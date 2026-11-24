@@ -157,9 +157,11 @@ test("B0. the branch pattern finds a branch whatever the variable is called", ()
 // R4-2 (contract 5.1): the view types are named by the way in (workspace.js) and the organization read path only. Each
 // module's VIEW pull request that opens its module to a view workspace adds its file here, reviewed against section 6
 // (can() next to the workspace match, never instead of it). permissions.js maps them to a scope by object keys.
-const VIEW_TYPE_FILES = ["routes/organization.js", "workspace.js"];
+// V-0 (the code review): the pattern also sees an unquoted object key (club_view: …), so permissions.js (the scope map of
+// /me) and moduleView.js (canView / the entry gate, reviewed in V-0) are listed.
+const VIEW_TYPE_FILES = ["moduleView.js", "permissions.js", "routes/organization.js", "workspace.js"];
 test("B3. the R4-2 workspace types (club_view, team_view) are named only where R4-2 opened them (a tripwire for the next helper)", () => {
-  const named = SOURCES.filter((s) => /["'](?:club_view|team_view)["']/.test(s.text)).map((s) => s.rel).sort();
+  const named = SOURCES.filter((s) => /(?:["'](?:club_view|team_view)["']|\b(?:club_view|team_view)\s*:)/.test(s.text)).map((s) => s.rel).sort();
   assert.deepEqual(named, VIEW_TYPE_FILES);
 });
 

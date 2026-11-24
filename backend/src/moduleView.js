@@ -16,6 +16,12 @@
 //     workspace-trusting write helper stays out of reach by construction (plan section 1, hazards 3 and 4). It resolves
 //     the workspace READ-ONLY (never a preference write, hazard 1) and hands the route what it resolved.
 //
+// Rules for the V steps that use this file (the V-0 reviews):
+//   - canView receives only a RESOLVED workspace (resolveActiveWorkspace* / the gate's), never one built from a request;
+//     a club or team workspace exists only for an old role row (workspace.js, pinned by roles-r4-checked-gates B2).
+//   - req.moduleView means "a read context for a view workspace"; a write never checks it as a permission.
+//   - A gated route reads req.moduleView.workspace / .scope and does not resolve the workspace again.
+//
 // V-0 opens no module: OPEN_VIEW_MODULES is empty and no router mounts the gate yet. Each module's V pull request adds its
 // key to OPEN_VIEW_MODULES, mounts the gate with its reads, adds its word to ENFORCED_PERMISSIONS and
 // VIEW_WORKSPACE_USABLE_WORDS (permissions.js), and its row to backend/tests/roles-v-sweep.test.mjs.
@@ -72,17 +78,30 @@ export function canView(authz, workspace, module, { open = OPEN_VIEW_MODULES } =
   return can(authz, word, scope);
 }
 
-// "GET /", "GET /:id", "GET /:id/history": a path pattern of one route, matched segment by segment against req.path
-// (relative to the router's mount). A ":name" segment matches one non-empty segment; nothing else is a wildcard.
+// "GET /", "GET /:id", "GET /:id/history": the path of one READ route, matched segment by segment against req.path
+// (relative to the router's mount). Only GET can be listed (a view workspace never writes). A ":name" segment matches a
+// canonical UUID unless the route gives that parameter its own CLOSED pattern (`params: { name: /^…$/ }`), so a listed
+// "GET /:id" can never also admit a literal sibling route of the router ("GET /active", "GET /export"); nothing else is
+// a wildcard. Each module's V step still proves its list against its router's GET routes (the plan's section 4).
+const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function compileRoute(route) {
-  const method = String(route.method || "").toUpperCase();
-  const parts = String(route.path || "").split("/").filter(Boolean);
-  if (!method || !String(route.path || "").startsWith("/")) throw new Error(`Bad view route: ${JSON.stringify(route)}`);
+  const method = String(route?.method || "").toUpperCase();
+  const path = String(route?.path || "");
+  if (method !== "GET" || !path.startsWith("/")) throw new Error(`Bad view route: ${JSON.stringify(route)}`);
+  const params = route.params || {};
+  const parts = path.split("/").filter(Boolean).map((p) => {
+    if (!p.startsWith(":")) return (segment) => segment === p;
+    const pattern = Object.hasOwn(params, p.slice(1)) ? params[p.slice(1)] : UUID_SEGMENT;
+    if (!(pattern instanceof RegExp) || !pattern.source.startsWith("^") || !pattern.source.endsWith("$")) {
+      throw new Error(`Bad view route parameter (a closed ^…$ pattern): ${JSON.stringify(route)}`);
+    }
+    return (segment) => pattern.test(segment);
+  });
   return (req) => {
     if (req.method !== method) return false;
     const got = String(req.path || "").split("/").filter(Boolean);
     if (got.length !== parts.length) return false;
-    return parts.every((p, i) => (p.startsWith(":") ? got[i].length > 0 : p === got[i]));
+    return parts.every((matches, i) => matches(got[i]));
   };
 }
 

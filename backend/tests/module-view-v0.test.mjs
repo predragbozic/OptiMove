@@ -28,6 +28,7 @@ function authzWith(words, { closed = [], scopeType = "club", scopeId = CLUB, tea
     roleAssignments: assignments,
   };
 }
+const EVENT = "22222222-0000-4000-8000-000000000001";
 const clubView = { type: "club_view", scopeId: CLUB };
 const teamView = { type: "team_view", scopeId: TEAM, clubId: CLUB };
 
@@ -112,11 +113,11 @@ test("6. the gate: an account that cannot have a view workspace goes on as today
 test("7. the gate: a view workspace reaches only the listed reads, of an open module, with the word; everything else is the router's refusal", async () => {
   const holder = authzWith(["calendar.view"]);
   const gate = viewEntryGate("calendar", READS, { open: ["calendar"], resolve: resolver(clubView) });
-  const ok = { user: { id: "u1" }, authz: holder, method: "GET", path: "/events/e1" };
+  const ok = { user: { id: "u1" }, authz: holder, method: "GET", path: `/events/${EVENT}` };
   const r = await runGate(gate, ok);
   assert.equal(r.next, true);
   assert.deepEqual(ok.moduleView, { module: "calendar", workspace: clubView, scope: { type: "club", id: CLUB } });
-  for (const [method, path] of [["POST", "/"], ["PATCH", "/events/e1"], ["GET", "/events"], ["GET", "/events/e1/questions"], ["GET", "/settings"], ["HEAD", "/"]]) {
+  for (const [method, path] of [["POST", "/"], ["PATCH", `/events/${EVENT}`], ["GET", "/events"], ["GET", `/events/${EVENT}/questions`], ["GET", "/settings"], ["HEAD", "/"], ["GET", "/events/types"], ["GET", "/events/e1"]]) {
     const req = { user: { id: "u1" }, authz: holder, method, path };
     const x = await runGate(gate, req);
     assert.equal(x.next, false, `${method} ${path}`);
@@ -147,7 +148,38 @@ test("8. the gate: the fallback workspace counts; a resolver error goes to the e
 test("9. a bad route list is refused at mount; the gate resolves read-only (never the writing resolveActiveWorkspace)", () => {
   assert.throws(() => viewEntryGate("calendar", [{ method: "GET", path: "events" }]), /Bad view route/);
   assert.throws(() => viewEntryGate("calendar", [{ path: "/" }]), /Bad view route/);
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD"]) assert.throws(() => viewEntryGate("calendar", [{ method, path: "/" }]), /Bad view route/, `only GET may be listed: ${method}`);
+  assert.throws(() => viewEntryGate("calendar", [{ method: "GET", path: "/:key", params: { key: /[a-z]+/ } }]), /closed/, "an open parameter pattern");
+  assert.doesNotThrow(() => viewEntryGate("calendar", [{ method: "GET", path: "/:key", params: { key: /^[a-z_]{1,40}$/ } }]));
   const src = fs.readFileSync(new URL("../src/moduleView.js", import.meta.url), "utf8");
-  assert.ok(!/resolveActiveWorkspace(?!ReadOnly)\b/.test(src), "moduleView.js never calls the resolver that writes a preference");
+  assert.ok(!/\bresolveActiveWorkspace\s*\(/.test(src), "moduleView.js never calls the resolver that writes a preference");
+  const imports = src.match(/^import[^;]*;/gm).join("\n");
+  assert.ok(!/\bresolveActiveWorkspace\b(?!ReadOnly)/.test(imports), "nor imports it");
+});
+
+test("10. through a real Express router: a listed GET /:dashboardId never admits the literal sibling GET /active (defined first); the listed read runs its handler", async () => {
+  const express = (await import("express")).default;
+  const http = await import("node:http");
+  const holder = authzWith(["dashboards.view"]);
+  const ran = [];
+  const router = express.Router();
+  router.get("/active", (req, res) => { ran.push("active"); res.json({ active: true }); });
+  router.get("/:dashboardId", (req, res) => { ran.push("one"); res.json({ scope: req.moduleView?.scope || null }); });
+  const app = express();
+  app.use((req, _res, next) => { req.user = { id: "u1" }; req.authz = holder; next(); });
+  app.use("/d", viewEntryGate("dashboards", [{ method: "GET", path: "/:dashboardId" }], { open: ["dashboards"], resolve: resolver(clubView) }), router);
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const base = `http://127.0.0.1:${server.address().port}/d`;
+    const active = await fetch(`${base}/active`);
+    assert.equal(active.status, 403, "a literal sibling is not a listed read");
+    const one = await fetch(`${base}/${EVENT}`);
+    assert.equal(one.status, 200);
+    assert.deepEqual(await one.json(), { scope: { type: "club", id: CLUB } });
+    assert.deepEqual(ran, ["one"], "the /active handler never ran");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 }
