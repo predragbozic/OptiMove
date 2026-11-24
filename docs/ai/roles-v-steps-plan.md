@@ -1,6 +1,7 @@
 # Roles: the V steps (view rights per module) – discovery and plan
 
-Status: **Proposed** (docs only; nothing built). Base: `main` `2ea5213e`. Author: the executor of the Settings and roles
+Status: **Accepted** (the manager, 2026-11-24: the order, P-3 and the executor's choices of section 6; the owner, 2026-11-24:
+P-1 and P-2 as recommended, section 7). Docs only. Base: `main` `2ea5213e`. Author: the executor of the Settings and roles
 stream, on the manager's order of 2026-11-24 (the owner's GO for the V steps).
 
 Builds on `docs/ai/roles-r4-contract.md` (section 4.1 the VIEW package, section 6 the six workspace-trusting modules,
@@ -360,7 +361,15 @@ show names if P-1 is answered "names need `athletes.view`".
 8. Imports, Messages and Notifications get no V step; module notification links open per V step.
 9. A V step changes no MANAGE gate; event questions, calendar settings and the roster stay managers'.
 
-## 7. Questions for the owner (only real product decisions)
+## 7. Questions for the owner (only real product decisions) – decided
+
+**Decided (the owner, 2026-11-24, relayed by the manager):**
+- **P-1:** athlete names appear in a module only with ; without it, counts only.
+- **P-2:**  and  for a club cover the programs and weekly plans assigned to the club's
+  athletes, the public program library and the system exercise library, all read-only.
+- **P-3:** the order of section 5 (the manager).
+
+The questions as they were asked:
 
 **P-1. Imena sportista u modulima.** Kada osoba ima pravo da gleda neki modul (npr. kalendar, testove ili trenažno
 opterećenje), da li u tom modulu sme da vidi i **imena sportista** ili samo brojeve (npr. „12 sportista, 9 uneli RPE")?
