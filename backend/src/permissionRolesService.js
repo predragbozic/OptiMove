@@ -789,7 +789,7 @@ export async function changeRole(ctx, roleIdRaw, body) {
       const affected = await affectedBy(client, role, remove);
       const follow = role.owner_scope === "system" ? await defaultFollowPlan(client, role, add, followLocked) : [];
       // Q15: a word taken from a role does not reach the customs frozen from it; the answer names who still holds it.
-      const stillHolding = remove.length ? await customsStillHolding(client, roleId, ownerClubId, remove) : [];
+      const stillHolding = await customsStillHolding(client, roleId, ownerClubId, remove);
       return { basis, role, add, remove, newTypes, addedTypes, nameChanged, descriptionChanged, affected, follow, stillHolding };
     },
     write: async (client, p) => {
@@ -815,7 +815,10 @@ export async function changeRole(ctx, roleIdRaw, body) {
       });
       return {
         roleId, roleChangeId, ownerClubId, ids: { roleId },
-        extra: { affected: p.affected, clubsTouched: p.follow.map((f) => ({ clubId: f.clubId, wordsAdded: f.words })), customsStillHolding: p.stillHolding },
+        extra: {
+          affected: p.affected, clubsTouched: p.follow.map((f) => ({ clubId: f.clubId, wordsAdded: f.words })),
+          customsStillHolding: p.stillHolding.list, customsStillHoldingTruncated: p.stillHolding.truncated,
+        },
       };
     },
   });
@@ -864,15 +867,21 @@ export const customAliveSql = (c) => `(${c}.ended_at is null
     or (${c}.holding_row_table = 'user_team_roles' and exists (select 1 from public.user_team_roles hr
           where hr.id = ${c}.holding_row_id and hr.is_active and hr.updated_at = ${c}.holding_row_version))))`;
 
-// Q15: the live customs of a role (in one club, or in every club for a null club) that still hold any of `words`.
+// Q15: the live customs of a role (in one club, or in every club for a null club) that still hold any of `words`; at
+// most 200, `truncated` when there are more.
+export const STILL_HOLDING_CAP = 200;
 export async function customsStillHolding(client, roleId, clubId, words) {
-  if (!words.length) return [];
+  if (!words.length) return { list: [], truncated: false };
+  const rows = await customsStillHoldingRows(client, roleId, clubId, words);
+  return { list: rows.slice(0, STILL_HOLDING_CAP), truncated: rows.length > STILL_HOLDING_CAP };
+}
+async function customsStillHoldingRows(client, roleId, clubId, words) {
   return (await client.query(`select c.id, c.user_id, c.club_id, u.display_name,
         array(select i.permission_word from public.permission_custom_role_items i where i.custom_role_id = c.id and i.permission_word = any($3::text[]) order by 1) as words
       from public.permission_custom_roles c join public.users u on u.id = c.user_id
      where c.base_role_id = $1 and ($2::uuid is null or c.club_id = $2) and ${customAliveSql("c")}
        and exists (select 1 from public.permission_custom_role_items i where i.custom_role_id = c.id and i.permission_word = any($3::text[]))
-     order by c.club_id, c.id limit 200`, [roleId, clubId, words])).rows
+     order by c.club_id, c.id limit ${STILL_HOLDING_CAP + 1}`, [roleId, clubId, words])).rows
     .map((r) => ({ customId: r.id, userId: r.user_id, clubId: r.club_id, name: r.display_name, words: r.words }));
 }
 

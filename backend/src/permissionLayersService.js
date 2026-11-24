@@ -217,10 +217,10 @@ async function liveVersion(client, clubId, roleId) {
       from public.permission_club_role_versions v where v.club_id = $1 and v.system_role_id = $2 and v.ended_at is null`, [clubId, roleId])).rows[0] || null;
 }
 
-async function clubRoleView(client, role, clubId, platform) {
+async function clubRoleView(client, role, clubId, platform, manages = true) {
   const v = await liveVersion(client, clubId, role.id);
   const pending = v != null && role.revision > v.answered_revision;
-  const own = role.basic_key !== "club_admin" || platform;
+  const own = manages && (role.basic_key !== "club_admin" || platform);
   return {
     roleId: role.id, name: role.name, basicKey: role.basic_key, scopeTypes: scopeTypesOf(role),
     defaultRevision: role.revision, defaultItems: role.items,
@@ -235,11 +235,13 @@ async function clubRoleView(client, role, clubId, platform) {
 
 export async function listClubRoles(ctx, clubIdRaw) {
   const { clubId, platform } = await clubGate(ctx, clubIdRaw, "view");
+  // A reader with org.view only is offered no change (the write route would answer the identical 404).
+  const manages = platform || can(ctx.authz, "roles.manage", clubScope(clubId));
   return boundedRead(async (client) => {
     const system = (await client.query(`select ${SYSTEM_ROLE_COLUMNS} from public.permission_roles r
         where public.permission_versionable_role(r.id) order by r.is_basic desc, lower(r.name), r.id`)).rows;
     const roles = [];
-    for (const r of system) roles.push(await clubRoleView(client, r, clubId, platform));
+    for (const r of system) roles.push(await clubRoleView(client, r, clubId, platform, manages));
     const clubRoles = (await client.query(`select ${SYSTEM_ROLE_COLUMNS} from public.permission_roles r
         where r.owner_club_id = $1 and r.archived_at is null order by lower(r.name), r.id`, [clubId])).rows
       .map((r) => ({ roleId: r.id, name: r.name, revision: r.revision, scopeTypes: scopeTypesOf(r), items: r.items }));
@@ -328,7 +330,7 @@ export async function changeClubVersion(ctx, roleIdRaw, clubIdRaw, body) {
       const clubVersionChangeId = (await client.query(`insert into public.permission_club_role_version_changes (version_id, revision_after, kind, performed_by_user_id, basis, reason, items_added, items_removed)
           values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
       [versionId, revision, p.v ? "change" : "create", ctx.userId, p.basis, reason, itemsAdded, p.v ? remove : []])).rows[0].id;
-      return { clubVersionChangeId, ownerClubId: clubId, ids: { roleId, clubId }, extra: { customsStillHolding: p.stillHolding } };
+      return { clubVersionChangeId, ownerClubId: clubId, ids: { roleId, clubId }, extra: { customsStillHolding: p.stillHolding.list, customsStillHoldingTruncated: p.stillHolding.truncated } };
     },
   });
 }
@@ -464,6 +466,12 @@ async function lockHoldings(client, userId, role, scopeType, scopeId) {
     .map((r) => ({ assignmentId: r.id }));
 }
 
+// The target users' Club admin rows in the club, FOR SHARE in id order (contract 7.6 place 2): O5 below is read from
+// them, so a revocation or a re-grant of an existing row waits for this write. A first grant inserts a new row, which
+// no row lock can hold back (recorded limit: the old grant route takes no lock that R4-3 can wait on).
+async function lockClubAdminRows(client, userIds, clubId) {
+  await client.query(`select r.id from public.user_club_roles r where r.user_id = any($1::uuid[]) and r.club_id = $2 and r.role = 'club_admin' order by r.id for share`, [userIds, clubId]);
+}
 // Does the user hold the Club admin role in the club (an old row)? O5: a club's admin never narrows another admin.
 const holdsClubAdmin = async (client, userId, clubId) => (await client.query(`select 1 from public.user_club_roles
     where user_id = $1 and club_id = $2 and role = 'club_admin' and is_active`, [userId, clubId])).rowCount > 0;
@@ -517,17 +525,26 @@ export async function changeCustom(ctx, userIdRaw, clubIdRaw, body) {
       // Place 0: the club's lock, shared. Place 1: both users rows, one statement, id order.
       await lockClubCeiling(client, [clubId], "shared");
       await client.query(USERS_SQL, [[String(ctx.userId).toLowerCase(), userId]]);
-      const r = await lockedRole(client, roleId);
-      if (!r || r.archived_at) throw NOT_FOUND();
-      // Place 2: the target's holding rows; place 3: the target's live customs of that key.
-      const holdings = await lockHoldings(client, userId, r, scopeType, scopeId);
-      const customs = (await client.query(`select c.id, c.revision, ${customAliveSql("c")} as live from public.permission_custom_roles c
-          where c.user_id = $1 and c.base_role_id = $2 and c.scope_type = $3 and c.scope_id = $4 and c.ended_at is null order by c.id for update`,
-      [userId, roleId, scopeType, scopeId])).rows;
+      // The basic key decides which old table holds the holding (it never changes); every other fact of the role is
+      // read again below, under the role's share lock.
+      const early = await lockedRole(client, roleId);
+      if (!early) throw NOT_FOUND();
+      // Place 2: the target's Club admin rows (O5 is read from them) and holding rows; place 3: the target's live
+      // customs of that key together with the acting user's own.
+      await lockClubAdminRows(client, [userId], clubId);
+      const holdings = await lockHoldings(client, userId, early, scopeType, scopeId);
+      const customs = (await client.query(`select c.id, c.user_id, c.revision, ${customAliveSql("c")} as live from public.permission_custom_roles c
+          where c.ended_at is null
+            and ((c.user_id = $1 and c.base_role_id = $2 and c.scope_type = $3 and c.scope_id = $4) or (c.user_id = $5 and c.club_id = $6))
+          order by c.id for update`,
+      [userId, roleId, scopeType, scopeId, String(ctx.userId).toLowerCase(), clubId])).rows.filter((c) => String(c.user_id) === userId);
       // Then the acting user's rows, the role rows and the club's versions; the club row.
       await lockActor(client, ctx, { scopeType, scopeId, roleForShare: roleId });
       const basis = await lockedBasis(client, ctx, "staff.assign", clubId);
       await lockClubRow(client, clubId);
+      // The role as it is under its share lock (a change committed before it is seen; the db review's finding 1).
+      const r = await lockedRole(client, roleId);
+      if (!r || r.archived_at) throw NOT_FOUND();
       if (scopeType === "team" && !(await client.query(`select 1 from public.teams where id = $1 and coalesce(is_active, true)`, [scopeId])).rowCount) throw NOT_FOUND();
       const target = (await client.query(`select is_active from public.users where id = $1`, [userId])).rows[0];
       // Section 10: a custom of a role the user no longer holds (revoked meanwhile) is refused as not found.
@@ -608,6 +625,8 @@ export async function endCustom(ctx, userIdRaw, customIdRaw, body) {
   const found = (await pool.query(`select user_id, club_id, scope_type, scope_id, base_role_id from public.permission_custom_roles where id = $1`, [customId])).rows[0];
   if (!found || String(found.user_id) !== userId) throw NOT_FOUND();
   const { clubId } = await clubGate(ctx, found.club_id, "staff");
+  // Nobody changes their own rights: ending one's own custom would undo a narrowing (the security review's HIGH).
+  if (userId === String(ctx.userId).toLowerCase()) throw refuse("self_custom");
   const requestKey = requireUuid(body?.requestKey, "requestKey");
   const reason = requireText(body.reason, "reason", 500);
   const requestHash = requestHashOf("custom_end", { customId, userId, reason });
@@ -618,13 +637,24 @@ export async function endCustom(ctx, userIdRaw, customIdRaw, body) {
     prepare: async (client) => {
       await lockClubCeiling(client, [clubId], "shared");
       await client.query(USERS_SQL, [[String(ctx.userId).toLowerCase(), userId]]);
-      const c = (await client.query(`select id, revision, ended_at, base_role_id from public.permission_custom_roles where id = $1 for update`, [customId])).rows[0];
+      await lockClubAdminRows(client, [userId], clubId);
+      const c = (await client.query(`select c.id, c.revision, c.ended_at, c.base_role_id from public.permission_custom_roles c
+          where c.id = $1 or (c.user_id = $2 and c.club_id = $3 and c.ended_at is null) order by c.id for update`,
+      [customId, String(ctx.userId).toLowerCase(), clubId])).rows.find((x) => String(x.id) === customId);
       await lockActor(client, ctx, { scopeType: found.scope_type, scopeId: found.scope_id, roleForShare: found.base_role_id });
       const basis = await lockedBasis(client, ctx, "staff.assign", clubId);
       await lockClubRow(client, clubId);
       if (c.ended_at) throw refuse("custom_changed", { current: await customView(client, customId) });
       const baseKey = (await client.query(`select basic_key from public.permission_roles where id = $1`, [c.base_role_id])).rows[0].basic_key;
       if (basis !== "platform_admin" && (baseKey === "club_admin" || (await holdsClubAdmin(client, userId, clubId)))) throw refuse("admin_not_narrowable");
+      // Ending gives the user the role's set in the club again (club version or default): R2's dominance on that set
+      // (the security review's MEDIUM).
+      if (basis !== "platform_admin") {
+        const items = (await client.query(`select public.permission_role_club_items($1, $2) as w`, [c.base_role_id, clubId])).rows[0].w;
+        const missing = [];
+        for (const w of items) if (!(await holdsInClub(client, ctx.userId, w, clubId))) missing.push(w);
+        if (missing.length) throw refuse("role_exceeds_your_permissions", { words: missing });
+      }
       return { basis, c };
     },
     write: async (client, p) => {
@@ -674,31 +704,36 @@ export async function removeWordFromCustoms(ctx, roleIdRaw, clubIdRaw, body) {
   if (found.length !== customIds.length) throw NOT_FOUND();
   if (!HONOURED.has(word)) throw refuse("permission_not_available_yet", { words: [word] });
   const users = [...new Set(found.map((f) => String(f.user_id)))];
+  if (users.includes(String(ctx.userId).toLowerCase())) throw refuse("self_custom");
   const requestHash = requestHashOf("custom_word_removal", { clubId, roleId, word, customIds, reason });
   return runWrite(ctx, {
     operation: "custom_word_removal", requestKey, requestHash,
     standingFor: standingIn(ctx, "staff.assign"),
-    reread: async (client, rec) => {
-      const changeId = rec.customRoleChangeId ?? rec.custom_role_change_id;
-      const ids = (await client.query(`select x.custom_role_id from public.permission_custom_role_changes x
-          where x.xmin = (select y.xmin from public.permission_custom_role_changes y where y.id = $1) and x.kind = 'word_removal' order by 1`, [changeId])).rows;
+    // A replay carries the same request hash, so the same customIds of this club and role (every one was changed: the
+    // write is all or nothing). Never a cross-transaction xmin match (a restore or a wraparound would mix clubs).
+    reread: async (client) => {
       const customs = [];
-      for (const r of ids) customs.push(await customView(client, r.custom_role_id));
+      for (const id of customIds) customs.push(await customView(client, id));
       return { customs };
     },
     prepare: async (client) => {
       await lockClubCeiling(client, [clubId], "shared");
       await client.query(USERS_SQL, [[String(ctx.userId).toLowerCase(), ...users]]);
+      await lockClubAdminRows(client, users, clubId);
       const rows = (await client.query(`select c.id, c.user_id, c.revision, c.base_role_id, ${customAliveSql("c")} as live,
             exists (select 1 from public.permission_custom_role_items i where i.custom_role_id = c.id and i.permission_word = $2) as holds,
             array(select i.permission_word from public.permission_custom_role_items i where i.custom_role_id = c.id order by 1) as items
-          from public.permission_custom_roles c where c.id = any($1::uuid[]) order by c.id for update`, [customIds, word])).rows;
+          from public.permission_custom_roles c
+         where c.id = any($1::uuid[]) or (c.user_id = $3 and c.club_id = $4 and c.ended_at is null)
+         order by c.id for update`, [customIds, word, String(ctx.userId).toLowerCase(), clubId])).rows.filter((c) => customIds.includes(String(c.id)));
       await lockActor(client, ctx, { scopeType: "club", scopeId: clubId, roleForShare: roleId });
       const basis = await lockedBasis(client, ctx, "staff.assign", clubId);
       await lockClubRow(client, clubId);
       const r = await lockedRole(client, roleId);
       const changed = rows.filter((c) => !c.live || !c.holds).map((c) => c.id);
       if (changed.length) throw refuse("custom_changed", { customIds: changed });
+      // H1, as checkedItemChange: a Club admin custom keeps staff.assign and roles.manage (else v95 refuses with a 500).
+      if (r.basic_key === "club_admin" && RULE7_REQUIRED.includes(word)) throw refuse("club_admin_requires", { words: [word] });
       if (basis !== "platform_admin") {
         if (r.basic_key === "club_admin") throw refuse("admin_not_narrowable");
         for (const c of rows) if (await holdsClubAdmin(client, c.user_id, clubId)) throw refuse("admin_not_narrowable", { customIds: [c.id] });

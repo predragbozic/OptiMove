@@ -277,6 +277,10 @@ test("4. a custom role of an old-table coach: frozen, live only through its hold
   const paTc = ok(await custom(w.pa, w.adminA2.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] }));
   code(await srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/custom-word-removal`, { method: "POST", body: { requestKey: key(), reason: "x", word: "org.view", customIds: [paTc.custom.id] } }), 409, "admin_not_narrowable");
   code(await endCustom(w.adminA, w.adminA2.id, paTc.custom.id), 409, "admin_not_narrowable");
+  // Self: an admin neither ends nor narrows their own custom (Q13), even one a platform admin made.
+  code(await endCustom(w.adminA2, w.adminA2.id, paMade.custom.id), 409, "self_custom");
+  code(await srv.api(w.adminA2.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/custom-word-removal`, { method: "POST", body: { requestKey: key(), reason: "x", word: "org.view", customIds: [paTc.custom.id] } }), 409, "self_custom");
+  assert.equal(await holds(w.adminA2.id, "org.club.edit", "club", w.A), false, "the custom still acts");
   // A role the user does not hold there, another club's team, another club's admin, a random user: 404.
   notFound(await custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T2, expectedRevision: null, remove: ["athletes.remove"] }));
   notFound(await custom(w.adminA, w.coachB.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.TB, expectedRevision: null, remove: ["athletes.remove"] }));
@@ -493,8 +497,12 @@ test("9. recorded lock order: every R4-3 write takes R2's request-key lock, then
   const texts = steps[3][1].map((s) => s.t);
   const users = texts.findIndex((t) => /from public\.users u where u\.id = any/.test(t));
   const holding = texts.findIndex((t) => /from public\.user_team_roles r where r\.user_id/.test(t));
-  const customs = texts.findIndex((t) => /from public\.permission_custom_roles c where c\.user_id/.test(t));
-  assert.ok(users >= 0 && users < holding && holding < customs && customs < texts.findIndex((t) => /lock_permission_actor/.test(t)), texts.join("\n"));
+  const adminRows = texts.findIndex((t) => /from public\.user_club_roles r where r\.user_id = any/.test(t));
+  const customs = texts.findIndex((t) => /from public\.permission_custom_roles c where c\.ended_at is null and \(\(c\.user_id/.test(t));
+  assert.ok(users >= 0 && users < adminRows && adminRows < holding && holding < customs && customs < texts.findIndex((t) => /lock_permission_actor/.test(t)), texts.join("\n"));
+  // The role is read again under its share lock (after lock_permission_actor), and that read is what the write uses.
+  const roleReads = texts.map((t, i) => [t, i]).filter(([t]) => /from public\.permission_roles r where r\.id = \$1/.test(t)).map(([, i]) => i);
+  assert.ok(roleReads.some((i) => i > texts.findIndex((t) => /lock_permission_actor/.test(t))), texts.join("\n"));
   // A default change that follows a club takes that club's exclusive lock before any row.
   ok(await version(w.pa, ROLE_IDS.club_admin, w.A, { expectedRevision: null, remove: ["org.club.edit"] }));
   const sys = ok(await srv.api(w.pa.cookie, R, { method: "POST", body: { requestKey: key(), name: `Analyst ${hex()}`, scopeTypes: ["club"], items: ["org.view"] } })).role;
@@ -548,4 +556,34 @@ test("10. the uncertain COMMIT: an answer lost after a COMMIT that happened is v
   } finally {
     svc.setRolesAfterBeginHoldForTests(null);
   }
+});
+
+test("12. ending a custom gives its role's club words back, so a club admin ends only a custom whose role's club words they hold; another admin who holds them may", async () => {
+  const w = await world();
+  const made = ok(await custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.manage"] }));
+  // A platform admin narrows adminA's Club admin: adminA no longer holds athletes.remove in club A.
+  ok(await custom(w.pa, w.adminA.id, w.A, { roleId: ROLE_IDS.club_admin, scopeType: "club", scopeId: w.A, expectedRevision: null, remove: ["athletes.remove"] }));
+  assert.equal(await holds(w.adminA.id, "athletes.remove", "club", w.A), false);
+  code(await endCustom(w.adminA, w.coach.id, made.custom.id), 409, "role_exceeds_your_permissions");
+  assert.equal(await holds(w.coach.id, "athletes.manage", "team", w.T1), false, "nothing was written");
+  const ended = ok(await endCustom(w.adminA2, w.coach.id, made.custom.id));
+  assert.equal(ended.custom.endKind, "reassigned");
+  assert.equal(await holds(w.coach.id, "athletes.manage", "team", w.T1), true);
+});
+
+test("13. Take it from them too: never staff.assign or roles.manage out of a Club admin custom (club_admin_requires, not a 500); its replay lists only its own customs, by durable columns", async () => {
+  const w = await world();
+  const paMade = ok(await custom(w.pa, w.adminA2.id, w.A, { roleId: ROLE_IDS.club_admin, scopeType: "club", scopeId: w.A, expectedRevision: null, remove: ["org.club.edit"] }));
+  code(await srv.api(w.pa.cookie, `${R}/${ROLE_IDS.club_admin}/clubs/${w.A}/custom-word-removal`, { method: "POST", body: { requestKey: key(), reason: "x", word: "staff.assign", customIds: [paMade.custom.id] } }), 409, "club_admin_requires");
+  // A removal in club A and one in club B: the replay of A's lists A's customs only.
+  const a = ok(await custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] }));
+  const b = ok(await custom(w.adminB, w.coachB.id, w.B, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.TB, expectedRevision: null, remove: ["athletes.remove"] }));
+  const kA = key();
+  const body = { requestKey: kA, reason: "Not any more", word: "org.view", customIds: [a.custom.id] };
+  const first = ok(await srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/custom-word-removal`, { method: "POST", body }));
+  ok(await srv.api(w.adminB.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.B}/custom-word-removal`, { method: "POST", body: { requestKey: key(), reason: "Not any more", word: "org.view", customIds: [b.custom.id] } }));
+  const again = ok(await srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/custom-word-removal`, { method: "POST", body }));
+  assert.equal(again.replayed, true);
+  assert.deepEqual(again.customs.map((c) => c.id), first.customs.map((c) => c.id));
+  assert.ok(!JSON.stringify(again).includes(b.custom.id), "no custom of club B");
 });
