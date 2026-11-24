@@ -42,10 +42,20 @@ const echartsNotices = {
   },
 };
 
+// React islands (react-build/, vite.islands.config.js): the MIT notices of the bundled React packages.
+const reactNotices = {
+  name: "react-license-notices",
+  generateBundle() {
+    for (const name of ["react", "react-dom", "scheduler"]) {
+      this.emitFile({ type: "asset", fileName: `licenses/${name}/LICENSE`, source: readFileSync(resolve(rootDir, "node_modules", name, "LICENSE")) });
+    }
+  },
+};
+
 export default defineConfig({
   root: rootDir,
   base: "/",
-  plugins: [buildStamp, echartsNotices],
+  plugins: [buildStamp, echartsNotices, reactNotices],
   build: {
     outDir: "dist",
     emptyOutDir: true,

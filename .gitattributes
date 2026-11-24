@@ -14,6 +14,9 @@ frontend/tests/support/** text eol=lf
 # on every checkout (no line-ending conversion); new files only, same reason as above.
 frontend/vendor/mediabunny/*.mjs -text
 frontend/vendor/echarts/** -text
+# React islands: the committed build is compared byte for byte with a fresh build (react-islands-build.test.mjs), and its
+# React chunk opens with a multi-line MIT notice; a CRLF checkout must not change it. New files only, same reason.
+frontend/react-build/** -text
 # Phase 5b (v42): the runbook SQL restores function bodies whose md5 the
 # preflight compares, so a CRLF checkout must not change them; new files only.
 docs/runbooks/source-metric-zone-model-v42*.sql text eol=lf

@@ -40,6 +40,13 @@ test("ECharts distribution carries its complete upstream license and third-party
   }
 });
 
+test("the React islands' packages carry their MIT notices in the build and in the committed React chunk", () => {
+  for (const name of ["react", "react-dom", "scheduler"]) {
+    assert.equal(readFileSync(path.join(distDir, "licenses", name, "LICENSE"), "utf8"), readFileSync(path.join(frontendDir, "node_modules", name, "LICENSE"), "utf8"));
+  }
+  assert.match(readFileSync(path.join(frontendDir, "react-build", "react.js"), "utf8"), /^\/\*! react \d+\.\d+\.\d+, react-dom \d+\.\d+\.\d+, scheduler [^\n]*\nMIT License\n\nCopyright \(c\) Meta Platforms, Inc\. and affiliates\./);
+});
+
 test("the production build retains the app update stamp in both HTML entries and outside JS bundles", () => {
   for (const entry of ["index.html", "athlete.html"]) {
     assert.ok(readFileSync(path.join(distDir, entry), "utf8").includes(`<meta name="optimove-build" content="${fixtureBuildCommit}">`));
