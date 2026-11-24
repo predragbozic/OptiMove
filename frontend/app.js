@@ -1922,7 +1922,8 @@ function toggleRail() {
 }
 
 function toggleMobileNav() {
-  state.mobileNavOpen = !state.mobileNavOpen;
+  if (state.mobileNavOpen) { closeMobileNav(); return; }
+  state.mobileNavOpen = true;
   renderMobileNavState();
 }
 
@@ -1933,6 +1934,13 @@ function closeMobileNav() {
   const focusInDrawer = Boolean(document.activeElement?.closest?.(".sidebar"));
   state.mobileNavOpen = false;
   renderMobileNavState();
+  // On a phone the athlete list lives inside the drawer (the bottom bar's Athletes opens both): it closes with it, so
+  // the page is never left marked as having the athlete list open (body.athletes-drawer-open and its scrim).
+  if (state.athletesExpanded) {
+    state.athletesExpanded = false;
+    renderAthleteListState();
+    renderLibraryNav();
+  }
   if (!focusInDrawer) return;
   // On a phone the drawer is opened by the bottom bar's Athletes (the header's menu button is hidden there).
   // (Athletes moved to More by Edit menu: focus goes to More, where it was opened from.)
