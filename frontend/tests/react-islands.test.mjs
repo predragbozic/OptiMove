@@ -55,6 +55,25 @@ test("unmountIsland removes the island's DOM and root; a second unmount is a no-
   assert.equal(el.textContent, "again");
 });
 
+test("onError runs after React's own render error removed the tree (the bar's fallback path), never inside React's work", async () => {
+  capture.setReporterForTests(() => {});
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const el = host();
+    let got = null;
+    // A real render error (not a fake mountIsland that throws): mountIsland returns normally.
+    islands.mountIsland(el, () => { throw new TypeError("boom"); }, {}, { name: "probe", onError: (e) => { got = e; } });
+    assert.equal(got, null, "not called inside React's work");
+    await new Promise((r) => queueMicrotask(r));
+    assert.equal(got?.message, "boom");
+    assert.equal(el.childElementCount, 0, "the tree is gone");
+  } finally {
+    console.error = originalError;
+    capture.setReporterForTests(null);
+  }
+});
+
 test("mountIsland refuses anything but an element", () => {
   for (const bad of [null, undefined, {}, document.createTextNode("t")]) assert.throws(() => islands.mountIsland(bad, Hello, {}), TypeError);
 });
