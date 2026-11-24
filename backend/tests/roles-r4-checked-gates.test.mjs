@@ -104,6 +104,10 @@ const REVIEWED = Object.freeze({
   "inviteContext.js": 6,
   "joinLinkContext.js": 5,
   "mediaStorage.js": 2,
+  // V-0 (docs/ai/roles-v-steps-plan.md 3): canView maps a workspace to the scope can() is asked at (platform, private,
+  // the old club / team rows, the view types) and viewReadScope to a view workspace's data context; never an offer, and
+  // the entry gate lets a view workspace reach only a module's listed reads.
+  "moduleView.js": 5,
   "organizationEntry.js": 1, // R4-2: lets a non-coach through only with a view workspace (contract 5.1)
   "permissionRolesService.js": 5,
   // R4-3 (reviewed in its pull request): a custom role's scope (club or team) - which club a team lies in, and that
@@ -153,9 +157,11 @@ test("B0. the branch pattern finds a branch whatever the variable is called", ()
 // R4-2 (contract 5.1): the view types are named by the way in (workspace.js) and the organization read path only. Each
 // module's VIEW pull request that opens its module to a view workspace adds its file here, reviewed against section 6
 // (can() next to the workspace match, never instead of it). permissions.js maps them to a scope by object keys.
-const VIEW_TYPE_FILES = ["routes/organization.js", "workspace.js"];
+// V-0 (the code review): the pattern also sees an unquoted object key (club_view: …), so permissions.js (the scope map of
+// /me) and moduleView.js (canView / the entry gate, reviewed in V-0) are listed.
+const VIEW_TYPE_FILES = ["moduleView.js", "permissions.js", "routes/organization.js", "workspace.js"];
 test("B3. the R4-2 workspace types (club_view, team_view) are named only where R4-2 opened them (a tripwire for the next helper)", () => {
-  const named = SOURCES.filter((s) => /["'](?:club_view|team_view)["']/.test(s.text)).map((s) => s.rel).sort();
+  const named = SOURCES.filter((s) => /(?:["'](?:club_view|team_view)["']|\b(?:club_view|team_view)\s*:)/.test(s.text)).map((s) => s.rel).sort();
   assert.deepEqual(named, VIEW_TYPE_FILES);
 });
 

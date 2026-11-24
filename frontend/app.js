@@ -4,6 +4,7 @@ import { api } from "./api.js";
 import { openExerciseClassification } from "./exercise-classification.js";
 import { accessScopeLabel, currentUserWorkspaceContextParts, isAthleteMode, isViewWorkspace, roleLabel } from "./access.js";
 import { viewSettingsSections } from "./permission-nav.js";
+import { viewModuleOpen } from "./view-modules.js";
 import {
   renderInviteAccept as renderInviteAcceptAction,
   renderLogin as renderLoginAction,
@@ -2530,12 +2531,24 @@ async function loadAthletes() {
 
 // Roles R4-4: a notification is the person's, not the workspace's. In a view workspace (club_view / team_view) a
 // notification that opens a module goes to Home instead: the module is not reachable there (its menu entry is hidden).
+// The view module (view-modules.js) a notification opener belongs to; an opener of no module never opens in a view
+// workspace (the calendar question opener is an athlete's).
+function viewModuleOfOpener(open) {
+  if (open === openProgramRequests || open === openWeeklyPlanOnDate || open === openSpecificProgramFromNotification) return "programs";
+  if (open === openTestAssignment || open === openTestsToday) return "tests";
+  if (open === openTestsResults) return "tests_results";
+  if (open === openTrainingLoadAssignment || open === openTrainingLoadResults) return "load_athlete";
+  return "";
+}
+
 function notInViewWorkspace(open) {
   return (...args) => {
     // Every notification opener leaves Settings without loadActiveTab: the Club licence island goes with it.
     leaveClubLicence();
     leaveRolesLayers();
     if (!isViewWorkspace()) return open(...args);
+    // V-0: once a module opens for a view workspace (its V step), that module's notification links open too.
+    if (viewModuleOpen(viewModuleOfOpener(open))) return open(...args);
     state.activeTab = "coach-home";
     return loadActiveTab();
   };
