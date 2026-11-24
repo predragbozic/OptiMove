@@ -9,6 +9,7 @@ import {
 } from "./roles-data.js";
 import { assignScopeOptions, assignableRoles, permissionLabel, permissionReason, BASIC_ASSIGNABLE } from "./roles-view.js";
 import { state } from "./state.js";
+import { licence } from "./club-licence-data.js";
 
 const rs = () => state.roles;
 
@@ -83,7 +84,8 @@ async function execute(cmd, { holder, owner, render }) {
 }
 
 const rolesAsk = (question) => Boolean(globalThis.window?.confirm?.(question));
-const rolesCommands = () => { const d = rs(); return [d.command, d.assign.command, d.who.command]; };
+// R4-4: the club licence's one write is a role-layer write too (club-licence-data.js), asked about by the same guards.
+const rolesCommands = () => { const d = rs(); return [d.command, d.assign.command, d.who.command, licence.command]; };
 // A role write in flight or not confirmed (no question: beforeunload uses this too).
 const rolesWriteOpen = () => rolesCommands().some((c) => c?.busy || c?.unconfirmed);
 

@@ -1,3 +1,4 @@
+import { isViewWorkspace } from "./access.js";
 import { calendarSettingsContext } from "./calendar-settings-data.js";
 import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
 import { renderDataSourcesPanelHtml } from "./data-sources-view.js";
@@ -103,7 +104,7 @@ const ICON_MANAGE_USERS = `
 
 // U1b: the card beside "Signed in as" says, in plain words, which workspace the
 // settings below belong to and in which role, from the active workspace (never role_hint).
-const WORKSPACE_ROLE_TEXT = { platform: "Platform administrator", club: "Club administrator", team: "Team coach", private_coach: "Private coach" };
+const WORKSPACE_ROLE_TEXT = { platform: "Platform administrator", club: "Club administrator", team: "Team coach", private_coach: "Private coach", club_view: "a role holder (view)", team_view: "a role holder (view)" };
 export function renderWorkspaceScopeCard(workspace, { scope = "" } = {}) {
   const place = workspace?.type === "platform" ? "All clubs and teams" : workspace?.type === "private_coach" ? "Private coaching" : (workspace?.label || scope || "Workspace");
   const as = WORKSPACE_ROLE_TEXT[workspace?.type] || "";
@@ -298,6 +299,16 @@ function canArchiveTeam(data, team) {
 function renderOrganizationSelectableRow(row, type, selectedId, { canArchive = null } = {}) {
   const isSelected = String(row.id) === String(selectedId);
   const isTeam = type === "team";
+  // A view workspace (roles R4) only reads: no Edit or Delete that the server would always refuse.
+  if (isViewWorkspace()) {
+    return `
+    <article class="organization-row ${isSelected ? "is-selected" : ""}">
+      <button class="organization-row-main" type="button" data-action="organization-select-${escapeAttr(type)}" data-${escapeAttr(type)}-id="${escapeAttr(row.id)}">
+        ${renderOrganizationRowContent(row, type)}
+      </button>
+    </article>
+  `;
+  }
   const deleteControl = isTeam
     ? (canArchive?.(row) ? `<button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="team" data-org-id="${escapeAttr(row.id)}" aria-label="Archive team" title="Archive team">${ICON_TRASH}</button>` : "")
     : `<button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button>`;
@@ -342,6 +353,12 @@ function renderSectionHead(title, count, actions = "", eyebrow = "") {
         </div>
         ${actions.trim() ? `<div class="organization-browser-actions">${actions}</div>` : ""}
       </div>`;
+}
+
+// Roles R4-4 (docs/ai/roles-r4-4-screens-contract.md 5.1): the empty host of the Club licence island, for a platform
+// administrator on a chosen club. club-licence-actions.js mounts the island after the paint; the server decides again.
+function renderClubLicenceHost(club) {
+  return `<div class="club-licence-host" data-club-licence-host data-club-id="${escapeAttr(club.id)}" data-club-name="${escapeAttr(club.name || "")}"></div>`;
 }
 
 export function renderOrganizationBrowser(data) {
@@ -408,6 +425,7 @@ export function renderOrganizationBrowser(data) {
     body = `${head(selectedTeam?.name || selectedClub?.name || "Clubs", selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : countLabel(clubs.length, "club"), showAll)}
       <section class="organization-lists organization-lists-browser">
         ${renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId, { bare: true })}
+        ${selectedClub && !selectedTeam && isPlatformAdmin ? renderClubLicenceHost(selectedClub) : ""}
         ${selectedClub ? renderOrganizationSelectableList(`Teams - ${selectedClub.name}`, visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team) }) : ""}
         ${selectedClub ? athletesBlock() : ""}
       </section>`;

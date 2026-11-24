@@ -32,13 +32,29 @@ function hasResolvedWorkspace(user) {
 // active workspace showing".
 const STAFF_WORKSPACE_TYPES = new Set(["platform", "private_coach", "club", "team"]);
 
+// Roles R4 (docs/ai/roles-r4-contract.md 5.2): the way into a club or a team for an account that holds only a new-style
+// role there. A view workspace is never a staff one: it reaches only what the words of /me let through (today the
+// Settings sections Overview, Clubs and Teams, `org.view`), and every module that does not know it stays hidden.
+export const VIEW_WORKSPACE_TYPES = new Set(["club_view", "team_view"]);
+
+export function isViewWorkspace(user = state.currentUser) {
+  return VIEW_WORKSPACE_TYPES.has(user?.activeWorkspace?.type);
+}
+
+// The held words of /me as a set, or null without a usable list (read here, not from permission-nav.js, to keep
+// access.js free of a circular import).
+function heldWords(user) {
+  if (!user || user.permissionsUnavailable === true || !Array.isArray(user.permissions)) return null;
+  return new Set(user.permissions.filter((word) => typeof word === "string"));
+}
+
 export function accessScopeLabel(user = state.currentUser) {
   const workspace = user?.activeWorkspace;
   if (workspace) {
     if (workspace.type === "platform") return "All platform data";
     if (workspace.type === "private_coach") return "Private coaching";
-    if (workspace.type === "club") return workspace.label || "Club workspace";
-    if (workspace.type === "team") return workspace.label || "Team workspace";
+    if (workspace.type === "club" || workspace.type === "club_view") return workspace.label || "Club workspace";
+    if (workspace.type === "team" || workspace.type === "team_view") return workspace.label || "Team workspace";
     if (workspace.type === "athlete") return "Athlete view";
   }
   if (hasResolvedWorkspace(user)) return "Workspace";
@@ -57,7 +73,11 @@ export function accessScopeLabel(user = state.currentUser) {
 
 export function hasOrganizationAccess(user = state.currentUser) {
   if (!user) return false;
-  if (hasResolvedWorkspace(user)) return STAFF_WORKSPACE_TYPES.has(user.activeWorkspace?.type);
+  if (hasResolvedWorkspace(user)) {
+    // A view workspace reaches Settings only while /me says it holds org.view there (never without a word list).
+    if (isViewWorkspace(user)) return Boolean(heldWords(user)?.has("org.view"));
+    return STAFF_WORKSPACE_TYPES.has(user.activeWorkspace?.type);
+  }
   // Legacy fallback - only before /me has resolved activeWorkspace.
   return String(user?.accessScope || "").toLowerCase() !== "athlete";
 }

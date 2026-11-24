@@ -6,7 +6,7 @@ manager's go.**
 
 | | |
 |---|---|
-| Status | **Proposed** (draft pull request). Documentation only. |
+| Status | **Accepted** (the manager's GO, 2026-11-24, with the owner's decisions of section 11a). Built in two pull requests (section 10). |
 | Written against | `origin/main` at `2f2a2b3` (2026-11-24): R4-1 (v92), R4-2 (`club_view` / `team_view`), v95 and the R4-3 API are merged. Re-checked at `766e338` (R4-3b, PR #759, merged): it changes only the grant routes' locks, tests and R4 contract 18; no route, body or code this document uses changed. Its decision that *Accept the default* is not checked against the admin's own words means both O3 buttons are always offered to a club admin (5.2). Every `file:line` below is at `2f2a2b3`; the frontend files did not change since. |
 | Level | Ordinary (frontend only, no server change planned; section 9 names the one place where a server change could be asked). Reviews: `code-reviewer`, `ux-design-reviewer`, `mobile-qa`; the *Rukovodilac*. |
 | Owner orders | Every new or substantially reworked screen is a React island (`.claude/rules/frontend.md`, "React islands"). Simple and plain for a club admin. Phone first: 360 / 375 / 390 px, 44 px targets, 16 px inputs. No real athlete's name in tests, fixtures or screenshots. |
@@ -271,17 +271,28 @@ same-requestKey resend, the view-workspace hide fallback).
 
 ## 10. Proposed pull requests
 
+**Decided (the owner, 2026-11-24, overriding the proposal of four, to save usage): two pull requests.**
+
 | PR | What | Reviews |
 |---|---|---|
-| R4-4a | Navigation of view workspaces (5.2, section 4.3) – plain, small | code, mobile; e2e test 1 |
-| R4-4b | *Club roles* island (5.2, 5.3) and the shared word list | code, ux, mobile |
-| R4-4c | *Person access* and drift (5.4, 5.5) | code, ux, mobile |
-| R4-4d | *Club licence* (5.1) | code, ux, mobile |
+| **A** | Navigation of view workspaces (5.2, section 4.3, the short Home) and *Club licence* (5.1) | `code-reviewer`, `mobile-qa`; e2e test 1 |
+| **B** | *Club roles* (5.2, 5.3) with the shared word list, *Person access* and drift (5.4, 5.5) | `code-reviewer`, `mobile-qa`, `ux-design-reviewer`; the *Nezavisni revizor* |
 
-R4-4b-d depend on R4-4b's shared component; a and d are independent. One large pull request is possible but would need
-one review of four screens.
+A is built first, frozen and handed to the manager; then B. Each before its freeze: the targeted unit and island tests,
+`--preset frontend-fast` on the head and on clean `main`, the production build with the islands' drift test, the
+targeted e2e (the navigation and settings files and the new ones), and one internal review round plus at most one narrow
+re-review.
 
-## 11. Pitanja za vlasnika (open questions, with a recommendation)
+## 11a. Decided (the owner, 2026-11-24, relayed by the manager)
+
+- **Q-1 to Q-6: as recommended.** No role list for a view workspace; the platform screen of default roles stays the R3
+  plain screen; no "reset to default" button now (Q-3, later, with a small server change); the short Home as proposed;
+  a closed part shown as a closed card with text, no padlock; *Take it from them too* offered right after a save.
+- **Q-7: two pull requests, not four** (section 10).
+- **Finding 2 (holder count): frontend only** – *Club roles* reads R4-3's club roles, R2's list and the catalog in
+  parallel; no server change.
+
+## 11. Pitanja za vlasnika (open questions, with a recommendation; all decided, 11a)
 
 | # | Pitanje | Preporuka |
 |---|---|---|

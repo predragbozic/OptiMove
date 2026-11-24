@@ -32,7 +32,18 @@ const SETTINGS_TAB_WORDS = Object.freeze({
   users: ["staff.assign"],
 });
 
+// A view workspace (club_view / team_view, roles R4 contract 5.2): only the sections a word of /me opens, and when
+// /me carries no list the answer is HIDDEN, never today's visibility - a role holder has no "before".
+export const VIEW_WORKSPACE_SECTIONS = Object.freeze(["overview", "clubs", "teams"]);
+const VIEW_TYPES = new Set(["club_view", "team_view"]);
+export function viewSettingsSections(user = state.currentUser) {
+  const held = heldPermissions(user);
+  if (!held) return [];
+  return VIEW_WORKSPACE_SECTIONS.filter((section) => SETTINGS_TAB_WORDS[section].some((word) => held.has(word)));
+}
+
 export function permissionTabAllowed(section, user = state.currentUser) {
+  if (VIEW_TYPES.has(user?.activeWorkspace?.type)) return viewSettingsSections(user).includes(section);
   const words = SETTINGS_TAB_WORDS[section];
   const held = heldPermissions(user);
   if (!words || !held) return true;

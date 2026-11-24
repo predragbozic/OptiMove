@@ -23,6 +23,9 @@ function workspaceLabel(workspace) {
   if (workspace.type === "private_coach") return "Private coaching";
   if (workspace.type === "club") return `Club · ${workspace.label}`;
   if (workspace.type === "team") return `Team · ${workspace.label}`;
+  // Roles R4 (contract 5.2): the way into a club or team through a new-style role, labelled with its name.
+  if (workspace.type === "club_view") return `Club · ${workspace.label} (view)`;
+  if (workspace.type === "team_view") return `Team · ${workspace.label} (view)`;
   if (workspace.type === "athlete") return "Athlete";
   return workspace.label || "Workspace";
 }
@@ -46,7 +49,7 @@ export function renderWorkspaceSwitcher() {
   // "Club · " / "Team · " is its own span so a narrow phone can hide it and keep the name;
   // the full label stays the button's accessible name and its title.
   const full = workspaceLabel(active);
-  const prefix = active.type === "club" ? "Club · " : active.type === "team" ? "Team · " : "";
+  const prefix = active.type === "club" || active.type === "club_view" ? "Club · " : active.type === "team" || active.type === "team_view" ? "Team · " : "";
   const name = prefix && full.startsWith(prefix) ? full.slice(prefix.length) : full;
   // "Platform administration" keeps only "Platform" on a narrow phone, the same way.
   const tail = active.type === "platform" && full === "Platform administration" ? " administration" : "";
