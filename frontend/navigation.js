@@ -3,6 +3,7 @@ import { calendarSettingsContext } from "./calendar-settings-data.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { rolesContext } from "./roles-data.js";
 import { coachSettingsSections, permissionTabAllowed, viewSettingsSections } from "./permission-nav.js";
+import { viewHiddenMenuSelectors, viewWorkspaceTabs } from "./view-modules.js";
 import { storageAdminContext } from "./media-storage-admin-data.js";
 import { requestBottomNavSync } from "./bottom-nav.js";
 import { els } from "./dom.js";
@@ -64,12 +65,15 @@ export const VIEW_WORKSPACE_MENU_HIDDEN = Object.freeze([
 ]);
 export const VIEW_WORKSPACE_TABS = Object.freeze(["coach-home", "organization", "coach-account"]);
 
+// V-0: a place opens in a view workspace once one of its modules is open there and its word is held (view-modules.js);
+// until a module's V step, the hidden set is the whole list above.
 function applyViewWorkspaceMenu(view) {
+  const hidden = new Set(view ? viewHiddenMenuSelectors() : []);
   for (const selector of VIEW_WORKSPACE_MENU_HIDDEN) {
     document.querySelectorAll(selector).forEach((el) => {
       // The athlete search is a label around its input: hide the label.
       const target = el.id === "athleteSearch" ? el.closest(".search-field") || el : el;
-      if (view) {
+      if (hidden.has(selector)) {
         if (!target.hidden) target.dataset.viewHidden = "true";
         target.hidden = true;
       } else if (target.dataset.viewHidden) {
@@ -104,7 +108,7 @@ export function renderLibraryNav() {
   // plan without a picked athlete is only "No athlete selected."); the
   // athlete shell keeps its own weekly plan as the fallback.
   if (state.activeTab === "organization" && !hasOrganizationAccess()) state.activeTab = isAthleteMode() ? "weekly" : "coach-home";
-  if (isViewWorkspace() && !VIEW_WORKSPACE_TABS.includes(state.activeTab)) state.activeTab = "coach-home";
+  if (isViewWorkspace() && !viewWorkspaceTabs().includes(state.activeTab)) state.activeTab = "coach-home";
   if (isAthleteMode() && state.activeTab === "builder") state.activeTab = "weekly";
   document.querySelectorAll("[data-library-tab]").forEach((button) => {
     const tab = button.dataset.libraryTab;

@@ -104,6 +104,10 @@ const REVIEWED = Object.freeze({
   "inviteContext.js": 6,
   "joinLinkContext.js": 5,
   "mediaStorage.js": 2,
+  // V-0 (docs/ai/roles-v-steps-plan.md 3): canView maps a workspace to the scope can() is asked at (platform, private,
+  // the old club / team rows, the view types) and viewReadScope to a view workspace's data context; never an offer, and
+  // the entry gate lets a view workspace reach only a module's listed reads.
+  "moduleView.js": 5,
   "organizationEntry.js": 1, // R4-2: lets a non-coach through only with a view workspace (contract 5.1)
   "permissionRolesService.js": 5,
   // R4-3 (reviewed in its pull request): a custom role's scope (club or team) - which club a team lies in, and that
