@@ -351,7 +351,8 @@ test("(1280 px) a computer keeps the rail: no bar and React is never downloaded"
 // least 96 px, one line with an ellipsis, the full name in its title and accessible name, and nothing overflows.
 for (const width of [360, 375, 390, 412]) {
   test(`(club_admin, ${width} px) the workspace switcher keeps its width: one line, ellipsis, the full name in its title`, async () => {
-    const longName = "FK Primer Grad Sportski Klub";
+    // Invented, and long enough to be cut even at 412 px.
+    const longName = "FK Primer Grad Sportski Klub Omladinski Pogon Sever";
     const admin = await openAs(browser, world, "club_admin", width);
     let restore = null;
     try {
@@ -359,6 +360,7 @@ for (const width of [360, 375, 390, 412]) {
       const ws = (me.user || me).activeWorkspace;
       assert.equal(ws?.type, "club");
       const before = (me.user || me).clubs.find((c) => String(c.id) === String(ws.scopeId))?.name;
+      assert.ok(before, "the club's own name, to put back afterwards");
       const put = await admin.context.request.put(`${world.baseUrl}/api/organization/clubs/${ws.scopeId}`, { data: { name: longName } });
       assert.equal(put.status(), 200, await put.text());
       restore = () => admin.context.request.put(`${world.baseUrl}/api/organization/clubs/${ws.scopeId}`, { data: { name: before } });
@@ -376,6 +378,8 @@ for (const width of [360, 375, 390, 412]) {
           width: r.width,
           oneLine: lr.height <= lineHeight * 1.5,
           ellipsis: getComputedStyle(label).textOverflow === "ellipsis" && getComputedStyle(label).whiteSpace === "nowrap",
+          // The name really is cut (not merely styled for it), and the label stays inside the button.
+          truncated: label.scrollWidth > label.clientWidth && lr.right <= r.right + 0.5,
           inside: r.left >= 0 && r.right <= innerWidth,
           title: button.title,
           aria: button.getAttribute("aria-label"),
@@ -385,12 +389,13 @@ for (const width of [360, 375, 390, 412]) {
       assert.ok(g.width >= 96, `the switcher is at least 96 px wide (${g.width})`);
       assert.equal(g.oneLine, true, "its name is on one line");
       assert.equal(g.ellipsis, true, "a long name ends with an ellipsis");
+      assert.equal(g.truncated, true, "the long name is cut inside the button");
       assert.equal(g.inside, true);
       assert.equal(g.overflow, 0, "no horizontal overflow");
       assert.ok(g.title.includes(longName) && g.aria.includes(longName), "the full name stays in its title and accessible name");
       assert.deepEqual(admin.pageErrors, []);
     } finally {
-      if (restore) await restore();
+      if (restore) assert.equal((await restore()).status(), 200, "the club's name is put back");
       await admin.context.close();
     }
   });
@@ -405,6 +410,9 @@ async function tapBar(page, id) {
   await page.waitForTimeout(400);
 }
 async function noScrim(page, step) {
+  // Wait for the page to settle (a back or a tab's render), then assert: a scrim that stays fails the assertion below.
+  await page.waitForFunction(() => !/\b(athletes-drawer-open|mobile-nav-open)\b/.test(document.body.className)
+    && !document.querySelector(".om-bottom-sheet-backdrop"), null, { timeout: 5_000 }).catch(() => {});
   const s = await page.evaluate(() => {
     const backdrop = document.getElementById("mobileNavBackdrop");
     const centre = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
@@ -421,8 +429,8 @@ async function noScrim(page, step) {
     { bodyScrim: "none", backdrop: "none", sheet: false, centreIsContent: true, listOpen: false }, `${step}: ${s.classes}`);
 }
 
-test("(team_coach, 390 px) no scrim stays after any bar tab, another tab, browser back, or More", async () => {
-  const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 390);
+for (const role of ["team_coach", "club_admin"]) test(`(${role}, 390 px) no scrim stays after any bar tab, another tab, browser back, or More`, async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, role, 390);
   try {
     await page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
     const ids = (await barIds(page)).filter((id) => id !== "more");
@@ -433,7 +441,6 @@ test("(team_coach, 390 px) no scrim stays after any bar tab, another tab, browse
         // A second tap where the first only closed the athlete list: the section opens now.
         if (await page.evaluate(() => document.body.classList.contains("mobile-nav-open"))) await tapBar(page, second);
         await page.goBack();
-        await page.waitForTimeout(500);
         assert.ok(page.url().startsWith(world.baseUrl), "still in the app after back");
         await noScrim(page, `${first} -> ${second} -> back`);
       }
@@ -452,8 +459,8 @@ test("(team_coach, 390 px) no scrim stays after any bar tab, another tab, browse
     await noScrim(page, "athletes -> athletes");
     // Athletes, then browser back closes it.
     await tapBar(page, "athletes");
+    await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"));
     await page.goBack();
-    await page.waitForTimeout(500);
     await noScrim(page, "athletes -> back");
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
