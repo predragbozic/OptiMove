@@ -11,7 +11,12 @@ import os from "node:os";
 import path from "node:path";
 import pg from "pg";
 import { runMigrations } from "../src/migrate.js";
-import { asActor, buildDatabase, fixtures, MIGRATIONS, RUNBOOKS, ROLE_IDS, startServer, V92_FILE, V92_NAME } from "./support/permission-roles-world.mjs";
+import { asActor, buildDatabase, fixtures, MIGRATIONS, migrationsWithout, RUNBOOKS, ROLE_IDS, startServer, V92_FILE, V92_NAME } from "./support/permission-roles-world.mjs";
+
+// Migrations that build on v92 and refuse to run without it (v95): left out of the worlds in which this suite applies
+// v92 last (both orders, old-vs-new, the rollback), so they keep testing v92 itself; the main world has them all.
+const V92_DEPENDENTS = ["202611271000_roles_v95_closed_module_dominance.sql"];
+const UP_TO_V92 = migrationsWithout(V92_DEPENDENTS, "all");
 
 const V93_FILE = "202611251000_calendar_v93_event_delete.sql";
 const VIEW = ["athletes.view", "programs.view", "exercises.use", "presets.use", "calendar.view", "load.view.team",
@@ -32,6 +37,7 @@ after(async () => {
   await srv?.stop();
   await k?.end().catch(() => {});
   await db?.drop();
+  UP_TO_V92.cleanup();
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
 });
 
@@ -127,15 +133,17 @@ test("1. both orders against v93: fresh (v92 then v93 by name) and production (v
   const fresh = await k.query(`select migration_name from public.schema_migrations where migration_name in ($1, $2) order by applied_at, migration_name`, [V92_NAME, `migrations_v2/${V93_FILE}`]).catch(() => null);
   assert.ok(fresh, "schema_migrations readable");
   const freshCatalog = await v92Catalog(k);
-  const prod = await buildDatabase({ label: "r4v92_prod", upTo: "all", skip: [V92_FILE] });
+  const prod = await buildDatabase({ label: "r4v92_prod", upTo: "all", skip: [V92_FILE, ...V92_DEPENDENTS] });
   const c = new pg.Client({ connectionString: prod.url });
   await c.connect();
   try {
     assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows[0].n, 0);
     assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [`migrations_v2/${V93_FILE}`])).rows[0].n, 1, "v93 is applied before v92");
-    await runMigrations({ databaseUrl: prod.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: prod.url, migrationsRoot: UP_TO_V92.dir });
     const rec = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows[0];
     assert.equal(rec.checksum, crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V92_FILE))).digest("hex"));
+    // Then what builds on v92 (v95), as production meets it after v92: the same objects as the fresh world.
+    await runMigrations({ databaseUrl: prod.url, migrationsRoot: MIGRATIONS });
     assert.deepEqual(await v92Catalog(c), freshCatalog);
     // The runner again: skipped by its checksum.
     await runMigrations({ databaseUrl: prod.url, migrationsRoot: MIGRATIONS });
@@ -165,7 +173,7 @@ test("2. the seed: Club admin and Team coach get exactly the view words of 4.1, 
 });
 
 test("3. old-vs-new of the twin: before and after v92 every account answers identically for every word, apart from the view words the seed gave to their holders", async () => {
-  const pre = await buildDatabase({ label: "r4v92_old", upTo: "all", skip: [V92_FILE] });
+  const pre = await buildDatabase({ label: "r4v92_old", upTo: "all", skip: [V92_FILE, ...V92_DEPENDENTS] });
   const c = new pg.Client({ connectionString: pre.url });
   await c.connect();
   try {
@@ -190,7 +198,7 @@ test("3. old-vs-new of the twin: before and after v92 every account answers iden
       return out;
     };
     const before = await ask();
-    await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V92.dir });
     const afterMap = await ask();
     const diff = [...before.keys()].filter((key) => before.get(key) !== afterMap.get(key));
     for (const key of diff) {
@@ -527,7 +535,7 @@ test("14. the rollback: refused after real writes; clean, it restores v84's bodi
   const rollback = fs.readFileSync(path.join(RUNBOOKS, "roles-layers-v92-rollback.sql"), "utf8");
   await refused(k.query(rollback), "23514", /v92 rollback refused/);
   await k.query("rollback"); // the file's own BEGIN left the refused transaction open on this connection
-  const pre = await buildDatabase({ label: "r4v92_rb", upTo: "all", skip: [V92_FILE] });
+  const pre = await buildDatabase({ label: "r4v92_rb", upTo: "all", skip: [V92_FILE, ...V92_DEPENDENTS] });
   const c = new pg.Client({ connectionString: pre.url }); await c.connect();
   try {
     const catalog = async () => (await c.query(`select p.proname || ':' || md5(p.prosrc) as x from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like any (array['permission%', 'user_has%', 'user_holds%', 'lock_%'])
@@ -541,7 +549,7 @@ test("14. the rollback: refused after real writes; clean, it restores v84's bodi
     for (const block of preflight.split(/\n(?=-- Block )/).filter((b) => /select/i.test(b))) {
       for (const row of (await c.query(block)).rows) for (const [col, val] of Object.entries(row)) if (col.endsWith("ok")) assert.equal(val, true, `preflight ${col}`);
     }
-    await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V92.dir });
     const postcheck = fs.readFileSync(path.join(RUNBOOKS, "roles-layers-v92-postcheck.sql"), "utf8");
     for (const block of postcheck.split(/\n(?=-- Block )/).filter((b) => /select/i.test(b))) {
       for (const row of (await c.query(block)).rows) for (const [col, val] of Object.entries(row)) if (col.endsWith("ok")) assert.equal(val, true, `postcheck ${col}`);
@@ -550,7 +558,7 @@ test("14. the rollback: refused after real writes; clean, it restores v84's bodi
     await c.query(rollback);
     assert.deepEqual(await catalog(), before);
     assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows[0].n, 0);
-    await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V92.dir });
     assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows[0].n, 1);
     // A changed seeded item blocks the rollback (planted: a later migration-like removal is too heavy; use a body change).
     await c.query(`create or replace function public.permission_word_honoured(p_word text) returns boolean language sql immutable as $$ select false $$`);
@@ -775,10 +783,10 @@ test("20. the rollback refuses after a later migration was applied and after a b
       await x.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason, items_removed) values ($1, $2, 'change', $3, 'platform_admin', 'x', '{athletes.remove}')`, [ROLE_IDS.team_coach, rev, pa]);
     })],
   ]) {
-    const pre = await buildDatabase({ label: "r4v92_rbref", upTo: "all", skip: [V92_FILE] });
+    const pre = await buildDatabase({ label: "r4v92_rbref", upTo: "all", skip: [V92_FILE, ...V92_DEPENDENTS] });
     const c = new pg.Client({ connectionString: pre.url }); await c.connect();
     try {
-      await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V92.dir });
       const pa = await fixtures(c).user("pa"); await fixtures(c).grantPlatform(pa);
       await plant(c, pa, pre.url);
       await refused(c.query(rollback), "23514", expected);
