@@ -891,3 +891,26 @@ verified by the request record; the record now carries `ceiling_change_id`, `clu
   the uncertain COMMIT both ways, the replay re-evaluating standing inside its transaction, drift leaving dead customs out,
   `default_follow` skipping a club with its own version of the role, v95 end to end); `roles-r4-api.test.mjs` test 5 now proves
   `default_follow` and N4 through the route.
+- **After the internal review (security, db, code):**
+  - Ending a custom and *Take it from them too* refuse the actor's own custom (`self_custom`, Q13), as the custom write does.
+  - Ending a custom gives back the role's club words, so a club's admin ends only a custom whose role's club items it
+    holds (`role_exceeds_your_permissions`; test 12), the dominance of 3.5 applied to "back to the role". A platform admin
+    always may. *Accept the default* (O3) is not checked this way: it gives the club the platform's default, not words
+    the admin chose (an owner decision if that should change).
+  - The three custom writers lock the targets' Club admin rows of the club (any `is_active`) FOR SHARE after the users
+    rows, and lock the target's customs together with the actor's own live customs in the club (one statement, id order),
+    so the O5 check and the dominance check read rows a concurrent writer cannot change under them. The role of a custom
+    write is read again under its share lock (a role archived meanwhile is the identical 404).
+  - *Take it from them too* refuses `staff.assign` / `roles.manage` out of a Club admin custom (`club_admin_requires`,
+    not a 500); its replay lists the request's own customs (same hash, same ids), never a cross-transaction `xmin` match.
+  - `customsStillHolding` carries `customsStillHoldingTruncated` past 200; a club's roles offer *Change* / *Answer* only
+    to a reader with `roles.manage` (or a platform admin).
+- **Recorded limits:**
+  - **A brand-new Club admin grant against O5.** `PUT /api/organization/users/:id/club-roles/:clubId/club_admin` is an
+    upsert that locks no users row, so a grant of a user with no Club admin row in the club yet can commit while a custom
+    write by a peer admin is past its O5 check; both commit. An existing row (any `is_active`) is locked and serializes.
+    Closing it needs the grant route to lock the target's users row FOR UPDATE first (`organization.js`, outside R4-3).
+  - A stale custom (its R2 assignment revoked or expired) ended by the next write is recorded as `end_kind = 'reset'` by
+    the writing admin, with the reason `STALE_END_REASON`; `role_ended` would need a service marker in the v92 guard.
+  - A custom is bound to its old holding row by `updated_at`: a write that does not change the row's rights but bumps
+    `updated_at` ends the custom (fail closed).
