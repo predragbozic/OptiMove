@@ -1,6 +1,9 @@
+import {renderGalleryPicker} from './training-load-gallery-picker.js';
+import {dashboardDisclosureOpen} from './training-load-dashboard-disclosures.js';
+import {GALLERY_CHOICES} from './training-load-gallery-editor.js';
 import {renderDashboardPages} from './training-load-pages-view.js';
 import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from './training-load-calculation-view.js';
-import { ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { analysisChartInteractionGeneration, ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
 import { formatDashboardValue as formatValue, renderDashboardMetricTable } from "./training-load-dashboard-table.js";
@@ -294,6 +297,7 @@ function renderTopBarHtml() {
       <div class="tl-analysis-topbar-group">
         ${renderActivityPickerHtml()}
       </div>
+      ${a.dashboard?'<button type="button" class="plain-button compact-button" data-action="training-load-analysis-print">Export page as PDF</button>':''}
       ${renderLayoutBarHtml()}
     </div>
   `;
@@ -510,7 +514,7 @@ function renderChartHtml(model) {
   return `
     ${renderDashboardChartPlots(model, seriesLabel, row => safeAthleteName(row.identity.athleteId), groupLabels)}
     ${diagnostics.join("")}
-    <details class="tl-analysis-chart-values" open>
+    <details class="tl-analysis-chart-values" data-dashboard-disclosure="values" data-widget-id="${escapeAttr(model.widgetId)}" ${dashboardDisclosureOpen(model.widgetId,'values')?'open':''}>
       <summary>Values and status</summary>
       ${renderTableHtml(model, groupLabels)}
     </details>
@@ -523,6 +527,7 @@ function renderWidgetBodyHtml(widget, results) {
   const catalog = state.trainingLoad.analysis.metricPicker.definitions ?? [];
   const displayWidget = { ...widget, series: widget.series.map(series => { const definition = catalog.find(d => d.id === series.metric_definition_id); return { ...series, ...(definition ? { calculation: definition.calculation } : {}) }; }) };
   const model = buildDashboardWidgetDisplayModel(displayWidget, results, { loading: analysis.queryLoading, querySkipped, error: analysis.queryError, period: analysis.period });
+  model.interactionGeneration=analysisChartInteractionGeneration();
   if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
@@ -871,6 +876,12 @@ function renderEditorHtml() {
               : `<span class="muted">Uses dashboard/runtime filter</span>`}
           </div>
         </div>
+        ${a.chartShapes&&['line_chart','bar_chart'].includes(draft.widgetType)?`<fieldset class="tl-gallery-editor"><legend>Chart gallery</legend>
+          ${renderGalleryPicker(draft.galleryKind??'standard',GALLERY_CHOICES,'training-load-analysis-gallery-kind',saving)}
+          ${draft.galleryKind&&draft.galleryKind!=='standard'?`<p>Choose the measurements used by this chart. Scatter uses the first as X and the second as Y.</p>${entries.map((e,i)=>`<label><input type="checkbox" data-action="training-load-analysis-gallery-series" data-series-key="${escapeAttr(e.key)}" ${!draft.galleryKeys||draft.galleryKeys.includes(e.key)?'checked':''} ${off}>${escapeHtml(e.metric?.label??'Measurement '+(i+1))}</label>${draft.galleryKind==='combined'?`<label>Mark<select data-action="training-load-analysis-gallery-mark" data-series-key="${escapeAttr(e.key)}" ${off}>${[['bar','Bar'],['line','Line']].map(([v,l])=>optionHtml(v,l,draft.galleryMarks?.[e.key]??(i===entries.length-1?'line':'bar'))).join('')}</select></label>`:''}`).join('')}`:''}
+          ${draft.galleryKind==='stacked'?`<label><input type="checkbox" data-action="training-load-analysis-gallery-additive" ${draft.galleryAdditive?'checked':''} ${off}>These measurements are separate additive components of one total.</label>`:''}
+          ${['heatmap','boxplot'].includes(draft.galleryKind)?'<p>Use Each measurement to keep separate athlete values. Conflicting or repeated athlete/date values are left out.</p>':''}
+        </fieldset>`:''}
         <div class="tl-analysis-series-editor">
           <div class="tl-analysis-series-head">
             <strong>Series <span class="muted">${entries.length} of ${cap}</span></strong>

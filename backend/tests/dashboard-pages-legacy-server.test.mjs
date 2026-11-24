@@ -28,7 +28,7 @@ before(async()=>{
  console.log('Previous build under test:',old.commit);
 });
 after(async()=>{await old?.stop();await db?.drop()});
-for(const [stage,boundary] of [['v90','202611231000'],['v91','202611231100']])test(`previous build seven flows against ${stage}`,async t=>{
+for(const [stage,boundary] of (process.env.DASHBOARD_GALLERY_REHEARSAL==='true'?[['v94','202611261000']]:[['v90','202611231000'],['v91','202611231100']]))test(`previous build seven flows against ${stage}`,async t=>{
  const stable=await dashboard(stage+' stable');await widget(stable);
  const before=await detail(stable.id);
  const beforeQuery=await api(`/api/training-load/dashboards/${stable.id}/query`,{dateFrom:'2026-11-01',dateTo:'2026-11-07'});assert.equal(beforeQuery.status,200,beforeQuery.text);

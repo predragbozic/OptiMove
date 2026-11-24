@@ -66,6 +66,7 @@ test('reader derives retained eligibility from the authorized stored single seri
     canManageDashboardRow: () => true, dataWorkspaceMatches: () => true,
     query: async (sql, params) => {
       calls.push({ sql, params });
+      if(sql.includes('dashboard_chart_shapes_available'))return {rows:[{supported:false}]};
       if (sql.includes('select * from training_load.dashboards')) return { rows: [f.s.dashboard] };
       if (sql.includes('dashboard_widget_types')) return { rows: f.s.widgetTypes };
       if (sql.includes('dashboard_builtin_series')) return { rows: f.s.builtins };
@@ -76,6 +77,7 @@ test('reader derives retained eligibility from the authorized stored single seri
         return { rows: stored };
       }
       if (sql.includes('metric_source_connections')) return { rows: params[5] ? [f.s.connection] : [] };
+      if(sql.includes('dashboard_chart_shapes_available'))return {rows:[{supported:false}]};
       throw new Error(sql);
     },
   });
@@ -136,6 +138,7 @@ test('reader ignores forged retainedPin and existing series claims when the DB h
         sourceChecks.push(params[5]);
         return { rows: params[5] ? [f.s.connection] : [] };
       }
+      if(sql.includes('dashboard_chart_shapes_available'))return {rows:[{supported:false}]};
       throw new Error(sql);
     },
   });

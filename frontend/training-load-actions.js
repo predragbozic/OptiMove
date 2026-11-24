@@ -1,3 +1,5 @@
+import {formatDate as formatDashboardReportDate} from './utils.js';
+import {printDashboardPage} from './training-load-dashboard-print.js';
 import {handleDashboardPageAction} from './training-load-pages-data.js';
 import { emptyExternalScheduleDetail, emptyExternalScheduleForm, emptyGpexeImportState, emptyRpeForm, emptyTrainingLoadAnalysisState, emptyTrainingLoadFilter, emptyTrainingLoadFilterPicker, state } from "./state.js";
 import { closeImportsOverlays } from "./gpexe-period-data.js";
@@ -43,6 +45,7 @@ import {
   updateExternalSchedule,
 } from "./training-load-data.js";
 import {
+  analysisChartInteractionGeneration,
   BUILT_IN_FIXED_SCOPE,
   BUILT_IN_SERIES,
   addEditorSeries,
@@ -1525,6 +1528,25 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     await saveAnalysisWidgetEditor(renderTrainingLoad);
     renderTrainingLoad();
     return true;
+  }
+  if(type==='training-load-analysis-chart-period'){
+    const a=state.trainingLoad.analysis;if(a.queryLoading||!a.widgets.some(w=>w.id===action.dataset.widgetId)||JSON.stringify(a.period)!==action.dataset.boundPeriod||Number(action.dataset.boundGeneration)!==analysisChartInteractionGeneration())return true;
+    const from=action.dataset.dateFrom,to=action.dataset.dateTo;
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(from??'')||!/^\d{4}-\d{2}-\d{2}$/.test(to??'')||to<from)return true;
+    a.period={...a.period,dateFrom:from,dateTo:to};await queryAnalysisDashboard(renderTrainingLoad,{force:true});return true;
+  }
+  if(type==='training-load-analysis-print'){
+    const a=state.trainingLoad.analysis;if(a.queryLoading||a.saving)return true;
+    try{await printDashboardPage(document.querySelector('.tl-analysis-grid'),{title:a.dashboard?.name??'Dashboard',subtitle:[a.page?.name,formatDashboardReportDate(a.period.dateFrom),formatDashboardReportDate(a.period.dateTo)].filter(Boolean).join(' · ')});}catch(error){a.notice=error.message;renderTrainingLoad();}return true;
+  }
+  if(type==='training-load-analysis-gallery-kind'||type==='training-load-analysis-gallery-series'||type==='training-load-analysis-gallery-mark'||type==='training-load-analysis-gallery-additive'){
+    const editor=state.trainingLoad.analysis.editor;if(!editor?.draft||editor.saving||!state.trainingLoad.analysis.chartShapes)return true;
+    const d=editor.draft;
+    if(type.endsWith('kind')){d.galleryKind=action.value;d.galleryKeys=d.series.map(e=>e.key);}
+    else if(type.endsWith('series')){const keys=new Set(d.galleryKeys??d.series.map(e=>e.key));if(action.checked)keys.add(action.dataset.seriesKey);else keys.delete(action.dataset.seriesKey);d.galleryKeys=[...keys];}
+    else if(type.endsWith('mark')){d.galleryMarks??={};d.galleryMarks[action.dataset.seriesKey]=action.value;}
+    else d.galleryAdditive=action.checked;
+    renderTrainingLoad();return true;
   }
   if (type === "training-load-analysis-widget-title" || type === "training-load-analysis-widget-type" || type === "training-load-analysis-widget-group") {
     const editor = state.trainingLoad.analysis.editor;

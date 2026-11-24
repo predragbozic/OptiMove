@@ -1,3 +1,4 @@
+import {galleryDraftSettings,galleryEditorProblem,gallerySettingsChanged,galleryEditorPresentation} from './training-load-gallery-editor.js';
 import {loadDashboardPages,pageApiPath} from './training-load-pages-data.js';
 import { loadTrainingLoadOrgPickerData } from "./training-load-data.js";
 import { api } from "./api.js";
@@ -148,6 +149,12 @@ export function analysisRuntimeFilterPayload(filter = state.trainingLoad.analysi
   return payload;
 }
 
+let chartInteractionContext='', chartInteractionGeneration=0;
+// A local counter binds actions to workspace/page/filter without putting IDs in chart DOM.
+export function analysisChartInteractionGeneration(){
+ const current=queryContextKey();if(current!==chartInteractionContext){chartInteractionContext=current;chartInteractionGeneration++;}
+ return chartInteractionGeneration;
+}
 function queryContextKey(runtimePayload = analysisRuntimeFilterPayload()) {
   const a = state.trainingLoad.analysis;
   const widgetRevisions = (a.widgets || []).map((w) => `${w.id}:${w.revision}`).join(",");
@@ -195,6 +202,7 @@ function applyDashboardDetail(detail) {
   }
   analysis.dashboard = detail.dashboard;
   analysis.simplePreview = detail.simplePreview === true;
+  analysis.chartShapes = detail.chartShapes === true;
   analysis.pagesAvailable = detail.pagesAvailable === true;
   if (!analysis.pagesAvailable) { analysis.selectedPageId = null; analysis.page = null; analysis.pages = []; }
   analysis.simpleWorkspaceRequired = detail.simpleWorkspaceRequired === true;
@@ -986,6 +994,7 @@ function normalizedFilterOverride(override) {
 
 export function analysisEditorDraftFromWidget(widget) {
   return {
+    ...galleryDraftSettings(widget),
     title: widget.title || "",
     widgetType: widget.widget_type,
     groupBy: widget.group_by || "day",
@@ -1076,6 +1085,7 @@ function editorMetricFacts(metric) {
 
 export function setEditorWidgetType(draft, widgetType) {
   draft.widgetType = widgetType;
+  if(!["line_chart","bar_chart"].includes(widgetType))draft.galleryKind="standard";
   if (!analysisWidgetSupportsComparison(widgetType)) {
     for (const entry of draft.series) entry.fields.comparisonPeriod = null;
   }
@@ -1084,6 +1094,7 @@ export function setEditorWidgetType(draft, widgetType) {
 // What would block a Save before any request is made ("" = nothing).
 export function analysisEditorProblem(draft) {
   if (!draft) return "";
+  const galleryProblem=galleryEditorProblem(draft);if(galleryProblem)return galleryProblem;
   const title = draft.title.trim();
   if (!title) return "Give the widget a title.";
   if (title.length > 200) return "The title can be at most 200 characters.";
@@ -1186,6 +1197,11 @@ export function analysisEditorPlan(widget, draft) {
   const keptInServerOrder = rows.map((row) => row.id).filter((id) => keptInDraftOrder.includes(id));
   const orderChanged = keptInDraftOrder.join(",") !== keptInServerOrder.join(",");
   if (draft.series.length > 1 && (orderChanged || adds.length || metricOps.some((op) => op.type === "replaceSeries"))) ops.push({ type: "reorder" });
+  const galleryChanged=gallerySettingsChanged(widget,draft);
+  const shape=widget.presentation_config?.schemaVersion===1?widget.presentation_config.chartShape:null;
+  const modifiesBinding=ops.some(op=>op.type!=='patchWidget'||Object.keys(op.body).some(k=>k!=='title'));
+  if(shape&&modifiesBinding)ops.unshift({type:'patchWidget',body:{presentation:{mode:'clear'}}});
+  if(galleryChanged||shape&&modifiesBinding||(draft.galleryKind&&draft.galleryKind!=='standard'&&modifiesBinding))ops.push({type:'gallery'});
   return ops;
 }
 
@@ -1355,7 +1371,9 @@ export async function saveAnalysisWidgetEditor(onPainted) {
   try {
     for (const op of plan) {
       const entry = op.key ? editorSeriesEntry(draft, op.key) : null;
-      if (op.type === "deleteSeries") {
+      if(op.type==='gallery'){
+        written(await send('PATCH',widgetUrl,{expectedWidgetRevision:revision,presentation:{mode:'replace',value:galleryEditorPresentation(widget,draft)}}));
+      } else if (op.type === "deleteSeries") {
         await deleteSeries(op.seriesId);
         draft.removedIds = draft.removedIds.filter((id) => id !== op.seriesId);
         draft.staleIds = draft.staleIds.filter((id) => id !== op.seriesId);

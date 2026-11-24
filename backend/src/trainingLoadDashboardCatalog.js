@@ -1,3 +1,4 @@
+import {remapGalleryPresentation} from './dashboardGallery/remap.js';
 import { pageSchemaInstalled } from './dashboardPages/config.js';
 // Training Load Analysis Dashboard — dashboard lifecycle: list, detail,
 // create, update metadata, clone, archive, and active-selection
@@ -449,15 +450,21 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       );
       cloneReport.push({ sourceSeriesId: s.id, resolution: "copied" });
     }
+    const clonedSeries = widgets.rows.some(w=>w.presentation_config?.schemaVersion===1&&w.presentation_config?.chartShape)
+      ? (await c.query('select id,widget_id,series_order from training_load.dashboard_widget_series where widget_id=any($1::uuid[])',[[...widgetIdMap.values()]])).rows : [];
     for (const sourceWidget of widgets.rows) {
       if (pagesInstalled) await c.query("select set_config('optimove.dashboard_page',pg_current_xact_id()::text||':'||$1,true)", [widgetPageMap.get(sourceWidget.id)]);
-      await c.query(
-        `update training_load.dashboard_widgets as cloned_widget
-         set presentation_config = source_widget.presentation_config
-         from training_load.dashboard_widgets as source_widget
-         where cloned_widget.id = $1 and source_widget.id = $2`,
-        [widgetIdMap.get(sourceWidget.id), sourceWidget.id],
-      );
+      if(sourceWidget.presentation_config?.schemaVersion!==1||!sourceWidget.presentation_config.chartShape){
+        // Preserve unknown/opaque JSON in PostgreSQL, including numeric precision.
+        await c.query(`update training_load.dashboard_widgets as cloned_widget
+          set presentation_config = source_widget.presentation_config
+          from training_load.dashboard_widgets as source_widget
+          where cloned_widget.id=$1 and source_widget.id=$2`,[widgetIdMap.get(sourceWidget.id),sourceWidget.id]);
+        continue;
+      }
+      const idMap=new Map(series.rows.filter(row=>row.widget_id===sourceWidget.id).map(row=>[row.id.toLowerCase(),clonedSeries.find(next=>next.widget_id===widgetIdMap.get(sourceWidget.id)&&next.series_order===row.series_order)?.id]));
+      const presentation=remapGalleryPresentation(sourceWidget.presentation_config,idMap);
+      await c.query('update training_load.dashboard_widgets set presentation_config=$2 where id=$1',[widgetIdMap.get(sourceWidget.id),JSON.stringify(presentation)]);
     }
     await c.query("commit");
     return { dashboard: newDashboard, cloneReport };
