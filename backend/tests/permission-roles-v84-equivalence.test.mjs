@@ -18,7 +18,7 @@ let db, k, F, srv, authz, perms, oracle;
 const W = {};
 
 before(async () => {
-  db = await buildDatabase({ label: "v84_eq" });
+  db = await buildDatabase({ label: "v84_eq", upTo: "all" });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);
@@ -52,6 +52,8 @@ after(async () => {
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
 });
 
+const SEEDED_VIEW = ["athletes.view", "programs.view", "exercises.use", "presets.use", "calendar.view", "load.view.team",
+  "load.view.athlete", "dashboards.view", "tests.view", "tests.results.view", "variables.view"];
 const ctxOf = (userId) => authz.loadAuthorizationContext({ id: userId, role_hint: null });
 const twin = async (userId, word, type, id) => (await k.query(`select public.user_has_permission($1, $2, $3, $4) as ok`, [userId, word, type, id ?? null])).rows[0].ok;
 const scopesOf = () => ({
@@ -74,8 +76,11 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           const sql = await twin(userId, word, type, scope.id);
           const clubAdminHere = word === "roles.manage" && ctx.clubRoles.some((r) => r.role === "club_admin"
             && ((type === "club" && r.clubId === scope.id) || (type === "team" && ((r.clubId === W.A && scope.id === W.T1) || (r.clubId === W.B && scope.id === W.T2)))));
-          const expected = clubAdminHere && ctx.platformRoles.length === 0 ? true : r1;
-          if (expected !== r1) differences++;
+          // Roles R4-1 (v92): the VIEW package is seeded into Club admin and Team coach (contract 4.1); R1's oracle never
+          // knew those words. A seeded view word is held exactly where org.view (seeded in both since v84) is held.
+          const seededView = SEEDED_VIEW.includes(word) && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
+          const expected = (clubAdminHere && ctx.platformRoles.length === 0) || seededView ? true : r1;
+          if (expected !== r1 && !seededView) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);
           assert.equal(sql, expected, `${name}: twin(${word}) on ${scopeName}`);
           cells++;

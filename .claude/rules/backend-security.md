@@ -77,3 +77,16 @@ forwarding.
 If `auth.js` is touched: PBKDF2 stays >= 210,000 iterations, the session token is hashed
 in the database (never stored plain), comparison uses `timingSafeEqual`, and the session
 cookie stays `HttpOnly` + `SameSite`.
+
+## Workspace types (roles R4-1, the Rukovodilac's rule of 2026-11-22)
+
+- No pull request may introduce a `club` or `team` workspace for an account that is not that club's `club_admin` /
+  that team's `team_coach` (old role rows), nor a helper that derives a scope from `{type, scopeId}` without checking a
+  role. Six modules still treat an active club or team workspace as the permission itself
+  (`docs/ai/roles-r4-contract.md` section 6); a role holder reaches a club only through the separate `club_view` /
+  `team_view` types, which those helpers do not recognize (fail closed).
+- Proof: `backend/tests/roles-r4-checked-gates.test.mjs` B1 enumerates every workspace-type branch in `backend/src`
+  against a reviewed list (a new branch fails until it is reviewed against this rule) and B2 pins that only
+  `workspace.js` offers a club or team workspace, from the old role rows only.
+- A word acts only once every route that gives what it means calls `can()` with it: `ENFORCED_PERMISSIONS`
+  (`backend/src/permissions.js`) lists, per word, its gate files; the same test file (A1, A2) proves both directions.

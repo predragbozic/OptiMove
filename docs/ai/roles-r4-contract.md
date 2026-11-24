@@ -774,3 +774,64 @@ no migration beyond vNN. MANAGE is two to three times that, plus the migrations 
 - The MANAGE steps and their database guards (R5, R6, R6a, R7 of the plan, in the order of O7).
 - The padlock screen (Q2), the private workspace's licence (Q9), the account target rule (plan 2.1 rule 6).
 - Any change to `requireCoach`, `computeCapabilities`, `managedTeamIds` or the old role tables.
+
+## 16. As built: R4-1 (vNN = v92, `202611241000`)
+
+Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook `docs/runbooks/roles-layers-v92.md`.
+
+- **What is built:** sections 7.1-7.5 and 7.7 in the database (the eight tables, their guards, the twin with steps 6 and
+  8, `user_holds_role_items` against the effective set, rule 7 inside a club and across clubs, the widened request record,
+  the old tables' `updated_at` and `role_ended` triggers, the seed of 4.1); the lock of 7.6 as
+  `public.lock_club_ceiling(uuid[], mode)` / `public.permission_club_lock_held(uuid, mode)` and the Node helper
+  `backend/src/clubCeilingLock.js` (namespace 891234593); section 8 (`ROLE_PERMISSIONS_SQL` reads
+  `public.permission_user_holdings`, the one definition of a holding's effective words, and the closed modules in the
+  same statement; `can()` step 6); `ENFORCED_PERMISSIONS` (= R2's seven words with their gate files) and
+  `STORABLE_PERMISSIONS` (its database twin `permission_word_honoured`, 18 words); the R2 service takes the club lock
+  first on every club-scope write; the standing rule in `.claude/rules/backend-security.md` with its test.
+- **Not built in R4-1 (R4-3, with the writers):** the routes of section 9 and the service side of 7.2's `default_follow`
+  (the database refuses at COMMIT a default change that would break rule 7 in a club - test 16 of
+  `roles-r4-v92.test.mjs` - but no route yet adds the word to the clubs' Club admin versions; no club version can exist
+  before R4-3 anyway). `permission_actor_holds` is not replaced: it delegates to the two replaced functions.
+- **Decisions taken while building (the *Rukovodilac* of OptiMove, 2026-11-23):**
+  1. *Copy as a new role* keeps R2's behaviour: only checked words are copied; the seeded view words are dropped and named
+     in the answer's `dropped` list with the reason `not_available_yet` (option B).
+  2. An unchecked word is never added to or taken away from any role through the R2 API - basic system roles included
+     (`409 permission_not_available_yet`); the seed is the only writer of unchecked words on the basic roles.
+- **Found while building:** the old tables' `updated_at` trigger reads `revoked_at` through `to_jsonb`, because the
+  minimal test scaffolds' copies of `user_club_roles` / `user_team_roles` have no such column; production's have it.
+- **Changed by the internal review (code, security, db):**
+  - `lock_permission_actor` gains a seventh parameter, `p_all_system_roles` (default false): a club version writer
+    passes true and locks every live system role `FOR SHARE`, so it serializes with a platform admin's default change
+    of any system role (7.2, H4) instead of reading a default that is about to change (test 19). The six-argument v84
+    body is dropped; the rollback drops the seven-argument one and restores v84's.
+  - `permission_rule7_check` returns at once for a change of a non-system role (it relies on `owner_scope` being
+    immutable and on roles being archived, never deleted). A per-batch "already checked" flag was tried and removed at the
+    re-review: in immediate mode two writes of one client message share a statement timestamp, so it could skip the
+    second (test 21); the cross-club loop runs on every firing.
+  - The rollback locks the v92 tables and the role tables `access exclusive` before its checks; it refuses after a later
+    migration and after a basic role changed (test 20).
+  - A database refusal "a club's Club admin would lack ..." maps to `409 club_admin_would_lack` in the R2 service
+    (`roles-r4-api.test.mjs` test 5).
+  - `roles-r4-checked-gates.test.mjs` B1 enumerates the workspace-type comparison forms (`<x>.type ===`, a local
+    `type` / `<name>Type ===`, `case "club":`, `workspace?.type`, a list of type words or a `*WORKSPACE|SCOPE|CONTEXT*TYPES`
+    constant asked `.includes(` / `.has(`; B0 holds a positive and a negative example of each) against a reviewed list of
+    46 files; B3 is a tripwire on the first `club_view` / `team_view` literal in `backend/src`. A form the pattern does
+    not know (for example a type read through a computed key) is still a review matter.
+- **Deferred to R4-3 (with the writers; recorded, not built):**
+  - the races of 7.6 between a ceiling close and a guarded write, a version change and a custom, and a ceiling close and
+    a club archive: their writers do not exist yet, so the lock order is proven only for the R2 writes and the default /
+    version pair (tests 15, 19);
+  - a club's admin versioning or customising the very role that gives them `roles.manage` (self-reference), ending
+    stale customs when their holding row changes, and two holdings that bind one custom;
+  - a holding's `holding_row_version` must travel as text through the API (a `timestamptz` compared for equality loses
+    microseconds through a JavaScript `Date`).
+- **LOW notes (accepted):** an authorization entry without `closedModules` skips the ceiling in `can()` (every entry
+  `ROLE_PERMISSIONS_SQL` builds carries it; a hand-made context in a test may not); the preflight's block 2 is a
+  point-in-time check, so nothing may change the v84 bodies between it and the deploy (the migration's step 0 refuses
+  anyway); v92 takes its table locks in a short deploy window (runbook, "quiet moment").
+- **Evidence:** `backend/tests/roles-r4-v92.test.mjs` (both orders against v93, seed, old-vs-new of the twin, the truth
+  table in `can()` and the twin with rows 5 and 9 and an expired assignment, every guard, the lock, races, H2, H4, the
+  rollback and its refusals), `roles-r4-api.test.mjs`,
+  `roles-r4-view-seed-proof.test.mjs` (M4: every seeded row proven on its module's read route),
+  `roles-r4-checked-gates.test.mjs`, `roles-layers-v92-rehearsal-guards.test.mjs`; the rehearsal
+  (`backend/scripts/roles-layers-v92-rehearsal.mjs`) passed on PostgreSQL 16; PostgreSQL 17 is the owner's run.

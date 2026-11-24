@@ -12,7 +12,7 @@ const R = "/api/organization/roles";
 let db, k, F, srv, P, A;
 
 before(async () => {
-  db = await buildDatabase({ label: "me_perm_r3" });
+  db = await buildDatabase({ label: "me_perm_r3", upTo: "all" });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);
@@ -208,7 +208,10 @@ test("7. equality: for every account, each of its workspaces and every catalog w
       const authz = await A.loadAuthorizationContext(row);
       const scope = scopeOf(ws, who.id);
       for (const word of Object.keys(P.PERMISSIONS)) {
-        const expected = scope ? P.can(authz, word, scope) : false;
+        // Since v92 (R4-1) a non-admin's role also holds unchecked VIEW words; /me offers only checked words (its
+        // candidates are HONOURED_PERMISSIONS, contract 5.1), so an unchecked word is never in the list.
+        const offered = authz.platformRoles.length > 0 || P.HONOURED_PERMISSIONS.includes(word);
+        const expected = scope && offered ? P.can(authz, word, scope) : false;
         assert.equal(user.permissions.includes(word), expected, `${ws.type} ${word}`);
         cells += 1;
       }
