@@ -183,6 +183,7 @@ import { calendarSettingsNeedLoad, enterCalendarSettingsSection, loadCalendarSet
 import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
 import { handleRolesAction, handleRolesBeforeUnload, handleRolesInput, rolesMayBeLeft, submitRolesForm } from "./roles-actions.js";
 import { leaveClubLicence, syncClubLicence } from "./club-licence-actions.js";
+import { leaveRolesLayers, syncRolesLayers } from "./roles-layers-actions.js";
 import { resetClubLicence } from "./club-licence-data.js";
 import { enterRolesSection, loadRoles, markRolesUsersStale, loadWho, resetRolesForWorkspaceChange, rolesContext, rolesNeedLoad, rolesUsersAvailable, whoNeedsLoad } from "./roles-data.js";
 import { renderRolesAssignHtml, renderRolesPanelHtml, renderRolesWhoHtml } from "./roles-view.js";
@@ -2533,6 +2534,7 @@ function notInViewWorkspace(open) {
   return (...args) => {
     // Every notification opener leaves Settings without loadActiveTab: the Club licence island goes with it.
     leaveClubLicence();
+    leaveRolesLayers();
     if (!isViewWorkspace()) return open(...args);
     state.activeTab = "coach-home";
     return loadActiveTab();
@@ -2543,8 +2545,11 @@ async function loadActiveTab() {
   if (isAthleteMode() && state.activeTab === "coach-home") state.activeTab = "athlete-home";
   renderTabs();
   renderLibraryNav();
-  // Roles R4-4: the Club licence island lives only in Settings; leaving it unmounts the island at once.
-  if (state.activeTab !== "organization") leaveClubLicence();
+  // Roles R4-4: the Club licence and role-layer islands live only in Settings; leaving it unmounts them at once.
+  if (state.activeTab !== "organization") {
+    leaveClubLicence();
+    leaveRolesLayers();
+  }
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
   if (state.activeTab === "coach-account") return renderCoachAccount();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
@@ -3906,6 +3911,7 @@ function renderRolesSurface() {
     return;
   }
   panel.outerHTML = renderRolesPanelHtml();
+  syncRolesLayers(els.content, { renderRoles: renderRolesSurface, renderUsers: renderRolesUsersSurface });
 }
 
 // Users (R3): the assignment form and "who holds what" repaint on their own, so what is typed elsewhere stays.
@@ -4011,8 +4017,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     }
     // The Settings tab row scrolls sideways when it does not fit: keep the active tab in view.
     revealActiveTab(els.content);
-    // Roles R4-4: the Club licence island of a chosen club (a platform administrator), mounted after the paint.
+    // Roles R4-4: the Club licence island of a chosen club (a platform administrator), mounted after the paint, and
+    // the role-layer islands (Club roles in Roles, Access in this club in Users).
     void syncClubLicence(els.content);
+    syncRolesLayers(els.content, { renderRoles: renderRolesSurface, renderUsers: renderRolesUsersSurface });
   };
 
   await loadCachedView({

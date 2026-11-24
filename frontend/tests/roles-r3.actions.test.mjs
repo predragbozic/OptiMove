@@ -92,6 +92,15 @@ test("2. the list reads the catalog and every role for the club and shows people
   await loadRoles();
   assert.ok(calls.some((c) => c.url.includes("/catalog") && c.url.includes(`clubId=${CLUB}`)));
   assert.ok(calls.some((c) => c.url.includes("state=all") && c.url.includes(`clubId=${CLUB}`)));
+  // R4-4 PR B: in a club's workspace the list is the Club roles island (roles-layers tests); its host is drawn.
+  const club = renderRolesPanelHtml();
+  assert.match(club, /data-club-roles-host data-club-id="11111111-0000-4000-8000-000000000001" data-club-name="FK Borac"/);
+  assert.doesNotMatch(club, /roles-row/, "no R3 list in a club workspace");
+  // The R3 list stays the platform workspace's (the system roles).
+  state.currentUser = { id: "u1", activeWorkspace: { type: "platform" }, clubs: [] };
+  state.organization.data = { ...state.organization.data, isPlatformAdmin: true };
+  resetRolesForWorkspaceChange();
+  await loadRoles();
   const html = renderRolesPanelHtml();
   assert.match(html, /Assistant/);
   assert.match(html, /2 people/);
@@ -103,14 +112,10 @@ test("2. the list reads the catalog and every role for the club and shows people
   assert.doesNotMatch(html, /dddddddd|11111111-0000/); // no id on screen
 });
 
-test("3. a caller with no actions reads the list and a role read-only", async () => {
+test("3. a caller with no actions reads a role read-only (the R3 form a club's own role still opens)", async () => {
   asClubAdmin();
   server({ roles: [role({ actions: { change: false, archive: false, copy: false, assign: false } })] });
   await loadRoles();
-  const list = renderRolesPanelHtml();
-  assert.doesNotMatch(list, /roles-new|roles-archive|roles-copy/);
-  assert.match(list, />View</);
-  assert.match(list, /You can view these roles\. Only a club administrator can change them\./);
   await handleRolesAction(action("roles-open", { roleId: ROLE }), {});
   const html = renderRolesPanelHtml();
   assert.match(html, /You can read this role but not change it/);

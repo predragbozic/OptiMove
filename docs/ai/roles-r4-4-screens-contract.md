@@ -283,6 +283,57 @@ A is built first, frozen and handed to the manager; then B. Each before its free
 targeted e2e (the navigation and settings files and the new ones), and one internal review round plus at most one narrow
 re-review.
 
+### 10.1 PR B as built (from `main` `ed6817a1`)
+
+- **Files.** `frontend/roles-layers-rules.js` (the word locks in their order – licence, not checked yet (O6), a Club
+  admin's required words, not held by the caller –, the groups, one plain sentence per R4-3 code, which Check-result
+  answers settle); `frontend/roles-layers-data.js` (the two islands' state and every R4-3 write, one at a time, each with
+  its own requestKey; a lost answer is *Result not confirmed* and *Check result* sends the same body and key; a 404 or a
+  busy server on that resend stays not confirmed; state belongs to one club and one person, an older read never wins);
+  `frontend/roles-layers-actions.js` (the hosts, the lazy islands, the callbacks); `frontend/react/role-words.jsx`,
+  `club-roles.jsx`, `person-access.jsx`; the styles at the end of `frontend/styles.css`.
+- **Club roles** (5.2, 5.3) replaces the R3 list in a club's workspace (`renderRolesPanelHtml` draws the island's host
+  there; the platform workspace keeps the R3 list of the system roles, Q-2). It reads R4-3's club roles, R2's list
+  (holders, the R3 actions) and the catalog in parallel (11a, finding 2).
+- **Person access and drift** (5.4, 5.5) sit in Settings > Users under "who holds what", for a platform admin and for a
+  holder of `staff.assign` in the club.
+- **Deviations from section 5, decided by the executor (for the manager's review):**
+  1. The club's own roles are listed in the island, but *Edit* / *View*, *Copy*, *Archive* and *New role* open the R3
+     plain form unchanged (the island dispatches the R3 actions); a React rewrite of that form is Q-2's later work.
+  2. *Person access* chooses the person from a picker inside the island, not from a button on each user row.
+  3. *Take it from them too* sends one request per word, each naming only the customs that still hold that word (the
+     server refuses a custom that does not: `custom_changed`); the reason is prefilled "Removed from <Role> in this
+     club".
+  4. A saved club version or O3 answer whose read failed (`readError`) reads the club's roles again; a replay answer
+     (no `customsStillHolding`) offers no *Take it from them too*.
+- **After the internal review round** (code NOT READY: one HIGH, two MEDIUM; UX: six MEDIUM; mobile: LOW only):
+  - the club's roles are read again on entering Roles and after every write of the club's own roles (R3's list read
+    marks them stale; the list stays on screen until the new read); drift and the chosen person are read again on
+    entering Users, after a role is given or taken there, and after a club version or a removal in Roles;
+  - a failed list or catalog read is a sentence with *Try again*, as is a failed read in Access;
+  - Access in this club, with its drift, now opens Settings > Users (5.5: the top of Users);
+  - drift asks first: *Take it from them* opens a step with the names, an editable prefilled reason, *Take it from N
+    people* and *Cancel*; after a save, *Take it from them too* has *Leave it* beside it;
+  - every save waits for a reason and says "Write a reason to save." beside the button;
+  - the outcome of a removal names every word taken and the number of people, says when the list was cut, and a
+    `custom_changed` refusal drops the offer with its own sentence; the caller's own custom is never listed;
+  - a pending role's row says *Answer*; *All roles* is off while a write is open; the history uses DD.MM.YYYY.
+- **After the narrow re-reviews** (code: one MEDIUM half closed; both READY WITH NON-BLOCKING NOTES): a stale mark of
+  Access now draws it again in the same flow, so a role given or taken in Users reads the chosen person and the drift
+  again (the R2 surface repaints only itself); a read begun before a save that lands after it is read over; several
+  words taken read "Taken from them: …" with no single count; a person of no role here is a plain line without *Try
+  again*; the drift list stays open after a removal.
+- **Recorded, not built (LOW):** leaving out a club admin's custom (made by a platform admin) from *Take it from them*
+  for a non-platform caller – today the whole word is refused with `admin_not_narrowable` and the sentence says so; an
+  *Access* button on each user row; asking before an unsaved draft is dropped (*All
+  roles*, *Cancel*, another person); a shorter save bar on small phones; the iOS keyboard over the save bar (a physical
+  device).
+- **Tests.** `frontend/tests/roles-layers.data.test.mjs` (14, a fake server keeping the R4-3 rules; mutations of the
+  per-word customs filter and of the Check-result 404 rule killed), `frontend/tests/roles-layers.islands.test.mjs` (8,
+  the compiled islands; the self-block mutation killed), `frontend/tests/roles-r3.actions.test.mjs` (tests 2 and 3 moved
+  to the new place of the list), `e2e/tests/roles-r4-4-club-roles.test.mjs` (6: a club version saved, the O3 question
+  with *Keep ours*, a person's custom and *Back to the role*, and 360/375/390 px).
+
 ## 11a. Decided (the owner, 2026-11-24, relayed by the manager)
 
 - **Q-1 to Q-6: as recommended.** No role list for a view workspace; the platform screen of default roles stays the R3

@@ -30977,3 +30977,51 @@ body.athlete-questions-prompt-open {
 @media print {
   .tl-analysis-topbar-compact, .tl-compact-page-row { display: none !important; }
 }
+
+/* Roles R4-4, PR B: the role word list (shared), Club roles and Access in this club (React islands). */
+.club-roles, .person-access { min-width: 0; }
+.club-roles-head h3, .person-access-head h3 { margin: 0; overflow-wrap: anywhere; }
+.club-roles-notice { overflow-wrap: anywhere; }
+.club-roles-licence { margin: 8px 0 12px; overflow-wrap: anywhere; }
+.club-roles-section { margin: 16px 0 8px; font-size: 1rem; }
+.club-roles-section-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.club-roles-list { display: grid; gap: 0; border-top: 1px solid var(--line); }
+.club-roles-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.club-roles-row-main { display: grid; gap: 2px; min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+.club-roles-row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.club-roles .plain-button, .person-access .plain-button { min-height: 44px; }
+.club-roles-state { font-size: 0.875rem; }
+.club-roles-state.is-question_pending { color: var(--danger, #b42318); font-weight: 600; }
+.club-roles-back { margin-bottom: 8px; }
+.club-roles-editor-title { margin: 0 0 4px; overflow-wrap: anywhere; }
+.club-roles-question, .club-roles-still, .person-access-end { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.club-roles-question h4, .club-roles-still h4 { margin: 0 0 6px; overflow-wrap: anywhere; }
+.club-roles-still li, .person-access-diff li, .person-access-drift li { overflow-wrap: anywhere; }
+.club-roles-save { position: sticky; bottom: calc(var(--om-bottom-nav-height, 0px) + env(safe-area-inset-bottom, 0px)); z-index: 5; display: grid; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 -6px 18px #122c3414; }
+.club-roles-changes { margin: 0; overflow-wrap: anywhere; }
+.club-roles textarea, .person-access textarea { display: block; box-sizing: border-box; width: 100%; min-height: 72px; padding: 8px 10px; font: inherit; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); resize: vertical; }
+.person-access select { box-sizing: border-box; width: 100%; min-height: 44px; font-size: 16px; }
+.role-words { display: grid; gap: 8px; margin-top: 12px; }
+.role-words-group { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.role-words-group.is-closed { background: transparent; border-style: dashed; }
+.role-words-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 48px; padding: 8px 12px; border: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.role-words-title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.role-words-count { flex: none; font-size: 0.875rem; color: var(--muted); }
+.role-words-list { margin: 0; padding: 0 12px 8px; list-style: none; }
+.role-words-row { border-top: 1px solid var(--line); }
+.role-words-label { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 4px 0; cursor: pointer; }
+.role-words-label input { width: 22px; height: 22px; flex: none; }
+.role-words-name { min-width: 0; overflow-wrap: anywhere; }
+.role-words-row.is-locked .role-words-label { cursor: default; }
+.role-words-lock, .role-words-through { display: block; padding: 0 0 6px 34px; color: var(--muted); overflow-wrap: anywhere; }
+.person-access-drift { margin: 8px 0 12px; }
+.person-access-drift summary, .person-access-history summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; overflow-wrap: anywhere; }
+.person-access-drift-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--line); }
+.person-access-pick { margin: 8px 0; }
+.person-access-holdings { display: grid; gap: 16px; margin-top: 12px; }
+.person-access-holding { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.person-access-holding-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.person-access-holding-head > div:first-child { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.person-access-holding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.person-access-diff { margin: 8px 0 0; padding-left: 18px; }
+.person-access-blocked { margin: 8px 0 0; }

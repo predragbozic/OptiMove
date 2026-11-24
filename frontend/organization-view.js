@@ -357,6 +357,15 @@ function renderSectionHead(title, count, actions = "", eyebrow = "") {
 
 // Roles R4-4 (docs/ai/roles-r4-4-screens-contract.md 5.1): the empty host of the Club licence island, for a platform
 // administrator on a chosen club. club-licence-actions.js mounts the island after the paint; the server decides again.
+// Roles R4-4, PR B (contract 5.4, 5.5): the host of *Access in this club* in Users, for whoever gives roles in this
+// club's workspace (a club's staff.assign holder, or a platform administrator there). The routes decide again.
+function renderPersonAccessHost(data) {
+  const ctx = rolesContext(data);
+  if (!ctx?.clubId || !(ctx.platform || holdsPermission("staff.assign", true))) return "";
+  const club = (data.clubs || []).find((c) => String(c.id) === String(ctx.clubId));
+  return `<div class="person-access-host" data-person-access-host data-club-id="${escapeAttr(ctx.clubId)}" data-club-name="${escapeAttr(club?.name || "")}"></div>`;
+}
+
 function renderClubLicenceHost(club) {
   return `<div class="club-licence-host" data-club-licence-host data-club-id="${escapeAttr(club.id)}" data-club-name="${escapeAttr(club.name || "")}"></div>`;
 }
@@ -421,7 +430,9 @@ export function renderOrganizationBrowser(data) {
         ${tiles.map(([value, noun, count]) => `<button class="organization-section-summary-tile" type="button" data-action="organization-section" data-section="${value}" aria-label="${escapeAttr(countLabel(count, noun))}"><strong>${count}</strong><span>${escapeHtml(countLabel(count, noun).replace(/^\d+ /, "").replace(/^./, (c) => c.toUpperCase()))}</span></button>`).join("")}
       </nav>`;
   } else if (section === "users") {
+    // R4-4 (contract 5.5): Access in this club, with its drift, opens the section.
     body = `${head("Users", countLabel(activeUserCount, "active user"), organizationUsersControls(data))}
+      ${renderPersonAccessHost(data)}
       <section class="organization-lists organization-lists-browser">${renderOrganizationUsersSection(data, { bare: true })}</section>
       ${renderRolesWhoHtml(data)}`;
   } else if (section === "clubs") {
