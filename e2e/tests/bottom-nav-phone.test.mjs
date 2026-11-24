@@ -211,6 +211,45 @@ test("(team_coach, 390 px) Edit menu: choose and order the three buttons; kept a
   } finally { await context.close(); }
 });
 
+test("(platform_admin, 390 px) a dashboard widget's ⋯ menu opens above the bar: its last item is the one under the finger", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "platform_admin", 390);
+  try {
+    const created = await context.request.post(`${world.baseUrl}/api/training-load/dashboards`, { data: { name: "Bar widget menu" } });
+    assert.equal(created.status(), 201, await created.text());
+    const { dashboard } = await created.json();
+    const widget = await context.request.post(`${world.baseUrl}/api/training-load/dashboards/${dashboard.id}/widgets`, { data: { expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "Bar widget", widgetOrder: 0, x: 0, y: 0, width: 6, height: 4, mobileOrder: 0, groupBy: "athlete" } });
+    assert.equal(widget.status(), 201, await widget.text());
+    await go(page, "training-load", "Training load");
+    await page.waitForSelector('[data-action="training-load-section"]');
+    await page.getByRole("tab", { name: "Data & Analysis" }).click();
+    const tab = page.getByRole("tab", { name: "Dashboards" });
+    if (await tab.isVisible()) await tab.click();
+    await page.locator('[data-action="training-load-analysis-open-picker"]').first().click();
+    await page.locator(`[data-dashboard-id="${dashboard.id}"]`).first().click();
+    await page.getByRole("button", { name: "Widget actions: Bar widget" }).click();
+    const last = page.locator('.tl-popover.tl-menu [role="menuitem"]').last();
+    await last.waitFor();
+    const box = await last.boundingBox();
+    const hit = await page.evaluate(([x, y]) => ({ inMenu: Boolean(document.elementFromPoint(x, y)?.closest(".tl-popover")), onBar: Boolean(document.elementFromPoint(x, y)?.closest(".om-bottom-nav")) }), [box.x + box.width / 2, box.y + box.height / 2]);
+    assert.deepEqual(hit, { inMenu: true, onBar: false }, "Delete widget is not under the bar");
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
+test("(team_coach, 390 px) Escape closes the More sheet only; the page under it stays as it was", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 390);
+  try {
+    await page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
+    await page.click(`${bar} [data-nav-id="more"]`);
+    await page.waitForSelector(".om-bottom-sheet");
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".om-bottom-sheet"));
+    assert.equal(await page.evaluate(() => document.activeElement?.dataset?.navId), "more", "focus back on More");
+    assert.equal(await page.getAttribute(`${bar} [data-nav-id="home"]`, "aria-current"), "page", "still on Home");
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
 test("(1280 px) a computer keeps the rail: no bar and React is never downloaded", async () => {
   const requested = [];
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 1280);

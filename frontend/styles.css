@@ -30529,6 +30529,9 @@ body.athlete-questions-prompt-open {
   /* Training Load's phone popover is a bottom sheet of its own: above the bar, like the More sheet. */
   body.has-bottom-nav:not(.login-mode) .tl-popover-backdrop { z-index: 1189 !important; }
   body.has-bottom-nav:not(.login-mode) .tl-popover { z-index: 1190 !important; }
+  /* A widget's "⋯" menu: its anchor is positioned with a z-index (a layer of its own), so the anchor itself goes
+     above the bar while the menu is open - the popover's own z-index only counts inside it. */
+  body.has-bottom-nav:not(.login-mode) .tl-popover-anchor.tl-widget-menu-anchor.is-open { z-index: 1190 !important; }
 
   body.has-bottom-nav:not(.login-mode) .tl-layout-bar { bottom: var(--om-bottom-nav-space) !important; }
   body.has-bottom-nav:not(.login-mode) .exercise-selection-bar { bottom: calc(var(--om-bottom-nav-space) + 12px) !important; }
