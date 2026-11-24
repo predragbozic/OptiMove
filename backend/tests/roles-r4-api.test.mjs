@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import pg from "pg";
-import { buildDatabase, fixtures, key, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
+import { asActor, buildDatabase, fixtures, key, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 const R = "/api/organization/roles";
@@ -157,4 +157,27 @@ test("4. info hiding stays: another club's admin changing a club role answers th
   const random = await change(w.adminB, crypto.randomUUID(), { expectedRevision: 1, name: `X ${hex()}` });
   assert.equal(random.status, 404);
   assert.deepEqual(random.body, r.res.body);
+});
+
+test("5. H4 through R2's change route: a default change that would leave a club's own Club admin version short answers 409 club_admin_would_lack, nothing written", async () => {
+  const w = await world();
+  // Club A gives up athletes.remove: its Team coach version, then its own Club admin version (planted as R4-3 will write them).
+  const plant = (roleId) => asActor(db.url, w.pa.id, async (c) => {
+    await c.query(`select public.lock_club_ceiling($1::uuid[], 'exclusive')`, [[w.A]]);
+    const rev = (await c.query(`select revision from public.permission_roles where id = $1`, [roleId])).rows[0].revision;
+    const id = (await c.query(`insert into public.permission_club_role_versions (club_id, system_role_id, based_on_revision, answered_revision, created_by_user_id) values ($1, $2, $3, $3, $4) returning id`, [w.A, roleId, rev, w.pa.id])).rows[0].id;
+    const words = (await c.query(`select array(select permission_word from public.permission_role_items where role_id = $1 and permission_word <> 'athletes.remove') as w`, [roleId])).rows[0].w;
+    for (const x of words) await c.query(`insert into public.permission_club_role_version_items (version_id, permission_word) values ($1, $2)`, [id, x]);
+    await c.query(`insert into public.permission_club_role_version_changes (version_id, revision_after, kind, performed_by_user_id, basis, reason, items_added) values ($1, 1, 'create', $2, 'platform_admin', 'licence', $3)`, [id, w.pa.id, words]);
+  });
+  await plant(ROLE_IDS.team_coach);
+  await plant(ROLE_IDS.club_admin);
+  const sys = ok(await createRole(w.pa, { name: `Analyst ${hex()}`, scopeTypes: ["club"], items: ["org.view"] })).role;
+  const res = code(await change(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "athletes.remove"] }), 409, "club_admin_would_lack");
+  assert.equal(typeof res.message, "string");
+  assert.equal(await revision(sys.id), 1, "nothing written");
+  assert.equal((await one(`select count(*)::int as n from public.permission_role_items where role_id = $1`, [sys.id])).n, 1);
+  // A word that leaves no club short still goes through.
+  ok(await change(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "org.club.edit"] }));
+  ok(await srv.api(w.pa.cookie, `${R}/${sys.id}/archive`, { method: "POST", body: { requestKey: key(), expectedRevision: 2, reason: "Done" } }));
 });

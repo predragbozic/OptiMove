@@ -646,3 +646,99 @@ test("17. dominance compares the effective set of the role in the club (3.2): us
   const other = await world();
   assert.equal((await one(`select public.user_holds_role_items($1, $2, 'team', $3) as ok`, [w.admin, ROLE_IDS.team_coach, other.team])).ok, false, "another club follows the default");
 });
+
+// A non-basic system role (club-assignable) made by a platform admin, and an assignment of it at a club.
+async function systemRole(pa, items) {
+  return asActor(db.url, pa, async (c) => {
+    const id = (await c.query(`insert into public.permission_roles (owner_scope, name, assignable_club, created_by_user_id) values ('system', $1, true, $2) returning id`, [`Sys ${crypto.randomBytes(3).toString("hex")}`, pa])).rows[0].id;
+    for (const x of items) await c.query(`insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ($1, $2, $3)`, [id, x, pa]);
+    await c.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, items_added) values ($1, 1, 'create', $2, 'platform_admin', $3)`, [id, pa, items]);
+    return id;
+  });
+}
+async function assign(pa, user, roleId, club, expiresAt = null) {
+  return asLocked(pa, [club], "shared", async (c) => {
+    const a = (await c.query(`insert into public.user_role_assignments (user_id, role_id, scope_type, scope_id, granted_by_user_id, grant_basis, grant_reason, expires_at) values ($1, $2, 'club', $3, $4, 'platform_admin', 'help', $5) returning id`, [user, roleId, club, pa, expiresAt])).rows[0].id;
+    await c.query(`insert into public.permission_requests (request_key, requested_by_user_id, operation, request_hash, owner_scope, owner_club_id, basis, assignment_id) values ($1, $2, 'assignment_grant', $3, 'club', $4, 'platform_admin', $5)`, [crypto.randomUUID(), pa, "f".repeat(64), club, a]);
+    return a;
+  });
+}
+
+test("18. truth table rows 5 and 9 (a club version WIDENS a role; a second role still gives what one role's version lacks), and a custom on an expired assignment", async () => {
+  const w = await world();
+  const W = "athletes.manage";
+  const analyst = await systemRole(w.pa, ["org.view"]);
+  const user = await F.user("analyst");
+  await assign(w.pa, user, analyst, w.club);
+  assert.equal(await twin(user, W, "club", w.club), false, "the default Analyst lacks W");
+  // Row 5: no custom; the club's version of Analyst holds W the default lacks -> yes, in the twin and in can().
+  await makeVersion(w.pa, w.club, analyst, { add: [W] });
+  assert.equal(await twin(user, W, "club", w.club), true, "row 5 twin");
+  assert.equal(await canOf(user, W, perms.clubScope(w.club)), true, "row 5 can()");
+  assert.equal(await twin(user, W, "team", w.team), true, "row 5 reaches the club's teams");
+  // Row 9: role A's (Analyst's) version of another club lacks W; role B (Team coach, an old-table row) holds W -> yes.
+  const x = await world();
+  const user2 = await F.user("analyst2");
+  await assign(x.pa, user2, analyst, x.club);
+  await makeVersion(x.pa, x.club, analyst, { remove: ["org.view"] });
+  await F.grantTeam(user2, x.team);
+  assert.equal(await twin(user2, "org.view", "team", x.team), true, "row 9 twin");
+  assert.equal(await canOf(user2, "org.view", perms.teamScope(x.team)), true, "row 9 can()");
+  assert.equal(await twin(user2, "org.view", "club", x.club), false, "the version of role A alone lacks it at the club");
+  // 14.7a: a custom made on an assignment that then expires is dead at read time.
+  const y = await world();
+  const user3 = await F.user("expiring");
+  const a = await assign(y.pa, user3, analyst, y.club, new Date(Date.now() + 1500));
+  await makeCustom(y.pa, user3, analyst, "club", y.club, y.club, { holding: { assignmentId: a }, add: [W] });
+  assert.equal(await twin(user3, W, "club", y.club), true, "the custom acts while the assignment lives");
+  await new Promise((r) => setTimeout(r, 1700));
+  assert.equal(await twin(user3, W, "club", y.club), false, "expired: the custom is dead");
+  assert.equal(await canOf(user3, W, perms.clubScope(y.club)), false);
+});
+
+test("19. a default-role writer and a club version writer serialize (7.2 H4): the version writer locks every system role FOR SHARE through lock_permission_actor(..., p_all_system_roles => true)", async () => {
+  const w = await world();
+  const holder = new pg.Client({ connectionString: db.url }); await holder.connect();
+  try {
+    // A platform admin's default-role change holds Team coach FOR UPDATE (as R2's change route does through the function).
+    await holder.query("begin");
+    await holder.query(`select set_config('optimove.permission_actor', $1 || ':' || pg_current_xact_id()::text, true)`, [w.pa]);
+    await holder.query(`select public.lock_permission_actor($1, 'global', '00000000-0000-0000-0000-000000000000', $2)`, [w.pa, ROLE_IDS.team_coach]);
+    // The version writer (exclusive club lock first) waits on that role row; without the flag it would not.
+    const plain = await asLocked(w.admin, [w.club], "shared", async (c) => {
+      await c.query(`set local lock_timeout = '300ms'`);
+      return (await c.query(`select public.lock_permission_actor($1, 'club', $2) as b`, [w.admin, w.club])).rows[0].b;
+    });
+    assert.equal(plain, "club_admin", "without the flag the club admin's own roles do not include Team coach");
+    await refused(asLocked(w.admin, [w.club], "exclusive", async (c) => {
+      await c.query(`set local lock_timeout = '300ms'`);
+      await c.query(`select public.lock_permission_actor($1, 'club', $2, null, null, null, true)`, [w.admin, w.club]);
+    }), "55P03");
+  } finally { await holder.query("rollback"); await holder.end(); }
+  // Released: the version writer goes through.
+  assert.equal(await asLocked(w.admin, [w.club], "exclusive", async (c) => (await c.query(`select public.lock_permission_actor($1, 'club', $2, null, null, null, true) as b`, [w.admin, w.club])).rows[0].b), "club_admin");
+});
+
+test("20. the rollback refuses after a later migration was applied and after a basic role changed (7.7)", async () => {
+  const rollback = fs.readFileSync(path.join(RUNBOOKS, "roles-layers-v92-rollback.sql"), "utf8");
+  for (const [label, plant] of [
+    ["a later migration", (c) => c.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ('migrations_v2/209912312359_later.sql', repeat('0', 64), 1, 'test')`)],
+    ["a basic role changed", (c, pa, url) => asActor(url, pa, async (x) => {
+      await x.query(`update public.permission_roles set revision = revision + 1 where id = $1`, [ROLE_IDS.team_coach]);
+      const rev = (await x.query(`select revision from public.permission_roles where id = $1`, [ROLE_IDS.team_coach])).rows[0].revision;
+      await x.query(`delete from public.permission_role_items where role_id = $1 and permission_word = 'athletes.remove'`, [ROLE_IDS.team_coach]);
+      await x.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason, items_removed) values ($1, $2, 'change', $3, 'platform_admin', 'x', '{athletes.remove}')`, [ROLE_IDS.team_coach, rev, pa]);
+    })],
+  ]) {
+    const pre = await buildDatabase({ label: "r4v92_rbref", upTo: "all", skip: [V92_FILE] });
+    const c = new pg.Client({ connectionString: pre.url }); await c.connect();
+    try {
+      await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
+      const pa = await fixtures(c).user("pa"); await fixtures(c).grantPlatform(pa);
+      await plant(c, pa, pre.url);
+      await refused(c.query(rollback), "23514", /v92 rollback refused: (later migrations|the basic roles changed)/);
+      await c.query("rollback");
+      assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows[0].n, 1, `${label}: v92 still recorded`);
+    } finally { await c.end(); await pre.drop(); }
+  }
+});

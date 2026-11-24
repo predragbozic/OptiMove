@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -72,10 +73,16 @@ test("G3. the wrappers refuse a non-loopback host before asking for a password a
 
 test("G5. the rollback is the generator's output: v84's bodies verbatim, the v92 md5 list the preflight-free rollback checks", () => {
   const REPO = path.join(HERE, "..", "..");
-  const before = fs.readFileSync(path.join(REPO, "docs", "runbooks", "roles-layers-v92-rollback.sql"), "utf8");
-  execFileSync("python3", [path.join(REPO, "backend", "scripts", "roles-layers-v92-gen-rollback.py"), path.join(REPO, "backend", "scripts", "roles-layers-v92-md5.json")], { cwd: REPO });
-  const after = fs.readFileSync(path.join(REPO, "docs", "runbooks", "roles-layers-v92-rollback.sql"), "utf8");
-  assert.equal(after, before, "the committed rollback is exactly what the generator writes");
+  const committed = fs.readFileSync(path.join(REPO, "docs", "runbooks", "roles-layers-v92-rollback.sql"), "utf8");
+  // Generated into a temporary file: the test never touches the tracked rollback.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "roles92-gen-"));
+  try {
+    const out = path.join(dir, "rollback.sql");
+    execFileSync("python3", [path.join(REPO, "backend", "scripts", "roles-layers-v92-gen-rollback.py"), path.join(REPO, "backend", "scripts", "roles-layers-v92-md5.json"), out], { cwd: REPO });
+    assert.equal(fs.readFileSync(out, "utf8"), committed, "the committed rollback is exactly what the generator writes");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("G6. Node 20 or later: the tool refuses an older Node before it reads anything", () => {

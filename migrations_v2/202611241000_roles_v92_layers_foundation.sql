@@ -431,12 +431,17 @@ $$ language sql stable set search_path = pg_catalog, public;
 
 -- ===========================================================================
 -- 8. The lock function (contract 7.6): v84's order, the club lock checked first, the custom roles (place 3) and the
---    club's live versions (place 4, after the role rows) locked FOR SHARE.
+--    club's live versions (place 4, after the role rows) locked FOR SHARE. A seventh parameter,
+--    p_all_system_roles: a club version writer (R4-3) passes true and every non-archived system role row is locked FOR
+--    SHARE in id order inside place 4 (7.2, H4), so a default-role writer (its role FOR UPDATE) and a version writer
+--    serialize. v84's six-parameter function is dropped and replaced (the rollback restores it).
 -- ===========================================================================
-create or replace function public.lock_permission_actor(p_user uuid, p_scope_type text, p_scope_id uuid,
-                                                        p_role_for_update uuid default null,
-                                                        p_assignment_for_update uuid default null,
-                                                        p_role_for_share uuid default null)
+drop function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid);
+create function public.lock_permission_actor(p_user uuid, p_scope_type text, p_scope_id uuid,
+                                             p_role_for_update uuid default null,
+                                             p_assignment_for_update uuid default null,
+                                             p_role_for_share uuid default null,
+                                             p_all_system_roles boolean default false)
 returns text as $$
 declare
   club uuid;
@@ -500,6 +505,7 @@ begin
               select 1 from public.user_team_roles t where t.user_id = p_user and t.team_id = p_scope_id and t.role = 'team_coach' and t.is_active))
     union select p_role_for_update where p_role_for_update is not null
     union select p_role_for_share where p_role_for_share is not null
+    union select r.id from public.permission_roles r where p_all_system_roles and r.owner_scope = 'system' and r.archived_at is null
   ) s;
   if role_ids is not null then
     foreach rid in array role_ids loop
@@ -557,7 +563,18 @@ declare
   -- dump keeps this body, and the legacy-schema tool refuses a uuid literal in it.
   v_club_admin uuid := (select id from public.permission_roles where basic_key = 'club_admin');
   v_club uuid;
+  v_role uuid;
+  v_batch text;
 begin
+  -- A club's own role never takes part in rule 7 (it reads system roles only): nothing to check.
+  if tg_table_name = 'permission_role_items' then
+    v_role := case when tg_op = 'DELETE' then old.role_id else new.role_id end;
+  else
+    v_role := new.id;
+  end if;
+  if (select r.owner_scope from public.permission_roles r where r.id = v_role) is distinct from 'system' then
+    return null;
+  end if;
   if not exists (select 1 from public.permission_role_items where role_id = v_club_admin and permission_word = 'staff.assign')
      or not exists (select 1 from public.permission_role_items where role_id = v_club_admin and permission_word = 'roles.manage') then
     raise exception 'permission role item: the Club admin role must hold this permission' using errcode = '23514';
@@ -574,11 +591,17 @@ begin
                            where ci.role_id = v_club_admin and ci.permission_word = i.permission_word)) then
     raise exception 'permission role item: a system role holds a permission the Club admin role lacks' using errcode = '23514';
   end if;
-  for v_club in select distinct v.club_id from public.permission_club_role_versions v where v.ended_at is null loop
-    if not public.permission_club_rule7_ok(v_club) then
-      raise exception 'permission role item: a club''s Club admin would lack a permission another role holds there' using errcode = '23514';
-    end if;
-  end loop;
+  -- The clubs with a live version, once per firing batch: every deferred trigger of one COMMIT (or one SET CONSTRAINTS)
+  -- runs in the same statement and sees the same final state, so the first one checks every club for all of them.
+  v_batch := pg_current_xact_id()::text || ':' || statement_timestamp()::text;
+  if coalesce(current_setting('optimove.rule7_clubs_checked', true), '') is distinct from v_batch then
+    for v_club in select distinct v.club_id from public.permission_club_role_versions v where v.ended_at is null loop
+      if not public.permission_club_rule7_ok(v_club) then
+        raise exception 'permission role item: a club''s Club admin would lack a permission another role holds there' using errcode = '23514';
+      end if;
+    end loop;
+    perform set_config('optimove.rule7_clubs_checked', v_batch, true);
+  end if;
   return null;
 end;
 $$ language plpgsql set search_path = pg_catalog, public;

@@ -4,7 +4,8 @@
 
 -- Block 1: the server and the migration record
 select current_setting('server_version_num')::int >= 130000 as server_ok,
-       exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201300_roles_v84_permission_roles.sql') as v84_recorded_ok,
+       exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611201300_roles_v84_permission_roles.sql'
+                 and checksum = 'dfafb581c762d724d63a8356f93d9422ec96e27dfab75a344746e83b23df2e9c') as v84_recorded_ok,
        not exists (select 1 from public.schema_migrations where migration_name = 'migrations_v2/202611241000_roles_v92_layers_foundation.sql') as v92_absent_ok,
        (select max(migration_name) from public.schema_migrations) as last_migration;
 

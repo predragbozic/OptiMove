@@ -61,43 +61,71 @@ test("A3. the lists nest: checked (HONOURED) = ENFORCED keys, checked is inside 
   assert.equal(new Set(STORABLE_PERMISSIONS).size, STORABLE_PERMISSIONS.length);
 });
 
-// The reviewed list (roles R4-1, at the R4-1 base): file -> number of lines that branch on a workspace type. Each was
-// read for the rule: the helpers recognize only the five existing types, and an unknown type (club_view / team_view
-// of R4-2) falls through to "no scope" (contract section 6; the security review's list of fail-closed helpers).
-// Changing a count needs a review of that file against the rule, recorded in the pull request.
+// A line that branches on a workspace type, whatever the variable is called: `workspace.type` / `activeWorkspace?.type`,
+// any `<x>.type` compared with a workspace type word (either side), or a `case "<type>":`.
+const TYPES = "club|team|club_view|team_view|platform|private_coach|athlete";
+export const WORKSPACE_BRANCH = new RegExp(`(?:workspace|Workspace)\\??\\.type\\b|\\.type\\s*[!=]==?\\s*["'](?:${TYPES})["']|["'](?:${TYPES})["']\\s*[!=]==?\\s*[A-Za-z_.?]+\\.type\\b|case\\s+["'](?:${TYPES})["']\\s*:`);
+
+// The reviewed list (roles R4-1, at the R4-1 base 4a24996): file -> number of lines that branch on a workspace type.
+// Every one is pre-existing code; none offers a workspace (B2). The six modules of contract section 6 (calendar, training
+// activities, external RPE schedules, measurements, dashboards, session types) take the active workspace as their data
+// context and, for now, as their right; they recognize only the five existing types, so the R4-2 types fall through to
+// "no scope" (fail closed). Each module's VIEW pull request revisits its rows. Changing or adding a count needs a review
+// of that file against the rule (.claude/rules/backend-security.md), recorded in the pull request.
 const REVIEWED = Object.freeze({
   "activityRoster.js": 3,
   "athleteRosterScope.js": 4,
-  "calendarAccess.js": 13,
+  "calendarAccess.js": 17,
+  "calendarEventAccess.js": 7,
   "calendarEventService.js": 4,
-  "calendarQuery.js": 1,
+  "calendarQuery.js": 11,
+  "calendarQuestionService.js": 2,
   "calendarSettingsService.js": 3,
   "canonicalVariableAdminService.js": 1,
   "dashboardSimple/platformPilot.js": 1,
+  "gpexeAthleteIdentityService.js": 3,
   "gpexeImportAccess.js": 5,
+  "mediaStorage.js": 1,
   "permissions.js": 1,
-  "positionService.js": 1,
+  "positionService.js": 8,
   "routes/auth.js": 1,
+  "routes/builder.js": 4,
+  "routes/calendar.js": 1,
   "routes/gpexeImport.js": 3,
   "routes/organization.js": 14,
   "routes/trainingActivity.js": 3,
-  "routes/trainingLoad.js": 7,
+  "routes/trainingLoad.js": 12,
+  "routes/trainingLoadDashboard.js": 1,
   "routes/trainingLoadMetrics.js": 5,
+  "sessionTypeService.js": 5,
   "sourceConnectionService.js": 5,
   "sourceMetricAccess.js": 3,
   "testsAccess.js": 2,
-  "trainingActivityAccess.js": 7,
-  "trainingLoadAccess.js": 7,
-  "trainingLoadDashboardAccess.js": 5,
-  "trainingLoadMetricsAccess.js": 7
+  "trainingActivityAccess.js": 17,
+  "trainingActivityMaterialize.js": 4,
+  "trainingActivityResults.js": 1,
+  "trainingLoadAccess.js": 24,
+  "trainingLoadDashboardAccess.js": 7,
+  "trainingLoadDashboardCatalog.js": 3,
+  "trainingLoadMetricsAccess.js": 15,
+  "trainingLoadOccurrenceService.js": 4,
+});
+
+test("B0. the branch pattern finds a branch whatever the variable is called", () => {
+  for (const line of ['if (ws.type === "club") return', 'w.type !== "team"', 'scope?.type === "club_view"', 'ctx.type == "platform"',
+    '"team" === active.type', 'case "private_coach":', 'if (workspace?.type) x', 'const t = activeWorkspace.type;']) {
+    assert.ok(WORKSPACE_BRANCH.test(line), line);
+  }
+  for (const line of ['const type = "club";', 'row.type === "drill"', 'event.kind === "club"']) assert.ok(!WORKSPACE_BRANCH.test(line), line);
 });
 
 test("B1. every workspace-type branch in backend/src is on the reviewed list (the R4-1 standing rule)", () => {
   const found = {};
   for (const src of SOURCES) {
-    const n = src.text.split("\n").filter((line) => /workspace\??\.type|activeWorkspace\??\.type/.test(line)).length;
+    const n = src.text.split("\n").filter((line) => WORKSPACE_BRANCH.test(line)).length;
     if (n) found[src.rel] = n;
   }
+  assert.ok(Object.hasOwn(found, "calendarEventAccess.js") && found["positionService.js"] >= 8, "the pattern sees branches on any variable");
   for (const [file, n] of Object.entries(found)) {
     assert.ok(Object.hasOwn(REVIEWED, file), `${file} branches on a workspace type and is not on the reviewed list`);
     assert.ok(n <= REVIEWED[file], `${file}: ${n} workspace-type branches, ${REVIEWED[file]} reviewed`);

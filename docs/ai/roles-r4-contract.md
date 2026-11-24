@@ -799,8 +799,34 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
      (`409 permission_not_available_yet`); the seed is the only writer of unchecked words on the basic roles.
 - **Found while building:** the old tables' `updated_at` trigger reads `revoked_at` through `to_jsonb`, because the
   minimal test scaffolds' copies of `user_club_roles` / `user_team_roles` have no such column; production's have it.
+- **Changed by the internal review (code, security, db):**
+  - `lock_permission_actor` gains a seventh parameter, `p_all_system_roles` (default false): a club version writer
+    passes true and locks every live system role `FOR SHARE`, so it serializes with a platform admin's default change
+    of any system role (7.2, H4) instead of reading a default that is about to change (test 19). The six-argument v84
+    body is dropped; the rollback drops the seven-argument one and restores v84's.
+  - `permission_rule7_check` returns at once for a change of a non-system role, and its cross-club loop runs once per
+    statement batch (a transaction-local flag keyed on the transaction and the statement timestamp), not once per row.
+  - The rollback locks the v92 tables and the role tables `access exclusive` before its checks; it refuses after a later
+    migration and after a basic role changed (test 20).
+  - A database refusal "a club's Club admin would lack ..." maps to `409 club_admin_would_lack` in the R2 service
+    (`roles-r4-api.test.mjs` test 5).
+  - `roles-r4-checked-gates.test.mjs` B1 enumerates every workspace-type comparison form (`<x>.type ===`,
+    `case "club":`, `workspace?.type`) against a reviewed list of 36 files.
+- **Deferred to R4-3 (with the writers; recorded, not built):**
+  - the races of 7.6 between a ceiling close and a guarded write, a version change and a custom, and a ceiling close and
+    a club archive: their writers do not exist yet, so the lock order is proven only for the R2 writes and the default /
+    version pair (tests 15, 19);
+  - a club's admin versioning or customising the very role that gives them `roles.manage` (self-reference), ending
+    stale customs when their holding row changes, and two holdings that bind one custom;
+  - a holding's `holding_row_version` must travel as text through the API (a `timestamptz` compared for equality loses
+    microseconds through a JavaScript `Date`).
+- **LOW notes (accepted):** an authorization entry without `closedModules` skips the ceiling in `can()` (every entry
+  `ROLE_PERMISSIONS_SQL` builds carries it; a hand-made context in a test may not); the preflight's block 2 is a
+  point-in-time check, so nothing may change the v84 bodies between it and the deploy (the migration's step 0 refuses
+  anyway); v92 takes its table locks in a short deploy window (runbook, "quiet moment").
 - **Evidence:** `backend/tests/roles-r4-v92.test.mjs` (both orders against v93, seed, old-vs-new of the twin, the truth
-  table in `can()` and the twin, every guard, the lock, races, H2, H4, the rollback), `roles-r4-api.test.mjs`,
+  table in `can()` and the twin with rows 5 and 9 and an expired assignment, every guard, the lock, races, H2, H4, the
+  rollback and its refusals), `roles-r4-api.test.mjs`,
   `roles-r4-view-seed-proof.test.mjs` (M4: every seeded row proven on its module's read route),
   `roles-r4-checked-gates.test.mjs`, `roles-layers-v92-rehearsal-guards.test.mjs`; the rehearsal
   (`backend/scripts/roles-layers-v92-rehearsal.mjs`) passed on PostgreSQL 16; PostgreSQL 17 is the owner's run.

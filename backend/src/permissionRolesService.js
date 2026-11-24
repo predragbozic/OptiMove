@@ -91,6 +91,7 @@ const MESSAGES = {
   permission_not_delegable: "This permission exists only in the Club admin role.",
   permission_not_honoured: "No part of the app checks this permission yet.",
   permission_not_available_yet: "This permission is not available yet.",
+  club_admin_would_lack: "A club's own Club admin role would lack a permission its other roles hold there.",
   role_limit_reached: "This club already has the largest number of roles allowed.",
   permission_platform_only: "This permission belongs to no role.",
   permission_scope_mismatch: "A permission does not cover the places this role can be assigned.",
@@ -122,6 +123,9 @@ function classifyDatabaseError(error) {
   if (code === "55P03" || code === "40P01") return refuse("try_again");
   if (code === "23505" && error.constraint === "permission_roles_owner_name_key") return refuse("role_name_taken");
   if (code === "23505" && error.constraint === "user_role_assignments_active_key") return refuse("assignment_exists");
+  // Roles R4 (contract 7.2, N4): a default-role change that would leave a club's own Club admin version short of a word
+  // the club's other roles hold there; v92's rule-7 trigger raises it with this fixed message (no club named).
+  if (code === "23514" && /a club's Club admin would lack a permission/.test(String(error?.message ?? ""))) return refuse("club_admin_would_lack");
   return null;
 }
 

@@ -206,7 +206,7 @@ export const BASIC_ROLE_PERMISSIONS = Object.freeze({
 // The CHECKED words (roles R4 contract 3.1 and 4): a word for which EVERY route that gives what the word means calls
 // can() with it. Each word lists its gates: the source files (relative to backend/src) whose can() calls check it.
 // A word enters this list only in the pull request that moves every gate of that word to can() (a module's VIEW or
-// MANAGE step). `checked-gates-r4.test.mjs` proves both directions: every listed gate file calls can() with the
+// MANAGE step). `backend/tests/roles-r4-checked-gates.test.mjs` proves both directions: every listed gate file calls can() with the
 // word, and every can() call with a literal word in backend/src names a listed word from a listed file.
 // R4-1 starts it as R2's honoured words with their call sites.
 export const ENFORCED_PERMISSIONS = Object.freeze({

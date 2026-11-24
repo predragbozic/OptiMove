@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Generates docs/runbooks/roles-layers-v92-rollback.sql: v84's six bodies copied verbatim from the v84 migration (so
 # their md5(prosrc) is v84's), the v92 bodies' md5 the rollback requires, and the drop order. Run from the repo root:
-#   python3 backend/scripts/roles-layers-v92-gen-rollback.py <v92 md5 json>
+#   python3 backend/scripts/roles-layers-v92-gen-rollback.py <v92 md5 json> [<output path>]
+# The output path defaults to docs/runbooks/roles-layers-v92-rollback.sql; the guard test writes to a temporary file.
 import json, re, sys
 V84 = open("migrations_v2/202611201300_roles_v84_permission_roles.sql").read()
 NAMES = ["permission_word_honoured", "user_has_permission", "user_holds_role_items", "lock_permission_actor",
@@ -57,6 +58,12 @@ out.append("""-- Rollback of migration v92 (roles R4-1, the layers foundation; m
 --   psql -v ON_ERROR_STOP=1 -f roles-layers-v92-rollback.sql
 begin;
 set local lock_timeout = '5s';
+-- Every table the checks below read, locked before they read it (the db review's MEDIUM-3): no write can commit between
+-- the "layers used" check and the drops.
+lock table public.club_permission_ceiling, public.club_permission_ceiling_changes, public.permission_club_role_versions,
+  public.permission_club_role_version_items, public.permission_club_role_version_changes, public.permission_custom_roles,
+  public.permission_custom_role_items, public.permission_custom_role_changes, public.permission_requests,
+  public.permission_roles, public.permission_role_items in access exclusive mode;
 
 do $$
 declare
@@ -105,7 +112,25 @@ begin
   end if;
 end $$;
 """ % (checks, VIEW, VIEW, ", ".join("'public.%s'::regclass" % t for t in NEW_TABLES), ", ".join("'public.%s'::regclass" % t for t in NEW_TABLES)))
+out.append("-- v92 replaced lock_permission_actor by a seven-parameter function; it goes before v84's is created again.\n"
+           "drop function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid, boolean);\n\n")
 out.append("-- v84's bodies, verbatim.\n" + "\n\n".join(block(n) for n in NAMES) + "\n")
+out.append("""
+-- v84 revoked execute on its functions; the re-created lock_permission_actor gets the same.
+do $$
+begin
+  revoke execute on function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid) from public;
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke execute on function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid) from anon;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    revoke execute on function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid) from authenticated;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    revoke execute on function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid) from service_role;
+  end if;
+end $$;
+""")
 out.append("""
 drop trigger user_club_roles_permission_ends_customs on public.user_club_roles;
 drop trigger user_team_roles_permission_ends_customs on public.user_team_roles;
@@ -153,4 +178,4 @@ end $$;
 
 commit;
 """ % (VIEW, VIEW, v84checks))
-open("docs/runbooks/roles-layers-v92-rollback.sql", "w").write("".join(out))
+open(sys.argv[2] if len(sys.argv) > 2 else "docs/runbooks/roles-layers-v92-rollback.sql", "w").write("".join(out))

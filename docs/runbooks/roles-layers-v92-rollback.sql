@@ -23,17 +23,23 @@
 --   psql -v ON_ERROR_STOP=1 -f roles-layers-v92-rollback.sql
 begin;
 set local lock_timeout = '5s';
+-- Every table the checks below read, locked before they read it (the db review's MEDIUM-3): no write can commit between
+-- the "layers used" check and the drops.
+lock table public.club_permission_ceiling, public.club_permission_ceiling_changes, public.permission_club_role_versions,
+  public.permission_club_role_version_items, public.permission_club_role_version_changes, public.permission_custom_roles,
+  public.permission_custom_role_items, public.permission_custom_role_changes, public.permission_requests,
+  public.permission_roles, public.permission_role_items in access exclusive mode;
 
 do $$
 declare
   expected text[][] := array[
     ['lock_club_ceiling', 'ee43ae057289f628c199efabf1160d27'],
-    ['lock_permission_actor', 'f2fd3f7b3004327afd86926fb4f71e8c'],
+    ['lock_permission_actor', '50d042ff81721bf983da67521ee8f8bb'],
     ['permission_club_lock_held', '9c4d8fbc25b5004cf5bd84402284633b'],
     ['permission_club_rule7_ok', '0f97c7a6c365e73e19c649bfe1a304b5'],
     ['permission_requests_guard', '92299209ef9b664261566218c0504437'],
     ['permission_role_club_items', '1359f7661c664d6f1f59762ca083d254'],
-    ['permission_rule7_check', '336b3da064167f8f3043d107fa0e0ab0'],
+    ['permission_rule7_check', '4e54f03c388bab7686dde6a26e12632f'],
     ['permission_user_holdings', '7c8511a90c202c5cd94d22fe707de1ce'],
     ['permission_word_honoured', '0c47ce1a6b157c1c9205d4f48438a5ac'],
     ['user_has_permission', '3ee2c276f7caf9fb50066aa753e7c079'],
@@ -80,6 +86,9 @@ begin
     raise exception 'v92 rollback refused: another table refers to the v92 tables' using errcode = '23514';
   end if;
 end $$;
+-- v92 replaced lock_permission_actor by a seven-parameter function; it goes before v84's is created again.
+drop function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid, boolean);
+
 -- v84's bodies, verbatim.
 create or replace function public.permission_word_honoured(p_word text) returns boolean
   language sql immutable set search_path = pg_catalog, public as $$
@@ -293,6 +302,21 @@ begin
   return new;
 end;
 $$ language plpgsql set search_path = pg_catalog, public;
+
+-- v84 revoked execute on its functions; the re-created lock_permission_actor gets the same.
+do $$
+begin
+  revoke execute on function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid) from public;
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke execute on function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid) from anon;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    revoke execute on function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid) from authenticated;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    revoke execute on function public.lock_permission_actor(uuid, text, uuid, uuid, uuid, uuid) from service_role;
+  end if;
+end $$;
 
 drop trigger user_club_roles_permission_ends_customs on public.user_club_roles;
 drop trigger user_team_roles_permission_ends_customs on public.user_team_roles;
