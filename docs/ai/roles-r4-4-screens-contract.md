@@ -323,9 +323,13 @@ re-review.
   again (the R2 surface repaints only itself); a read begun before a save that lands after it is read over; several
   words taken read "Taken from them: …" with no single count; a person of no role here is a plain line without *Try
   again*; the drift list stays open after a removal.
-- **Recorded, not built (LOW):** leaving out a club admin's custom (made by a platform admin) from *Take it from them*
-  for a non-platform caller – today the whole word is refused with `admin_not_narrowable` and the sentence says so; an
-  *Access* button on each user row; asking before an unsaved draft is dropped (*All
+- **Merged** as PR #762 (`71da92ed`) and deployed, after the *Nezavisni revizor*'s GO; the four deviations above were
+  accepted by the manager.
+- **Recorded, not built (LOW):** while a write is unconfirmed, if the host's club changes without a workspace switch,
+  the *Result not confirmed* / *Check result* banner is not shown in the other club (the *Nezavisni revizor*'s LOW; the
+  write's state stays with its own club); leaving out a club admin's custom (made by a platform admin) from *Take it from
+  them* for a non-platform caller – today the whole word is refused with `admin_not_narrowable` and the sentence says
+  so; an *Access* button on each user row; asking before an unsaved draft is dropped (*All
   roles*, *Cancel*, another person); a shorter save bar on small phones; the iOS keyboard over the save bar (a physical
   device).
 - **Tests.** `frontend/tests/roles-layers.data.test.mjs` (14, a fake server keeping the R4-3 rules; mutations of the
