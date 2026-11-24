@@ -992,7 +992,7 @@ test("c1. every write of user_club_roles / user_team_roles in the code writes on
   // (a session type per athlete, ST-3) plants one team_coach row, and so does the v88 rehearsal (manual values, ST-4);
   // the v92 rehearsal (roles R4-1) plants one club_admin and one team_coach row in its own disposable database.
   assert.deepEqual([...new Set(found.filter((f) => f.startsWith("backend/")).map((f) => f.split(":")[0]))].sort(),
-    ["backend/scripts/athlete-positions-v87-rehearsal.mjs", "backend/scripts/calendar-event-delete-v93-rehearsal.mjs", "backend/scripts/manual-values-v88-rehearsal.mjs", "backend/scripts/participant-session-types-v89-rehearsal.mjs", "backend/scripts/permission-roles-v84-rehearsal.mjs", "backend/scripts/roles-layers-v92-rehearsal.mjs", "backend/scripts/session-types-v85-rehearsal.mjs", "backend/src/routes/organization.js"]);
+    ["backend/scripts/athlete-positions-v87-rehearsal.mjs", "backend/scripts/calendar-event-delete-v93-rehearsal.mjs", "backend/scripts/manual-values-v88-rehearsal.mjs", "backend/scripts/participant-session-types-v89-rehearsal.mjs", "backend/scripts/permission-roles-v84-rehearsal.mjs", "backend/scripts/roles-closed-module-dominance-v95-rehearsal.mjs", "backend/scripts/roles-layers-v92-rehearsal.mjs", "backend/scripts/session-types-v85-rehearsal.mjs", "backend/src/routes/organization.js"]);
 });
 
 test("c1m. the migrations: only the allowlisted historical file writes these tables, and only the right literal", () => {
