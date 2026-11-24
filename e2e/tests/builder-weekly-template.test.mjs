@@ -92,8 +92,7 @@ for (const width of [1280, 390, 375, 360]) {
         assert.match(await page.locator(".builder-workspace").textContent(), /Easy run/);
 
         // The Program Library: the template is marked Weekly.
-        if (await toggle.isVisible().catch(() => false)) await toggle.click();
-        await page.locator('[data-library-tab="templates"]').first().click();
+        await navTo(page, '.sidebar .sidebar-nav-button[data-library-tab="templates"]');
         const card = page.locator(".program-library-card", { hasText: "Base weeks" });
         await card.waitFor({ timeout: 20_000 });
         assert.match(await card.locator(".program-kind-chip").textContent(), /Weekly · 3 weeks/);

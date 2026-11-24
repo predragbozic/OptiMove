@@ -286,6 +286,51 @@ test("(team_coach, 390 px) if the bar's code cannot load, the header menu button
   } finally { await context.close(); }
 });
 
+test("(team_coach, 390 px) if the bar's code loads but fails to draw, the header menu button comes back", async () => {
+  const account = world.accounts.find((a) => a.role === "team_coach");
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
+    await context.route("**/react-build/islands.js", (route) => route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: 'export const BottomNav = () => null; export function mountIsland() { throw new Error("e2e: the bar fails to draw"); } export function unmountIsland() { return false; }',
+    }));
+    const page = await context.newPage();
+    await page.goto(world.baseUrl);
+    await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+    await page.waitForFunction(() => document.body.classList.contains("bottom-nav-unavailable"), null, { timeout: 20_000 });
+    assert.equal(await page.locator(bar).count(), 0);
+    assert.equal(await page.locator("#mobileNavToggle").isVisible(), true);
+    await page.locator("#mobileNavToggle").click();
+    await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"), null, { timeout: 5_000 });
+  } finally { await context.close(); }
+});
+
+for (const width of [360, 375, 390]) {
+  test(`(athlete, ${width} px) the pending-tests count is on the bar's Tests, inside its button and the screen`, async () => {
+    const { context, page, pageErrors } = await openAs(browser, world, "athlete", width);
+    try {
+      await page.waitForSelector(`${bar} [data-nav-id="tests"]`, { timeout: 20_000 });
+      // The count the app shows in the menu (set here: the seed has no pending test).
+      await page.evaluate(() => { const c = document.querySelector("[data-tests-count]"); c.textContent = "12"; c.hidden = false; });
+      const badge = page.locator(`${bar} [data-nav-id="tests"] .om-bottom-nav-badge`);
+      await badge.waitFor({ timeout: 5_000 });
+      assert.match(await badge.textContent(), /12/);
+      const g = await page.evaluate(() => {
+        const item = document.querySelector('.om-bottom-nav [data-nav-id="tests"]').getBoundingClientRect();
+        const b = document.querySelector('.om-bottom-nav [data-nav-id="tests"] .om-bottom-nav-badge').getBoundingClientRect();
+        return { inside: b.left >= item.left && b.right <= item.right && b.top >= item.top && b.bottom <= item.bottom, onScreen: b.right <= innerWidth && b.left >= 0, overflow: document.documentElement.scrollWidth - innerWidth };
+      });
+      assert.deepEqual(g, { inside: true, onScreen: true, overflow: 0 });
+      // Gone again with the count.
+      await page.evaluate(() => { document.querySelector("[data-tests-count]").hidden = true; });
+      await page.waitForFunction(() => !document.querySelector(".om-bottom-nav .om-bottom-nav-badge"), null, { timeout: 5_000 });
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  });
+}
+
 test("(1280 px) a computer keeps the rail: no bar and React is never downloaded", async () => {
   const requested = [];
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 1280);

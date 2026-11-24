@@ -1934,7 +1934,9 @@ function closeMobileNav() {
   renderMobileNavState();
   if (!focusInDrawer) return;
   // On a phone the drawer is opened by the bottom bar's Athletes (the header's menu button is hidden there).
-  const opener = els.mobileNavToggle?.offsetParent ? els.mobileNavToggle : document.querySelector('.om-bottom-nav [data-nav-id="athletes"]');
+  // (Athletes moved to More by Edit menu: focus goes to More, where it was opened from.)
+  const opener = els.mobileNavToggle?.offsetParent ? els.mobileNavToggle
+    : (document.querySelector('.om-bottom-nav [data-nav-id="athletes"]') || document.querySelector('.om-bottom-nav [data-nav-id="more"]'));
   opener?.focus({ preventScroll: true });
 }
 
