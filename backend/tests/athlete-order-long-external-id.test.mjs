@@ -15,7 +15,7 @@ let db, k, srv, admin;
 const EXTERNAL = ["3", "5", "10", "2147483647", "2147483648", "2607482921", "12345678901234567890", "99999999999999999999"];
 
 before(async () => {
-  db = await buildDatabase({ label: "athlete_order_long_id" });
+  db = await buildDatabase({ label: "athlete_order_long_id", upTo: "all" });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   const F = fixtures(k);

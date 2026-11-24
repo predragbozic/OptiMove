@@ -107,6 +107,8 @@ export const GPEXE_TEST_MIGRATIONS = [
   "202611221300_training_load_v88_manual_values.sql",
   // ST-3: a session type per athlete, the type change record, the merge and reparent rule.
   "202611221400_training_load_v89_participant_session_types.sql",
+  // Roles R4-1 (v92): the layers; the server's role read needs its functions (authz.js ROLE_PERMISSIONS_SQL).
+  "202611241000_roles_v92_layers_foundation.sql",
 ];
 
 // Copied from training-load-dashboard.test.mjs (identical to
