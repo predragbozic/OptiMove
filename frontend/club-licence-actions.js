@@ -75,12 +75,13 @@ function rerender() {
 
 async function mountInto(host) {
   const mod = await loadIslands();
-  if (!host.isConnected) return;
+  // Settings was left (or another host drawn) while React was still loading: nothing is mounted into the old host.
+  if (!host.isConnected || host !== lastHost) return;
   mod.mountIsland(host, mod.ClubLicence, propsFor(host), { name: "club_licence" });
 }
 
-// After each paint of the content area (Settings and every other tab): mount into the host the panel drew, or unmount
-// the island when the content no longer shows it.
+// After each paint of Settings (renderOrganizationPanel): mount into the host the panel drew, or unmount the island when
+// the panel no longer shows it. Leaving Settings is leaveClubLicence (loadActiveTab and the notification openers).
 export function syncClubLicence(root = globalThis.document) {
   const host = root?.querySelector?.(LICENCE_HOST_SELECTOR) || null;
   if (lastHost && lastHost !== host && islands) islands.unmountIsland(lastHost);

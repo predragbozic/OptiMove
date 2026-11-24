@@ -374,7 +374,28 @@ test("11. a club switched while a save is not confirmed: the open write stays on
   assert.equal(closedOf(CLUB).has("calendar"), true);
   assert.ok(calls.some((c) => c.method === "GET" && c.url.includes(CLUB2)), "read once the write is settled");
   assert.match(root.textContent, /Second Club's licence/);
+  assert.match(root.textContent, /Test Club's licence: Licence saved – taken out: Calendar\./, "the outcome of Test Club's write is shown, under its name");
   assert.ok(calls.filter((c) => c.method === "POST").every((c) => c.url.includes(CLUB + "/")), "every write went to Test Club");
+});
+
+test("11b. a check of the other club's write that settles as a refusal still says so, under that club's name", async () => {
+  newServer();
+  let root = await openLicence(CLUB);
+  click(box(root, "calendar"));
+  await settle();
+  type(root.querySelector("textarea"), "Test");
+  await settle();
+  server.fail = { throwNetworkError: true };
+  click(button(root, "Save licence"));
+  await settle();
+  root = hostFor(CLUB2, "Second Club");
+  await actions.syncClubLicence(root);
+  await settle();
+  server.fail = { status: 409, body: { error: "request_key_reused", message: "x" } };
+  click(button(root, "Check result"));
+  await settle();
+  assert.match(root.textContent, /Second Club's licence/);
+  assert.match(root.textContent, /Test Club's licence: This change was already sent with other content\./);
 });
 
 test("12. an answer for a state replaced by a workspace switch settles nothing of the new state", async () => {

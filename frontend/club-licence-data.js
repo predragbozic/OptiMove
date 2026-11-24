@@ -54,7 +54,10 @@ export async function loadClubLicence(clubId, render, clubName = "") {
   if (!clubId) return;
   if (licence.clubId !== clubId) {
     if (licenceWriteOpen()) return;
-    Object.assign(licence, emptyClubLicence(), { clubId, clubName });
+    // The outcome of the earlier club's last write is carried over under that club's own name: a write that settled
+    // while this club was already on screen would otherwise never be reported (code re-review M1).
+    const carried = licence.notice && licence.clubName ? { notice: `${licence.clubName}'s licence: ${licence.notice}`, noticeTone: licence.noticeTone, open: licence.open } : {};
+    Object.assign(licence, emptyClubLicence(), { clubId, clubName }, carried);
     epoch += 1;
   } else if (clubName) {
     licence.clubName = clubName;

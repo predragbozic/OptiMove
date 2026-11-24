@@ -2522,6 +2522,8 @@ async function loadAthletes() {
 // notification that opens a module goes to Home instead: the module is not reachable there (its menu entry is hidden).
 function notInViewWorkspace(open) {
   return (...args) => {
+    // Every notification opener leaves Settings without loadActiveTab: the Club licence island goes with it.
+    leaveClubLicence();
     if (!isViewWorkspace()) return open(...args);
     state.activeTab = "coach-home";
     return loadActiveTab();
