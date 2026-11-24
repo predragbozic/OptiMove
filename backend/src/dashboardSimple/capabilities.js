@@ -1,3 +1,4 @@
+import {galleryAvailable} from '../dashboardGallery/query.js';
 // Isolated read port. Caller supplies a server-owned query runner and the
 // existing DashboardAccess predicates, not booleans or claims from a request body.
 // Deliberately not imported/registered by any production route in S2a.
@@ -88,7 +89,7 @@ export function createSimpleCapabilityReader({ query, canManageDashboardRow, dat
       connection = (await query(`select c.* from training_load.metric_source_connections c where (c.state='active' or c.state='inactive' and $6::boolean) and ${visibleSql('c')} and c.id=$5`, [...targetParams(d), sourceConnectionId, retainedPin !== null])).rows[0];
       if (!connection) throw new SimpleContractError('notFound');
     }
-    return { dashboard: d, metric, metricRef: structuredClone(metricRef), connection, retainedPin, widgetTypes, builtins, capabilities: { contractVersion: 1, chartComposition: ['athletes-v1'], maxChartAthletes: 20, pages: false, backendReference: false, referencePercent: false } };
+    return { dashboard: d, metric, metricRef: structuredClone(metricRef), connection, retainedPin, widgetTypes, builtins, capabilities: { contractVersion: 1, chartShapes: await galleryAvailable(query), chartComposition: ['athletes-v1'], maxChartAthletes: 20, pages: false, backendReference: false, referencePercent: false } };
   }
   return { listMetrics, load };
 }

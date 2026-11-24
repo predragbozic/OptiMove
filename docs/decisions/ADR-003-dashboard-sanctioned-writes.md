@@ -114,3 +114,20 @@ cloneDashboard remains the documented JS raw-write exception; the sanctioned SQL
 P1 copy is the second explicit composite raw-INSERT implementation, alongside cloneDashboard: sanctioned SQL function training_load.copy_dashboard_page_widget inserts dashboard_widgets and dashboard_widget_series inside its atomic transaction, under dashboard -> Pages -> widget -> series locks and all v16/v17/v71 validation triggers. This does not authorize raw INSERTs in Page routes/services. The copy receipt and the inserts commit together.
 
 Simple request locking precedes the domain hierarchy: save_simple_page_widget takes the same dashboard-simple:<actor>:<request> advisory lock as save_simple_widget before dashboard/Page locks; the nested acquisition is reentrant in the transaction.
+
+## P2 chart shapes (v94)
+
+The four replaced sanctioned/validation bodies are dashboard_presentation_valid,
+dashboard_presentation_assert_compatible, copy_dashboard_page_widget and
+save_simple_widget. Save and copy keep their existing advisory-first and
+ dashboard -> Pages -> widget -> series order. They remap only known schemaVersion=1
+chartShape series identities after new series are created; deferred validation checks
+final references and catalog units. No new route performs a raw write.
+
+cloneDashboard remains the documented JS composite exception: gallery series bindings
+are remapped to the new identities after the series batch. Ordinary and opaque future
+sidecars still copy inside PostgreSQL, preserving JSON numeric precision. The sanctioned
+SQL copy function is the other documented composite INSERT implementation; its additional
+presentation UPDATE stays in the same transaction and receipt protocol. The append-only
+chart-use evidence survives deletion and blocks v94 rollback after use. No new access
+right or athlete/fact source is introduced.

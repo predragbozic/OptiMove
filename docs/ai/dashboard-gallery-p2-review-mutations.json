@@ -1,0 +1,53 @@
+{
+  "reviewedHead": "b4a68077d047393477b6850009c540285536e8ad",
+  "migrationSha256": "2c018c784ace8edc1cb0c9b729d5e0143166d813477899f678060d6c6ac304cb",
+  "migrationByteIdentical": true,
+  "normalDbTests": {
+    "passed": 9,
+    "failed": 0
+  },
+  "mutationsKilled": 16,
+  "controlsPassed": 5,
+  "sql": [
+    {
+      "name": "sql-shape-validation",
+      "status": "KILLED",
+      "killedBy": "SQL/JS shape allow-lists agree on every gallery form and invalid unions",
+      "targetFailure": "shape validation: null",
+      "unmodifiedMigrationTestPassed": true,
+      "installedAfterApply": true
+    },
+    {
+      "name": "sql-axis-assignment",
+      "status": "KILLED",
+      "killedBy": "combined axis assignment accepts labelled compatible axes and refuses a false axis claim",
+      "targetFailure": "Missing expected rejection.",
+      "unmodifiedMigrationTestPassed": true,
+      "installedAfterApply": true
+    },
+    {
+      "name": "sql-measurements",
+      "status": "KILLED",
+      "killedBy": "DB write refuses aggregated heatmap and boxplot values",
+      "targetFailure": "Missing expected rejection.",
+      "unmodifiedMigrationTestPassed": true,
+      "installedAfterApply": true
+    },
+    {
+      "name": "sql-scope",
+      "status": "KILLED",
+      "killedBy": "DB write refuses mixed data scope levels",
+      "targetFailure": "Missing expected rejection.",
+      "unmodifiedMigrationTestPassed": true,
+      "installedAfterApply": true
+    },
+    {
+      "name": "sql-axis-units",
+      "status": "KILLED",
+      "killedBy": "DB write refuses different units on the same combined axis",
+      "targetFailure": "Missing expected rejection.",
+      "unmodifiedMigrationTestPassed": true,
+      "installedAfterApply": true
+    }
+  ]
+}

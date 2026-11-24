@@ -30386,6 +30386,22 @@ body.athlete-questions-prompt-open {
 .builder-tw-week-options .builder-athlete-option { grid-template-columns: minmax(0, 1fr) auto; }
 /* end WT-C */
 
+/* P2 chart gallery, controls and report entry — isolated dashboard additions. */
+.tl-gallery-editor { display:grid;gap:12px;margin:12px 0;min-width:0; }
+.tl-gallery-editor label { display:flex;align-items:center;gap:10px;min-height:44px; }
+.tl-gallery-editor select { font-size:16px;max-width:100%;min-height:44px; }
+.tl-gallery-editor input[type="checkbox"] { min-width:24px;min-height:24px; }
+.tl-gallery-editor p { margin:0; }
+.tl-chart-controls,.tl-chart-point { margin-top:8px;max-width:100%; }
+.tl-chart-controls summary,.tl-chart-point summary { cursor:pointer;min-height:44px;display:flex;align-items:center; }
+.tl-chart-controls button { min-height:44px;margin:4px; }
+.tl-analysis-plot { min-width:0;max-width:100%; }
+@media(max-width:760px){.tl-gallery-editor label{flex-wrap:wrap}.tl-gallery-editor select{width:100%}.tl-chart-controls button{font-size:16px}.tl-analysis-chart-values{max-width:100%;overflow-x:auto}}
+.tl-gallery-picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;min-width:0}
+.tl-gallery-picks .tl-gallery-pick{position:relative;display:grid;grid-template-columns:24px 1fr;gap:6px;padding:10px;border:1px solid #bcc9d7;border-radius:8px;min-height:96px;cursor:pointer}
+.tl-gallery-pick svg{width:96px;max-width:100%;height:48px;grid-column:2;color:#006b68}
+.tl-gallery-pick span{grid-column:1/-1}.tl-gallery-pick.is-selected{border:2px solid #007f78;background:#edf8f6}
+@media(max-width:760px){.tl-gallery-picks{grid-template-columns:repeat(2,minmax(0,1fr))}.tl-gallery-picks .tl-gallery-pick{min-height:106px}.tl-gallery-pick input{min-width:24px;min-height:24px}}
 /* The event panel's redesign (2026-11-23): the "In this event" summary row, collapsible sections, one "⋯" menu per
    linked row, one See each athlete with its form chooser, and Edit · Cancel event · Delete together at the bottom. */
 .cc-panel-summary { display: grid; gap: 6px; }

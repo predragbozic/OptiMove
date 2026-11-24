@@ -14,7 +14,7 @@ export function simpleDraftFromWidget(widget, uuid) {
     ...(series ? { metricRef: series.built_in_series_key ? { kind: 'builtin', key: series.built_in_series_key } : { kind: 'metric', metricDefinitionId: series.metric_definition_id } } : {}),
     athleteSelection: !Object.hasOwn(filter, 'athleteIds') ? { mode: 'inherit' } : filter.athleteIds?.length ? { mode: 'selected', athleteIds: copy(filter.athleteIds) } : { mode: 'allAuthorized' },
     advancedFilter: { activity: selection('activityId'), component: selection('componentId') }, periodIntent: { mode: 'inherit' },
-    view: widget ? { type: widget.widget_type, groupBy: widget.group_by, dataScopeLevel: series.data_scope_level, analyticalAggregation: series.analytical_aggregation } : { type: 'table', groupBy: 'day' },
+    view: widget ? { type: widget.widget_type, groupBy: widget.group_by, dataScopeLevel: series.data_scope_level, analyticalAggregation: series.analytical_aggregation, ...(widget.presentation_config?.schemaVersion===1&&widget.presentation_config.chartShape?.schemaVersion===1?{chartKind:widget.presentation_config.chartShape.kind}:{}) } : { type: 'table', groupBy: 'day' },
     ...(widget ? { display: { mode: 'preserve' }, presentation: { mode: 'preserve' } } : {}),
   };
 }

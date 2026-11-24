@@ -1,3 +1,4 @@
+import {galleryAvailable,attachGalleryResult} from '../dashboardGallery/query.js';
 import { applySimplePage, simplePageBinding } from '../dashboardPages/simple.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { randomUUID } from 'node:crypto';
@@ -47,7 +48,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       if (kind === 'capabilities') {
         const widgetTypes = (await queryRunner('select * from training_load.dashboard_widget_types where is_active=true order by key')).rows;
         const builtins = (await queryRunner('select * from training_load.dashboard_builtin_series where is_active=true order by key')).rows.map(row => ({ ...row, allowed_aggregations: row.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none'], source_policy: 'not_applicable' }));
-        return { contractVersion: 1, widgetTypes, builtins, capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false, maxChartAthletes: 20 }, limits: { debounceMs: 350, statementTimeoutMs: 3000, transactionTimeoutMs: 5000, requestBytes: 65536, responseBytes: responseLimit } };
+        return { contractVersion: 1, widgetTypes, builtins, capabilities: { preview: previewEnabled, atomicSave: atomicSaveEnabled, chartShapes: await galleryAvailable(queryRunner), pages: false, presentationAnnotations: false, backendReference: false, referencePercent: false, maxChartAthletes: 20 }, limits: { debounceMs: 350, statementTimeoutMs: 3000, transactionTimeoutMs: 5000, requestBytes: 65536, responseBytes: responseLimit } };
       }
       let existing = null;
       if (envelope?.editTarget != null) {
@@ -84,7 +85,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
       const results = compiled.effectiveFilter.athleteIds.length
         ? await queryDashboard(target.workspace, [queryWidget], compiled.resolvedPeriod, { queryRunner, shellCohort: context.shellCohort })
         : [{ widgetId: queryWidget.id, series: [{ widgetId: queryWidget.id, seriesId: queryWidget.series[0].id, status: 'ok', data: { current: [], comparison: null, comparisonRange: null } }] }];
-      const widgetResult = results[0] && { ...results[0], presentation_config: compiled.widget.presentation_config ?? null };
+      const widgetResult = results[0] && attachGalleryResult(compiled.widget,{ ...results[0], presentation_config: compiled.widget.presentation_config ?? null });
       const contractError = widgetResult?.series?.find(series => ['calculation_changed_in_period', 'aggregation_not_allowed'].includes(series.error));
       if (contractError) return issueResult('invalid', contractError.error, '$.draft.view.analyticalAggregation');
       if (!widgetResult || widgetResult.series?.length !== 1 || widgetResult.series.some(series => series.status !== 'ok')) throw previewError('previewQueryFailed');

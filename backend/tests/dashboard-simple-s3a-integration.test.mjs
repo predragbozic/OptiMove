@@ -26,6 +26,7 @@ if (needsModuleMocksRelaunch()) {
       const client = new EventEmitter();
       client.query = async (sql, params) => {
         calls.push({ sql, params });
+      if(sql.includes('dashboard_chart_shapes_available'))return {rows:[{supported:false}]};
         if (sql.includes('from public.schema_migrations')) return { rows: [{ migration_name: SIMPLE_MIGRATION_NAME, checksum: SIMPLE_MIGRATION_SHA256 }] };
         if (sql.includes('information_schema.columns')) return { rows: [{ presentation: true, receipts: true, writer: true }] };
         if (sql.includes('from public.users')) return { rows: options.inactiveUser ? [] : [{ id: id(3), is_active: true }] };

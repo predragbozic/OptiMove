@@ -1,3 +1,4 @@
+import {attachGalleryResult,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { isMetricVisibleToDashboard, isSourceConnectionVisibleToDashboard } from '../trainingLoadDashboardAccess.js';
 import { assertDashboardAggregation } from '../dashboardRatios.js';
 import { queryDashboard } from '../trainingLoadDashboardQuery.js';
@@ -101,7 +102,8 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
    const selected=widgets.filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
    const result=await queryDashboard(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q});
-   return {dashboardRevision:target.dashboard.revision,pageId:page.id,pageRevision:page.revision,defaultsRevision:page.defaults_revision,resolvedPeriod:period,widgets:result.map(w=>({...w,presentation_config:selected.find(x=>x.id===w.widgetId)?.presentation_config}))};
+   const galleryWidgets=await hydrateGalleryWidgets(q,selected);
+   return {dashboardRevision:target.dashboard.revision,pageId:page.id,pageRevision:page.revision,defaultsRevision:page.defaults_revision,resolvedPeriod:period,widgets:result.map(w=>attachGalleryResult(galleryWidgets.find(x=>x.id===w.widgetId),{...w,presentation_config:selected.find(x=>x.id===w.widgetId)?.presentation_config}))};
   });
  }
  async function status({req,dashboardId,requestId}){

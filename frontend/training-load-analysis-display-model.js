@@ -191,7 +191,7 @@ export function buildDashboardWidgetDisplayModel(widget, queryResult, { loading 
   const groupBy = widget?.group_by ?? "day";
   const model = {
     widgetId: copy(widget?.id), widgetType: copy(widget?.widget_type), title: copy(widget?.title ?? ""),
-    groupBy: copy(groupBy), period: copy(period), config, status: "ready", reasons: [], series: [], kpi: null,
+    gallery: copy(queryResult?.gallery), galleryShape: copy(widget?.presentation_config?.schemaVersion===1?widget.presentation_config.chartShape:null), chartInteractions: copy(widget?.presentation_config?.schemaVersion===1?widget.presentation_config.chartInteractions:null), groupBy: copy(groupBy), period: copy(period), config, status: "ready", reasons: [], series: [], kpi: null,
   };
   if (config.status !== "ready") {
     model.status = config.status === "unsupported" ? "unsupported" : "error";

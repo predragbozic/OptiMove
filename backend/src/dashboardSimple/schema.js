@@ -1,3 +1,4 @@
+import {validGalleryShape} from '../dashboardGallery/contract.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 // S1.1 26162ae: isolated JSON contracts. No routes, database or evaluator.
 const obj = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -20,7 +21,7 @@ export const periodConfigSchema = union(
   tagged('mode', 'relative', { schemaVersion: { const: 1 }, preset: en('today', 'last_7_days', 'last_28_days', 'this_week'), timeZone: { type: 'string', format: 'time-zone' } }),
 );
 export const periodIntentSchema = union(tagged('mode', 'inherit'), tagged('mode', 'replacePageRuntime', { periodConfig: periodConfigSchema, savePageDefaults: bool }, ['mode', 'periodConfig']));
-export const viewSchema = obj({ type: en('kpi', 'line_chart', 'bar_chart', 'table'), groupBy: en('day', 'week', 'session', 'component', 'athlete', 'cohort'), dataScopeLevel: en('day', 'session', 'component'), analyticalAggregation: en('sum', 'avg', 'max', 'last', 'none', 'ratio') });
+export const viewSchema = obj({ type: en('kpi', 'line_chart', 'bar_chart', 'table'), groupBy: en('day', 'week', 'session', 'component', 'athlete', 'cohort'), dataScopeLevel: en('day', 'session', 'component'), analyticalAggregation: en('sum', 'avg', 'max', 'last', 'none', 'ratio'), chartKind: en('standard','area','horizontal_bar','heatmap','boxplot') }, ['type','groupBy','dataScopeLevel','analyticalAggregation']);
 export const displayV2Schema = obj({ schemaVersion: { const: 2 }, numberFormat: obj({ maximumFractionDigits: { type: 'integer', minimum: 0, maximum: 6 } }, []), legend: obj({ visible: bool }, []), valueLabels: obj({ visible: bool }, []) }, ['schemaVersion']);
 export const yAxisSchema = union(tagged('mode', 'auto'), tagged('mode', 'fixed', { min: num, max: num }));
 export const chartInteractionsSchema = obj({ tooltip: obj({ mode: en('exact', 'formatted') }), legend: obj({ toggle: bool }), zoom: obj({ mode: en('disabled', 'local'), applyPeriodAction: bool }), pointSelection: obj({ mode: en('disabled', 'details') }), yAxis: yAxisSchema }, []);
@@ -29,7 +30,8 @@ const target = obj({ series: { const: 'main' }, phase: { const: 'current' }, cel
 const style = obj({ tone: en('neutral', 'positive', 'caution', 'negative'), marker: en('none', 'up', 'down', 'check', 'alert', 'star1', 'star2', 'star3'), label: str(120) });
 const baseRule = { id: str(64), priority: integer, enabled: bool, name: str(200), target, operand: en('value', 'referenceDifference', 'referencePercent'), operator: en('gt', 'gte', 'lt', 'lte', 'between', 'outside'), threshold: obj({ value: num, unit }), range: obj({ lower: num, upper: num, lowerInclusive: bool, upperInclusive: bool, unit }), reference: referenceSchema, formulaVersion: { const: 'signed-relative-abs-v1' }, style };
 export const ruleSchema = obj(baseRule, ['id', 'priority', 'enabled', 'name', 'target', 'operand', 'operator', 'style']);
-export const presentationV1Schema = obj({ schemaVersion: { const: 1 }, chartComposition: { const: 'athletes-v1' }, chartInteractions: chartInteractionsSchema, tableFormatting: obj({ evaluationVersion: { const: 1 }, rules: { type: 'array', items: ruleSchema, maxItems: 20 } }) }, ['schemaVersion']);
+export const galleryShapeSchema = obj({schemaVersion:{const:1},kind:en('area','horizontal_bar','combined','heatmap','scatter','stacked','boxplot'),seriesIds:{type:'array',items:uuid,minItems:1,maxItems:20},bindings:{type:'array',minItems:2,maxItems:20,items:obj({seriesId:uuid,mark:en('bar','line'),axis:en(0,1)})},additive:bool},['schemaVersion','kind','seriesIds']);
+export const presentationV1Schema = obj({ chartShape: galleryShapeSchema, schemaVersion: { const: 1 }, chartComposition: { const: 'athletes-v1' }, chartInteractions: chartInteractionsSchema, tableFormatting: obj({ evaluationVersion: { const: 1 }, rules: { type: 'array', items: ruleSchema, maxItems: 20 } }) }, ['schemaVersion']);
 export const displayModeSchema = union(tagged('mode', 'preserve'), tagged('mode', 'replace', { value: displayV2Schema }));
 export const presentationModeSchema = union(tagged('mode', 'preserve'), tagged('mode', 'clear'), tagged('mode', 'replace', { value: presentationV1Schema }));
 export const editorDraftSchema = obj({ contractVersion: { const: 1 }, draftId: uuid, draftVersion: integer, title: str(200), metricRef: metricRefSchema, athleteSelection: athleteSelectionSchema, advancedFilter: obj({ activity: filterSelectionSchema, component: filterSelectionSchema }, []), periodIntent: periodIntentSchema, view: viewSchema, display: displayModeSchema, presentation: presentationModeSchema }, ['contractVersion', 'draftId', 'draftVersion', 'title', 'metricRef', 'athleteSelection', 'periodIntent', 'view']);
@@ -106,7 +108,8 @@ export function validateContract(name, value) {
     const pres = name === 'editorDraft' ? value.presentation?.value : name === 'presentationMode' ? value.value : name === 'presentationV1' ? value : null;
     const axis = name === 'yAxis' ? value : name === 'chartInteractions' ? value.yAxis : pres?.chartInteractions?.yAxis;
     if (axis?.mode === 'fixed' && axis.min >= axis.max) add('axisBounds', '$.yAxis');
-    if ((pres?.chartInteractions || pres?.chartComposition) && pres.tableFormatting) add('incompatiblePresentation', '$');
+    if (pres?.chartShape && !validGalleryShape(pres.chartShape)) add('invalidChartShape', '$.chartShape');
+    if ((pres?.chartInteractions || pres?.chartComposition || pres?.chartShape) && pres.tableFormatting) add('incompatiblePresentation', '$');
     const rules = name === 'rule' ? [value] : pres?.tableFormatting?.rules ?? [];
     const priorities = new Set(), ruleIds = new Set();
     rules.forEach((r, i) => {
