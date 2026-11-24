@@ -292,6 +292,20 @@ test("10. no fallback is persisted when the role tables could not be read (5.1, 
   const r = await resolveActiveWorkspace(w.viewer.id, unreadable);
   assert.equal(r.workspace.type, "athlete");
   assert.deepEqual(await pref(w.viewer), { workspace_type: "club", scope_id: w.A });
+  // L1 is narrow: unreadable role tables keep only a stale club / team preference that may be a view workspace. One
+  // where the account holds no live assignment (club B; a revoked assignment in A for w.revoked) is replaced as before R4-2.
+  await setPref(w.viewer, "club", w.B);
+  await resolveActiveWorkspace(w.viewer.id, unreadable);
+  assert.deepEqual(await pref(w.viewer), { workspace_type: "athlete", scope_id: null });
+  await setPref(w.revoked, "club", w.A);
+  await resolveActiveWorkspace(w.revoked.id, { ...unreadable, userId: w.revoked.id });
+  assert.deepEqual(await pref(w.revoked), { workspace_type: "athlete", scope_id: null });
+  await setPref(w.viewer, "team", w.TA1);
+  await resolveActiveWorkspace(w.viewer.id, unreadable);
+  assert.deepEqual(await pref(w.viewer), { workspace_type: "athlete", scope_id: null }, "an assignment of another scope does not keep it");
+  await setPref(w.viewer, "club", w.A);
+  await resolveActiveWorkspace(w.viewer.id, unreadable);
+  assert.deepEqual(await pref(w.viewer), { workspace_type: "club", scope_id: w.A }, "a live assignment in that scope keeps it");
   const r2 = await resolveActiveWorkspace(w.viewer.id, { ...unreadable, rolePermissions: [] });
   assert.equal(r2.workspace.type, "athlete");
   assert.deepEqual(await pref(w.viewer), { workspace_type: "athlete", scope_id: null });

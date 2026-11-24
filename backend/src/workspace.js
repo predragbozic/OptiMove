@@ -192,17 +192,36 @@ export async function resolveActiveWorkspace(userId, authz) {
   }
 
   const fallback = pickFallbackWorkspace(availableWorkspaces);
-  // No fallback is persisted when the role tables could not be read for this request (contract 5.1, the Nezavisni
-  // revizor's L1): the view workspaces are then missing from the list, and a passing database error must not overwrite
-  // a role holder's saved club.
-  const rolesReadable = !(authz?.rolePermissions && !Array.isArray(authz.rolePermissions));
-  if (fallback && rolesReadable) {
+  if (fallback && await mayPersistFallback(userId, authz, preference)) {
     const alreadyStored = preference
       && preference.workspace_type === storedWorkspaceType(fallback.type)
       && String(preference.scope_id || "") === String(fallback.scopeId || "");
     if (!alreadyStored) await saveWorkspacePreference(userId, fallback.type, fallback.scopeId);
   }
   return { workspace: fallback, availableWorkspaces };
+}
+
+// Contract 5.1, the Nezavisni revizor's L1: when the role tables could not be read for this request the view workspaces
+// are missing from the list, and a passing database error must not overwrite a role holder's saved club or team. So
+// with the role tables unreadable, a stale stored club / team preference is kept while the account may hold a live
+// assignment in that scope (asked of the assignments table itself; any error but "no such table" keeps it too). A
+// database without the table (one built before v84) can hold no assignment, so its fallback is persisted as before
+// R4-2; so is every other preference, and every fallback while the role tables are readable.
+async function mayPersistFallback(userId, authz, preference) {
+  const rolesReadable = !(authz?.rolePermissions && !Array.isArray(authz.rolePermissions));
+  if (rolesReadable) return true;
+  if (!preference || (preference.workspace_type !== "club" && preference.workspace_type !== "team") || !preference.scope_id) return true;
+  try {
+    const result = await query(
+      `select exists (select 1 from public.user_role_assignments
+                       where user_id = $1 and scope_type = $2 and scope_id = $3 and revoked_at is null
+                         and (expires_at is null or expires_at > now())) as held`,
+      [userId, preference.workspace_type, preference.scope_id],
+    );
+    return !result.rows[0]?.held;
+  } catch (error) {
+    return error?.code === "42P01";
+  }
 }
 
 // The actual gate PUT /api/auth/workspace enforces - never trusts the

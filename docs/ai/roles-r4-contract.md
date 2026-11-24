@@ -845,8 +845,11 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
   `authz.roleAssignments` (already live and of a non-archived role); one query per type for the names. `role` is
   `"role_holder"`. A stored `club` / `team` preference resolves to the exact workspace, else to the view one of the same
   scope (`findPreferredWorkspace`), else the fallback; `saveWorkspacePreference` stores the base type
-  (`storedWorkspaceType`) on every path; `FALLBACK_ORDER` has the two last (L-3, below). No fallback is persisted while
-  `authz.rolePermissions` is unavailable (L1). `PUT /api/auth/workspace` matches exactly: `club` + C is refused for an
+  (`storedWorkspaceType`) on every path; `FALLBACK_ORDER` has the two last (L-3, below). L1, narrow: while
+  `authz.rolePermissions` is unavailable, a stale stored `club` / `team` preference is not overwritten when the account
+  holds a live assignment in that scope (asked of `user_role_assignments`; any error but "no such table" keeps it);
+  every other fallback is persisted as before (found at the gate: a blanket "no persist when unreadable" stopped the
+  fallback of every account on a database built before v84, `source-metric-variables-club-7i` test 8). `PUT /api/auth/workspace` matches exactly: `club` + C is refused for an
   account that has only `club_view` C.
 - **The entry gate** (`backend/src/organizationEntry.js`, in place of `requireCoach` on `/api/organization`): an account
   that passes `requireCoach` goes on unchanged; any other account only on `GET /`, only while its active workspace

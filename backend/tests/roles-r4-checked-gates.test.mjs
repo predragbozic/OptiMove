@@ -132,7 +132,7 @@ const REVIEWED = Object.freeze({
   "trainingLoadDashboardWidgets.js": 1,
   "trainingLoadMetricsAccess.js": 15,
   "trainingLoadOccurrenceService.js": 4,
-  "workspace.js": 3, // R4-2: a stored club / team preference maps to club_view / team_view without the old row (+2)
+  "workspace.js": 4, // R4-2: a stored club / team preference maps to club_view / team_view without the old row; L1 keeps such a preference (+3)
 });
 
 test("B0. the branch pattern finds a branch whatever the variable is called", () => {
