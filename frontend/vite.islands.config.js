@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve, relative, sep } from "node:path";
+import { readFileSync } from "node:fs";
 
 // React islands (owner, 2026-11-24): every new screen, and every screen substantially reworked, is a React component.
 // The rest of the app stays plain ES modules, served unbuilt in dev and e2e (backend/src/server.js serves frontend/ as
@@ -18,6 +19,13 @@ import { resolve, relative, sep } from "node:path";
 // under frontend/, so "../api.js" means the same file from both.
 const rootDir = import.meta.dirname;
 const islandsDir = resolve(rootDir, "react");
+
+export const REACT_PACKAGES = Object.freeze(["react", "react-dom", "scheduler"]);
+function reactNotice() {
+  const versions = REACT_PACKAGES.map((name) => `${name} ${JSON.parse(readFileSync(resolve(rootDir, "node_modules", name, "package.json"), "utf8")).version}`).join(", ");
+  const license = readFileSync(resolve(rootDir, "node_modules", "react", "LICENSE"), "utf8").trim().replace(/\*\//g, "* /");
+  return `/*! ${versions} - https://react.dev\n${license}\n*/`;
+}
 
 export function isAppModule(id, importer) {
   // Only an island's own import: React's packages require their cjs/ files by relative paths too.
@@ -45,6 +53,9 @@ export default defineConfig({
         // React itself in its own file, so a change to an island does not rewrite the whole React bundle.
         codeSplitting: { groups: [{ name: "react", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ }] },
         chunkFileNames: "[name].js",
+        // React, react-dom and scheduler are MIT: their notice travels with the committed copy (the production build
+        // also emits the LICENSE files, vite.config.js).
+        postBanner: (chunk) => (chunk.name === "react" ? reactNotice() : ""),
         // Vite leaves a library's ES output unminified; React's chunk would be about 0.5 MB of committed text.
         minify: true,
       },
