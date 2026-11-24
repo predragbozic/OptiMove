@@ -6,6 +6,7 @@ import { renderTrainingLoadCalendarHtml } from "./training-load-calendar-view.js
 import { renderGpexeImportsHtml } from "./gpexe-import-view.js";
 import { variablesContext } from "./metric-variables-data.js";
 import { renderVariablesHtml } from "./metric-variables-view.js";
+import { viewTrainingLoadSections } from "./view-modules.js";
 import { renderSourceFieldsHtml } from "./source-fields-view.js";
 import { renderMappingsHtml } from "./metric-mappings-view.js";
 import { renderBoardHtml } from "./metric-board-view.js";
@@ -1661,12 +1662,15 @@ export function renderTrainingLoadCoachHtml() {
   // see state.js's own header comment and setTrainingLoadSection() in
   // training-load-actions.js, the only place that value is written.
   const dataAnalysisTargetSection = state.trainingLoad.lastDataAnalysisSection || "today";
+  // Roles V-1: a view workspace shows only the spaces of its open modules (today Data configuration); Schedule, Data &
+  // Analysis and the filter open with their own V steps.
+  const viewOnly = viewTrainingLoadSections() !== null;
   return `
     <div class="training-load-root">
       <div class="training-load-toolbar">
         <div class="training-load-tabs" role="tablist" aria-label="Training Load spaces">
-          <button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
-          <button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>
+          ${viewOnly ? "" : `<button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
+          <button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>`}
           ${variablesContext()
             // C80: an administrator's item in the platform or a club workspace;
             // R2 (C99): also a team workspace of a club, for its coach - the
@@ -1675,7 +1679,7 @@ export function renderTrainingLoadCoachHtml() {
             ? `<button type="button" class="training-load-tab ${space === "dataConfig" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataConfig" ? "true" : "false"}" data-action="training-load-section" data-section="${space === "dataConfig" ? section : "variables"}">${renderTrainingLoadTabIcon("dataConfig")}<span>Data configuration</span></button>`
             : ""}
         </div>
-        ${space === "dataConfig" || section === "imports" ? ""
+        ${space === "dataConfig" || section === "imports" || viewOnly ? ""
           // Imports (manager, 2026-11-15): the filter does nothing there, so there is no control and no line about it.
           : `<button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>`}
       </div>

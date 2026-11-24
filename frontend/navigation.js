@@ -3,7 +3,7 @@ import { calendarSettingsContext } from "./calendar-settings-data.js";
 import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { rolesContext } from "./roles-data.js";
 import { coachSettingsSections, permissionTabAllowed, viewSettingsSections } from "./permission-nav.js";
-import { viewHiddenMenuSelectors, viewWorkspaceTabs } from "./view-modules.js";
+import { VIEW_SETTINGS_LABELS, viewHiddenMenuSelectors, viewWorkspaceTabs } from "./view-modules.js";
 import { storageAdminContext } from "./media-storage-admin-data.js";
 import { requestBottomNavSync } from "./bottom-nav.js";
 import { els } from "./dom.js";
@@ -188,7 +188,8 @@ export function ensureTemplateScopeIsVisible() {
 
 export function renderSettingsNavHtml(data = {}, section = state.organization.section || "overview") {
   if (isViewWorkspace()) {
-    const labels = { overview: "Overview", clubs: "Clubs", teams: "Teams" };
+    // Roles V-1: the sections an open module adds carry their own labels (view-modules.js).
+    const labels = VIEW_SETTINGS_LABELS;
     return `
     <nav class="settings-tabs om-tabs" aria-label="Settings sections">
       ${viewSettingsSections().map((value) => `<button class="settings-tab om-tab ${section === value ? "is-active" : ""}" type="button"${section === value ? ' aria-current="page"' : ""} data-action="organization-section" data-section="${escapeAttr(value)}">${escapeHtml(labels[value])}</button>`).join("")}

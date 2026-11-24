@@ -395,3 +395,88 @@ kalendar, testovi, trenažno opterećenje, tabele (dashboards), a programi i ve�
 
 *Preporuka:* **ovako**, osim ako vam neki modul treba ranije za konkretnu osobu u klubu. Tada taj modul ide odmah posle
 V-0.
+
+## 8. V-1 as built (Data configuration; Tags, presets and session types)
+
+Branch `feature/roles-v1-config-presets` from `1e83d9c6`. No migration.
+
+**The gate (V-0's reviewer LOW).** `compileRoute` (`moduleView.js`) wraps a custom `:param` pattern whole,
+`^(?:…)$`, so an alternation such as `/^a|b$/` admits only `a` and `b`. It refuses the `g`, `y` and `m` flags
+(`module-view-v0` test 11).
+
+**Data configuration (`variables.view`).**
+- **Reads:** `routes/sourceMetrics.js` mounts `viewEntryGate("data_configuration", …)` with three reads:
+  `GET /variables`, `GET /variables/:variableId` and `GET /classification`. Everything else answers the identical
+  `404 {error:"notFound"}`.
+- **The view context:** `canonicalVariableAdminService.js` `resolveVariableViewer` builds the context of a view
+  workspace from the gate's scope, never resolving the workspace again: `{ basis: "role_holder", owner: the club,
+  view: "coach", readOnly: true }`. The club must be active; for `team_view`, the team and its club.
+- **Answers:** C99's reduced view. `reducedOut` offers nothing editable for a `readOnly` context: `editable: false`,
+  `actions: []`.
+- **The coach paths (checked word):**
+  - the club admin's branch of `resolveMappingAdminWith` (`sourceMetricAccess.js`) asks `can(variables.view)` at the
+    club;
+  - the team coach's branch of `resolveVariableEditor` asks it at the team.
+
+**Tags, presets and session types (`presets.use`).**
+- **Taxonomy:**
+  - `server.js` mounts `taxonomyViewGate` (`routes/taxonomy.js`) before `requireCoach`. A view workspace reaches only
+    `GET /node-presets`, `GET /template-tags` and `GET /library/:kind` (the five kinds); every other request is `403`,
+    as `requireCoach` answers.
+  - A view workspace reads the system rows plus its club's and its teams' rows (`club_view`), or its team's rows
+    (`team_view`). It never reads a person's own rows or another club's, and always with `can_manage: false`.
+  - The coach path keeps its query. A club or team row counts only with `can(presets.use)` there, and
+    `canManagePreset` asks the same.
+- **Session types:**
+  - `routes/sessionTypes.js` mounts the gate on `GET /`; every write answers the identical 404.
+  - `sessionTypeService.js` gives a view workspace its club's types, read only.
+  - A club or team workspace without `presets.use` (the licence) sees the system types only and writes none.
+
+**Word lists.**
+- `ENFORCED_PERMISSIONS` adds `variables.view` (`sourceMetricAccess.js`, `canonicalVariableAdminService.js`) and
+  `presets.use` (`routes/taxonomy.js`, `sessionTypeService.js`). `STORABLE_PERMISSIONS` lists them once.
+- `VIEW_WORKSPACE_USABLE_WORDS` adds both words.
+- `OPEN_VIEW_MODULES` is `["data_configuration", "presets"]` on both sides.
+
+**Frontend.**
+- **Training Load:**
+  - `variablesContext` gives a view workspace the reduced, read-only context, with the intro sentence "You can look at
+    them here".
+  - A view workspace shows only the Data configuration space, with no Filter (`viewTrainingLoadSections`), and
+    `setTrainingLoadSection` keeps it on `variables`.
+- **Tags & Presets:**
+  - The panel reads only: no Add, no remove, no positions (positions belong to the Athletes module and are not
+    loaded).
+  - The taxonomy rows are read again after a workspace switch, because they now depend on the workspace.
+  - The Settings tab and the Home button of an opened section carry their labels (`VIEW_SETTINGS_LABELS`). V-0
+    labelled only Overview, Clubs and Teams.
+
+**The executor's choices (for the manager).**
+1. **`GET /classification` is opened too.** It is the variable editor's reduced read, the same audience as a team
+   coach's, and offers no action there. Without it, Data configuration's start screen (the Domains and Categories
+   cards) and the categories of a variable would not load. Plan 2.1 named only the two variable reads.
+2. **The licence now also limits the club's old roles here.** A club that closes Data configuration or Tags & Presets
+   closes it for its club admin and team coaches too. Their paths ask `can()`, and `can()` applies the ceiling. A
+   platform admin is not limited.
+3. **Session types under a closed licence.** In a club or team workspace whose club closed Tags & Presets, the
+   session-type list shows the system types only (not a 404), so a screen that offers types keeps working.
+4. **Unchanged:** a club admin without a team role still does not see a team's presets in the coach list (today's
+   query), while a `club_view` holder of the club does. The sweep test pins both.
+
+**Tests.**
+- `backend/tests/roles-v-sweep.test.mjs` tests 5 and 6 cover the open rows:
+  - only the listed reads;
+  - club A only, including a mixed account in `club_view` B;
+  - C99's shape;
+  - the identical 404 and 403;
+  - every write lands nothing (a row-count snapshot);
+  - the word taken away;
+  - the licence, for role holders and for the old roles;
+  - old-vs-new for the coaches.
+- `source-metric-access-7a-context` test 7 covers the club admin's word and the licence.
+- On the frontend: `roles-v1-view.test.mjs` and `view-modules.test.mjs` (3, 3b).
+- e2e: `roles-v1-view-config-presets.test.mjs` at 1280, 390 and 360 px.
+
+**Follow-ups (not built).**
+- A Home entry for Training Load's Data configuration in a view workspace (today the menu opens it).
+- A Positions read for the Athletes step (V-2).

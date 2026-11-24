@@ -42,12 +42,13 @@ test("1. every module's view word is a known, storable (VIEW package) word, scop
   assert.throws(() => viewEntryGate("nope", []), /Unknown view module/);
 });
 
-test("2. V-0 opens no module: a view workspace holding every view word is refused every module", () => {
-  assert.deepEqual(OPEN_VIEW_MODULES, []);
+test("2. only the open modules (V-1: data_configuration, presets): a view workspace holding every view word is refused every other module", () => {
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["data_configuration", "presets"]);
   const all = authzWith(Object.values(MODULE_VIEW_WORDS));
   for (const module of Object.keys(MODULE_VIEW_WORDS)) {
-    assert.equal(canView(all, clubView, module), false, module);
-    assert.equal(canView(all, teamView, module), false, module);
+    const open = OPEN_VIEW_MODULES.includes(module);
+    assert.equal(canView(all, clubView, module), open, module);
+    assert.equal(canView(all, teamView, module), open, module);
   }
 });
 
@@ -181,5 +182,19 @@ test("10. through a real Express router: a listed GET /:dashboardId never admits
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test("11. a custom parameter pattern is matched whole: an alternation /^a|b$/ admits only a and b; the g, y and m flags are refused", async () => {
+  const holder = authzWith(["calendar.view"]);
+  const gate = viewEntryGate("calendar", [{ method: "GET", path: "/x/:key", params: { key: /^a|b$/ } }], { open: ["calendar"], resolve: resolver(clubView) });
+  for (const key of ["a", "b"]) assert.equal((await runGate(gate, { user: { id: "u1" }, authz: holder, method: "GET", path: `/x/${key}` })).next, true, key);
+  for (const key of ["ab-anything", "a-sibling", "x-b", "ab", "A"]) {
+    const r = await runGate(gate, { user: { id: "u1" }, authz: holder, method: "GET", path: `/x/${key}` });
+    assert.equal(r.status, 403, key);
+  }
+  for (const flags of ["g", "y", "m", "gi"]) {
+    assert.throws(() => viewEntryGate("calendar", [{ method: "GET", path: "/:key", params: { key: new RegExp("^[a-z]+$", flags) } }]), /without g, y or m/, flags);
+  }
+  assert.doesNotThrow(() => viewEntryGate("calendar", [{ method: "GET", path: "/:key", params: { key: /^[a-z]+$/i } }]), "the i flag is harmless");
 });
 }

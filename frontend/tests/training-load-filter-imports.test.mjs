@@ -5,12 +5,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const src = readFileSync(new URL("../training-load-view.js", import.meta.url), "utf8");
-const start = src.indexOf('${space === "dataConfig" || section === "imports" ? ""');
+// Roles V-1: a view workspace (viewOnly) gets no Filter either.
+const start = src.indexOf('${space === "dataConfig" || section === "imports" || viewOnly ? ""');
 const block = src.slice(start, src.indexOf("renderDataAnalysisSubNavHtml(section)", start));
 
 test("the Filter: none on Imports or Data configuration, working on Dashboards, working everywhere else", () => {
   assert.ok(start > 0, "the shell's filter control is chosen in one place");
-  assert.match(block, /^\$\{space === "dataConfig" \|\| section === "imports" \? ""/, "Imports and Data configuration get nothing");
+  assert.match(block, /^\$\{space === "dataConfig" \|\| section === "imports" \|\| viewOnly \? ""/, "Imports, Data configuration and a view workspace get nothing");
   assert.match(block, /: `<button type="button" class="plain-button compact-button training-load-filter-button \$\{count \? "is-active" : ""\}" data-action="training-load-filter-open">Filter/, "every other section: the working Filter");
   assert.doesNotMatch(block, /disabled aria-disabled="true"|not available for Dashboards/);
   assert.doesNotMatch(src, /filters do not apply to Imports/, "no line about Imports");

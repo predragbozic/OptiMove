@@ -4,6 +4,7 @@ import { renderFilterableSelect } from "./organization-select.js";
 import { renderPositionsSectionHtml } from "./positions-view.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
+import { viewModuleOpen } from "./view-modules.js";
 
 const NODE_TYPE_LABELS = { domain: "Domain presets", category: "Category presets", section: "Section presets" };
 const NODE_TYPES = ["domain", "category", "section"];
@@ -30,11 +31,17 @@ export const PASTEL_COLORS = [
   "#FBD1E6",
 ];
 
+// Roles V-1: in a view workspace (club_view / team_view with presets.use) the panel only reads - no Add, no remove and
+// no positions (their list is the Athletes module's); the server refuses every write there anyway.
+export const taxonomyReadOnly = () => viewModuleOpen("presets");
+
 export function renderTaxonomyPanelHtml(data) {
   const tags = state.taxonomy.templateTags || [];
+  const readOnly = taxonomyReadOnly();
   return `
-    <section class="taxonomy-panel">
+    <section class="taxonomy-panel${readOnly ? " is-read-only" : ""}">
       ${state.taxonomy.error ? `<p class="builder-error">${escapeHtml(state.taxonomy.error)}</p>` : ""}
+      ${readOnly ? `<p class="muted taxonomy-read-only-note">You can look at these tags and presets here; an administrator of the club adds and changes them.</p>` : ""}
       <section class="panel taxonomy-intro">
         <p class="eyebrow">Builder tree presets</p>
         <h3>Domain, category and section presets</h3>
@@ -67,33 +74,34 @@ export function renderTaxonomyPanelHtml(data) {
         addPlaceholder: `e.g. ${LIBRARY_KIND_META[kind].label}`,
         data,
       })).join("")}
-      ${renderPositionsSectionHtml()}
+      ${readOnly ? "" : renderPositionsSectionHtml()}
     </section>
   `;
 }
 
 function renderChipSection({ title, rows, kind, showColor, addPlaceholder, data }) {
-  const isAddOpen = state.taxonomy.addOpenKind === kind;
+  const readOnly = taxonomyReadOnly();
+  const isAddOpen = !readOnly && state.taxonomy.addOpenKind === kind;
   return `
     <section class="panel tag-chip-section">
       <div class="tag-chip-head">
         <p class="eyebrow">${escapeHtml(title)}</p>
-        <button class="text-action" type="button" data-action="taxonomy-toggle-add" data-taxonomy-kind="${escapeAttr(kind)}">${isAddOpen ? "Cancel" : "+ Add"}</button>
+        ${readOnly ? "" : `<button class="text-action" type="button" data-action="taxonomy-toggle-add" data-taxonomy-kind="${escapeAttr(kind)}">${isAddOpen ? "Cancel" : "+ Add"}</button>`}
       </div>
       <div class="tag-chip-row">
-        ${rows.length ? rows.map((row) => renderChip(kind, row, showColor)).join("") : `<span class="muted">Nothing yet.</span>`}
+        ${rows.length ? rows.map((row) => renderChip(kind, row, showColor, readOnly)).join("") : `<span class="muted">Nothing yet.</span>`}
       </div>
       ${isAddOpen ? renderChipAddForm(kind, addPlaceholder, showColor, data) : ""}
     </section>
   `;
 }
 
-function renderChip(kind, row, showColor) {
+function renderChip(kind, row, showColor, readOnly = false) {
   const style = showColor ? ` style="background:${escapeAttr(row.color || PASTEL_COLORS[0])}"` : "";
   return `
     <span class="tag-chip"${style}>
       ${escapeHtml(row.name)}
-      <button class="tag-chip-remove" type="button" data-action="taxonomy-remove" data-taxonomy-kind="${escapeAttr(kind)}" data-taxonomy-id="${escapeAttr(row.id)}" aria-label="Remove ${escapeAttr(row.name)}">&times;</button>
+      ${readOnly ? "" : `<button class="tag-chip-remove" type="button" data-action="taxonomy-remove" data-taxonomy-kind="${escapeAttr(kind)}" data-taxonomy-id="${escapeAttr(row.id)}" aria-label="Remove ${escapeAttr(row.name)}">&times;</button>`}
     </span>
   `;
 }
@@ -150,27 +158,28 @@ export function renderPastelSwatches(name, selected, { allowCustom = false, coll
 function renderNodePresetSection(type, data) {
   const kind = `node-preset:${type}`;
   const rows = (state.taxonomy.nodePresets || []).filter((preset) => preset.node_type === type);
-  const isAddOpen = state.taxonomy.addOpenKind === kind;
+  const readOnly = taxonomyReadOnly();
+  const isAddOpen = !readOnly && state.taxonomy.addOpenKind === kind;
   return `
     <section class="panel tag-chip-section">
       <div class="tag-chip-head">
         <p class="eyebrow">${escapeHtml(NODE_TYPE_LABELS[type])}</p>
-        <button class="text-action" type="button" data-action="taxonomy-toggle-add" data-taxonomy-kind="${escapeAttr(kind)}">${isAddOpen ? "Cancel" : "+ Add"}</button>
+        ${readOnly ? "" : `<button class="text-action" type="button" data-action="taxonomy-toggle-add" data-taxonomy-kind="${escapeAttr(kind)}">${isAddOpen ? "Cancel" : "+ Add"}</button>`}
       </div>
       <div class="tag-chip-row">
-        ${rows.length ? rows.map(renderNodePresetChip).join("") : `<span class="muted">Nothing yet.</span>`}
+        ${rows.length ? rows.map((preset) => renderNodePresetChip(preset, readOnly)).join("") : `<span class="muted">Nothing yet.</span>`}
       </div>
       ${isAddOpen ? renderNodePresetAddForm(type, data) : ""}
     </section>
   `;
 }
 
-function renderNodePresetChip(preset) {
+function renderNodePresetChip(preset, readOnly = false) {
   return `
     <span class="tag-chip" style="background:${escapeAttr(preset.color || PASTEL_COLORS[0])}">
       ${renderTaxonomyIcon(preset.icon_url)}
       ${escapeHtml(preset.name)}
-      <button class="tag-chip-remove" type="button" data-action="taxonomy-remove" data-taxonomy-kind="node-preset" data-taxonomy-id="${escapeAttr(preset.id)}" aria-label="Remove ${escapeAttr(preset.name)}">&times;</button>
+      ${readOnly ? "" : `<button class="tag-chip-remove" type="button" data-action="taxonomy-remove" data-taxonomy-kind="node-preset" data-taxonomy-id="${escapeAttr(preset.id)}" aria-label="Remove ${escapeAttr(preset.name)}">&times;</button>`}
     </span>
   `;
 }

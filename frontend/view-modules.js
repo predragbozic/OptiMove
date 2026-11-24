@@ -18,8 +18,10 @@ export const MODULE_VIEW_WORDS = Object.freeze({
   exercises: "exercises.use",
 });
 
-// The modules a view workspace may read (the same list as the backend's OPEN_VIEW_MODULES).
-export const OPEN_VIEW_MODULES = Object.freeze([]);
+// The modules a view workspace may read (the same list as the backend's OPEN_VIEW_MODULES). V-1: Data configuration
+// (Training Load -> Data configuration, the Variables list, read only) and Tags, presets and session types (Settings ->
+// Tags & Presets, read only).
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets"]);
 
 // The menu places of a view workspace: each opens when ANY of its modules is open and its word is held. A place with
 // no module (Coaches) never opens there.
@@ -35,6 +37,9 @@ export const VIEW_NAV_PLACES = Object.freeze([
 
 // The Settings sections a module opens in a view workspace (besides Overview, Clubs and Teams, which org.view opens).
 export const VIEW_SETTINGS_SECTIONS = Object.freeze({ presets: Object.freeze(["presets"]), athletes: Object.freeze(["athletes"]) });
+
+// The labels of every Settings section a view workspace can open (org.view's three and the open modules').
+export const VIEW_SETTINGS_LABELS = Object.freeze({ overview: "Overview", clubs: "Clubs", teams: "Teams", presets: "Tags & Presets", athletes: "Athletes" });
 
 // The tabs a view workspace may always stay on.
 export const VIEW_BASE_TABS = Object.freeze(["coach-home", "organization", "coach-account"]);
@@ -64,6 +69,25 @@ export function viewHiddenMenuSelectors(user = state.currentUser, open = OPEN_VI
 // The tabs a view workspace may be on.
 export function viewWorkspaceTabs(user = state.currentUser, open = OPEN_VIEW_MODULES) {
   return [...VIEW_BASE_TABS, ...VIEW_NAV_PLACES.filter((place) => placeOpen(place, user, open)).flatMap((place) => place.tabs)];
+}
+
+// The Training Load sections a module opens in a view workspace (V-1: Data configuration's start screen and Variables,
+// which is one section, "variables"). Schedule and Data & Analysis open with their own modules in later V steps.
+export const VIEW_TRAINING_LOAD_SECTIONS = Object.freeze({ data_configuration: Object.freeze(["variables"]) });
+
+// The Training Load sections this view workspace may be on; null outside a view workspace (other workspaces keep their
+// own rules).
+export function viewTrainingLoadSections(user = state.currentUser, open = OPEN_VIEW_MODULES) {
+  if (!isView(user)) return null;
+  return Object.entries(VIEW_TRAINING_LOAD_SECTIONS).filter(([module]) => viewModuleOpen(module, user, open)).flatMap(([, sections]) => sections);
+}
+
+// The section to show: unchanged outside a view workspace; in one, the asked section when it is open there, else the
+// first open one (a view workspace never lands on Schedule or Data & Analysis it cannot read).
+export function viewSafeTrainingLoadSection(section, user = state.currentUser, open = OPEN_VIEW_MODULES) {
+  const allowed = viewTrainingLoadSections(user, open);
+  if (!allowed || allowed.length === 0 || allowed.includes(section)) return section;
+  return allowed[0];
 }
 
 // The Settings sections of open modules (permission-nav.js adds them to org.view's).

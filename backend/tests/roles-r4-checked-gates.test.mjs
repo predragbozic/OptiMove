@@ -95,7 +95,8 @@ const REVIEWED = Object.freeze({
   "calendarQuery.js": 11,
   "calendarQuestionService.js": 2,
   "calendarSettingsService.js": 3,
-  "canonicalVariableAdminService.js": 1,
+  // V-1: resolveVariableViewer reads the club of the gate's view scope (club or team), never an offered workspace.
+  "canonicalVariableAdminService.js": 2,
   "clubCeilingLock.js": 2,
   "dashboardShellFilter.js": 5,
   "dashboardSimple/platformPilot.js": 1,
@@ -121,12 +122,13 @@ const REVIEWED = Object.freeze({
   "routes/calendar.js": 1,
   "routes/gpexeImport.js": 3,
   "routes/organization.js": 22, // R4-2: the view branch of GET /, its fail-closed filter and the members rule (+3)
+  "routes/taxonomy.js": 1, // V-1: viewScopeSql reads the gate's view scope (club or team), never an offered workspace
   "routes/tests.js": 1,
   "routes/trainingActivity.js": 3,
   "routes/trainingLoad.js": 13,
   "routes/trainingLoadDashboard.js": 1,
   "routes/trainingLoadMetrics.js": 5,
-  "sessionTypeService.js": 5,
+  "sessionTypeService.js": 6, // V-1: the club of the gate's view scope (club or team) (+1)
   "sourceConnectionService.js": 5,
   "sourceMetricAccess.js": 3,
   "testsAccess.js": 2,

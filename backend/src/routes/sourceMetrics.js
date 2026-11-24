@@ -36,6 +36,8 @@ import * as boardSave from "../sourceMetricBoardSaveService.js";
 import * as confirmationAdmin from "../sourceMetricConfirmationAdminService.js";
 import * as eventSetting from "../sourceEventSettingService.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
+import { viewEntryGate } from "../moduleView.js";
+import { PermissionsUnavailableError } from "../permissions.js";
 
 const router = Router();
 
@@ -48,6 +50,16 @@ router.use((req, res, next) => {
 function notFound(res) {
   return res.status(404).json({ error: "notFound" });
 }
+
+// Roles V-1 (docs/ai/roles-v-steps-plan.md section 2.1): a view workspace (club_view / team_view) reaches only the
+// reads of the variable editor's reduced (coach) view - the variables, one variable, and the domains and categories they
+// sit under - with variables.view; every other route of this router - the mappings, fields, board, the admin reads and
+// every write - answers it the identical 404 it answers any account without a right here.
+router.use(viewEntryGate("data_configuration", [
+  { method: "GET", path: "/variables" },
+  { method: "GET", path: "/variables/:variableId" },
+  { method: "GET", path: "/classification" },
+], { refuse: (_req, res) => notFound(res) }));
 
 // The database pool had no free connection within its checkout bound (db.js):
 // the source / importer family's answer (routes/sourceConnections.js,
@@ -66,6 +78,10 @@ function handle(fn) {
     } catch (error) {
       if (res.headersSent) return;
       if (isPoolCheckoutTimeout(error)) return poolBusy(req, res);
+      // can() could not read the role tables (permissions.js): the app-wide answer (server.js), never a 500.
+      if (error instanceof PermissionsUnavailableError) {
+        return res.status(503).json({ error: "permissions_unavailable", message: "Permissions could not be checked right now. Try again in a moment." });
+      }
       if (error instanceof service.SourceMetricMappingError) {
         // Every 404 is the same body, whatever was missing or not visible.
         if (error.status === 404) return notFound(res);
@@ -104,7 +120,10 @@ async function adminContext(req, res) {
 // The variable reads and the R2 writes (J3b.3): the admins as above, and a
 // team's coach in that team's workspace.
 async function editorContext(req, res) {
-  const ctx = await variables.resolveVariableEditor(req);
+  // A view workspace's read context (the gate let only the two GET reads through); never a write's.
+  const ctx = req.moduleView
+    ? (req.method === "GET" ? await variables.resolveVariableViewer(req, req.moduleView) : null)
+    : await variables.resolveVariableEditor(req);
   if (!ctx) notFound(res);
   return ctx;
 }
