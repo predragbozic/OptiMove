@@ -108,7 +108,8 @@ const REVIEWED = Object.freeze({
   "permissionRolesService.js": 5,
   // R4-3 (reviewed in its pull request): a custom role's scope (club or team) - which club a team lies in, and that
   // the team is still active; a resource scope of the request, never an offered workspace.
-  "permissionLayersService.js": 2,
+  // + the acting user's team rows locked for a team-scope custom (the custom's own scope, as lock_permission_actor).
+  "permissionLayersService.js": 3,
   "permissions.js": 8, // R4-2: closedModulesForWorkspace maps a workspace to its scope, /me narrows a view workspace's words (+4, never an offer)
   "positionService.js": 8,
   "routes/auth.js": 1,

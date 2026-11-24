@@ -496,10 +496,23 @@ test("9. recorded lock order: every R4-3 write takes R2's request-key lock, then
   // Both users rows in one statement, before the holding row and the custom rows.
   const texts = steps[3][1].map((s) => s.t);
   const users = texts.findIndex((t) => /from public\.users u where u\.id = any/.test(t));
-  const holding = texts.findIndex((t) => /from public\.user_team_roles r where r\.user_id/.test(t));
-  const adminRows = texts.findIndex((t) => /from public\.user_club_roles r where r\.user_id = any/.test(t));
-  const customs = texts.findIndex((t) => /from public\.permission_custom_roles c where c\.ended_at is null and \(\(c\.user_id/.test(t));
-  assert.ok(users >= 0 && users < adminRows && adminRows < holding && holding < customs && customs < texts.findIndex((t) => /lock_permission_actor/.test(t)), texts.join("\n"));
+  const holding = texts.findIndex((t) => /from public\.user_team_roles r where r\.user_id = \$1 and r\.team_id = \$2 and r\.role = 'team_coach'/.test(t));
+  // The acting user's own place-2 rows (lock_permission_actor's order) before its customs are taken FOR UPDATE (db
+  // re-review F1: the v92 trigger goes old row -> custom).
+  const actorGlobal = texts.findIndex((t) => /from public\.user_global_roles g where g\.user_id = \$1/.test(t));
+  const adminRows = texts.findIndex((t) => /from public\.user_club_roles r\s+where r\.club_id = \$2 and \(r\.user_id = \$3/.test(t));
+  const actorTeam = texts.findIndex((t) => /from public\.user_team_roles r where r\.user_id = \$1 and r\.team_id = \$2 order by/.test(t));
+  const actorAssignments = texts.findIndex((t) => /from public\.user_role_assignments a\s+where a\.user_id = \$1 and a\.revoked_at is null/.test(t));
+  const customs = texts.findIndex((t) => /from public\.permission_custom_roles c\s+where c\.ended_at is null\s+and \(\(c\.user_id/.test(t));
+  assert.ok(users >= 0 && users < actorGlobal && actorGlobal < adminRows && adminRows < actorTeam && actorTeam < actorAssignments
+    && actorAssignments < holding && holding < customs && customs < texts.findIndex((t) => /lock_permission_actor/.test(t)), texts.join("\n"));
+  // The same for the end and the word removal: the actor's club rows before the customs.
+  for (const step of [steps[4], steps[5]]) {
+    const t2 = step[1].map((s) => s.t);
+    const rows2 = t2.findIndex((t) => /from public\.user_club_roles r\s+where r\.club_id = \$2 and \(r\.user_id = \$3/.test(t));
+    const customs2 = t2.findIndex((t) => /from public\.permission_custom_roles c\s+where/.test(t));
+    assert.ok(rows2 >= 0 && rows2 < customs2, `${step[0]}: ${t2.join("\n")}`);
+  }
   // The role is read again under its share lock (after lock_permission_actor), and that read is what the write uses.
   const roleReads = texts.map((t, i) => [t, i]).filter(([t]) => /from public\.permission_roles r where r\.id = \$1/.test(t)).map(([, i]) => i);
   assert.ok(roleReads.some((i) => i > texts.findIndex((t) => /lock_permission_actor/.test(t))), texts.join("\n"));
@@ -586,4 +599,28 @@ test("13. Take it from them too: never staff.assign or roles.manage out of a Clu
   assert.equal(again.replayed, true);
   assert.deepEqual(again.customs.map((c) => c.id), first.customs.map((c) => c.id));
   assert.ok(!JSON.stringify(again).includes(b.custom.id), "no custom of club B");
+});
+
+test("14. db re-review F1: the acting admin's own custom on its Club admin row against a raw write of that row (the v92 trigger goes old row -> custom): the custom writer waits on the row before it takes its customs, so no 40P01", async () => {
+  const w = await world();
+  const own = ok(await custom(w.pa, w.adminA2.id, w.A, { roleId: ROLE_IDS.club_admin, scopeType: "club", scopeId: w.A, expectedRevision: null, remove: ["org.club.edit"] }));
+  const r = new pg.Client({ connectionString: db.url });
+  await r.connect();
+  try {
+    await r.query("begin");
+    await r.query(`select id from public.user_club_roles where user_id = $1 and club_id = $2 for update`, [w.adminA2.id, w.A]);
+    const writer = custom(w.adminA2, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] });
+    assert.ok(await someoneWaits(), "the custom writer waits on the actor's Club admin row");
+    // The raw writer now changes the row: its trigger ends the actor's custom. Before F1's fix the custom writer held
+    // that custom FOR UPDATE here and the two deadlocked.
+    await r.query(`update public.user_club_roles set updated_at = now() where user_id = $1 and club_id = $2`, [w.adminA2.id, w.A]);
+    await r.query("commit");
+    // A deadlock would answer 409 try_again (or abort the raw writer above); the writer must go through.
+    const res = await writer;
+    ok(res);
+    assert.equal((await one(`select end_kind from public.permission_custom_roles where id = $1`, [own.custom.id])).end_kind, "role_ended");
+  } finally {
+    await r.query("rollback").catch(() => {});
+    await r.end().catch(() => {});
+  }
 });

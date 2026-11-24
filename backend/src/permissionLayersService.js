@@ -469,8 +469,22 @@ async function lockHoldings(client, userId, role, scopeType, scopeId) {
 // The target users' Club admin rows in the club, FOR SHARE in id order (contract 7.6 place 2): O5 below is read from
 // them, so a revocation or a re-grant of an existing row waits for this write. A first grant inserts a new row, which
 // no row lock can hold back (recorded limit: the old grant route takes no lock that R4-3 can wait on).
-async function lockClubAdminRows(client, userIds, clubId) {
-  await client.query(`select r.id from public.user_club_roles r where r.user_id = any($1::uuid[]) and r.club_id = $2 and r.role = 'club_admin' order by r.id for share`, [userIds, clubId]);
+// The same statement takes the acting user's own place-2 rows first in lock_permission_actor's order (global roles, its
+// club rows, its team rows for a team scope, its live assignments of the scope): the customs statement below locks the
+// actor's customs FOR UPDATE, and the v92 trigger that ends customs goes old row -> custom, so the actor's old rows must
+// already be held (db re-review F1). lock_permission_actor then takes them again at no cost.
+async function lockClubAdminRows(client, userIds, clubId, ctx, scopeType, scopeId) {
+  const actor = String(ctx.userId).toLowerCase();
+  await client.query(`select g.id from public.user_global_roles g where g.user_id = $1 order by g.id for share`, [actor]);
+  await client.query(`select r.id from public.user_club_roles r
+      where r.club_id = $2 and (r.user_id = $3 or (r.user_id = any($1::uuid[]) and r.role = 'club_admin')) order by r.id for share`, [userIds, clubId, actor]);
+  if (scopeType === "team") {
+    await client.query(`select r.id from public.user_team_roles r where r.user_id = $1 and r.team_id = $2 order by r.id for share`, [actor, scopeId]);
+  }
+  await client.query(`select a.id from public.user_role_assignments a
+      where a.user_id = $1 and a.revoked_at is null
+        and ((a.scope_type = $2 and a.scope_id = $3) or ($2 = 'team' and a.scope_type = 'club' and a.scope_id = $4))
+      order by a.id for share`, [actor, scopeType, scopeId, clubId]);
 }
 // Does the user hold the Club admin role in the club (an old row)? O5: a club's admin never narrows another admin.
 const holdsClubAdmin = async (client, userId, clubId) => (await client.query(`select 1 from public.user_club_roles
@@ -531,7 +545,7 @@ export async function changeCustom(ctx, userIdRaw, clubIdRaw, body) {
       if (!early) throw NOT_FOUND();
       // Place 2: the target's Club admin rows (O5 is read from them) and holding rows; place 3: the target's live
       // customs of that key together with the acting user's own.
-      await lockClubAdminRows(client, [userId], clubId);
+      await lockClubAdminRows(client, [userId], clubId, ctx, scopeType, scopeId);
       const holdings = await lockHoldings(client, userId, early, scopeType, scopeId);
       const customs = (await client.query(`select c.id, c.user_id, c.revision, ${customAliveSql("c")} as live from public.permission_custom_roles c
           where c.ended_at is null
@@ -637,13 +651,14 @@ export async function endCustom(ctx, userIdRaw, customIdRaw, body) {
     prepare: async (client) => {
       await lockClubCeiling(client, [clubId], "shared");
       await client.query(USERS_SQL, [[String(ctx.userId).toLowerCase(), userId]]);
-      await lockClubAdminRows(client, [userId], clubId);
+      await lockClubAdminRows(client, [userId], clubId, ctx, found.scope_type, found.scope_id);
       const c = (await client.query(`select c.id, c.revision, c.ended_at, c.base_role_id from public.permission_custom_roles c
           where c.id = $1 or (c.user_id = $2 and c.club_id = $3 and c.ended_at is null) order by c.id for update`,
       [customId, String(ctx.userId).toLowerCase(), clubId])).rows.find((x) => String(x.id) === customId);
       await lockActor(client, ctx, { scopeType: found.scope_type, scopeId: found.scope_id, roleForShare: found.base_role_id });
       const basis = await lockedBasis(client, ctx, "staff.assign", clubId);
       await lockClubRow(client, clubId);
+      if (!c) throw NOT_FOUND();
       if (c.ended_at) throw refuse("custom_changed", { current: await customView(client, customId) });
       const baseKey = (await client.query(`select basic_key from public.permission_roles where id = $1`, [c.base_role_id])).rows[0].basic_key;
       if (basis !== "platform_admin" && (baseKey === "club_admin" || (await holdsClubAdmin(client, userId, clubId)))) throw refuse("admin_not_narrowable");
@@ -719,7 +734,7 @@ export async function removeWordFromCustoms(ctx, roleIdRaw, clubIdRaw, body) {
     prepare: async (client) => {
       await lockClubCeiling(client, [clubId], "shared");
       await client.query(USERS_SQL, [[String(ctx.userId).toLowerCase(), ...users]]);
-      await lockClubAdminRows(client, users, clubId);
+      await lockClubAdminRows(client, users, clubId, ctx, "club", clubId);
       const rows = (await client.query(`select c.id, c.user_id, c.revision, c.base_role_id, ${customAliveSql("c")} as live,
             exists (select 1 from public.permission_custom_role_items i where i.custom_role_id = c.id and i.permission_word = $2) as holds,
             array(select i.permission_word from public.permission_custom_role_items i where i.custom_role_id = c.id order by 1) as items

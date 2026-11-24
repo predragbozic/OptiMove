@@ -966,6 +966,11 @@ verified by the request record; the record now carries `ceiling_change_id`, `clu
     rows, and lock the target's customs together with the actor's own live customs in the club (one statement, id order),
     so the O5 check and the dominance check read rows a concurrent writer cannot change under them. The role of a custom
     write is read again under its share lock (a role archived meanwhile is the identical 404).
+  - Before the customs statement, the three custom writers take the acting user's own place-2 rows in
+    `lock_permission_actor`'s order (its global roles, its club rows in the same statement as the targets' Club admin
+    rows, its team rows for a team scope, its live assignments of the scope). The v92 trigger that ends customs goes old
+    row -> custom, so locking the actor's customs FOR UPDATE before its old rows could deadlock against a grant upsert
+    without a users lock (the db re-review's F1; test 14 runs that race, test 9 records the order).
   - *Take it from them too* refuses `staff.assign` / `roles.manage` out of a Club admin custom (`club_admin_requires`,
     not a 500); its replay lists the request's own customs (same hash, same ids), never a cross-transaction `xmin` match.
   - `customsStillHolding` carries `customsStillHoldingTruncated` past 200; a club's roles offer *Change* / *Answer* only
