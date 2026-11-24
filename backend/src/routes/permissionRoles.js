@@ -8,6 +8,7 @@
 import { Router } from "express";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 import * as roles from "../permissionRolesService.js";
+import * as layers from "../permissionLayersService.js";
 
 const router = Router();
 
@@ -44,6 +45,19 @@ function answer(handler, successStatus = 200) {
     }
   };
 }
+
+// Roles R4-3 (docs/ai/roles-r4-contract.md section 9): the club's licence, its own versions of system roles, and
+// one user's custom roles.
+router.get("/clubs/:clubId/ceiling", answer((req) => layers.getCeiling(ctxOf(req), req.params.clubId)));
+router.post("/clubs/:clubId/ceiling", answer((req) => layers.setCeiling(ctxOf(req), req.params.clubId, req.body)));
+router.get("/clubs/:clubId/roles", answer((req) => layers.listClubRoles(ctxOf(req), req.params.clubId)));
+router.get("/clubs/:clubId/custom-drift", answer((req) => layers.getCustomDrift(ctxOf(req), req.params.clubId)));
+router.get("/users/:userId/clubs/:clubId", answer((req) => layers.getUserInClub(ctxOf(req), req.params.userId, req.params.clubId)));
+router.post("/users/:userId/clubs/:clubId/custom", answer((req) => layers.changeCustom(ctxOf(req), req.params.userId, req.params.clubId, req.body)));
+router.post("/users/:userId/custom/:customId/end", answer((req) => layers.endCustom(ctxOf(req), req.params.userId, req.params.customId, req.body)));
+router.post("/:roleId/clubs/:clubId/version", answer((req) => layers.changeClubVersion(ctxOf(req), req.params.roleId, req.params.clubId, req.body)));
+router.post("/:roleId/clubs/:clubId/version/answer", answer((req) => layers.answerClubVersion(ctxOf(req), req.params.roleId, req.params.clubId, req.body)));
+router.post("/:roleId/clubs/:clubId/custom-word-removal", answer((req) => layers.removeWordFromCustoms(ctxOf(req), req.params.roleId, req.params.clubId, req.body)));
 
 router.get("/catalog", answer((req) => roles.getCatalog(ctxOf(req), req.query)));
 router.get("/assignments", answer((req) => roles.listAssignments(ctxOf(req), req.query)));
