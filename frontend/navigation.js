@@ -4,6 +4,7 @@ import { sourceConnectionsAdminContext } from "./source-connections-data.js";
 import { rolesContext } from "./roles-data.js";
 import { coachSettingsSections, permissionTabAllowed } from "./permission-nav.js";
 import { storageAdminContext } from "./media-storage-admin-data.js";
+import { requestBottomNavSync } from "./bottom-nav.js";
 import { els } from "./dom.js";
 import { ATHLETE_TEMPLATE_SCOPES, TEMPLATE_SCOPES, state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
@@ -113,6 +114,8 @@ export function renderLibraryNav() {
   document.querySelector("#athletesToggle")?.classList.toggle("is-active", state.athletesExpanded);
   // The rail's Calendar is the central calendar (K1b, D1).
   document.querySelector("#calendarToggle")?.classList.toggle("is-active", state.activeTab === "central-calendar");
+  // The phone's bottom bar shows the same sections and the same current one.
+  requestBottomNavSync();
 }
 
 export function renderRailState() {

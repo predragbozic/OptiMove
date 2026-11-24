@@ -1,0 +1,4 @@
+// The entry of the compiled islands (vite.islands.config.js -> react-build/islands.js). Plain modules import this file
+// lazily (import("./react-build/islands.js")), so a page that never shows an island never downloads React.
+export { mountIsland, unmountIsland, isIslandMounted } from "./mount.jsx";
+export { BottomNav } from "./bottom-nav.jsx";
