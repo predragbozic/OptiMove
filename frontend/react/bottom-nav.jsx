@@ -39,7 +39,7 @@ function EditMenu({ slots, defaults, options, titleId, onSave, onCancel }) {
   return (
     <div className="om-bottom-sheet-edit">
       <h2 className="om-bottom-sheet-title" id={titleId}>Edit menu</h2>
-      <p className="om-bottom-sheet-note">Home stays first. Choose the sections for the next three buttons; the rest stay under More.</p>
+      <p className="om-bottom-sheet-note">Home stays first. Choose the sections for the next three buttons; the rest stay under More. A section another button already shows swaps places with it.</p>
       {draft.map((id, index) => (
         <label key={PLACE_NAMES[index]} className="om-bottom-sheet-field">
           <span>{`${PLACE_NAMES[index]} button`}</span>
@@ -65,7 +65,10 @@ function MoreSheet({ groups, titleId, onClose, onSelect, edit }) {
   }, [editing]);
   const onKeyDown = (event) => {
     if (event.key === "Escape") {
+      // Closes the sheet only: the app's own Escape (the drawer, a panel underneath) does not run as well.
       event.preventDefault();
+      event.stopPropagation();
+      event.nativeEvent?.stopImmediatePropagation?.();
       onClose({ restoreFocus: true });
       return;
     }
@@ -147,7 +150,10 @@ export function BottomNav({ items = [], more = [], onSelect = () => {}, slots = 
   };
   // Nothing left for the sheet (a role with few sections): the sheet closes.
   useEffect(() => { if (open && !more.length) setOpen(false); }, [open, more.length]);
+  // The sheet is a sibling of the bar, never inside it: the fixed bar (z 40) is a stacking context, and a sheet inside it
+  // would stay under every layer above 40 (the header, the drawer, dropdowns) whatever its own z-index.
   return (
+    <>
     <nav className="om-bottom-nav" aria-label="Main">
       <ul className="om-bottom-nav-list">
         {items.map((item) => (
@@ -184,11 +190,12 @@ export function BottomNav({ items = [], more = [], onSelect = () => {}, slots = 
           </li>
         ) : null}
       </ul>
-      {open ? (
-        <div id={sheetId}>
-          <MoreSheet groups={more} titleId={titleId} onClose={close} onSelect={select} edit={edit} />
-        </div>
-      ) : null}
     </nav>
+    {open ? (
+      <div id={sheetId} className="om-bottom-sheet-layer">
+        <MoreSheet groups={more} titleId={titleId} onClose={close} onSelect={select} edit={edit} />
+      </div>
+    ) : null}
+    </>
   );
 }

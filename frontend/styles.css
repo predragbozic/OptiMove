@@ -30522,9 +30522,13 @@ body.athlete-questions-prompt-open {
 
   body.has-bottom-nav:not(.login-mode) .app-shell { padding-bottom: var(--om-bottom-nav-space); }
 
-  body.has-bottom-nav:not(.login-mode) :is(.builder-mobile-sticky-bar, .tests-schedule-form-actions, .tl-roster-sticky, .gpexe-map .gpexe-map-results .gpexe-link-actions, .imports-batch .imports-batch-actions, .mb-savebar, .k3-save-bar):not(:is([role="dialog"], [aria-modal="true"], .exercise-editor-overlay) *) {
+  body.has-bottom-nav:not(.login-mode) :is(.builder-mobile-sticky-bar, .tests-schedule-form-actions, .tl-roster-sticky, .gpexe-map .gpexe-map-results .gpexe-link-actions, .imports-batch .imports-batch-actions, .mb-savebar, .k3-save-bar, .node-detail-footer):not(:is([role="dialog"], [aria-modal="true"], .exercise-editor-overlay, .builder-section-overlay, .exercise-detail-overlay, .program-preview-overlay, .k3-sheet-layer) *) {
     bottom: var(--om-bottom-nav-space) !important;
   }
+
+  /* Training Load's phone popover is a bottom sheet of its own: above the bar, like the More sheet. */
+  body.has-bottom-nav:not(.login-mode) .tl-popover-backdrop { z-index: 1189 !important; }
+  body.has-bottom-nav:not(.login-mode) .tl-popover { z-index: 1190 !important; }
 
   body.has-bottom-nav:not(.login-mode) .tl-layout-bar { bottom: var(--om-bottom-nav-space) !important; }
   body.has-bottom-nav:not(.login-mode) .exercise-selection-bar { bottom: calc(var(--om-bottom-nav-space) + 12px) !important; }
@@ -30726,9 +30730,23 @@ body.athlete-questions-prompt-open {
 
   .om-bottom-sheet-item.is-active,
   .om-bottom-sheet-subitem.is-active {
+    position: relative;
     background: var(--accent-soft);
     color: var(--om-accent-strong);
     font-weight: var(--om-weight-semibold);
+  }
+
+  /* The current section in More: a mark on its left edge as well, as the bar's mark on top - never colour alone. */
+  .om-bottom-sheet-item.is-active::before,
+  .om-bottom-sheet-subitem.is-active::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    left: 0;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: currentColor;
   }
 
   /* Edit menu: the three places after Home. */

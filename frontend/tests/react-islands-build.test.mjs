@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
@@ -25,6 +26,14 @@ test("react-build/ is a fresh build of react/*.jsx, byte for byte", async () => 
   } finally {
     rmSync(outDir, { recursive: true, force: true });
   }
+});
+
+test("react-build is byte-exact on every checkout: no line-ending conversion, no CR in it", () => {
+  const repoRoot = path.resolve(frontendDir, "..");
+  const out = execFileSync("git", ["check-attr", "text", "--", "frontend/react-build/react.js", "frontend/react-build/islands.js"], { cwd: repoRoot, encoding: "utf8" });
+  assert.match(out, /react\.js: text: unset/);
+  assert.match(out, /islands\.js: text: unset/);
+  for (const name of ["react.js", "islands.js"]) assert.equal(readFileSync(path.join(committedDir, name), "utf8").includes("\r"), false, name);
 });
 
 test("the islands import the app's own modules (one state, one api, one session), never a bundled copy", () => {

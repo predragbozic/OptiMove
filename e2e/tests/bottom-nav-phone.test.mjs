@@ -105,6 +105,9 @@ test("(team_coach, 390 px) Training load and Calendar from the bar, the current 
     await page.waitForFunction(() => document.querySelector('.om-bottom-nav [data-nav-id="central-calendar"]')?.getAttribute("aria-current") === "page");
     // More: Settings; the More button is then marked as holding the current section.
     await page.click(`${bar} [data-nav-id="more"]`);
+    // The open sheet's backdrop covers the header and the page (it is not held under the bar's own layer).
+    const onTop = await page.evaluate(() => [[20, 20], [innerWidth - 20, 60]].map(([x, y]) => document.elementFromPoint(x, y)?.className || ""));
+    assert.deepEqual(onTop, ["om-bottom-sheet-backdrop", "om-bottom-sheet-backdrop"], "the backdrop is on top of the header");
     await page.locator(".om-bottom-sheet-item", { hasText: "Settings" }).click();
     await page.waitForSelector(".settings-tabs");
     await page.waitForFunction(() => document.querySelector('.om-bottom-nav [data-nav-id="more"]')?.classList.contains("is-active"));

@@ -55,6 +55,9 @@ test("the current section follows the menu's own is-active marks, sections inclu
   // The Athletes control opens a list; it is never the current section.
   doc.getElementById("athletesToggle").classList.add("is-active");
   assert.equal(buildBottomNavModel(doc, {}).items.find((i) => i.id === "athletes").active, false);
+  // Its button says whether the list is open (aria-expanded).
+  assert.equal(buildBottomNavModel(doc, {}).items.find((i) => i.id === "athletes").expanded, false);
+  assert.equal(buildBottomNavModel(doc, { mobileNavOpen: true, athletesExpanded: true }).items.find((i) => i.id === "athletes").expanded, true);
 });
 
 test("athlete shell: Home, Calendar, Tests and Messages by default; Weekly plan fills in while Messages is not shown", () => {

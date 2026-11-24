@@ -90,7 +90,11 @@ export function buildBottomNavModel(doc = globalThis.document, appState = state,
     targets.set(id, el);
     const section = { id, label: labelOf(el), icon: el.querySelector("svg.rail-icon")?.outerHTML || "", active: el.classList.contains("is-active") };
     // The Athletes control opens the athlete list (in the menu drawer), it is not a section of its own.
-    if (id === "athletes") section.active = false;
+    // Screen readers hear whether the list is open (aria-expanded on the bar's button).
+    if (id === "athletes") {
+      section.active = false;
+      section.expanded = Boolean(appState.mobileNavOpen && appState.athletesExpanded);
+    }
     const children = [];
     el.closest(".sidebar-submenu")?.querySelectorAll(".sidebar-subnav-button").forEach((child, index) => {
       if (isHidden(child)) return;
@@ -146,7 +150,7 @@ function teardown(doc) {
   if (host && islands) islands.unmountIsland(host);
   host?.remove();
   host = null;
-  doc?.body?.classList.remove("has-bottom-nav");
+  doc?.body?.classList?.remove?.("has-bottom-nav");
 }
 
 // The menu's render asks for a sync after it (coalesced; never a nested React render inside the bar's own click).
@@ -155,12 +159,17 @@ export function requestBottomNavSync() { scheduleSync(); }
 function scheduleSync() {
   if (queued) return;
   queued = true;
-  queueMicrotask(() => { queued = false; syncBottomNav(); });
+  queueMicrotask(() => {
+    queued = false;
+    // The bar never breaks the screen it sits on: a failure is reported and the menu button keeps working.
+    try { syncBottomNav(); } catch (error) { reportHandlerError(error, "bottom_nav_sync"); }
+  });
 }
 
 // Called after every menu render (navigation.js renderLibraryNav) and by the watchers below; cheap when nothing changed.
 export function syncBottomNav({ doc = globalThis.document, win = globalThis.window } = {}) {
-  if (!doc?.body || !win) return;
+  // A real page only (unit tests of other screens run the menu's render against small fakes of document).
+  if (!win || typeof doc?.querySelector !== "function" || typeof doc.body?.classList?.contains !== "function") return;
   const sidebar = doc.querySelector(".app-shell > .sidebar");
   const signedIn = Boolean(state.currentUser) && Boolean(sidebar) && !doc.body.classList.contains("login-mode");
   if (!signedIn) { teardown(doc); return; }

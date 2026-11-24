@@ -126,6 +126,9 @@ test("More opens a modal sheet with the other sections and their sections; a cho
   const sheet = el.querySelector('.om-bottom-sheet[role="dialog"]');
   assert.ok(sheet, "the sheet is open");
   assert.equal(sheet.getAttribute("aria-modal"), "true");
+  // Outside the fixed bar's stacking context, so its own z-index puts it over the header and the drawer.
+  assert.ok(!sheet.closest("nav.om-bottom-nav"), "the sheet is not inside the bar");
+  assert.ok(!el.querySelector(".om-bottom-sheet-backdrop").closest("nav"), "nor its backdrop");
   assert.equal(document.getElementById(sheet.getAttribute("aria-labelledby")).textContent, "More");
   assert.equal(more.getAttribute("aria-expanded"), "true");
   assert.equal(document.getElementById(more.getAttribute("aria-controls"))?.contains(sheet), true);
