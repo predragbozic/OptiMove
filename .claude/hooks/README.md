@@ -114,9 +114,15 @@ decided item 11 for the owner) — each also asks:
   of a file written on the same line (by a redirect, `cp`, `tee`, `sed -i`, …), not tracked in the
   repository, or with uncommitted changes; `node|python3|perl|ruby` code in any form it is fed —
   `-e` / `-c` / `-p`, a heredoc or here-string with or without `-`, `/dev/stdin`, a script file
-  written on the same line — whose OWN code (never the rest of the line) contains
-  `child_process`, `exec(`, `spawn`, `system(`, `os.system`, `subprocess`, `popen` or names a
-  `.env` file (`process.env` is not that); for perl and ruby also backticks and `qx`.
+  or an `--import` / `--require` file written on the same line, `< file` of such a file or of an
+  untracked one; code from a pipe (`… | python3`) always asks (`python3 -m <module>` does not) —
+  and code whose OWN text (never the rest of the line) contains
+  `child_process`, `exec(`, `spawn`, `system(`, `.system(` / `.popen(` / `.exec[lv]…(` (any
+  alias of os), `subprocess`, `popen` or names a `.env` file (`process.env` and a JavaScript
+  `/re/.exec(` are not that); for perl and ruby also backticks and `qx`.
+- a writer run by `xargs` / `parallel` (its target comes from stdin), and a `cp -r` source with a
+  dot name in a brace list (`src/{.claude,x}`); a `$` that is only a sed / perl anchor
+  (`sed -i "s/ *$//"`) is not an expansion and passes.
 
 **Still denied:** `git add .` / `-A` / `--all`, `git reset --hard`, `git clean -f`, a force push,
 `rm -rf` of the repository root, a home or a drive root, `git checkout -- <path>` / `git restore`

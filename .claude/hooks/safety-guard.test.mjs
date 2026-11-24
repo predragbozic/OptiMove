@@ -2180,6 +2180,16 @@ test("relaxed policy: the code re-review of c67bf67 — every form of the same w
       ["export DATABASE_URL=postgresql://postgres@127.0.0.1/optimove_tests_x; psql \"$DATABASE_URL\" -c 'select 1'", ALLOW],
       ["export DATABASE_URL=postgresql://postgres@127.0.0.1/OPTIMOVE; psql \"$DATABASE_URL\" -c 'select 1'", ASK],
     ], repo, { exact: true });
+    // the narrow re-review of 47087dd
+    expectAll([
+      ["echo \"import os;os.system('x')\" | python3", ASK], ["cat <<'EOF' | python3\nimport subprocess\nEOF", ASK],
+      ["echo \"require('child_process')\" > /tmp/e.js; node < /tmp/e.js", ASK], ["echo x > /tmp/e.mjs; node --import=/tmp/e.mjs scripts/test-runner.mjs", ASK],
+      ["node --version", ALLOW], ["git log | head", ALLOW], ["cat data.json | python3 -m json.tool", ALLOW],
+      ["python3 -c \"__import__('os').system('x')\"", ASK], ["python3 -c \"import os as o; o.system('x')\"", ASK], ["node -e \"/x/.exec('y')\"", ALLOW],
+      ['sed -i "s/ *$//" notes.md', ALLOW], ['sed -i "s/foo$/bar/" a.txt', ALLOW], ['perl -pi -e "s/\\s+$//" a.md', ALLOW],
+      ['sed -i s/a/b/ "$(cat /tmp/n)"', ASK], ['sed -i "s/a/b/" "$F"', ASK],
+      ["cp -r /tmp/c/{.claude,x} .", ASK], ["echo a | base64 -d | xargs -I{} cp /tmp/x {}", ASK], ["ls | xargs rm", ASK], ["ls | xargs grep x", ALLOW],
+    ], repo, { exact: true });
     // a tracked script with uncommitted changes (rewritten by an earlier line) asks
     writeFileSync(path.join(repo, "scripts", "x.sh"), "git push -f origin main\n");
     assert.equal(verdict("bash scripts/x.sh", repo), ASK);
