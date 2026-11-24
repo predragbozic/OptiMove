@@ -30515,3 +30515,327 @@ body.athlete-questions-prompt-open {
 .cc-panel-bottom .cc-panel-delete { margin-top: 0; }
 .cc-panel-bottom .cc-panel-delete-step { flex: 1 0 100%; }
 .cc-panel-k3 { margin: 0; }
+
+/* ==========================================================================
+   React island: the phone's bottom navigation (owner, 2026-11-24;
+   react/bottom-nav.jsx, frontend/bottom-nav.js). Phones only (<= 760 px):
+   wider screens keep the rail and never show it. The page ends above the bar
+   (the shell's bottom padding), and the page's own sticky action bars stop on
+   top of it instead of under it; those inside a dialog are left alone, the
+   dialog covers the bar. env(safe-area-inset-bottom) keeps the items above an
+   iPhone's home indicator wherever the page reports it.
+   ========================================================================== */
+.om-bottom-nav-host { display: none; }
+
+@media (max-width: 760px) {
+  body.has-bottom-nav:not(.login-mode) {
+    /* A 24 px icon and up to two 12 px lines of label ("Training load" wraps at 360 px): the bar never grows. */
+    --om-bottom-nav-height: 64px;
+    --om-bottom-nav-space: calc(var(--om-bottom-nav-height) + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.has-bottom-nav:not(.login-mode) .om-bottom-nav-host { display: block; }
+
+  body.has-bottom-nav:not(.login-mode) .app-shell { padding-bottom: var(--om-bottom-nav-space); }
+
+  body.has-bottom-nav:not(.login-mode) :is(.builder-mobile-sticky-bar, .tests-schedule-form-actions, .tl-roster-sticky, .gpexe-map .gpexe-map-results .gpexe-link-actions, .imports-batch .imports-batch-actions, .mb-savebar, .k3-save-bar, .node-detail-footer):not(:is([role="dialog"], [aria-modal="true"], .exercise-editor-overlay, .builder-section-overlay, .exercise-detail-overlay, .program-preview-overlay, .k3-sheet-layer) *) {
+    bottom: var(--om-bottom-nav-space) !important;
+  }
+
+  /* Training Load's phone popover is a bottom sheet of its own: above the bar, like the More sheet. */
+  body.has-bottom-nav:not(.login-mode) .tl-popover-backdrop { z-index: 1189 !important; }
+  body.has-bottom-nav:not(.login-mode) .tl-popover { z-index: 1190 !important; }
+  /* A widget's "⋯" menu: its anchor is positioned with a z-index (a layer of its own), so the anchor itself goes
+     above the bar while the menu is open - the popover's own z-index only counts inside it. */
+  body.has-bottom-nav:not(.login-mode) .tl-popover-anchor.tl-widget-menu-anchor.is-open { z-index: 1190 !important; }
+
+  body.has-bottom-nav:not(.login-mode) .tl-layout-bar { bottom: var(--om-bottom-nav-space) !important; }
+  body.has-bottom-nav:not(.login-mode) .exercise-selection-bar { bottom: calc(var(--om-bottom-nav-space) + 12px) !important; }
+
+  .om-bottom-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -2px 10px rgba(15, 23, 32, 0.06);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .om-bottom-nav-list {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .om-bottom-nav-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    width: 100%;
+    min-width: var(--om-tap-target);
+    height: var(--om-bottom-nav-height, 64px);
+    margin: 0;
+    padding: 4px 2px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--om-text-xs);
+    line-height: 1.15;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* The current section: colour, weight and a mark on top, never colour alone. */
+  .om-bottom-nav-item.is-active {
+    color: var(--accent);
+    font-weight: var(--om-weight-semibold);
+  }
+
+  .om-bottom-nav-item.is-active::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 22%;
+    right: 22%;
+    height: 3px;
+    border-radius: 0 0 3px 3px;
+    background: currentColor;
+  }
+
+  .om-bottom-nav-item:focus-visible,
+  .om-bottom-sheet-item:focus-visible,
+  .om-bottom-sheet-subitem:focus-visible,
+  .om-bottom-sheet-close:focus-visible {
+    outline: none;
+    box-shadow: inset var(--om-focus-ring);
+  }
+
+  .om-bottom-nav-label {
+    display: -webkit-box;
+    max-width: 100%;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  .om-bottom-nav-icon {
+    display: inline-flex;
+    width: 24px;
+    height: 24px;
+    flex: none;
+  }
+
+  .om-bottom-nav-icon svg {
+    width: 24px;
+    height: 24px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .om-bottom-nav-icon circle { fill: currentColor; stroke: none; }
+
+  .om-bottom-sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    border: 0;
+    padding: 0;
+    background: rgba(10, 20, 28, 0.32);
+  }
+
+  .om-bottom-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1201;
+    max-height: 80vh;
+    max-height: 80dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    border-radius: var(--om-radius-lg) var(--om-radius-lg) 0 0;
+    background: var(--surface);
+    box-shadow: 0 -12px 32px rgba(10, 20, 28, 0.24);
+    color: var(--text);
+  }
+
+  .om-bottom-sheet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .om-bottom-sheet-title {
+    margin: 0;
+    font-size: var(--om-text-lg);
+    font-weight: var(--om-weight-semibold);
+  }
+
+  .om-bottom-sheet-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--om-tap-target);
+    height: var(--om-tap-target);
+    border: 0;
+    border-radius: var(--om-radius-md);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .om-bottom-sheet-close svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  .om-bottom-sheet-list,
+  .om-bottom-sheet-sublist {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .om-bottom-sheet-group + .om-bottom-sheet-group { border-top: 1px solid var(--om-border-subtle); }
+
+  .om-bottom-sheet-item,
+  .om-bottom-sheet-subitem {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 48px;
+    margin: 0;
+    padding: 8px 8px;
+    border: 0;
+    border-radius: var(--om-radius-md);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--om-text-md);
+    text-align: left;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+
+  .om-bottom-sheet-subitem {
+    min-height: var(--om-tap-target);
+    padding-left: 44px;
+    font-size: var(--om-text-sm);
+    color: var(--muted);
+  }
+
+  .om-bottom-sheet-item.is-active,
+  .om-bottom-sheet-subitem.is-active {
+    position: relative;
+    background: var(--accent-soft);
+    color: var(--om-accent-strong);
+    font-weight: var(--om-weight-semibold);
+  }
+
+  /* The current section in More: a mark on its left edge as well, as the bar's mark on top - never colour alone. */
+  .om-bottom-sheet-item.is-active::before,
+  .om-bottom-sheet-subitem.is-active::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    left: 0;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: currentColor;
+  }
+
+  /* Edit menu: the three places after Home. */
+  .om-bottom-sheet-head .om-bottom-sheet-title { flex: 1; }
+  .om-bottom-sheet-edit-open { flex: none; }
+
+  .om-bottom-sheet-edit {
+    display: grid;
+    gap: 12px;
+  }
+
+  .om-bottom-sheet-note {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--om-text-sm);
+  }
+
+  .om-bottom-sheet-field {
+    display: grid;
+    gap: 4px;
+    font-size: var(--om-text-sm);
+    font-weight: var(--om-weight-medium);
+  }
+
+  .om-bottom-sheet-field select {
+    width: 100%;
+    min-height: var(--om-tap-target);
+    padding: 8px 10px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--om-radius-md);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 16px;
+    font-weight: var(--om-weight-regular);
+  }
+
+  .om-bottom-sheet-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .om-bottom-sheet-primary,
+  .om-bottom-sheet-secondary {
+    min-height: var(--om-tap-target);
+    padding: 0 16px;
+    border-radius: var(--om-radius-md);
+    font: inherit;
+    font-size: var(--om-text-md);
+    cursor: pointer;
+  }
+
+  .om-bottom-sheet-primary {
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-weight: var(--om-weight-semibold);
+  }
+
+  .om-bottom-sheet-secondary {
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  .om-bottom-sheet-primary:focus-visible,
+  .om-bottom-sheet-secondary:focus-visible,
+  .om-bottom-sheet-field select:focus-visible {
+    outline: none;
+    box-shadow: var(--om-focus-ring);
+  }
+}

@@ -9,8 +9,10 @@ specific architectural decision and its evidence, see `docs/decisions/`.
 A training-planning platform for coaches and athletes: program building (weekly plans,
 specific programs, templates), an exercise library, and Training Load tracking
 (RPE/sRPE capture, calendar-based session review, and an Analysis dashboard system).
-Node/Express backend, plain-ES-module frontend (no framework/bundler in dev; Vite for
-the production build), Postgres.
+Node/Express backend, plain-ES-module frontend (no bundler in dev; Vite for the
+production build), Postgres. Since 2026-11-24 every new or substantially reworked screen
+is a React island (`frontend/react/`, compiled into the committed `frontend/react-build/`;
+`.claude/rules/frontend.md`, "React islands"); the rest stays plain until touched.
 
 Superseding an earlier version of this document: real session-based authentication now
 exists (PBKDF2, `requireAuth` middleware, hashed session tokens — see
@@ -43,7 +45,8 @@ per milestone, this list of domains doesn't.
 - `frontend/` — one domain = `{name}-view.js` (render) + `{name}-actions.js`
   (events/mutations) + `{name}-data.js` (API/cache); `app.js` is the shared
   event-delegation orchestrator, not a domain module. `state.js` holds shared client
-  state shape.
+  state shape. React components live in `frontend/react/*.jsx` with a plain bridge
+  module beside their domain (the first: the phone's bottom navigation, `bottom-nav.js`).
 - `frontend/tests/` — `*.test.mjs`, one suite per frontend domain (same caveat as above —
   measure with `ls frontend/tests/*.test.mjs | wc -l`).
 - `migrations_v2/` — flat, `YYYYMMDDHHMM_description.sql`, checksum-protected once

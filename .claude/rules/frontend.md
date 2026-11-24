@@ -8,8 +8,8 @@ paths:
 
 # Frontend
 
-Plain ES modules, no build-time framework, no bundler in dev (Vite is used only for the
-production build). `app.js` is the intentional event-delegation orchestrator — a new
+Plain ES modules, no bundler in dev (Vite is used only for the production build and to
+compile the React islands, see "React islands" below). `app.js` is the intentional event-delegation orchestrator — a new
 `data-action` handler wired there isn't automatically a smell, but a new *domain's* logic
 belongs in its own module.
 
@@ -20,6 +20,43 @@ A new frontend domain follows `{name}-view.js` (rendering, pure template strings
 Check whether an existing domain already does something similar before adding parallel
 logic — cross-domain duplication (especially anything training-load-shaped) is a
 `code-reviewer` finding.
+
+## React islands
+
+Owner, 2026-11-24: every NEW screen, and every existing screen substantially reworked, is written in React. The rest
+stays plain ES modules until it is touched (incremental, island by island). React and react-dom are pinned exactly in
+`frontend/package.json` (MIT; no paid libraries).
+
+- **Where:** components in `frontend/react/*.jsx`; `frontend/react/islands.jsx` is the one entry that exports them.
+  The plain side of an island is a plain module beside the domain (`bottom-nav.js` for `react/bottom-nav.jsx`).
+- **Build, dev and tests (why there is a committed build):** the backend serves `frontend/` unbuilt in dev and e2e, so
+  a browser there cannot read JSX or React's CommonJS packages. `npm --prefix frontend run build:islands` (or
+  `dev:islands`, the same in watch mode) compiles `react/*.jsx` with Vite into `frontend/react-build/islands.js` and
+  `react.js` (React itself, production mode). That output is **committed**, like `frontend/vendor/`: dev, e2e and the
+  node tests load it, and the production build bundles it (`npm run build` rebuilds it first).
+  `tests/react-islands-build.test.mjs` fails when the committed output is not a fresh build of the source, so edit the
+  `.jsx`, run `build:islands`, commit both.
+- **Loading:** plain code imports `./react-build/islands.js` with a lazy `import()` only when the island is needed (a
+  computer never downloads the phone bar's React). Never a static import from `app.js`.
+- **Mounting:** `mountIsland(container, Component, props, { name })` from the islands entry. The plain code owns the
+  container; calling it again on the same container only updates props (call it from the plain render function every
+  time); `unmountIsland(container)` when the section is left. An uncaught error inside an island is reported through
+  `app-errors-capture.js` as `react_<name>`.
+- **Data and session:** no second auth or fetch layer. An island gets what it shows as props from the plain side, and
+  calls back through props (`onSelect`, `onSave`…). When a component must read or write itself, it imports the app's
+  own modules by a relative path (`../api.js`, `../state.js`): `vite.islands.config.js` keeps every import outside
+  `react/` external, so the island uses the same module instance, the same `state` and the same cookie session.
+- **Per-person UI choices** (e.g. the bottom bar's three places): there is no server-side store for UI preferences
+  yet, so they are kept per device in `localStorage`, every read and write inside try/catch with the role's default
+  as the fallback (the `athlete-strip-pref.js` pattern). A server store is a separate follow-up with its own migration.
+- **Navigation and leave guards:** an island never changes `state.activeTab` itself; it runs the existing control or
+  action, so the leave guards of unsaved work, the app's history and the section resets run as before.
+- **Testing:** unit tests import `../react-build/islands.js` under a JSDOM window set as globals before the import
+  (`tests/react-islands.test.mjs`); assert booleans and text, never `assert.equal(element, …)` (a failed diff of a
+  JSDOM node exhausts memory); after a click that changes React state, await one task before reading the DOM. A visual
+  or interaction change still needs its e2e browser test.
+- Everything else in this file applies unchanged: 16 px inputs, 44 px targets, 360/375/390 px, a state never by colour
+  alone, labelled controls, focus management for sheets and dialogs.
 
 ## Mobile / responsive (check at 360px, 375px, 390px — not just one breakpoint)
 
