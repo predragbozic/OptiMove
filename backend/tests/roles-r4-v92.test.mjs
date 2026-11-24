@@ -743,6 +743,27 @@ test("21. rule 7 across clubs holds when two writes of one client message fire i
   assert.equal((await one(`select count(*)::int as n from public.permission_role_items where role_id = $1`, [sys])).n, 1, "nothing written");
 });
 
+test("22. a custom bound to an old role row dies at read time when the row's updated_at moves, even when no trigger fires (permission_user_holdings' holding_row_version check)", async () => {
+  const w = await world();
+  const row = await clubRow(w.admin, w.club);
+  // The custom narrows the admin: without athletes.remove at the club.
+  await makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] });
+  await makeCustom(w.pa, w.admin, ROLE_IDS.club_admin, "club", w.club, w.club, { holding: { table: "user_club_roles", rowId: row }, remove: ["athletes.remove"] });
+  assert.equal(await twin(w.admin, "athletes.remove", "club", w.club), false, "the custom acts");
+  assert.equal(await canOf(w.admin, "athletes.remove", perms.clubScope(w.club)), false);
+  // The row changes behind every trigger (role_ended and updated_at do not run): only the read-time check sees it.
+  const c = new pg.Client({ connectionString: db.url }); await c.connect();
+  try {
+    await c.query("set session_replication_role = replica");
+    const moved = await c.query(`update public.user_club_roles set updated_at = updated_at + interval '1 second' where id = $1`, [row]);
+    assert.equal(moved.rowCount, 1);
+  } finally { await c.query("reset session_replication_role").catch(() => {}); await c.end(); }
+  assert.equal((await one(`select count(*)::int as n from public.permission_custom_roles where holding_row_id = $1 and ended_at is null`, [row])).n, 1, "no trigger ended it");
+  // The custom no longer applies: the admin is back on the default Club admin, which holds athletes.remove.
+  assert.equal(await twin(w.admin, "athletes.remove", "club", w.club), true, "the custom is dead (twin)");
+  assert.equal(await canOf(w.admin, "athletes.remove", perms.clubScope(w.club)), true, "the custom is dead (can)");
+});
+
 test("20. the rollback refuses after a later migration was applied and after a basic role changed (7.7)", async () => {
   const rollback = fs.readFileSync(path.join(RUNBOOKS, "roles-layers-v92-rollback.sql"), "utf8");
   for (const [label, expected, plant] of [
