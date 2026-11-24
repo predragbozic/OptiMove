@@ -982,7 +982,9 @@ verified by the request record; the record now carries `ceiling_change_id`, `clu
     first), before the upsert; it conflicts with the writer's FOR SHARE but not with other transactions' foreign-key
     key-share checks on that user (sessions, memberships). A custom-role writer holds that row FOR SHARE from its place 1, so a grant - a first one included, a new
     row no row lock could hold back - waits for the writer, and the writer's O5 check never misses a grant that commits
-    beside it (test 17, both grants; the mutation dropping either lock is killed).
+    beside it (test 17, both grants, the wait pinned to the grant's own users statement; test 17b, the other order: the
+    grant commits first and the writer refuses with `admin_not_narrowable`; the mutations dropping either grant's lock or
+    the writer's users lock are killed). Test 18 pins the grants' 404 order (club or team, then user).
   - Tests 15 (a narrowed club admin: adding a word it lacks to a custom is `permission_not_held`, a club version that
     keeps it is `role_exceeds_your_permissions` - the service's own check, the mutation turning it off is killed) and 16
     (an account with only `org.view` in the club gets the identical 404 on the user read, the drift read and the ceiling
@@ -992,6 +994,9 @@ verified by the request record; the record now carries `ceiling_change_id`, `clu
     the v92 trigger (role row -> customs), while a custom writer goes users -> role rows -> customs. No cycle is known
     (the writer waits on the role row before it takes the customs), but a users-first lock there would match LO-2; a
     later small fix.
+  - The two grants (pre-existing, R4-3b's code review, MEDIUM, outside the diff) read the user's roles after a confirmed
+    COMMIT; a failure of that read answers 500 although the grant is written (a retry is a safe idempotent upsert). The
+    importer's pattern - 200 with `readError` - is a later small fix.
   - A stale custom (its R2 assignment revoked or expired) ended by the next write is recorded as `end_kind = 'reset'` by
     the writing admin, with the reason `STALE_END_REASON`; `role_ended` would need a service marker in the v92 guard.
   - A custom is bound to its old holding row by `updated_at`: a write that does not change the row's rights but bumps
