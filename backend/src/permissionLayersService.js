@@ -24,7 +24,7 @@ import { pool } from "./db.js";
 
 const {
   runWrite, boundedRead, refuse, NOT_FOUND, bad, requireUuid, requireText, requireWords, requestHashOf, isUuid,
-  itemRuleRefusal, lockActor, holdsSql, lockedRole, scopeTypesOf, activeClub, isPlatform, CLUB_ADMIN_ROLE_ID,
+  itemRuleRefusal, lockActor, lockedRole, scopeTypesOf, activeClub, isPlatform, CLUB_ADMIN_ROLE_ID,
   RULE7_REQUIRED, HONOURED,
 } = rolesInternals;
 
@@ -76,6 +76,8 @@ async function lockClubRow(client, clubId) {
   if (!row || !row.active) throw NOT_FOUND();
 }
 const closedModulesOf = async (client, clubId) => (await client.query(`select public.permission_club_closed_modules($1) as m`, [clubId])).rows[0].m;
+// v95's dominance test: the word is held now, or its module is closed for the club and the actor would hold it there.
+const holdsInClub = async (client, userId, word, clubId) => (await client.query(`select public.permission_actor_holds_in_club($1, $2, $3) as ok`, [userId, word, clubId])).rows[0].ok;
 const optionalWords = (value, field) => (value === undefined || value === null ? [] : requireWords(value, field));
 
 // The rules of a change of an item set (a club version or a custom role; contract 3.5), in the order of the refusals.
@@ -95,15 +97,13 @@ async function checkedItemChange(client, ctx, { basis, base, add, remove, basicK
     const lacking = RULE7_REQUIRED.filter((w) => !next.includes(w));
     if (lacking.length) throw refuse("club_admin_requires", { words: lacking });
   }
-  // R2's dominance against the effective sets (the database repeats it at COMMIT): a club's admin holds every word of
-  // the set after the change. A word of a closed module is held by nobody but a platform admin (step 6), so a set
-  // that carries one is the licence's matter, named as such.
+  // R2's dominance against the effective sets, by the database's own rule (v95, repeated at COMMIT): a club's admin
+  // holds every word of the set after the change - a word of a closed module counts when the admin would hold it the
+  // moment the module opens again.
   if (basis !== "platform_admin") {
     const missing = [];
-    for (const w of next) if (!(await holdsSql(client, ctx.userId, w, clubId))) missing.push(w);
+    for (const w of next) if (!(await holdsInClub(client, ctx.userId, w, clubId))) missing.push(w);
     if (missing.length) {
-      const closedMissing = missing.filter((w) => closed.includes(PERMISSIONS[w].module));
-      if (closedMissing.length) throw refuse("closed_by_club_ceiling", { words: closedMissing });
       const notHeld = missing.filter((w) => add.includes(w));
       if (notHeld.length) throw refuse("permission_not_held", { words: notHeld });
       throw refuse("role_exceeds_your_permissions", { words: missing });
@@ -351,13 +351,10 @@ export async function answerClubVersion(ctx, roleIdRaw, clubIdRaw, body) {
         throw refuse("question_outdated", { current: await clubRoleView(client, role, clubId, basis === "platform_admin") });
       }
       // The database checks at COMMIT that a club's admin holds every word of a version it writes (an ended one
-      // included); a word of a closed module is the licence's matter.
+      // included), by v95's rule.
       if (basis !== "platform_admin") {
-        const closed = await closedModulesOf(client, clubId);
         const missing = [];
-        for (const w of v.items) if (!(await holdsSql(client, ctx.userId, w, clubId))) missing.push(w);
-        const closedMissing = missing.filter((w) => closed.includes(PERMISSIONS[w].module));
-        if (closedMissing.length) throw refuse("closed_by_club_ceiling", { words: closedMissing });
+        for (const w of v.items) if (!(await holdsInClub(client, ctx.userId, w, clubId))) missing.push(w);
         if (missing.length) throw refuse("role_exceeds_your_permissions", { words: missing });
       }
       return { basis, role, v };
@@ -705,12 +702,9 @@ export async function removeWordFromCustoms(ctx, roleIdRaw, clubIdRaw, body) {
       if (basis !== "platform_admin") {
         if (r.basic_key === "club_admin") throw refuse("admin_not_narrowable");
         for (const c of rows) if (await holdsClubAdmin(client, c.user_id, clubId)) throw refuse("admin_not_narrowable", { customIds: [c.id] });
-        // The database repeats R2's dominance at COMMIT: the acting admin holds every word left in each custom.
-        const closed = await closedModulesOf(client, clubId);
+        // The database repeats R2's dominance at COMMIT (v95's rule): the acting admin holds every word left in each custom.
         const missing = new Set();
-        for (const c of rows) for (const w of c.items) if (w !== word && !(await holdsSql(client, ctx.userId, w, clubId))) missing.add(w);
-        const closedMissing = [...missing].filter((w) => closed.includes(PERMISSIONS[w].module));
-        if (closedMissing.length) throw refuse("closed_by_club_ceiling", { words: closedMissing.sort() });
+        for (const c of rows) for (const w of c.items) if (w !== word && !(await holdsInClub(client, ctx.userId, w, clubId))) missing.add(w);
         if (missing.size) throw refuse("role_exceeds_your_permissions", { words: [...missing].sort() });
       }
       return { basis, rows };

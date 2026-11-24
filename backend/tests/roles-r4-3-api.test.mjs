@@ -176,9 +176,12 @@ test("2. a club version: made by the club's admin's first change, acting for an 
   code(await version(w.pa, ROLE_IDS.club_admin, w.A, { expectedRevision: null, remove: ["staff.assign"] }), 409, "club_admin_requires");
   // Rule 7 inside the club: Club admin's own version may not lack what Team coach's version gives.
   code(await version(w.pa, ROLE_IDS.club_admin, w.A, { expectedRevision: null, remove: ["athletes.remove"] }), 409, "club_admin_would_lack");
-  // The ceiling: a word of a closed module is not added, and a set that carries one is the licence's matter.
+  // The ceiling: a word of a closed module is added by nobody; the closed words a set already carries do not block a
+  // change by the club's admin (v95: it would hold them the moment the module opens).
   ok(await ceiling(w.pa, w.A, { close: ["athletes"] }));
-  code(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 2, remove: ["org.view"] }), 409, "closed_by_club_ceiling");
+  const carried = ok(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 2, remove: ["org.view"] }));
+  assert.ok(carried.role.effectiveItems.includes("athletes.manage") && !carried.role.effectiveItems.includes("org.view"));
+  ok(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 3, add: ["org.view"] }));
   const sysRole = ok(await srv.api(w.pa.cookie, R, { method: "POST", body: { requestKey: key(), name: `Clerk ${hex()}`, scopeTypes: ["club"], items: ["org.view"] } })).role;
   try {
     const refused = code(await version(w.pa, sysRole.id, w.A, { expectedRevision: null, add: ["athletes.manage"] }), 409, "closed_by_club_ceiling");
@@ -352,6 +355,27 @@ test("6. Q15: a word taken from a club version names the customs that still hold
   assert.deepEqual(replay.customs.map((x) => x.revision), [2]);
   code(await removal(w.adminA, { requestKey: key(), word: "athletes.remove", customIds: [c.custom.id] }), 409, "custom_changed");
   assert.deepEqual(ok(await srv.api(w.adminA.cookie, `${R}/clubs/${w.A}/custom-drift`)).customs, []);
+  // A custom whose holding ended (an R2 assignment revoked: dead, not yet ended) is not listed as drift.
+  const helper = ok(await srv.api(w.adminA.cookie, R, { method: "POST", body: { requestKey: key(), clubId: w.A, name: `Helper ${hex()}`, scopeTypes: ["team"], items: ["athletes.manage", "org.view"] } })).role;
+  const a = ok(await srv.api(w.adminA.cookie, `${R}/assignments`, { method: "POST", body: { requestKey: key(), reason: "Needed", userId: w.target.id, roleId: helper.id, scopeType: "team", scopeId: w.T2 } })).assignment;
+  const hc = ok(await custom(w.adminA, w.target.id, w.A, { roleId: helper.id, scopeType: "team", scopeId: w.T2, expectedRevision: null, remove: ["org.view"] }));
+  ok(await srv.api(w.adminA.cookie, `${R}/${helper.id}/change`, { method: "POST", body: { requestKey: key(), reason: "Less", expectedRevision: 1, items: ["org.view"] } }));
+  assert.deepEqual(ok(await srv.api(w.adminA.cookie, `${R}/clubs/${w.A}/custom-drift`)).customs.map((x) => [x.customId, x.words]), [[hc.custom.id, ["athletes.manage"]]]);
+  ok(await srv.api(w.adminA.cookie, `${R}/assignments/${a.id}/revoke`, { method: "POST", body: { requestKey: key(), reason: "Done", expected: { userId: w.target.id, roleId: helper.id } } }));
+  assert.deepEqual(ok(await srv.api(w.adminA.cookie, `${R}/clubs/${w.A}/custom-drift`)).customs, [], "a dead custom is no drift");
+});
+
+test("11. v95 end to end: with Calendar closed (its view word sits in Team coach and Club admin), the club's admin still makes and changes a club version and a custom role", async () => {
+  const w = await world();
+  ok(await ceiling(w.pa, w.A, { close: ["calendar"] }));
+  const v = ok(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: null, remove: ["athletes.remove"] }));
+  assert.ok(v.role.effectiveItems.includes("calendar.view"), "the closed word stays in the set, recorded");
+  const c = ok(await custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.manage"] }));
+  assert.ok(c.custom.items.includes("calendar.view"));
+  assert.equal(await holds(w.coach.id, "calendar.view", "team", w.T1), false, "the licence still decides");
+  ok(await custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: 1, add: ["athletes.manage"] }));
+  ok(await ceiling(w.pa, w.A, { open: ["calendar"] }));
+  assert.equal(await holds(w.coach.id, "athletes.remove", "team", w.T1), false, "the club version acts");
 });
 
 test("7. H4 at the route: a club whose Club admin version is made after the default writer read its list loses the race as try_again, never a 40P01; the version writer and the default writer serialize", async () => {
@@ -475,9 +499,16 @@ test("9. recorded lock order: every R4-3 write takes R2's request-key lock, then
   ok(await version(w.pa, ROLE_IDS.club_admin, w.A, { expectedRevision: null, remove: ["org.club.edit"] }));
   const sys = ok(await srv.api(w.pa.cookie, R, { method: "POST", body: { requestKey: key(), name: `Analyst ${hex()}`, scopeTypes: ["club"], items: ["org.view"] } })).role;
   try {
+    // Club B has its own Club admin version without org.club.edit AND its own version of the changed role: it does not
+    // follow the change, so nothing is added there (7.2, H4).
+    ok(await version(w.pa, ROLE_IDS.club_admin, w.B, { expectedRevision: null, remove: ["org.club.edit"] }));
+    ok(await version(w.pa, sys.id, w.B, { expectedRevision: null, add: ["org.teams.manage"] }));
     const d = await recorded(() => roleChange(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "org.club.edit"] }));
     const body = ok(d.res);
     assert.ok(body.clubsTouched.some((x) => x.clubId === w.A && x.wordsAdded.includes("org.club.edit")));
+    assert.ok(!body.clubsTouched.some((x) => x.clubId === w.B), JSON.stringify(body.clubsTouched));
+    assert.ok(!(await one(`select array(select i.permission_word from public.permission_club_role_version_items i join public.permission_club_role_versions v on v.id = i.version_id
+        where v.club_id = $1 and v.system_role_id = $2 and v.ended_at is null) as w`, [w.B, ROLE_IDS.club_admin])).w.includes("org.club.edit"));
     const dt = d.seen.map((s) => s.t);
     const at = dt.findIndex((t) => /lock_club_ceiling/.test(t));
     assert.ok(at >= 0 && at < dt.findIndex((t) => ROW_LOCK.test(t)), dt.join("\n"));
@@ -507,8 +538,14 @@ test("10. the uncertain COMMIT: an answer lost after a COMMIT that happened is v
   const again = ok(await srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/version`, { method: "POST", body: { requestKey: k1, reason: "x", expectedRevision: null, remove: ["athletes.remove"] } }));
   assert.equal(again.replayed, true);
   assert.equal(again.role.version.revision, 1);
-  // A replay re-evaluates the caller's standing: the admin's row switched off, the same key answers 404.
-  await k.query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [w.adminA.id, w.A]);
-  const cookie = await srv.cookieFor(w.adminA.id);
-  notFound(await srv.api(cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/version`, { method: "POST", body: { requestKey: k1, reason: "x", expectedRevision: null, remove: ["athletes.remove"] } }));
+  // A replay re-evaluates the caller's standing inside its transaction: the admin's row switched off after the request's
+  // gate passed (and after BEGIN), the same key answers the identical 404, never the saved answer.
+  svc.setRolesAfterBeginHoldForTests(async () => {
+    await k.query(`update public.user_club_roles set is_active = false where user_id = $1 and club_id = $2`, [w.adminA.id, w.A]);
+  });
+  try {
+    notFound(await srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/version`, { method: "POST", body: { requestKey: k1, reason: "x", expectedRevision: null, remove: ["athletes.remove"] } }));
+  } finally {
+    svc.setRolesAfterBeginHoldForTests(null);
+  }
 });
