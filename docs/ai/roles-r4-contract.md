@@ -845,7 +845,7 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
   `authz.roleAssignments` (already live and of a non-archived role); one query per type for the names. `role` is
   `"role_holder"`. A stored `club` / `team` preference resolves to the exact workspace, else to the view one of the same
   scope (`findPreferredWorkspace`), else the fallback; `saveWorkspacePreference` stores the base type
-  (`storedWorkspaceType`) on every path; `FALLBACK_ORDER` has the two after `team`. No fallback is persisted while
+  (`storedWorkspaceType`) on every path; `FALLBACK_ORDER` has the two last (L-3, below). No fallback is persisted while
   `authz.rolePermissions` is unavailable (L1). `PUT /api/auth/workspace` matches exactly: `club` + C is refused for an
   account that has only `club_view` C.
 - **The entry gate** (`backend/src/organizationEntry.js`, in place of `requireCoach` on `/api/organization`): an account
@@ -873,9 +873,10 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
   for a platform admin without one). A module's VIEW pull request (or R4-3 / R4-4 for Settings) adds its words to that
   list with the route that lets them through.
 - **Recorded, not changed (internal review LOWs):**
-  - `FALLBACK_ORDER` puts the view types before `athlete` (as section 5.1 says: "after `team`"): an athlete who gets an
-    assignment and has no preference lands in `club_view` and that is persisted; the athlete switches back once. If the
-    owner prefers the athlete workspace first for such an account, it is a one-line order change.
+  - **Changed at the gate (the manager's decision L-3, replacing 5.1's "after `team`"):** `FALLBACK_ORDER` puts the view
+    types last, after `athlete`: an athlete who also holds an assignment lands in the athlete workspace; `club_view`
+    stays reachable through the switch (test 16, with L-1 and L-2: a club's admin with an assignment in its own club is
+    offered only `club`; an inactive club is never a `club_view`).
   - The workspace is resolved twice on `GET /api/organization` for a non-coach (read-only in the gate, then by the
     route); safe, both from the same `req.authz`, and the route decides again.
   - The `club_view` members path (`staff.assign` in a view workspace) is not reachable in R4-2: `staff.assign` is
@@ -890,7 +891,7 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
   that `club` / `team` come only from the old rows), `permissions-r1` b1 / b2z (two new `org.view` call sites, club and
   team), `roles-r4-checked-gates` B1 counts and B3 (the view types named only in `workspace.js` and
   `routes/organization.js`).
-- **Evidence:** `backend/tests/roles-r4-2-view-workspace.test.mjs` (15 tests, disposable database, the real server:
+- **Evidence:** `backend/tests/roles-r4-2-view-workspace.test.mjs` (16 tests, disposable database, the real server:
   offers, preference mapping and forged rows, the fixed keys, the entry gate's 403 on every other method and path, no
   preference written by a refused request, cross-club identical 404, the mixed account, the members list and L3, closed
   modules, the end of an assignment, L1, `org.view` as the right, the fail-closed filter, and section 6's mandatory sweep:

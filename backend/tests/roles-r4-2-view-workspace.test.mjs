@@ -379,6 +379,34 @@ test("15. an athlete with a live assignment is a member of the club for its admi
   assert.deepEqual(body.users.map((u) => u.id), [q.id]);
 });
 
+test("16. L-1: a club's admin holding an assignment in its own club is not also offered club_view; L-2: an inactive club is not offered as club_view; L-3: an athlete with an assignment lands in the athlete workspace", async () => {
+  // L-1
+  const extra = await grant(w.pa, w.adminA.id, w.roleA.id, "club", w.A);
+  const a = await me(w.adminA);
+  assert.deepEqual(a.availableWorkspaces.filter((x) => x.scopeId === w.A).map((x) => x.type), ["club"]);
+  await revoke(w.pa, extra);
+  // L-2
+  const C = await F.club("Gamma");
+  const adminC = await person("adminC", (id) => F.grantClub(id, C));
+  const p = await person("gammaViewer");
+  const roleC = await createRole(adminC, C, ["club"]);
+  await grant(adminC, p.id, roleC.id, "club", C);
+  assert.deepEqual((await me(p)).availableWorkspaces.map((x) => [x.type, x.scopeId]), [["club_view", C]]);
+  await k.query(`update public.clubs set is_active = false where id = $1`, [C]);
+  const gone = await me(p);
+  assert.deepEqual(gone.availableWorkspaces, []);
+  assert.equal(gone.activeWorkspace, null);
+  // L-3: no preference -> athlete; club_view is still offered and reachable through the switch.
+  const q = await person("athleteFirst", (id) => F.makeAthlete(id));
+  await grant(w.adminA, q.id, w.roleA.id, "club", w.A);
+  const u = await me(q);
+  assert.equal(u.activeWorkspace.type, "athlete");
+  assert.deepEqual(u.availableWorkspaces.map((x) => x.type).sort(), ["athlete", "club_view"]);
+  assert.deepEqual(await pref(q), { workspace_type: "athlete", scope_id: null });
+  ok(await srv.api(q.cookie, "/api/auth/workspace", { method: "PUT", body: { type: "club_view", scopeId: w.A } }));
+  assert.equal((await me(q)).activeWorkspace.type, "club_view");
+});
+
 test("13. filterOrganizationDataForWorkspace fails closed: an unknown workspace type shows nothing", async () => {
   const { filterOrganizationDataForWorkspace } = await import("../src/routes/organization.js");
   const data = { clubs: [{ id: w.A }], teams: [{ id: w.TA1, club_id: w.A }], athletes: [{ id: w.athA.id, memberships: [{ clubId: w.A }] }],

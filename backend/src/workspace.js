@@ -33,9 +33,11 @@ export function storedWorkspaceType(type) {
 // backing role/FK was revoked or archived since it was chosen). A user
 // whose only available workspace is athlete lands there automatically -
 // there's no separate special case for that, it falls out of the loop
-// simply finding nothing earlier in this list. An account whose only
-// workspace is a view one lands in it (after every staff workspace).
-const FALLBACK_ORDER = ["platform", "club", "team", "club_view", "team_view", "private_coach", "athlete"];
+// simply finding nothing earlier in this list. The view workspaces come last
+// (the manager's decision at R4-2's gate, L-3): an athlete who also holds an
+// assignment lands in the athlete workspace and reaches club_view through the
+// switch; an account whose only workspace is a view one still lands in it.
+const FALLBACK_ORDER = ["platform", "club", "team", "private_coach", "athlete", "club_view", "team_view"];
 
 function sortByLabel(rows) {
   return [...rows].sort((a, b) => String(a.name).localeCompare(String(b.name)));
