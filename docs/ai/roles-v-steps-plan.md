@@ -364,8 +364,8 @@ show names if P-1 is answered "names need `athletes.view`".
 ## 7. Questions for the owner (only real product decisions) – decided
 
 **Decided (the owner, 2026-11-24, relayed by the manager):**
-- **P-1:** athlete names appear in a module only with ; without it, counts only.
-- **P-2:**  and  for a club cover the programs and weekly plans assigned to the club's
+- **P-1:** athlete names appear in a module only with `athletes.view`; without it, counts only.
+- **P-2:** `programs.view` and `exercises.use` for a club cover the programs and weekly plans assigned to the club's
   athletes, the public program library and the system exercise library, all read-only.
 - **P-3:** the order of section 5 (the manager).
 
