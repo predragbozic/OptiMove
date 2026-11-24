@@ -256,7 +256,8 @@ const CASES = [
 ];
 
 test("table-driven classification scenarios", async (t) => {
-  for (const [name, input, expected] of CASES) {
+  for (const [name, input, expectedBefore] of CASES) {
+    const expected = typeof input?.tool_input?.command === "string" ? expectedAfterRelaxation(input.tool_input.command, expectedBefore) : expectedBefore;
     await t.test(name, () => {
       const result = classifyToolCall(input);
       const actual = result ? result.decision : null;
@@ -725,6 +726,76 @@ after(() => {
 
 const verdict = (command, cwd) => classifyToolCall(bash(command, cwd))?.decision ?? null;
 
+// ------------------------------------------------------------------
+// The owner's order of 2026-11-23 ("Ublaži najmaksimalnije zaštitu zato što poslednjih godinu
+// dana nisam nikada kliknuo deny"): routine work no longer asks. The rows of the older tests that
+// asked only because of a removed rule are listed here, by the rule that was removed, and are now
+// expected to pass silently; every other row keeps its verdict. The new rules and the kept
+// protections have their own tests at the end of this file ("relaxed policy").
+// ------------------------------------------------------------------
+const RELAXED_2026_11_23 = [
+  // option lists of the read commands, and the read commands used to write or run a program
+  /^(sed|sort|uniq|rg|find|grep|cat|head|wc|cut|diff) /,
+  /^node --test\b/,
+  /^git (diff|log|show|status|rev-parse|ls-remote|fetch) /,
+  // a redirect, or a file operation, outside the session's temporary folder
+  /^(?:[A-Z]=\S+ *(?:;|&&) *)*(?:.*;\s*)?(?:cat|head|cut|diff|wc|grep) .*(?:>|>>|>\||&>) *(?!.*\.git[\\/])/,
+  /^(?:[A-Z]+=\S+;?\s*)+.*>/,
+  /^(?:false|true) (?:&&|\|\|) S=/,
+  /^(?:f\(\)|bash -c)/,
+  /^git (?:worktree add|clone|init|-C \S+ init)\b.*(?:&&|;) *(?:cat|grep)/,
+  // git: subcommands and options that are not plumbing, history loss or a protected branch
+  /^git (notes|am|apply|tag|restore --staged --pathspec|switch --cre|checkout --det|clean --forc --dry|branch --del (?!--forc)|restore --stag|pull --(?:reb=false|no-reb))\b/,
+  /^git worktree add\b/,
+  /^git commit (?:--no-verify|-am|-a |--all)/,
+  /^git add (?:-u|--update|'src\/\*\.js'|\.\.|\/|gone\/|backend\/src)/,
+  /^git commit -m x (?:\.|--|backend)/,
+  // push: any named branch that is not main/master, a bare push off main, tags by name
+  /^git push(?: (?:-u|-v|--no-verify|--dry-run))? (?:origin|upstream) (?:fix\/x|x|feature\/(?:foo|own|other)|v1)$/,
+  /^git push(?: origin)?$/,
+  /^cd \S+ && git push origin feature\/own$/,
+  /^git checkout -b y && git commit -m x$/,
+  // a heredoc of data written to a file in the work tree
+  /^cat <<E > notes\.md\n/,
+  /^git merge origin\/main && sed /,
+  // a recursive delete inside the work tree
+  /^rm -rf (?:node_modules|\.\/dist\/subdir)$/,
+  // variable bookkeeping for redirects (a redirect anywhere is allowed now)
+  /cat g > \$S/,
+  // file operations outside the own scratch folder that are not a recursive delete (rm, mv, cp,
+  // mkdir, touch, rmdir -p, xargs rm without -r, cp of a link): the work area is the whole machine
+  // now, the recursive delete keeps its own rule
+  /^(?:rm(?: -i| --no-preserve-root)? (?!-r)|mv |cp (?!-r \/tmp\/claude-test-[^ ]+\/repolink)|mkdir |touch |rmdir -p |echo x \| xargs rm -f |xargs rm < |echo \$\(rm |ln -s (?:\/proc|\/tmp\/sg-p5r2-[^ ]+ \/tmp\/[^ ]+\/r2$))/,
+  /^rm -rf \/tmp\/claude-test-[^ ]+\/scratchpad(?:\/\*|\/\{a,\.\.\})?$/,
+  /^(?:rm|touch) \/tmp\/claude-test-[^ ]+\/scratchpad\/(?:`echo x`|\$\(echo \.\.\/\.\.\/x\)|\{\.\.,a\}\/plain\.txt|a\\b|\.\.\/x)$/,
+  /^cat README\.md > \/tmp\/claude-test-/,
+  /^D=\/tmp\/claude-test-[^ ]+; cat README\.md > \$Db/,
+  /^ln -s \/tmp\/sg-p5r2-[^ ]+\/f \/tmp\/claude-test-[^ ]+; cat README\.md >/,
+  /^mv \/tmp\/claude-test-[^ ]+\/scratchpad\/a \/tmp\/[^ ]+ && touch /,
+  /^cp (?:-[aPd] |\/dev\/stdin |-r \/proc\/self\/cwd )/,
+  // PostgreSQL on this machine: starting and stopping a local cluster is routine
+  /^(?:(?:\/usr\/lib\/postgresql\/16\/bin\/)?pg_ctl |pg_ctlcluster 16 main |sudo -u postgres pg_ctl|[A-Z]=\/tmp\/claude-test-[^ ]+\/pg; pg_ctl |ln -s \/var\/lib\/postgresql\/16\/main )/,
+  // cp of a folder that merely holds a repository: a copy loses nothing
+  /^cp -r \/tmp\/sg-p5r2-/,
+  // a case pattern or coproc with a plain cp: not a recursive delete
+  /^case \$x in a\|b\) cp /,
+];
+// Rows that asked nothing before and ask now (new protections of the same order).
+const TIGHTENED_2026_11_23 = [
+  /^git stash(?: push)?$/, // stash puts uncommitted work aside: kept by the order ("stash")
+  /^\$EDITOR /, // a variable as the command word cannot be read
+  /^git branch -f /, // a branch force-move can drop commits
+];
+// A row that touches a kept protection is never flipped, whatever pattern above it matches:
+// secret files, a shell fed by a pipe or a process substitution, a delete through find, git's
+// own configuration and hooks, a variable read as code.
+const KEPT_IN_ROW = /\\x65|\\145|\\u002e|\\U0000002e|\.env|environ|\.\\env|pgpass|\.pem|\.key\b|id_|credentials|\.npmrc|\.git[\\/]|\.GIT[\\/]|[<>]\((?:sh|bash|pwsh)\)|-delete|-ok |-\\?\\?exec rm|'delete'|"\$X"|sh -s|\.\[e\]|\.e\*|\.en\{/;
+function expectedAfterRelaxation(command, expected) {
+  if (expected === ASK && !KEPT_IN_ROW.test(command) && RELAXED_2026_11_23.some((re) => re.test(command))) return ALLOW;
+  if (expected === ALLOW && TIGHTENED_2026_11_23.some((re) => re.test(command))) return ASK;
+  return expected;
+}
+
 const ALLOWED_MERGES = [
   "git merge origin/main",
   "git merge origin/master",
@@ -904,7 +975,8 @@ test("merge exemption: verdicts that stay as they were", () => {
     ["git pull", ALLOW], ["git fetch origin main", ALLOW], ["git status", ALLOW],
     ["git commit -m wip", ALLOW], ["git push -u origin feature/x", ALLOW],
   ];
-  for (const [command, expected] of unchanged) {
+  for (const [command, expectedBefore] of unchanged) {
+    const expected = expectedAfterRelaxation(command, expectedBefore);
     assert.equal(verdict(command, featureRepo), expected, `expected ${expected} for: ${command}`);
   }
 });
@@ -1067,9 +1139,11 @@ test("the guard itself has no opinion on the session-message tool, and still ask
 // Every expectation is a whole command line, judged in a repository on a working branch.
 // ------------------------------------------------------------------
 
-function expectAll(rows, dir) {
+// `exact`: the rows already state the relaxed policy (the tests written for it) and are not mapped.
+function expectAll(rows, dir, { exact = false } = {}) {
   const wrong = [];
-  for (const [command, expected] of rows) {
+  for (const [command, expectedBefore] of rows) {
+    const expected = exact ? expectedBefore : expectedAfterRelaxation(command, expectedBefore);
     const got = verdict(command, dir ?? featureRepo);
     if (got !== expected) wrong.push(`${JSON.stringify(command)}: expected ${expected}, got ${got}`);
   }
@@ -1250,6 +1324,17 @@ test("settings.json: the wider allow list is exactly the read and test commands 
   const offending = allow.filter((entry) => forbidden.test(entry) && !approvedP3P5.includes(entry));
   assert.deepEqual(offending, []);
   assert.equal(allow.filter((e) => /^Bash\(git push/.test(e)).every((e) => /^Bash\(git push -u origin (design|feature|fix|docs)\/:\*\)$/.test(e) || approvedP3P5.includes(e)), true, "no other push pattern");
+});
+
+test("settings.json (the owner's order of 2026-11-23): Bash is allowed as a whole, the hook decides what asks, and the deny list keeps main, force and the secret files", () => {
+  const settingsPath = fileURLToPath(new URL("./settings.json", new URL("../", import.meta.url)));
+  const { permissions } = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.ok(permissions.allow.includes("Bash"), "bare Bash allow");
+  assert.ok(!permissions.allow.includes("PowerShell") && !permissions.allow.some((e) => /^(Write|Edit|mcp__(?!claude-code-remote__send_message$))/.test(e)), "nothing but Bash is allowed as a whole");
+  for (const entry of ["Bash(git push origin main:*)", "Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git reset --hard:*)", "Bash(git clean:*)", "Bash(gh pr merge:*)", "Read(**/.pgpass)", "Read(**/*.key)", "Read(**/.git-credentials)"]) {
+    assert.ok(permissions.deny.includes(entry), `deny keeps ${entry}`);
+  }
+  for (const entry of ["Read(**/.env)", "Read(**/.env.local)", "Read(**/.env.production)"]) assert.ok(permissions.ask.includes(entry), `ask keeps ${entry}`);
 });
 
 // ------------------------------------------------------------------
@@ -1576,7 +1661,7 @@ test("a redirect sees only the assignments made before it in the line", () => {
 // somewhere else first. Real execution proves the loss; the hook must ask.
 // ------------------------------------------------------------------
 
-test("HIGH-1 (proof by execution): read/for/$(...)/eval set the variable before the redirect; the hook asks", () => {
+test("removed by the relaxed policy (superseded HIGH-1): read/for/$(...)/eval set the variable before the redirect", { skip: "superseded by the owner's order of 2026-11-23: a redirect may write anywhere; a reassigned variable in a recursive delete is in the relaxed-policy proof test" }, () => {
   const tmp = mkdtempSync(path.join(tmpdir(), "sg-var-"));
   const y = path.join(tmp, "y");
   try {
@@ -1659,7 +1744,7 @@ test("HIGH-2: every git rule reads a long option as a possible prefix", () => {
 // indirect name. Real bash proves each writes somewhere else than the plain reading says.
 // ------------------------------------------------------------------
 
-test("HIGH-1 (proof by execution): a setter behind a prefix or an indirect name moves the redirect; the hook asks", () => {
+test("removed by the relaxed policy (superseded HIGH-1): a setter behind a prefix or an indirect name moves the redirect", { skip: "superseded by the owner's order of 2026-11-23: a redirect may write anywhere" }, () => {
   const tmp = mkdtempSync(path.join(tmpdir(), "sg-indirect-"));
   const safe = path.join(tmp, "safe");
   const other = path.join(tmp, "other.txt");
@@ -1767,7 +1852,7 @@ test("the git list: plumbing and unknown subcommands ask; listed read forms stay
 // -b <new branch>. And LOW-1 of #665: the `git config <subcommand>` syntax that writes.
 // ------------------------------------------------------------------
 
-test("HIGH-A (proof by execution): worktree add without -b/--detach checks out an EXISTING branch", () => {
+test("removed by the relaxed policy (superseded HIGH-A): worktree add without -b/--detach checks out an EXISTING branch", { skip: "superseded by the owner's order of 2026-11-23: a commit or push on main in that work tree still asks (relaxed-policy push test)" }, () => {
   const repo = makeRepo("sg-wta-", "feature/a");
   const tmp = mkdtempSync(path.join(tmpdir(), "sg-wta-out-"));
   const g = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
@@ -1863,33 +1948,127 @@ function makeScratch() {
 }
 const verdictIn = (command, cwd, sid = SID) => classifyToolCall({ ...bash(command, cwd), session_id: sid })?.decision ?? null;
 
-test("P5 (proof by execution): a hard link or a symlink in the scratch folder writes into the repository", () => {
-  const repo = makeRepo("sg-p5-link-", "feature/x");
-  const { base, scratch } = makeScratch();
+// ------------------------------------------------------------------
+// The relaxed policy (the owner's order of 2026-11-23; it supersedes the scratch-folder contract
+// of 2026-11-20, P3-P5 and #698 above it in the history). Routine work passes; what stays is
+// tested here, chained, in a heredoc and hidden.
+// ------------------------------------------------------------------
+
+test("relaxed policy: the four commands of the owner's order pass without a question", () => {
+  const repo = makeRepo("sg-relax-", "feature/own");
   try {
-    writeFileSync(path.join(repo, "f.txt"), "original\n");
-    execFileSync("ln", [path.join(repo, "f.txt"), path.join(scratch, "hard.txt")]);
-    execFileSync("ln", ["-s", path.join(repo, "f.txt"), path.join(scratch, "sym.txt")]);
-    for (const name of ["hard.txt", "sym.txt"]) {
-      const line = `cat /dev/null > ${path.join(scratch, name)}`;
-      writeFileSync(path.join(repo, "f.txt"), "original\n");
-      execFileSync("bash", ["-c", line]);
-      assert.equal(readFileSync(path.join(repo, "f.txt"), "utf8"), "", `bash did not write through ${name}`);
-      assert.equal(verdictIn(line, repo), ASK, line);
-      assert.equal(verdictIn(`cp /dev/null ${path.join(scratch, name)}`, repo), ASK);
-    }
-    // a hard link is never made without a question; a symbolic link only as text
-    assert.equal(verdictIn(`ln ${path.join(repo, "f.txt")} ${path.join(scratch, "h2")}`, repo), ASK);
-    assert.equal(verdictIn(`cp -l ${path.join(repo, "f.txt")} ${path.join(scratch, "h3")}`, repo), ASK);
-    assert.equal(verdictIn(`ln -s ${path.join(repo, "f.txt")} ${path.join(scratch, "s2")}`, repo), ASK); // a link to outside the folder
-    assert.equal(verdictIn(`ln -s ${path.join(scratch, "hard.txt")} ${path.join(scratch, "s3")}`, repo), ALLOW); // a link inside it
+    mkdirSync(path.join(repo, "backend"));
+    expectAll([
+      [`cd ${repo} && cat >> .claude/rules/backend-security.md <<'EOF'\n- a new rule\nEOF`, ALLOW],
+      ['git add a.js b.mjs && git commit -qm "msg" && git push -q 2>&1|tail -1; git log --oneline -1', ALLOW],
+      ["cd backend && python3 - <<'EOF'\nprint('x')\nEOF\nnode scripts/test-runner.mjs --project backend --file x > x.log 2>&1; grep -n fail x.log", ALLOW],
+      ["pg_ctlcluster 16 main start 2>/dev/null; export DATABASE_URL=postgresql://postgres@127.0.0.1:5432/postgres; node scripts/test-runner.mjs --project backend > f 2>&1", ALLOW],
+      // more routine work of the same order
+      ["rm -rf node_modules frontend/dist", ALLOW], ["git push -u origin feature/own", ALLOW], ["git push origin HEAD", ALLOW], ["git push", ALLOW],
+      ["git checkout -b feature/n && git commit -m x && git push -u origin feature/n", ALLOW], [`cd ${repo} && git commit -m x`, ALLOW],
+      ["git commit -am x", ALLOW], ["git add -u", ALLOW], ["git cherry-pick abc", ALLOW], ["git apply p.patch", ALLOW], ["pg_ctlcluster 16 main stop", ALLOW],
+      ["psql postgresql://postgres@127.0.0.1/optimove_tests_a -c 'create table t(x int)'", ALLOW],
+      ["DATABASE_URL=postgresql://postgres@127.0.0.1:5432/optimove_tests_x node backend/src/migrate.js", ALLOW],
+      ["cat .claude/settings.json | head -5; git diff .claude/hooks/safety-guard.mjs", ALLOW], ["node --test .claude/hooks/safety-guard.test.mjs 2>&1 | tail -5", ALLOW],
+      ["for f in a b; do echo $f >> out.txt; done", ALLOW], ["sed -i 's/a/b/' backend/x.js && node -e 'console.log(1)'", ALLOW], ["cat .git/config; ls .git/hooks", ALLOW],
+    ], repo, { exact: true });
   } finally {
-    rmSync(base, { recursive: true, force: true });
     rmSync(repo, { recursive: true, force: true });
   }
 });
 
-test("P5: files in the own scratch folder are deleted and changed without a question; nothing else is", () => {
+test("relaxed policy: every kept protection still asks or is denied when chained, in a heredoc, or hidden", () => {
+  const repo = makeRepo("sg-relax-kept-", "feature/own");
+  try {
+    execFileSync("git", ["branch", "main"], { cwd: repo });
+    expectAll([
+      // main/master
+      ["echo x && git push origin main", ASK], ["git push origin feature:main", ASK], ["git checkout main && git commit -m x", ASK], ["git switch main; git push", ASK],
+      ["cd $X && git push", ASK], ["git push --tags", ASK], ["gh pr merge 5", ASK], ["`echo git` push origin main", ASK],
+      // force, history, the work tree
+      ["true; git add .", DENY], ["$(echo git) push -f", ASK], ["bash -c 'git push --force origin x'", DENY], ["git -C . reset --hard", DENY], ["git stash", ASK],
+      ["git commit --amend --no-edit", ASK], ["git rebase -i HEAD~3", ASK], ["git checkout -q -B x origin/main", ASK], ["git switch --force-create x origin/main", ASK],
+      ["git branch -f x HEAD", ASK], ["git update-ref refs/heads/main HEAD", ASK], ["git config alias.p 'push -f'", ASK], ["git frobnicate", ASK],
+      ["printf '[alias]\\n p = push -f\\n' >> .git/config && git p", ASK], ["echo x > ~/.gitconfig", ASK], ["cp hook .git/hooks/pre-push", ASK],
+      ["echo 'git push -f' | bash", ASK], ["git add -f backend/.env.local", ASK], ["git add backend/..", ASK],
+      // deletes outside the work area
+      ["rm -rf /home/user/other", ASK], ["rm -rf .git", ASK], ["cd backend && rm -rf ..", ASK], ["find / -name x -delete", ASK],
+      // databases that are not this machine, deploys, migrations
+      ["cat <<EOF | psql postgresql://u@db.example.com/p\nselect 1;\nEOF", ASK], ["psql -h db.example.com -c 'select 1'", ASK],
+      ["node x.mjs postgresql://u:p@aws-0-eu.pooler.supabase.com:6543/postgres", ASK], ["DATABASE_URL=postgres://u@db.example.com/p node backend/src/migrate.js", ASK],
+      ["npm --prefix backend run migrate", ASK], ["supabase projects list", ASK], ["npx supabase db push", ASK], ["curl -X POST https://api.render.com/v1/services/x/deploys", ASK],
+      // secrets, the guard itself
+      ["cat .env", ASK], ["echo '{}' > .claude/settings.json", ASK], ["cd .claude && echo x > settings.json", ASK], ["cp /tmp/x .claude/hooks/safety-guard.mjs", ASK],
+      ["python3 - <<'EOF'\nopen('.claude/hooks/safety-guard.mjs','w').write('')\nEOF", ASK], ["su postgres -c 'git push -f origin main'", ASK], ["runuser -u postgres -- ls", ASK],
+      ["git rm -f f.txt", ASK], ["git rm --cached f.txt", ALLOW],
+    ], repo, { exact: true });
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("relaxed policy (proof by execution): a recursive delete through a link, or a link made on the same line, reaches outside; it asks", () => {
+  const repo = makeRepo("sg-relax-rm-", "feature/x");
+  const { base, scratch } = makeScratch();
+  // another repository: a folder in /tmp that is a git work tree is not part of the work area
+  const outside = makeRepo("sg-relax-outside-", "feature/other");
+  const s = scratch;
+  try {
+    // rm -rf link/ deletes what the link points to
+    writeFileSync(path.join(outside, "keep.txt"), "x");
+    execFileSync("ln", ["-s", outside, path.join(s, "k")]);
+    execFileSync("bash", ["-c", `rm -rf ${s}/k/`]);
+    assert.equal(existsSync(path.join(outside, "keep.txt")), false, "bash did not delete through k/");
+    rmSync(outside, { recursive: true, force: true });
+    execFileSync("git", ["init", "-q", outside]);
+    writeFileSync(path.join(outside, "keep.txt"), "x");
+    mkdirSync(path.join(s, "empty"));
+    mkdirSync(path.join(s, "holds-wt", "w"), { recursive: true });
+    writeFileSync(path.join(s, "holds-wt", "w", ".git"), "gitdir: x\n");
+    execFileSync("git", ["init", "-q", path.join(s, "wt")]);
+    mkdirSync(path.join(repo, "dist", "sub"), { recursive: true });
+    const rows = [
+      [`rm -rf ${s}/k/`, ASK], [`rm -rf ${s}/k/.`, ASK], [`rm ${s}/k`, ALLOW], [`rm -rf ${s}/empty`, ALLOW], [`rm -rf ${s}/holds-wt`, ASK], [`rm -rf ${s}/wt`, ASK],
+      ["rm -rf dist/sub", ALLOW], [`rm -rf ${repo}`, ASK], [`rm -rf ${repo}/.git`, ASK], ["rm -rf ~/x", ASK], ["rm -rf $X/y", ASK], ["rm -rf /usr/../etc/x", ASK],
+      [`rm -rf ${outside}/x`, ASK], [`rm -rf ${s}/empty/../../../../../../home/x`, ASK],
+      [`ln -s ${outside} ${s}/r && rm -rf ${s}/r/backend`, ASK], [`git worktree add -q -b feature/n ${s}/w origin/main && rm -rf ${s}/w/backend`, ASK],
+      ["case x in x) rm -rf /home/user/x;; esac", ASK], ["coproc rm -rf /home/user/x", ASK], ["f() { rm -rf /home/user/x; }; f", ASK],
+      ["ls | xargs rm -r", ASK], [`S=${s}/empty; rm -rf $S; S=${outside}; rm -rf $S`, ASK], [`for S in ${s}/empty ${outside}; do rm -rf $S; done`, ASK],
+      [`find ${outside} -name '*.txt' -delete`, ASK], ["find dist -name '*.map' -delete", ALLOW], ['git commit -m "docs: note about rm -rf"', ALLOW],
+    ];
+    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    assert.deepEqual(wrong, []);
+  } finally {
+    for (const d of [base, repo, outside]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("relaxed policy: push follows the branch and git configuration; main and master always ask", () => {
+  const repo = makeRepo("sg-relax-push-", "feature/own");
+  const onMaster = makeRepo("sg-relax-master-", "master");
+  try {
+    const g = (...a) => execFileSync("git", a, { cwd: repo });
+    for (const c of ["git push origin feature/own", "git push", "git push origin", "git push origin feature/other", "git push upstream feature/own"]) assert.equal(verdict(c, repo), ALLOW, c);
+    g("config", "push.default", "upstream"); g("config", "branch.feature/own.merge", "refs/heads/main");
+    assert.equal(verdict("git push origin feature/own", repo), ASK);
+    assert.equal(verdict("git push", repo), ASK);
+    g("config", "--unset", "push.default"); g("config", "--unset", "branch.feature/own.merge");
+    g("config", "push.default", "matching");
+    assert.equal(verdict("git push", repo), ASK);
+    g("config", "--unset", "push.default");
+    g("config", "remote.origin.push", "refs/heads/*:refs/heads/main");
+    assert.equal(verdict("git push origin feature/own", repo), ASK);
+    assert.equal(verdict("git commit -m x", onMaster), ASK);
+    assert.equal(verdict("git push", onMaster), ASK);
+    assert.equal(verdict("git push -u origin master", onMaster), ASK);
+    assert.equal(verdict(`cd ${onMaster} && git commit -m x`, repo), ASK);
+    assert.equal(verdict(`cd ${repo} && git commit -m x`, onMaster), ALLOW);
+  } finally {
+    for (const d of [repo, onMaster]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("removed by the relaxed policy (superseded P5 contract): files in the own scratch folder are deleted and changed without a question; nothing else is", { skip: "superseded by the owner's order of 2026-11-23" }, () => {
   const repo = makeRepo("sg-p5-", "feature/x");
   const { base, scratch } = makeScratch();
   const other = path.join(base, "-proj", "ffffffff-0000-4000-8000-000000000000", "scratchpad");
@@ -1933,7 +2112,7 @@ test("P5: files in the own scratch folder are deleted and changed without a ques
   }
 });
 
-test("P3: commit and push to the own work branch without a question; everything else asks", () => {
+test("removed by the relaxed policy (superseded P3 contract): commit and push to the own work branch without a question; everything else asks", { skip: "superseded by the owner's order of 2026-11-23; see the relaxed-policy tests" }, () => {
   const repo = makeRepo("sg-p3-", "feature/own");
   const onMaster = makeRepo("sg-p3-master-", "master");
   try {
@@ -1955,7 +2134,7 @@ test("P3: commit and push to the own work branch without a question; everything 
   }
 });
 
-test("P4: stopping a PostgreSQL cluster asks unless it is the session's own test cluster; su/runuser always ask", () => {
+test("removed by the relaxed policy (superseded P4 contract): stopping a PostgreSQL cluster asks unless it is the session's own test cluster", { skip: "superseded by the owner's order of 2026-11-23 (a local pg_ctl is routine); su/runuser are kept in the relaxed-policy tests" }, () => {
   const repo = makeRepo("sg-p4-", "feature/x");
   const { base, scratch } = makeScratch();
   try {
@@ -1989,7 +2168,7 @@ test("P4: stopping a PostgreSQL cluster asks unless it is the session's own test
 // without a question before the fix and reaches outside the approved scope.
 // ------------------------------------------------------------------
 
-test("P5 review (proof by execution): a trailing slash and a link in a destination folder reach outside", () => {
+test("removed by the relaxed policy (superseded P5 review): a trailing slash and a link in a destination folder reach outside", { skip: "superseded by the owner's order of 2026-11-23; the recursive-delete part is in the relaxed-policy proof test" }, () => {
   const repo = makeRepo("sg-p5r-", "feature/x");
   const { base, scratch } = makeScratch();
   const outside = mkdtempSync(path.join(tmpdir(), "sg-p5r-outside-"));
@@ -2025,7 +2204,7 @@ test("P5 review (proof by execution): a trailing slash and a link in a destinati
   }
 });
 
-test("P5 review: whole variable names, links made on the same line, link copies, xargs, rmdir -p", () => {
+test("removed by the relaxed policy (superseded P5 review): whole variable names, links made on the same line, link copies, xargs, rmdir -p", { skip: "superseded by the owner's order of 2026-11-23; the recursive-delete part is in the relaxed-policy proof test" }, () => {
   const repo = makeRepo("sg-p5r2-", "feature/x");
   const { base, scratch } = makeScratch();
   const s = scratch;
@@ -2060,7 +2239,7 @@ test("P5 review: whole variable names, links made on the same line, link copies,
   }
 });
 
-test("P3 review: broad add/commit forms, a cd on the line, push redirected by git config", () => {
+test("removed by the relaxed policy (superseded P3 review): broad add/commit forms, a cd on the line, push redirected by git config", { skip: "superseded by the owner's order of 2026-11-23; the push-configuration part is in the relaxed-policy push test" }, () => {
   const repo = makeRepo("sg-p3r-", "feature/own");
   const onMaster = makeRepo("sg-p3r-master-", "master");
   try {
@@ -2094,7 +2273,7 @@ test("P3 review: broad add/commit forms, a cd on the line, push redirected by gi
 // identical parts shared the first one's values. Proven with real deletion in a test folder.
 // ------------------------------------------------------------------
 
-test("#698 HIGH-1 (proof by execution): a repeated part with a reassigned variable is never silent", () => {
+test("removed by the relaxed policy (superseded #698 HIGH-1): a repeated file operation with a reassigned variable is never silent", { skip: "superseded by the owner's order of 2026-11-23; the recursive-delete and push forms are in the relaxed-policy tests" }, () => {
   const repo = makeRepo("sg-698-", "feature/x");
   const { base, scratch } = makeScratch();
   const victim = mkdtempSync(path.join(tmpdir(), "sg-698-victim-"));
@@ -2127,7 +2306,7 @@ test("#698 HIGH-1 (proof by execution): a repeated part with a reassigned variab
   }
 });
 
-test("#698: a file operation the hook cannot place asks (fail-closed backstop); cp of a link or /proc path asks", () => {
+test("removed by the relaxed policy (superseded #698 backstop): any file operation the hook cannot place asks", { skip: "superseded by the owner's order of 2026-11-23; the backstop now covers the recursive delete (relaxed-policy proof test)" }, () => {
   const repo = makeRepo("sg-698b-", "feature/x");
   const { base, scratch } = makeScratch();
   const s = scratch;
@@ -2152,7 +2331,7 @@ test("#698: a file operation the hook cannot place asks (fail-closed backstop); 
 // ---------------------------------------------------------------------------
 // File tools (Write, Edit, MultiEdit, NotebookEdit) on the live .claude folder
 // ---------------------------------------------------------------------------
-test("file tools: any edit inside the live .claude folder asks, however the path is written", async () => {
+test("file tools: an edit of the guard's folder, its registration or a secret file asks, however the path is written; rules and agents do not", async () => {
   const { classifyToolCall, classifyFileEdit, FILE_EDIT_TOOLS } = await import("./safety-guard.mjs");
   const { mkdtempSync, symlinkSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
@@ -2160,13 +2339,14 @@ test("file tools: any edit inside the live .claude folder asks, however the path
   const projectDir = path.dirname(claudeDir);
   const ask = (toolName, toolInput, cwd = projectDir) => classifyToolCall({ tool_name: toolName, tool_input: toolInput, cwd, session_id: "file-tools-test" });
   for (const tool of ["Write", "Edit", "MultiEdit"]) {
-    for (const p of [path.join(claudeDir, "settings.json"), ".claude/settings.local.json", ".claude/hooks/safety-guard.mjs", "./.claude/rules/git-safety.md", "backend/../.claude/agents/new-brief.md", ".claude"]) {
+    for (const p of [path.join(claudeDir, "settings.json"), ".claude/settings.local.json", ".claude/hooks/safety-guard.mjs", "./.claude/hooks/new.mjs", ".claude/hooks", "backend/.env", ".env.local", "server.key"]) {
       assert.equal(ask(tool, { file_path: p })?.decision, "ask", `${tool} ${p}`);
     }
   }
-  assert.equal(ask("NotebookEdit", { notebook_path: ".claude/x.ipynb" })?.decision, "ask");
+  assert.equal(ask("NotebookEdit", { notebook_path: ".claude/hooks/x.ipynb" })?.decision, "ask");
   assert.equal(ask("Edit", { file_path: "settings.json" }, claudeDir)?.decision, "ask", "relative to a cwd inside .claude");
-  for (const p of ["README.md", "backend/src/app.js", ".claudefoo/x", "docs/.claude-notes.md", path.join(tmpdir(), "x.txt")]) {
+  // the owner's order of 2026-11-23: rules, agent briefs and the rest of .claude are routine edits
+  for (const p of ["README.md", "backend/src/app.js", ".claudefoo/x", "docs/.claude-notes.md", path.join(tmpdir(), "x.txt"), "./.claude/rules/git-safety.md", ".claude/agents/new-brief.md", ".claude/x.md", ".env.example"]) {
     assert.equal(ask("Write", { file_path: p }), null, p);
   }
   for (const bad of [{}, { file_path: "" }, { file_path: "   " }, { file_path: 42 }]) {
@@ -2196,10 +2376,12 @@ test("file tools: a dangling symlink to a missing file in .claude asks, elsewher
   const dir = mkdtempSync(path.join(tmpdir(), "guard-file-links-"));
   try {
     // settings.local.json is usually absent: a link to it is dangling until the write creates it
-    symlinkSync(path.join(claudeDir, "zz-missing-probe.json"), path.join(dir, "into-claude"));
+    symlinkSync(path.join(claudeDir, "hooks", "zz-missing-probe.json"), path.join(dir, "into-claude"));
     assert.equal(ask("Write", { file_path: path.join(dir, "into-claude") }, dir)?.decision, "ask");
+    symlinkSync(path.join(claudeDir, "settings.local.json"), path.join(dir, "into-settings-local"));
+    assert.equal(ask("Write", { file_path: path.join(dir, "into-settings-local") }, dir)?.decision, "ask");
     // relative link target, through a dangling parent link
-    symlinkSync(path.relative(dir, path.join(claudeDir, "zz-missing-dir")), path.join(dir, "rel-into-claude"));
+    symlinkSync(path.relative(dir, path.join(claudeDir, "hooks", "zz-missing-dir")), path.join(dir, "rel-into-claude"));
     assert.equal(ask("Write", { file_path: path.join(dir, "rel-into-claude", "x.json") }, dir)?.decision, "ask");
     symlinkSync(path.join(dir, "missing-elsewhere.txt"), path.join(dir, "elsewhere"));
     assert.equal(ask("Write", { file_path: path.join(dir, "elsewhere") }, dir), null);
@@ -2207,7 +2389,7 @@ test("file tools: a dangling symlink to a missing file in .claude asks, elsewher
     symlinkSync(path.join(dir, "loop-a"), path.join(dir, "loop-b"));
     assert.equal(ask("Write", { file_path: path.join(dir, "loop-a") }, dir)?.decision, "ask", "a link loop cannot be followed: ask");
     // any path field inside .claude asks, whatever the tool
-    assert.equal(ask("NotebookEdit", { file_path: path.join(dir, "x"), notebook_path: path.join(claudeDir, "x.ipynb") }, dir)?.decision, "ask");
+    assert.equal(ask("NotebookEdit", { file_path: path.join(dir, "x"), notebook_path: path.join(claudeDir, "hooks", "x.ipynb") }, dir)?.decision, "ask");
     assert.equal(ask("Edit", { file_path: path.join(dir, "x"), notebook_path: 7 }, dir)?.decision, "ask", "a path field that is not a string asks");
   } finally {
     rmSync(dir, { recursive: true, force: true });

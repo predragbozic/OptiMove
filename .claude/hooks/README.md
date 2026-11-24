@@ -67,6 +67,71 @@ never once actually invoked in a real session) — but that test can only confir
 *file* is well-formed, not that a live session has picked it up; the `/hooks` menu check
 is still the only way to confirm actual registration.
 
+## The relaxed policy (the owner's order of 2026-11-23) — read this first
+
+The owner's order, in their own words: „Ublaži najmaksimalnije zaštitu zato što poslednjih
+godinu dana nisam nikada kliknuo deny" (relax the protection as much as possible: in the last
+year I never clicked deny), confirmed in the executor's session: „Zaštite za main, produkciju,
+lozinke i sam hook ostaju." Questions that the owner always approved without reading only stalled
+the work, so routine development work no longer asks. Where this section and the older sections
+below disagree, this section wins; the older sections describe rules that were removed (marked in
+the test file as "removed by the relaxed policy", skipped with that reason).
+
+**No question any more** (the hook stays silent, and `settings.json` allows `Bash` as a whole):
+compound commands (`&&`, `;`, `|`, heredocs, redirections, subshells, `export`, `cd` chains) whose
+parts are each allowed; writing files anywhere through the shell (`cat >>`, `sed -i`, `tee`,
+`cp`, `mv`, `mkdir`, `touch`, a non-recursive `rm`); `git add` of named files, folders, globs and
+`-u`; `git commit` (also `-a`, `--no-verify`) on a branch that is not main/master; `git push` of a
+named branch, or of the current branch when it is not main/master (also a bare `git push`);
+`cherry-pick`, `revert`, `apply`, `am`, `tag`, `notes`, `worktree add`; any option of a read
+command; running tests, node / python one-off scripts; a local `pg_ctl` / `pg_ctlcluster`;
+`psql` and migrations against an `optimove_tests_*` database on this machine; edits of
+`.claude/rules`, `.claude/agents` and documents with the file tools.
+
+**Still denied:** `git add .` / `-A` / `--all`, `git reset --hard`, `git clean -f`, a force push,
+`rm -rf` of the repository root, a home or a drive root, `git checkout -- <path>` / `git restore`
+that discards changes, `git stash drop` / `clear` — wherever they stand on the line (chained,
+wrapped in `bash -c`, in a substitution).
+
+**Still asks:**
+- main/master: a push that reaches main or master (an explicit refspec, a bare push while on
+  main, `push.default matching`, an upstream main under `push.default upstream`, a configured push
+  refspec, `--all` / `--tags` / `--mirror`), a commit on main or master (after a plain `cd` or
+  `git checkout|switch <name>` on the same line, followed; any cd the hook cannot follow asks), a
+  merge or rebase (except a plain `git merge origin/main` into a working branch), `gh pr merge`;
+- history and work: `git stash` / `stash push` / `stash pop`, `git commit --amend`, `checkout -B`,
+  `switch -C`, `branch -f/-M/-C/-D`, `git rm -f`, `reset --merge/--keep`, a forced switch,
+  `worktree remove --force`, `pull --rebase`, a push that deletes, git plumbing (`update-ref`,
+  `filter-branch`, `reflog expire`, `gc`, `prune`, …), a configuration write (`git config`, `git -c`,
+  a remote change), a git word that is not a git subcommand (an alias could be `push -f`);
+- a recursive delete (`rm -r`, `find -delete`, `xargs rm -r`) that reaches outside the work tree
+  the line runs in and the temporary folders, or reaches the work tree's top, its `.git`, a folder
+  holding another work tree, the guard's files, a target behind a variable or a substitution, or a
+  path after a link or work tree made on the same line; the raw-text backstop also catches it in
+  `case … in x) …;;`, after `coproc` and in a function body;
+- a database that is not this machine: a `postgres://` URL with another host anywhere on the line
+  (heredoc bodies included), `psql -h <host>` / `host=` / `service=`, a Supabase or Render database
+  host, `DATABASE_URL` / `PGHOST` set to another host; a `psql` write that does not name only
+  `optimove_tests_*` databases on this machine; a migration runner unless the line sets a loopback
+  `optimove_tests_*` `DATABASE_URL`; deploys and the hosting CLIs (`supabase`, `render`, `vercel`,
+  `wrangler`, `fly`, `heroku`, `railway`, any subcommand) and `curl` to `api.render.com`; the Supabase
+  MCP writes;
+- secrets: a command that names `.env`, a pgpass, a key or credentials file; a file-tool edit of one;
+- the guard itself and git's own settings: any shell line that names `.claude/hooks`, the settings
+  files, the guard's files, `.git/<anything>`, `~/.gitconfig` or `~/.config/git` and does more than
+  read them (or stage and commit them); a file-tool edit of `.claude/hooks/*`,
+  `.claude/settings.json` or `.claude/settings.local.json`;
+- what the hook cannot read: a shell fed by a pipe (`… | bash`), `eval $X`, `bash -c "$X"`, a
+  command word that is a substitution or a variable (`$(echo git) push -f`), `su` / `runuser`,
+  an alias definition, `NODE_OPTIONS` / `PATH` / `GIT_*` and the other environment variables that
+  change what runs.
+
+**Known limits of the relaxed policy:** a program the line runs may itself do anything (a
+`node -e` or a Python script can push or delete) — the hook judges the command line, not what the
+program does, as before; writes outside the work tree (for example to `/etc`) do not ask; a `cd`
+inside a subshell, a group or a substitution makes the rest of the line unknown, so a commit or
+push after it asks.
+
 ## What it decides
 
 The hook reads `tool_name`/`tool_input`/`cwd` from the JSON on stdin, classifies the
