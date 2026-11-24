@@ -112,6 +112,18 @@ async function someoneWaits(ms = 4_000) {
   }
   return false;
 }
+// Waits until a grant's own users lock statement waits on a lock (never any other backend).
+async function grantWaitsOnUsers(ms = 4_000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const n = (await one(`select count(*)::int as n from pg_stat_activity where datname = current_database()
+        and wait_event_type = 'Lock' and query like '%from public.users where id = $1 for no key update%'`)).n;
+    if (n > 0) return true;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return false;
+}
+const stillPending = (p) => Promise.race([p.then(() => false, () => false), new Promise((r) => setTimeout(() => r(true), 200))]);
 
 test("1. the ceiling: a platform admin closes and opens a module; the club's admin reads it without who and why; replay, reuse, unchanged, organization, the identical 404", async () => {
   const w = await world();
@@ -624,4 +636,99 @@ test("14. db re-review F1: the acting admin's own custom on its Club admin row a
     await r.query("rollback").catch(() => {});
     await r.end().catch(() => {});
   }
+});
+
+test("15. R4-3b LOW-1: a narrowed club admin cannot give a word it lacks - adding it to a custom is permission_not_held; a club version that keeps it is role_exceeds_your_permissions (the service's own check, not a database refusal)", async () => {
+  const w = await world();
+  // adminA2 (not narrowed) makes the coach's custom without athletes.remove; a platform admin then narrows adminA.
+  const made = ok(await custom(w.adminA2, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] }));
+  ok(await custom(w.pa, w.adminA.id, w.A, { roleId: ROLE_IDS.club_admin, scopeType: "club", scopeId: w.A, expectedRevision: null, remove: ["athletes.remove"] }));
+  assert.equal(await holds(w.adminA.id, "athletes.remove", "club", w.A), false);
+  const added = code(await custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: 1, add: ["athletes.remove"] }), 409, "permission_not_held");
+  assert.deepEqual(added.words, ["athletes.remove"]);
+  const kept = code(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: null, remove: ["athletes.manage"] }), 409, "role_exceeds_your_permissions");
+  assert.deepEqual(kept.words, ["athletes.remove"]);
+  // Nothing was written.
+  assert.equal((await one(`select revision from public.permission_custom_roles where id = $1`, [made.custom.id])).revision, 1);
+  assert.equal((await one(`select count(*)::int as n from public.permission_club_role_versions where club_id = $1`, [w.A])).n, 0);
+});
+
+test("16. R4-3b LOW-2: an account holding only org.view in the club (an R2 assignment) gets the identical 404 on the user read, the drift read and the ceiling read (staff.assign is their gate)", async () => {
+  const w = await world();
+  const viewRole = ok(await srv.api(w.adminA.cookie, R, { method: "POST", body: { requestKey: key(), clubId: w.A, name: `Viewer ${hex()}`, scopeTypes: ["club"], items: ["org.view"] } })).role;
+  ok(await srv.api(w.adminA.cookie, `${R}/assignments`, { method: "POST", body: { requestKey: key(), reason: "Needed", userId: w.target.id, roleId: viewRole.id, scopeType: "club", scopeId: w.A } }));
+  assert.equal(await holds(w.target.id, "org.view", "club", w.A), true);
+  assert.equal(await holds(w.target.id, "staff.assign", "club", w.A), false);
+  notFound(await srv.api(w.target.cookie, `${R}/users/${w.coach.id}/clubs/${w.A}`));
+  notFound(await srv.api(w.target.cookie, `${R}/clubs/${w.A}/custom-drift`));
+  notFound(await srv.api(w.target.cookie, `${R}/clubs/${w.A}/ceiling`));
+  // The same three for a club that does not exist: byte-identical.
+  const ghost = crypto.randomUUID();
+  notFound(await srv.api(w.target.cookie, `${R}/users/${w.coach.id}/clubs/${ghost}`));
+  notFound(await srv.api(w.target.cookie, `${R}/clubs/${ghost}/custom-drift`));
+  notFound(await srv.api(w.target.cookie, `${R}/clubs/${ghost}/ceiling`));
+  // org.view does reach the club's roles read (its own gate).
+  ok(await srv.api(w.target.cookie, `${R}/clubs/${w.A}/roles`));
+});
+
+test("17. R4-3b O5: a Club admin grant (and a team coach grant) to the target of a custom-role write waits for that writer (users FOR NO KEY UPDATE first, LO-2), so the writer's O5 check never misses a grant that commits beside it", async () => {
+  const w = await world();
+  // A first Club admin grant: no row of the coach in user_club_roles exists, so only the users row can serialize it.
+  assert.equal((await one(`select count(*)::int as n from public.user_club_roles where user_id = $1`, [w.coach.id])).n, 0);
+  let hold = holdFirst(svc.setRolesWriteHoldForTests);
+  let writer = custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] });
+  await reachedOr(hold, writer);
+  let grant = srv.api(w.pa.cookie, `/api/organization/users/${w.coach.id}/club-roles/${w.A}/club_admin`, { method: "PUT" });
+  assert.ok(await grantWaitsOnUsers(), "the grant waits on the custom writer's share lock of the target's users row");
+  assert.equal(await stillPending(grant), true, "the grant has not finished while the writer is held");
+  hold.release();
+  const made = ok(await writer);
+  ok(await grant);
+  // The grant committed after the custom: the target is an admin now, and a peer club admin may not narrow them further.
+  code(await custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: made.custom.revision, add: ["athletes.remove"] }), 409, "admin_not_narrowable");
+  // The team coach grant waits the same way.
+  hold = holdFirst(svc.setRolesWriteHoldForTests);
+  writer = custom(w.adminB, w.coachB.id, w.B, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.TB, expectedRevision: null, remove: ["athletes.remove"] });
+  await reachedOr(hold, writer);
+  const TB2 = await F.team(w.B, "TB2");
+  grant = srv.api(w.pa.cookie, `/api/organization/users/${w.coachB.id}/team-roles/${TB2}/team_coach`, { method: "PUT" });
+  assert.ok(await grantWaitsOnUsers(), "the team coach grant waits too");
+  assert.equal(await stillPending(grant), true);
+  hold.release();
+  ok(await writer);
+  ok(await grant);
+});
+
+test("17b. R4-3b O5, the other order: a grant that holds the target's users row commits first; the custom writer waits on that row, then sees the new Club admin row and refuses (admin_not_narrowable), nothing written", async () => {
+  const w = await world();
+  const r = new pg.Client({ connectionString: db.url });
+  await r.connect();
+  try {
+    // The grant's own statements, held before its COMMIT (the route has no seam): users first, then the new row.
+    await r.query("begin");
+    await r.query(`select id from public.users where id = $1 for no key update`, [w.coach.id]);
+    await r.query(`insert into public.user_club_roles (user_id, club_id, role, is_active, granted_by_user_id) values ($1, $2, 'club_admin', true, $3)`, [w.coach.id, w.A, w.pa.id]);
+    const writer = custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] });
+    assert.ok(await someoneWaits(), "the custom writer waits on the target's users row");
+    assert.equal(await stillPending(writer), true);
+    await r.query("commit");
+    code(await writer, 409, "admin_not_narrowable");
+    assert.equal((await one(`select count(*)::int as n from public.permission_custom_roles where user_id = $1`, [w.coach.id])).n, 0);
+  } finally {
+    await r.query("rollback").catch(() => {});
+    await r.end().catch(() => {});
+  }
+});
+
+test("18. R4-3b: the grants' 404 answers keep their order after the users lock moved first - a missing club or team is named before a missing user", async () => {
+  const w = await world();
+  const ghost = crypto.randomUUID();
+  const put = (path) => srv.api(w.pa.cookie, `/api/organization/users/${path}`, { method: "PUT" });
+  const msg = (res, status, error) => { assert.equal(res.status, status, res.text); assert.equal(res.body.error, error, res.text); };
+  msg(await put(`${ghost}/club-roles/${ghost}/club_admin`), 404, "Club not found.");
+  msg(await put(`${w.coach.id}/club-roles/${ghost}/club_admin`), 404, "Club not found.");
+  msg(await put(`${ghost}/club-roles/${w.A}/club_admin`), 404, "User not found.");
+  msg(await put(`${ghost}/team-roles/${ghost}/team_coach`), 404, "Team not found.");
+  msg(await put(`${w.coach.id}/team-roles/${ghost}/team_coach`), 404, "Team not found.");
+  msg(await put(`${ghost}/team-roles/${w.T1}/team_coach`), 404, "User not found.");
 });

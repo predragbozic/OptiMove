@@ -960,8 +960,9 @@ verified by the request record; the record now carries `ceiling_change_id`, `clu
   - Ending a custom and *Take it from them too* refuse the actor's own custom (`self_custom`, Q13), as the custom write does.
   - Ending a custom gives back the role's club words, so a club's admin ends only a custom whose role's club items it
     holds (`role_exceeds_your_permissions`; test 12), the dominance of 3.5 applied to "back to the role". A platform admin
-    always may. *Accept the default* (O3) is not checked this way: it gives the club the platform's default, not words
-    the admin chose (an owner decision if that should change).
+    always may. *Accept the default* (O3) is not checked this way, **by decision** (the *Rukovodilac*, 2026-11-24, R4-3b):
+    it returns the club to the platform's default, the same set every club without a version of the role already has,
+    not words the admin chose; a narrowed admin can therefore accept a default that holds a word it lacks.
   - The three custom writers lock the targets' Club admin rows of the club (any `is_active`) FOR SHARE after the users
     rows, and lock the target's customs together with the actor's own live customs in the club (one statement, id order),
     so the O5 check and the dominance check read rows a concurrent writer cannot change under them. The role of a custom
@@ -975,11 +976,27 @@ verified by the request record; the record now carries `ceiling_change_id`, `clu
     not a 500); its replay lists the request's own customs (same hash, same ids), never a cross-transaction `xmin` match.
   - `customsStillHolding` carries `customsStillHoldingTruncated` past 200; a club's roles offer *Change* / *Answer* only
     to a reader with `roles.manage` (or a platform admin).
+- **R4-3b (the follow-up of the external review):**
+  - **O5 against a brand-new Club admin grant: closed.** `grantClubAdminRole` and `grantTeamCoachRole`
+    (`routes/organization.js`) lock the target's `users` row FOR NO KEY UPDATE as their first lock (LO-2's users
+    first), before the upsert; it conflicts with the writer's FOR SHARE but not with other transactions' foreign-key
+    key-share checks on that user (sessions, memberships). A custom-role writer holds that row FOR SHARE from its place 1, so a grant - a first one included, a new
+    row no row lock could hold back - waits for the writer, and the writer's O5 check never misses a grant that commits
+    beside it (test 17, both grants, the wait pinned to the grant's own users statement; test 17b, the other order: the
+    grant commits first and the writer refuses with `admin_not_narrowable`; the mutations dropping either grant's lock or
+    the writer's users lock are killed). Test 18 pins the grants' 404 order (club or team, then user).
+  - Tests 15 (a narrowed club admin: adding a word it lacks to a custom is `permission_not_held`, a club version that
+    keeps it is `role_exceeds_your_permissions` - the service's own check, the mutation turning it off is killed) and 16
+    (an account with only `org.view` in the club gets the identical 404 on the user read, the drift read and the ceiling
+    read; the mutation letting `org.view` through the `staff.assign` gate is killed).
 - **Recorded limits:**
-  - **A brand-new Club admin grant against O5.** `PUT /api/organization/users/:id/club-roles/:clubId/club_admin` is an
-    upsert that locks no users row, so a grant of a user with no Club admin row in the club yet can commit while a custom
-    write by a peer admin is past its O5 check; both commit. An existing row (any `is_active`) is locked and serializes.
-    Closing it needs the grant route to lock the target's users row FOR UPDATE first (`organization.js`, outside R4-3).
+  - `revokeTeamCoachRole` (pre-existing, R4-3b's db review, LOW) takes no users lock: its UPDATE of the role row fires
+    the v92 trigger (role row -> customs), while a custom writer goes users -> role rows -> customs. No cycle is known
+    (the writer waits on the role row before it takes the customs), but a users-first lock there would match LO-2; a
+    later small fix.
+  - The two grants (pre-existing, R4-3b's code review, MEDIUM, outside the diff) read the user's roles after a confirmed
+    COMMIT; a failure of that read answers 500 although the grant is written (a retry is a safe idempotent upsert). The
+    importer's pattern - 200 with `readError` - is a later small fix.
   - A stale custom (its R2 assignment revoked or expired) ended by the next write is recorded as `end_kind = 'reset'` by
     the writing admin, with the reason `STALE_END_REASON`; `role_ended` would need a service marker in the v92 guard.
   - A custom is bound to its old holding row by `updated_at`: a write that does not change the row's rights but bumps

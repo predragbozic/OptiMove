@@ -3003,10 +3003,11 @@ async function grantClubAdminRole(req, targetUserId, clubId) {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const [club, target] = await Promise.all([
-      client.query(`select id from public.clubs where id = $1 limit 1`, [clubId]),
-      client.query(`select id from public.users where id = $1 limit 1`, [targetUserId]),
-    ]);
+    // Users first (LO-2), FOR NO KEY UPDATE (conflicts with FOR SHARE, not with FK key-share checks): a custom-role writer of R4-3 holds the target's users row FOR SHARE while it
+    // decides O5 ("a club's admin never narrows another admin"), so a first grant - a new row no row lock can hold back -
+    // waits for it, and the writer's O5 check never misses a grant that commits beside it (contract section 18).
+    const target = await client.query(`select id from public.users where id = $1 for no key update`, [targetUserId]);
+    const club = await client.query(`select id from public.clubs where id = $1 limit 1`, [clubId]);
     if (!club.rows[0]) {
       await client.query("rollback");
       return { status: 404, body: { error: "Club not found." } };
@@ -3092,10 +3093,10 @@ async function grantTeamCoachRole(req, targetUserId, teamId) {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const [team, target] = await Promise.all([
-      client.query(`select id from public.teams where id = $1 limit 1`, [teamId]),
-      client.query(`select id from public.users where id = $1 limit 1`, [targetUserId]),
-    ]);
+    // Users first (LO-2), FOR NO KEY UPDATE, as grantClubAdminRole: a grant to a user waits for an R4-3 custom-role writer that
+    // holds that user's row FOR SHARE (a new holding row is then seen by the writer's next read, never beside it).
+    const target = await client.query(`select id from public.users where id = $1 for no key update`, [targetUserId]);
+    const team = await client.query(`select id from public.teams where id = $1 limit 1`, [teamId]);
     if (!team.rows[0]) {
       await client.query("rollback");
       return { status: 404, body: { error: "Team not found." } };
