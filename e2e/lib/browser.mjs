@@ -33,11 +33,47 @@ export async function openImportsTab(page, tab) {
   await page.waitForSelector(`.imports-tab-panel[data-imports-tab="${tab}"]`);
 }
 
-// Training Load from the main navigation (a phone opens the menu first).
+// The main navigation at any width. `selector` names the menu's own control (e.g. '[data-library-tab="builder"]',
+// '#calendarToggle', '.sidebar [data-athlete-tab="tests"]', a Program Library or Settings sub-section). A computer
+// clicks it in the menu; a phone (<= 760 px, no header menu button there since the bottom bar) taps the same section on
+// the bottom bar, or in its More sheet - a sub-section under its section's group there.
+export async function navTo(page, selector) {
+  const target = page.locator(selector).first();
+  const phone = await page.evaluate(() => window.matchMedia("(max-width: 760px)").matches);
+  if (!phone) {
+    const toggle = page.locator('[data-action="mobile-nav-toggle"]');
+    if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await target.click();
+    return;
+  }
+  await page.waitForSelector('.om-bottom-nav [data-nav-id]', { timeout: 20_000 });
+  // The athlete list (the drawer the bar's Athletes opens) covers the bar while it is open: it is closed first.
+  if (await page.evaluate(() => document.body.classList.contains("mobile-nav-open"))) {
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.body.classList.contains("mobile-nav-open"), null, { timeout: 10_000 });
+  }
+  const info = await target.evaluate((el) => {
+    const action = el.dataset.action || "";
+    const id = el.id === "athletesToggle" ? "athletes" : el.id === "calendarToggle" ? "central-calendar"
+      : action === "brand-home" || action === "home" ? "home" : (el.dataset.libraryTab || el.dataset.athleteTab || "");
+    const sub = el.classList.contains("sidebar-subnav-button");
+    const parent = sub ? el.closest(".sidebar-submenu")?.querySelector(".sidebar-nav-button")?.getAttribute("title") : null;
+    return { id, sub, parent, label: sub ? el.textContent.trim() : (el.getAttribute("title") || el.textContent.trim()) };
+  });
+  if (!info.sub && await page.locator(`.om-bottom-nav [data-nav-id="${info.id}"]`).count()) {
+    await page.click(`.om-bottom-nav [data-nav-id="${info.id}"]`);
+    return;
+  }
+  await page.click('.om-bottom-nav [data-nav-id="more"]');
+  const sheet = page.locator(".om-bottom-sheet");
+  await sheet.waitFor();
+  if (info.sub) await sheet.locator(`ul[aria-label="${info.parent} sections"]`).getByRole("button", { name: info.label, exact: true }).click();
+  else await sheet.locator(".om-bottom-sheet-item", { has: page.getByText(info.label, { exact: true }) }).first().click();
+}
+
+// Training Load from the main navigation.
 export async function openTrainingLoad(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.getByText("Training load", { exact: true }).first().click();
+  await navTo(page, '.sidebar [data-library-tab="training-load"]');
   await page.waitForSelector('[data-action="training-load-section"]');
 }
 
@@ -46,11 +82,9 @@ export async function api(context, world, path) {
   return res.status();
 }
 
-// Settings from the main navigation (a phone opens the menu first); returns the tab labels.
+// Settings from the main navigation; returns the tab labels.
 export async function openSettings(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.getByText("Settings", { exact: true }).first().click();
+  await navTo(page, '.sidebar .sidebar-nav-button[data-library-tab="organization"]');
   await page.waitForSelector(".settings-tabs");
   return page.$$eval(".settings-tabs button", (e) => e.map((x) => x.textContent.trim()));
 }

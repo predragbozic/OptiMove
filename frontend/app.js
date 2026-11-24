@@ -1,3 +1,4 @@
+import { mountDashboardControls, disposeDashboardControls, closeDashboardControlPanel } from "./dashboard-controls.js";
 import { captureChangedFields, restoreChangedFields } from "./form-keep.js";
 import { api } from "./api.js";
 import { openExerciseClassification } from "./exercise-classification.js";
@@ -1932,7 +1933,12 @@ function closeMobileNav() {
   const focusInDrawer = Boolean(document.activeElement?.closest?.(".sidebar"));
   state.mobileNavOpen = false;
   renderMobileNavState();
-  if (focusInDrawer && els.mobileNavToggle?.offsetParent) els.mobileNavToggle.focus({ preventScroll: true });
+  if (!focusInDrawer) return;
+  // On a phone the drawer is opened by the bottom bar's Athletes (the header's menu button is hidden there).
+  // (Athletes moved to More by Edit menu: focus goes to More, where it was opened from.)
+  const opener = els.mobileNavToggle?.offsetParent ? els.mobileNavToggle
+    : (document.querySelector('.om-bottom-nav [data-nav-id="athletes"]') || document.querySelector('.om-bottom-nav [data-nav-id="more"]'));
+  opener?.focus({ preventScroll: true });
 }
 
 function collapseRailAfterNav() {
@@ -3030,7 +3036,9 @@ function renderTrainingLoad() {
   // IMP1: a search repaints Imports every 2 s; the tab row keeps where the person scrolled it, and the active tab is
   // brought into view only when it is not.
   const importsRowLeft = state.trainingLoad.section === "imports" ? els.content.querySelector(".imports-tabs")?.scrollLeft || 0 : 0;
+  disposeDashboardControls();
   els.content.innerHTML = renderTrainingLoadCoachHtml();
+  void mountDashboardControls(els.content, renderTrainingLoad);
   renderImportsBackBand();
   if (state.trainingLoad.section === "imports") keepImportsTabRow(importsRowLeft);
   if (state.trainingLoad.section === "analysis") {
@@ -5283,3 +5291,7 @@ function renderEmpty(message) {
 function renderError(error) {
   els.content.innerHTML = `<div class="error">${escapeHtml(error.message || String(error))}</div>`;
 }
+
+// React dashboard disclosures share the existing action delegation.
+document.addEventListener("pointerdown", closeDashboardControlPanel);
+document.addEventListener("keydown", closeDashboardControlPanel, true);

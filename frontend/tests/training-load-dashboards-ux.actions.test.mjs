@@ -186,6 +186,7 @@ test("one popover at a time: opening the period menu closes the dashboard menu, 
   assert.match(html, /role="menu" aria-label="Dashboard actions"/);
   const items = [...html.matchAll(/role="menuitem"[^>]*data-action="([^"]+)"[^>]*>([^<]+)</g)].map((m) => [m[1], m[2]]);
   assert.deepEqual(items, [
+    ["training-load-analysis-print", "Export page as PDF"],
     ["training-load-analysis-rename-dashboard", "Rename"],
     ["training-load-analysis-set-active", "Active dashboard"],
     ["training-load-analysis-toggle-edit", "Edit layout"],
@@ -200,8 +201,8 @@ test("one popover at a time: opening the period menu closes the dashboard menu, 
   assert.equal(state.trainingLoad.analysis.menu, "period");
   html = renderTrainingLoadAnalysisHtml();
   assert.doesNotMatch(html, /aria-label="Dashboard actions"[\s\S]*role="menu" aria-label="Dashboard actions"/);
-  assert.match(html, /role="menu" aria-label="Period presets"/);
-  assert.equal((html.match(/class="tl-popover-backdrop"/g) || []).length, 1, "exactly one backdrop for the one open popover");
+  assert.match(html, /data-dashboard-controls="fields"/);
+  assert.equal((html.match(/class="tl-popover-backdrop"/g) || []).length, 0, "period fields now use a React disclosure, not a legacy backdrop");
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-close-popovers" }), { renderTrainingLoad });
   assert.equal(state.trainingLoad.analysis.menu, "");
@@ -212,12 +213,12 @@ test("one popover at a time: opening the period menu closes the dashboard menu, 
   const menuActions = () => [...renderTrainingLoadAnalysisHtml().matchAll(/role="menuitem"[^>]*data-action="([^"]+)"/g)].map((m) => m[1]);
   state.trainingLoad.analysis.menu = "dashboard";
   state.trainingLoad.analysis.dashboard = dashboard({ status: "archived" });
-  assert.deepEqual(menuActions(), ["training-load-analysis-delete-dashboard"], "archived: Delete only - no Rename/Set active/Edit layout/Archive");
+  assert.deepEqual(menuActions(), ["training-load-analysis-print", "training-load-analysis-delete-dashboard"], "archived: PDF and Delete only - no edit actions");
   assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /role="separator"/, "no separator when Delete is the only item");
   state.trainingLoad.analysis.dashboard = dashboard({ id: templateId, is_template: true, owner_scope: "club" });
-  assert.deepEqual(menuActions(), ["training-load-analysis-delete-dashboard"], "club template: Delete only");
+  assert.deepEqual(menuActions(), ["training-load-analysis-print", "training-load-analysis-delete-dashboard"], "club template: PDF and Delete only");
   state.trainingLoad.analysis.dashboard = dashboard({ id: templateId, is_template: true, owner_scope: "system" });
-  assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /data-menu="dashboard"/, "system template: no dashboard actions menu at all");
+  assert.deepEqual(menuActions(), ["training-load-analysis-print"], "system template keeps PDF but no write actions");
 });
 
 test("Escape closes the topmost overlay in order - popover, then dialog, then metric panel - and never a panel whose save is in flight", () => {
@@ -249,7 +250,7 @@ test("the default period is the 28-day preset; choosing a preset rewrites From/T
   installFetchMock(responder());
   assert.equal(analysisPeriodPresetKey(), "28d");
   let html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /<small>Period<\/small><strong>Last 28 days<\/strong>/);
+  assert.match(html, /data-dashboard-controls="period"/);
 
   state.trainingLoad.analysis.menu = "period";
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-period-preset", preset: "7d" }), { renderTrainingLoad });
@@ -264,8 +265,8 @@ test("the default period is the 28-day preset; choosing a preset rewrites From/T
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-period-from" }, "2026-01-01"), { renderTrainingLoad });
   assert.equal(analysisPeriodPresetKey(), "custom");
   html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /<small>Period<\/small><strong>Custom<\/strong>/);
-  assert.match(html, /training-load-analysis-period-from/, "From/To inputs stay available alongside the presets");
+  assert.match(html, /data-dashboard-controls="period"/);
+  assert.match(html, /data-dashboard-controls="fields"/, "the React field island supplies From/To alongside presets");
 });
 
 // -------------------- New dashboard / Rename dialog --------------------

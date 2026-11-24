@@ -8,7 +8,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch } from "../lib/browser.mjs";
+import { launch, navTo } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -63,8 +63,7 @@ async function openCalendar(width, { prepare = null, ready = ".athlete-calendar 
   await prepare?.(page);
   await page.goto(`${world.baseUrl}/athlete`, { waitUntil: "load" });
   await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
-  if (phone) await page.locator("#mobileNavToggle").click();
-  await page.locator('.sidebar [data-athlete-tab="athlete-calendar"]').first().click();
+  await navTo(page, '.sidebar [data-athlete-tab="athlete-calendar"]');
   await page.locator(ready).first().waitFor({ timeout: 20_000 });
   return { context, page, pageErrors, phone };
 }

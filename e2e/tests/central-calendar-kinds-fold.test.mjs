@@ -5,7 +5,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 
 const cookieOf = (role) => `optimove_session=${world.accounts.find((a) => a.role === role).sessionToken}`;
 async function call(role, method, path, body) {
@@ -64,9 +64,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       if (url.pathname === "/api/calendar") kindsSent.push(url.searchParams.get("kinds"));
     });
     try {
-      const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-      if (await toggle.isVisible().catch(() => false)) await toggle.click();
-      await page.locator("#calendarToggle").click();
+      await navTo(page, "#calendarToggle");
       const eventCard = `[data-action="central-calendar-open-item"][data-key^="event:${eventId}"]`;
       const rpeCard = `[data-action="central-calendar-open-item"][data-key^="external:${scheduleId}"]`;
       await page.waitForSelector(eventCard, { timeout: 20_000 });

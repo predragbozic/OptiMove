@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
-import { DEFAULT_SLOTS, PHONE_QUERY, buildBottomNavModel, navRoleOf, readBarSlots, resolveSlots, runBottomNav, writeBarSlots } from "../bottom-nav.js";
+import { DEFAULT_SLOTS, FALLBACK_MS, PHONE_QUERY, buildBottomNavModel, navRoleOf, readBarSlots, resolveSlots, runBottomNav, syncBottomNav, writeBarSlots } from "../bottom-nav.js";
 
 const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
 function shell(file) {
@@ -177,6 +177,69 @@ test("Messages: a tap runs the header's own Messages button", () => {
   doc.addEventListener("click", (e) => { clicked = e.target.closest("button")?.id; });
   runBottomNav("messages", model, doc, {});
   assert.equal(clicked, "messageToggle");
+});
+
+test("a count on the menu's item (the athlete's pending tests) is carried to the bar; a hidden one is not", () => {
+  const doc = shell("athlete.html");
+  const badge = doc.querySelector("[data-tests-count]");
+  assert.equal(buildBottomNavModel(doc, {}, null).items.find((i) => i.id === "tests").badge, undefined, "hidden 0: no badge");
+  badge.hidden = false;
+  badge.textContent = "3";
+  assert.equal(buildBottomNavModel(doc, {}, null).items.find((i) => i.id === "tests").badge, "3");
+  // In More as well, when Tests is not one of the three places.
+  assert.equal(buildBottomNavModel(doc, {}, ["athlete-calendar", "calendar", "programs"]).more.find((s) => s.id === "tests").badge, "3");
+});
+
+test("the header's menu button is hidden on a phone from the first paint, and comes back only when the bar cannot load", () => {
+  const css = read("styles.css");
+  const block = css.slice(css.indexOf("React island: the phone's bottom navigation"));
+  const phone = block.slice(block.indexOf("@media (max-width: 760px)"));
+  assert.match(phone, /body:not\(\.login-mode\):not\(\.bottom-nav-unavailable\) \.mobile-nav-toggle \{ display: none !important; \}/);
+  assert.match(read("bottom-nav.js"), /\.add\("bottom-nav-unavailable"\)/);
+  // A drawer closed on a phone gives focus back to the bar's Athletes (its opener there).
+  assert.match(read("app.js"), /document\.querySelector\('\.om-bottom-nav \[data-nav-id="athletes"\]'\)/);
+});
+
+test("a phone is never left without navigation: no bar in time -> the menu button comes back; the bar on screen -> it goes again", async () => {
+  const dom = new JSDOM(read("index.html"), { url: "http://localhost/", pretendToBeVisual: true });
+  const win = dom.window;
+  const saved = {};
+  for (const key of ["window", "document", "navigator", "HTMLElement", "Node", "Event", "MouseEvent", "KeyboardEvent", "MutationObserver"]) {
+    saved[key] = Object.getOwnPropertyDescriptor(globalThis, key);
+    Object.defineProperty(globalThis, key, { value: key === "window" ? win : win[key], configurable: true, writable: true });
+  }
+  const timers = [];
+  win.matchMedia = (query) => ({ matches: query === PHONE_QUERY, addEventListener() {} });
+  win.setTimeout = (fn, ms) => { timers.push({ fn, ms }); return timers.length; };
+  const { state } = await import("../state.js");
+  const previousUser = state.currentUser;
+  state.currentUser = { id: "u-fallback", activeWorkspace: { type: "team" } };
+  try {
+    syncBottomNav({ doc: win.document, win });
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].ms, FALLBACK_MS);
+    // The bar is not on screen yet (its code still loading): the timer brings the menu button back.
+    timers[0].fn();
+    assert.equal(win.document.body.classList.contains("bottom-nav-unavailable"), true);
+    // The code arrives and the bar is drawn: the fallback goes.
+    for (let i = 0; i < 200 && !win.document.querySelector(".om-bottom-nav"); i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(win.document.querySelector(".om-bottom-nav"), "the bar is drawn");
+    assert.equal(win.document.body.classList.contains("has-bottom-nav"), true);
+    assert.equal(win.document.body.classList.contains("bottom-nav-unavailable"), false, "the menu button goes again");
+    // Signed out in place (no reload): the bar goes and the watchers settle. A class write on every sync used to make
+    // the body watcher sync again forever (a frozen tab); a few tasks must be enough to settle.
+    state.currentUser = null;
+    syncBottomNav({ doc: win.document, win });
+    for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+    assert.ok(!win.document.querySelector(".om-bottom-nav"), "the bar is gone");
+    assert.equal(win.document.body.classList.contains("has-bottom-nav"), false);
+  } finally {
+    state.currentUser = previousUser;
+    // Back to a signed-out page: the bar unmounts and its watchers stop, so nothing keeps the test process alive.
+    syncBottomNav({ doc: win.document, win });
+    win.close();
+    for (const [key, desc] of Object.entries(saved)) { if (desc) Object.defineProperty(globalThis, key, desc); else delete globalThis[key]; }
+  }
 });
 
 test("no menu, no bar: a page without the app shell (sign-in, invite) gives no model", () => {

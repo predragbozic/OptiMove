@@ -76,6 +76,7 @@
   },
   "permissions": {
     "allow": [
+      "Bash",
       "Bash(node scripts/test-runner.mjs:*)",
       "Bash(npm ci)",
       "Bash(npm ci --silent)",

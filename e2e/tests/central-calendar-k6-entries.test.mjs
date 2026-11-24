@@ -8,7 +8,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const DAY = iso(new Date());
@@ -43,10 +43,6 @@ const small = (page) => page.evaluate(() => [...document.querySelectorAll(".week
 const summary = (page) => page.locator(".weekly-k6-summary strong").innerText();
 const pillNames = (page) => page.$$eval(".weekly-k6 .builder-batch-pill", (els) => els.map((e) => e.getAttribute("aria-label")));
 const waitSummary = (page, name) => page.waitForFunction((n) => document.querySelector(".weekly-k6-summary strong")?.textContent === n, name, { timeout: 15_000 });
-async function openNav(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-}
 
 for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.phone]]) {
   test(`(${label}) an athlete row in an event's panel opens the plan with only that event's athletes`, async () => {
@@ -59,8 +55,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
     const eventId = made.body.event.id;
     const { context, page, pageErrors } = await openAs(browser, world, "club_admin", width);
     try {
-      await openNav(page);
-      await page.locator("#calendarToggle").click();
+      await navTo(page, "#calendarToggle");
       await page.waitForSelector(".central-calendar", { timeout: 20_000 });
       const card = page.locator(`.cc-card[data-key^="event:${eventId}"]`).first();
       await card.waitFor({ timeout: 20_000 });

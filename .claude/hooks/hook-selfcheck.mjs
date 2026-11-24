@@ -56,6 +56,9 @@ export const PROBES = [
   { tool: "Bash", command: "git push --force origin main", expect: "deny" },
   { tool: "PowerShell", command: "git reset --hard", expect: "deny" },
   { tool: "Bash", command: "ls -la", expect: "none" },
+  // the relaxed policy (owner, 2026-11-23): a routine compound line passes, a chained broad add does not
+  { tool: "Bash", command: "ls -la && echo done > /dev/null; true", expect: "none" },
+  { tool: "Bash", command: "true; git add .", expect: "deny" },
 ];
 
 export function checkSettings(settingsText) {

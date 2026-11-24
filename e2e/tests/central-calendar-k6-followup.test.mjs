@@ -7,7 +7,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -33,13 +33,8 @@ before(async () => {
 });
 after(async () => { await browser?.close(); await world?.stop(); });
 
-async function openNav(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-}
 async function openCalendar(page, width) {
-  await openNav(page);
-  await page.locator("#calendarToggle").click();
+  await navTo(page, "#calendarToggle");
   await page.waitForSelector(".central-calendar .athlete-switcher", { timeout: 20_000 });
   await openFold(page, width);
 }

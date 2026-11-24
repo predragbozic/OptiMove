@@ -5,7 +5,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const MONDAY = (() => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return iso(d); })();
@@ -34,10 +34,6 @@ async function call(role, method, path, body) {
   try { parsed = JSON.parse(text); } catch { parsed = {}; }
   return { status: res.status, body: parsed, text };
 }
-async function openNav(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-}
 const overflow = (page, width) => page.evaluate((w) => Math.max(window.innerWidth - w, document.documentElement.scrollWidth - w), width);
 
 // One draft with one empty session in this week, for an athlete no other test of this file uses.
@@ -58,8 +54,7 @@ test("(390 px) when opening the draft fails, the screen is drawn again with the 
   const planId = await draftWithEmptySession(name);
   const { context, page, pageErrors } = await openAs(browser, world, "club_admin", WIDTHS.phone);
   try {
-    await openNav(page);
-    await page.locator("#calendarToggle").click();
+    await navTo(page, "#calendarToggle");
     await page.waitForSelector(".central-calendar .athlete-switcher", { timeout: 20_000 });
     if ((await page.locator(".athlete-switcher-fold").getAttribute("aria-expanded")) !== "true") await page.locator(".athlete-switcher-fold").click();
     await page.locator(`.athlete-switcher .builder-batch-pill[aria-label="${name}"]`).click();
@@ -86,8 +81,7 @@ for (const [label, width, name] of CASES) {
     const planId = await draftWithEmptySession(name);
     const { context, page, pageErrors } = await openAs(browser, world, "club_admin", width);
     try {
-      await openNav(page);
-      await page.locator("#calendarToggle").click();
+      await navTo(page, "#calendarToggle");
       await page.waitForSelector(".central-calendar .athlete-switcher", { timeout: 20_000 });
       if (width < 761 && (await page.locator(".athlete-switcher-fold").getAttribute("aria-expanded")) !== "true") await page.locator(".athlete-switcher-fold").click();
       await page.locator(`.athlete-switcher .builder-batch-pill[aria-label="${name}"]`).click();

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 
 const G = "/api/training-load/gpexe";
 // The fake source's series sessions are on 2-4 November 2026; the event shares the imported session's day (9113).
@@ -55,15 +55,8 @@ const where = (page) => page.evaluate(() => ({
   panel: Boolean(document.querySelector('[data-action="central-calendar-close-panel"]')),
 }));
 
-// A phone opens its menu first (only when it is closed).
-async function openNav(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-}
-
 async function openCalendar(page) {
-  await openNav(page);
-  await page.locator("#calendarToggle").click();
+  await navTo(page, "#calendarToggle");
   // Drawn once the week's days carry their dates (the read is asynchronous).
   await page.waitForSelector(".central-calendar [data-date]", { timeout: 20_000 });
 }
@@ -163,10 +156,10 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
 
       // calendar -> Builder -> Back; calendar -> Settings -> Back: the same week.
       for (const go of [
-        async () => { await openNav(page); await page.locator('[data-library-tab="builder"]').first().click(); },
-        async () => { await openNav(page); await page.getByText("Settings", { exact: true }).first().click(); await page.waitForSelector(".settings-tabs"); },
+        async () => { await navTo(page, '[data-library-tab="builder"]'); },
+        async () => { await navTo(page, '.sidebar .sidebar-nav-button[data-library-tab="organization"]'); await page.waitForSelector(".settings-tabs"); },
       ]) {
-        // A phone's open panel sheet covers the menu button: it is closed first.
+        // A phone's open panel sheet covers the bottom bar: it is closed first.
         if (width < 600 && await page.locator(".cc-panel-close").count()) {
           await page.click(".cc-panel-close");
           await page.waitForFunction(() => !document.querySelector(".cc-panel-close"), null, { timeout: 10_000 });
@@ -179,8 +172,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
 
       // A place left behind on the same tab (the Athletes list opened and closed by its own toggle) is skipped:
       // Builder -> calendar -> Athletes open and closed -> Settings -> Back -> calendar -> Back -> Builder, never Home.
-      await openNav(page);
-      await page.locator('[data-library-tab="builder"]').first().click();
+      await navTo(page, '[data-library-tab="builder"]');
       await page.waitForFunction(() => !document.querySelector(".cc-toolbar"), null, { timeout: 20_000 });
       const builderTitle = (await where(page)).title;
       await openCalendar(page);
@@ -191,13 +183,12 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         await page.waitForFunction(() => !document.querySelector(".cc-panel-close"), null, { timeout: 10_000 });
       }
       const atCalendar = await where(page);
-      await openNav(page);
-      await page.click("#athletesToggle");
+      // A phone: the bar's Athletes opens the list in the drawer, then its own toggle closes it again.
+      await navTo(page, "#athletesToggle");
       await page.waitForFunction(() => document.querySelector("#athletesToggle")?.getAttribute("aria-expanded") === "true", null, { timeout: 10_000 });
       await page.click("#athletesToggle");
       await page.waitForFunction(() => document.querySelector("#athletesToggle")?.getAttribute("aria-expanded") === "false", null, { timeout: 10_000 });
-      await openNav(page);
-      await page.getByText("Settings", { exact: true }).first().click();
+      await navTo(page, '.sidebar .sidebar-nav-button[data-library-tab="organization"]');
       await page.waitForSelector(".settings-tabs");
       await backTo(page, calendarAt, [atCalendar.period, atCalendar.openKey]);
       // Every title shown on the way to the Builder.
@@ -228,9 +219,8 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
       const home = (await where(page)).title;
       const tab = async (name) => {
-        await openNav(page);
         const before = (await where(page)).title;
-        await page.locator(`[data-athlete-tab="${name}"]`).first().click();
+        await navTo(page, `.sidebar [data-athlete-tab="${name}"]`);
         await page.waitForFunction((t) => document.querySelector("#screenTitle")?.textContent.trim() !== t, before, { timeout: 20_000 });
         return (await where(page)).title;
       };

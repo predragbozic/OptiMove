@@ -4,6 +4,15 @@ import {seedGalleryMeasurements,seedGalleryDashboard} from '../../backend/tests/
 let world,browser,gallery;const byRole=new Map();
 const action=(page,name)=>page.locator(`[data-action="training-load-${name}"]`);
 async function openDashboard(page,id){await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();const tab=page.getByRole('tab',{name:'Dashboards'});if(await tab.isVisible())await tab.click();await page.locator('.tl-dash-picker-trigger').click();await page.locator('[data-dashboard-id="'+id+'"]').first().click();await page.locator('optimove-dashboard-chart svg').first().waitFor();}
+// Follow the same visible controls as a coach: Dashboard actions -> PDF.
+// Register the popup wait only after the menu is open; never click a hidden item.
+async function exportFromDashboardMenu(page){
+ await page.getByRole('button',{name:'Dashboard actions',exact:true}).click();
+ const item=page.getByRole('menuitem',{name:'Export page as PDF',exact:true});
+ await item.waitFor({state:'visible'});assert.equal(await item.isEnabled(),true);
+ const [report]=await Promise.all([page.waitForEvent('popup'),item.click()]);
+ return report;
+}
 before(async()=>{
  const config={DASHBOARD_PAGES_ENABLED:'true',DASHBOARD_SIMPLE_MODE:'enabled',DASHBOARD_SIMPLE_BUDGET_VERIFIED:'true',DASHBOARD_SIMPLE_SESSION_AFFINITY_VERIFIED:'true',DASHBOARD_SIMPLE_PREVIEW_MAX_ACTIVE:'2',DASHBOARD_SIMPLE_KEY_ID:'gallery-browser',DASHBOARD_SIMPLE_KEY_BASE64:randomBytes(32).toString('base64')},previous=Object.fromEntries(Object.keys(config).map(k=>[k,process.env[k]]));Object.assign(process.env,config);
  try{world=await startWorld()}finally{for(const [k,v]of Object.entries(previous))if(v===undefined)delete process.env[k];else process.env[k]=v;}
@@ -48,11 +57,11 @@ for(const width of [360,375,390])test(width+'px: visual gallery editor saves a m
   const selected=page.locator(`[data-analysis-widget-id="${gallery.widgets[2]}"] optimove-dashboard-chart`);await selected.locator('svg').waitFor();assert.equal(await selected.evaluate(el=>JSON.parse(el.getAttribute('data-chart')).option.series[0].type),width===360?'scatter':'bar');assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
-test('PDF copies seven graphs in visible order and only expanded tables, with no controls or identifiers',async()=>{
- const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',1280);try{
+for(const width of [390,1280])test(width+'px: PDF copies seven graphs in visible order and only expanded tables, with no controls or identifiers',async()=>{
+ const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',width);try{
   await context.addInitScript(()=>{window.print=()=>{}});await openDashboard(page,gallery.dashboard.id);await page.waitForFunction(()=>document.querySelectorAll('.tl-analysis-grid optimove-dashboard-chart svg').length===7);
   const first=page.locator(`[data-analysis-widget-id="${gallery.widgets[0]}"]`);await first.locator('.tl-analysis-chart-values summary').click();
-  const tables=await page.locator('.tl-analysis-chart-values[open] table').count(),popupPromise=page.waitForEvent('popup');await action(page,'analysis-print').click();const report=await popupPromise;
+  const tables=await page.locator('.tl-analysis-chart-values[open] table').count();const report=await exportFromDashboardMenu(page);
   await report.locator('.report-widget').last().waitFor();assert.equal(await report.locator('.report-widget svg').count(),7);assert.equal(await report.locator('.report-values table').count(),tables);
   assert.deepEqual(await report.locator('.report-widget h2').allTextContents(),['area','horizontal_bar','combined','heatmap','scatter','stacked','boxplot']);
   assert.equal(await report.locator('button,input,select,details').count(),0);assert.ok(await report.locator('.report-legend li').count()>0);assert.doesNotMatch(await report.locator('svg').allTextContents().then(v=>v.join(' ')),/1\/3|1\/6/);assert.doesNotMatch(await report.locator('body').innerHTML(),/data-chart|previewToken|fingerprint|[0-9a-f]{8}-[0-9a-f-]{27,}/i);
@@ -82,7 +91,7 @@ test('PDF never executes or fetches active content from a live SVG snapshot',asy
  try{
   await context.addInitScript(()=>{window.print=()=>{}});await openDashboard(page,gallery.dashboard.id);
   await page.locator('optimove-dashboard-chart').first().evaluate(host=>{host.printSvg=()=>'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="300" onload="window.__svgExecuted=true"><script>window.__svgExecuted=true</script><foreignObject><body xmlns="http://www.w3.org/1999/xhtml"><img src="https://svg-test.invalid/leak" onerror="window.__svgExecuted=true"/></body></foreignObject><image href="https://svg-test.invalid/leak"/><rect width="20" height="20" fill="green"/></svg>'});
-  const next=page.waitForEvent('popup');await action(page,'analysis-print').click();const report=await next;await report.locator('.report-widget svg').first().waitFor();
+  const report=await exportFromDashboardMenu(page);await report.locator('.report-widget svg').first().waitFor();
   assert.equal(await report.locator('script,foreignObject,image,[onload],[onerror]').count(),0);assert.equal(await report.evaluate(()=>window.__svgExecuted),undefined);assert.deepEqual(unsafeRequests,[]);await report.close();
  }finally{await context.close()}
 });
