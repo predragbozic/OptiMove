@@ -2,4 +2,5 @@
 // lazily (import("./react-build/islands.js")), so a page that never shows an island never downloads React.
 export { mountIsland, unmountIsland, isIslandMounted } from "./mount.jsx";
 export { BottomNav } from "./bottom-nav.jsx";
+export { ClubLicence } from "./club-licence.jsx";
 export { DashboardPeriodButton, DashboardPeriodFields, DashboardPageStrip } from "./dashboard-controls.jsx";
