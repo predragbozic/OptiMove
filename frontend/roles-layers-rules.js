@@ -69,7 +69,7 @@ export function layersRefusalText(info) {
     case "permissions_unavailable": return "Permissions could not be checked right now. Try again in a moment.";
     case "request_key_reused": return "This change was already sent with other content. Reload and try again.";
     // No server sentence for a club admin (frontend.md, Interaction principles).
-    default: return info.status === 400 ? "Nothing was saved. Check the changes and try again." : "Nothing was saved.";
+    default: return info.status === 400 ? "Nothing was saved. Check the changes and try again." : "Nothing was saved. Reload and try again.";
   }
 }
 

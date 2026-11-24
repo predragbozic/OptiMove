@@ -7,7 +7,10 @@ import { useId } from "react";
 import { RoleWords } from "./role-words.jsx";
 import { wordsText } from "../roles-layers-rules.js";
 
-function Drift({ drift, busy, onDriftRemove }) {
+const ddmmyyyy = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? "" : `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}.${d.getFullYear()}`; };
+
+function Drift({ drift, busy, ask, onDriftAsk, onDriftReason, onDriftCancel, onDriftRemove }) {
+  const reasonId = useId();
   if (!drift?.length) return null;
   const byRoleWord = [];
   for (const c of drift) for (const w of c.words) {
@@ -17,13 +20,27 @@ function Drift({ drift, busy, onDriftRemove }) {
   }
   const peopleCount = new Set(drift.map((c) => c.userId)).size;
   return (
-    <details className="person-access-drift" data-person-drift>
+    <details className="person-access-drift" data-person-drift open={Boolean(ask) || undefined}>
       <summary>{`${peopleCount} ${peopleCount === 1 ? "person still has" : "people still have"} permissions their role no longer gives`}</summary>
       <ul>
         {byRoleWord.map((e) => (
           <li key={`${e.roleId}-${e.word}`} className="person-access-drift-row">
             <span>{`${e.roleName}: ${wordsText([e.word])} – ${e.names.join(", ")}`}</span>
-            <button className="plain-button" type="button" disabled={busy} onClick={() => onDriftRemove(e.roleId, e.word)}>Take it from them too</button>
+            {ask && ask.roleId === e.roleId && ask.word === e.word ? (
+              <div className="person-access-drift-ask" data-drift-ask>
+                <p>{`Take ${wordsText([e.word])} from: ${ask.names.join(", ")}?`}</p>
+                <label className="search-field" htmlFor={reasonId}>
+                  <span>Reason (kept in each person's history)</span>
+                  <textarea id={reasonId} rows={2} maxLength={500} value={ask.reason} disabled={busy} onChange={(ev) => onDriftReason(ev.target.value)} />
+                </label>
+                <div className="data-sources-form-actions">
+                  <button className="plain-button data-sources-primary" type="button" disabled={busy || !ask.reason.trim()} onClick={() => onDriftRemove()}>{`Take it from ${ask.names.length} ${ask.names.length === 1 ? "person" : "people"}`}</button>
+                  <button className="plain-button" type="button" disabled={busy} onClick={() => onDriftCancel()}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <button className="plain-button" type="button" disabled={busy || Boolean(ask)} onClick={() => onDriftAsk(e.roleId, e.word)}>Take it from them</button>
+            )}
           </li>
         ))}
       </ul>
@@ -71,7 +88,7 @@ function Holding(props) {
           </label>
           <div className="data-sources-form-actions">
             <button className="plain-button" type="button" disabled={busy} onClick={() => onCancel()}>Cancel</button>
-            <button className="plain-button data-sources-primary" type="button" disabled={busy} onClick={() => onEnd()}>{`Back to ${h.roleName}`}</button>
+            <button className="plain-button data-sources-primary" type="button" disabled={busy || !endReason.trim()} onClick={() => onEnd()}>{`Back to ${h.roleName}`}</button>
           </div>
         </div>
       ) : null}
@@ -103,11 +120,12 @@ function Holding(props) {
           <div className="data-sources-form-actions">
             <button className="plain-button" type="button" disabled={busy} onClick={() => onCancel()}>Cancel</button>
             {changed ? (
-              <button className="plain-button data-sources-primary" type="button" disabled={busy} onClick={() => onSave()}>
+              <button className="plain-button data-sources-primary" type="button" disabled={busy || !reason.trim()} onClick={() => onSave()}>
                 {command?.busy ? "Saving…" : `Save for ${name} (${changed} ${changed === 1 ? "change" : "changes"})`}
               </button>
             ) : null}
           </div>
+          {changed && !reason.trim() ? <p className="muted club-roles-save-hint">Write a reason to save.</p> : null}
         </div>
       ) : null}
     </section>
@@ -118,7 +136,7 @@ export function PersonAccess(props) {
   const {
     clubName = "", people = [], userId = "", selfId = "", catalog = null, view = null, loading = false, error = "", editKey = "",
     endKey = "", command = null, notice = "", noticeTone = "ok", drift = null, driftError = "", platform = false, teams = [],
-    onPick, onCheck, onDriftRemove,
+    driftAsk = null, onPick, onCheck, onDriftAsk, onDriftReason, onDriftCancel, onDriftRemove, onRetry,
   } = props;
   const titleId = useId();
   const pickId = useId();
@@ -145,8 +163,13 @@ export function PersonAccess(props) {
         </div>
       ) : null}
       {notice ? <p className={`club-roles-notice ${noticeTone === "error" ? "builder-error" : "muted"}`} role={noticeTone === "error" ? "alert" : "status"}>{notice}</p> : null}
-      {driftError ? <p className="builder-error" role="alert">{driftError}</p> : null}
-      <Drift drift={drift} busy={busy} onDriftRemove={onDriftRemove} />
+      {driftError || error ? (
+        <div className="data-sources-error" role="alert">
+          <p>{error || driftError}</p>
+          <div className="data-sources-form-actions"><button className="plain-button" type="button" disabled={busy} onClick={() => onRetry?.()}>Try again</button></div>
+        </div>
+      ) : null}
+      <Drift drift={drift} busy={busy} ask={driftAsk} onDriftAsk={onDriftAsk} onDriftReason={onDriftReason} onDriftCancel={onDriftCancel} onDriftRemove={onDriftRemove} />
       <label className="search-field person-access-pick" htmlFor={pickId}>
         <span>Person</span>
         <select id={pickId} value={userId} disabled={busy} onChange={(e) => onPick(e.target.value)}>
@@ -155,9 +178,9 @@ export function PersonAccess(props) {
         </select>
       </label>
       {loading ? <p className="muted" role="status">Loading…</p> : null}
-      {error ? <p className="muted" role="status">{error}</p> : null}
       {view && catalog ? (
         <div className="person-access-holdings">
+          {!view.holdings.length ? <p className="muted">{`${name} has no role in this club yet.`}</p> : null}
           {view.holdings.map((h) => {
             const key = `${h.roleId}|${h.scopeType}|${h.scopeId}`;
             return (
@@ -179,7 +202,7 @@ export function PersonAccess(props) {
           {view.customHistory?.length ? (
             <details className="person-access-history">
               <summary>{`Earlier custom versions (${view.customHistory.length})`}</summary>
-              <ul>{view.customHistory.map((c) => <li key={c.id}>{`${c.name}${c.endedAt ? ` · ended ${new Date(c.endedAt).toLocaleDateString("en-GB")}` : ""}`}</li>)}</ul>
+              <ul>{view.customHistory.map((c) => <li key={c.id}>{`${c.name}${c.endedAt ? ` · ended ${ddmmyyyy(c.endedAt)}` : ""}`}</li>)}</ul>
             </details>
           ) : null}
         </div>

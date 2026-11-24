@@ -54,7 +54,7 @@ function RoleRow({ role, holders, canCopy, busy, onOpen, onCopy }) {
         <small>{holders == null ? "" : people(holders)}{role.basicKey === "club_admin" && !changeable ? `${holders == null ? "" : " · "}Only OptiMove changes this role` : ""}</small>
       </div>
       <div className="club-roles-row-actions">
-        <button className="plain-button" type="button" onClick={() => onOpen(role.roleId)}>{changeable ? "Open" : "View"}</button>
+        <button className="plain-button" type="button" onClick={() => onOpen(role.roleId)}>{role.state === "question_pending" && role.actions?.answer ? "Answer" : changeable ? "Open" : "View"}</button>
         {canCopy ? <button className="plain-button" type="button" disabled={busy} onClick={() => onCopy(role.roleId)}>Copy as a new role</button> : null}
       </div>
     </article>
@@ -87,16 +87,16 @@ function Question({ role, busy, onAnswer }) {
         {changes.removed.length ? `Removed: ${wordsText(changes.removed)}.` : ""}
         {!changes.added.length && !changes.removed.length ? "The default was saved again without a change of permissions." : ""}
       </p>
-      <p className="muted">Use the new default to drop this club's own changes, or keep this club's version as it is.</p>
       <div className="data-sources-form-actions">
         <button className="plain-button data-sources-primary" type="button" disabled={busy} onClick={() => onAnswer(role.roleId, "accept_default")}>Use the new default</button>
         <button className="plain-button" type="button" disabled={busy} onClick={() => onAnswer(role.roleId, "keep_mine")}>Keep ours</button>
       </div>
+      <p className="muted">The new default drops this club's own changes; Keep ours leaves this club's version as it is.</p>
     </section>
   );
 }
 
-function StillHolding({ stillHolding, reason, busy, onRemovalReason, onRemove }) {
+function StillHolding({ stillHolding, reason, busy, onRemovalReason, onRemove, onLeaveIt }) {
   const reasonId = useId();
   return (
     <section className="club-roles-still" data-club-roles-still role="status">
@@ -108,14 +108,15 @@ function StillHolding({ stillHolding, reason, busy, onRemovalReason, onRemove })
         <textarea id={reasonId} rows={2} maxLength={500} value={reason} disabled={busy} onChange={(e) => onRemovalReason(e.target.value)} />
       </label>
       <div className="data-sources-form-actions">
-        <button className="plain-button data-sources-primary" type="button" disabled={busy} onClick={() => onRemove()}>Take it from them too</button>
+        <button className="plain-button data-sources-primary" type="button" disabled={busy || !reason.trim()} onClick={() => onRemove()}>Take it from them too</button>
+        <button className="plain-button" type="button" disabled={busy} onClick={() => onLeaveIt?.()}>Leave it</button>
       </div>
     </section>
   );
 }
 
 function Editor(props) {
-  const { role, clubName, holders, catalog, closedModules, draft, changes, reason, command, platform, stillHolding, removalReason, onClose, onToggle, onReason, onSave, onAnswer, onRemovalReason, onRemove } = props;
+  const { role, clubName, holders, catalog, closedModules, draft, changes, reason, command, platform, stillHolding, removalReason, onClose, onToggle, onReason, onSave, onAnswer, onRemovalReason, onRemove, onLeaveIt } = props;
   const reasonId = useId();
   const changeable = Boolean(role.actions?.change);
   const pending = role.state === "question_pending";
@@ -124,7 +125,7 @@ function Editor(props) {
   const busy = Boolean(command);
   return (
     <div className="club-roles-editor" data-club-roles-editor={role.roleId}>
-      <button className="plain-button club-roles-back" type="button" disabled={busy && command.busy} onClick={() => onClose()}><span aria-hidden="true">‹ </span>All roles</button>
+      <button className="plain-button club-roles-back" type="button" disabled={busy} onClick={() => onClose()}><span aria-hidden="true">‹ </span>All roles</button>
       <h4 className="club-roles-editor-title">{`${role.name} in ${clubName || "this club"}`}</h4>
       <p className="muted">
         {changeable ? `Changes apply to everyone with this role in ${clubName || "this club"}` : "You can read this role but not change it"}
@@ -132,7 +133,7 @@ function Editor(props) {
       </p>
       {pending && role.actions?.answer ? <Question role={role} busy={busy} onAnswer={onAnswer} /> : null}
       {stillHolding && stillHolding.roleId === role.roleId ? (
-        <StillHolding stillHolding={stillHolding} reason={removalReason} busy={busy} onRemovalReason={onRemovalReason} onRemove={onRemove} />
+        <StillHolding stillHolding={stillHolding} reason={removalReason} busy={busy} onRemovalReason={onRemovalReason} onRemove={onRemove} onLeaveIt={onLeaveIt} />
       ) : null}
       <RoleWords
         catalog={catalog}
@@ -156,10 +157,11 @@ function Editor(props) {
           </label>
           <div className="data-sources-form-actions">
             <button className="plain-button" type="button" disabled={busy} onClick={() => onClose()}>Cancel</button>
-            <button className="plain-button data-sources-primary" type="button" disabled={busy} onClick={() => onSave()}>
+            <button className="plain-button data-sources-primary" type="button" disabled={busy || !reason.trim()} onClick={() => onSave()}>
               {command?.busy ? "Saving…" : `Save for ${clubName || "this club"} (${changed} ${changed === 1 ? "change" : "changes"})`}
             </button>
           </div>
+          {!reason.trim() ? <p className="muted club-roles-save-hint">Write a reason to save.</p> : null}
         </div>
       ) : null}
     </div>
@@ -169,7 +171,7 @@ function Editor(props) {
 export function ClubRoles(props) {
   const {
     clubName = "", view = null, loading = false, error = "", catalog = null, r2Roles = [], platform = false, openRoleId = "",
-    command = null, notice = "", noticeTone = "ok", canCreate = false, onRetry, onOpen, onCopy, onCheck, onOwnOpen, onOwnNew,
+    command = null, notice = "", noticeTone = "ok", canCreate = false, rolesError = "", rolesLoading = false, onRetry, onOpen, onCopy, onCheck, onOwnOpen, onOwnNew,
     onOwnCopy, onOwnArchive,
   } = props;
   const titleId = useId();
@@ -185,10 +187,10 @@ export function ClubRoles(props) {
         <p className="muted">A role is a set of permissions. Give a role to a person in Users.</p>
       </div>
       <Banner command={command} notice={notice} noticeTone={noticeTone} onCheck={onCheck} />
-      {loading && !view ? <p className="muted" role="status">Loading the roles…</p> : null}
-      {error && !view ? (
+      {(loading && !view) || (rolesLoading && !catalog && !rolesError) ? <p className="muted" role="status">Loading the roles…</p> : null}
+      {(error && !view) || (rolesError && !catalog) ? (
         <div className="data-sources-error" role="alert">
-          <p>{error}</p>
+          <p>{error && !view ? error : "The roles could not be read. Try again."}</p>
           <div className="data-sources-form-actions"><button className="plain-button" type="button" onClick={() => onRetry?.()}>Try again</button></div>
         </div>
       ) : null}

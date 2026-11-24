@@ -430,10 +430,11 @@ export function renderOrganizationBrowser(data) {
         ${tiles.map(([value, noun, count]) => `<button class="organization-section-summary-tile" type="button" data-action="organization-section" data-section="${value}" aria-label="${escapeAttr(countLabel(count, noun))}"><strong>${count}</strong><span>${escapeHtml(countLabel(count, noun).replace(/^\d+ /, "").replace(/^./, (c) => c.toUpperCase()))}</span></button>`).join("")}
       </nav>`;
   } else if (section === "users") {
+    // R4-4 (contract 5.5): Access in this club, with its drift, opens the section.
     body = `${head("Users", countLabel(activeUserCount, "active user"), organizationUsersControls(data))}
+      ${renderPersonAccessHost(data)}
       <section class="organization-lists organization-lists-browser">${renderOrganizationUsersSection(data, { bare: true })}</section>
-      ${renderRolesWhoHtml(data)}
-      ${renderPersonAccessHost(data)}`;
+      ${renderRolesWhoHtml(data)}`;
   } else if (section === "clubs") {
     body = `${head(selectedTeam?.name || selectedClub?.name || "Clubs", selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : countLabel(clubs.length, "club"), showAll)}
       <section class="organization-lists organization-lists-browser">

@@ -1,13 +1,13 @@
 // Roles R4-4, PR B: the word list of a role, grouped by module (docs/ai/roles-r4-4-screens-contract.md 5.2, 5.4).
 // Used by the club's version of a built-in role and by one person's custom role. A pure view: the ticks come in as
 // `items`, each change goes back through `onToggle`; roles-layers-rules.js decides which words are locked and why.
-import { useState } from "react";
+import { useId, useState } from "react";
 import { roleWordGroups, wordLabel, wordLock } from "../roles-layers-rules.js";
 
 function Group({ group, items, ctx, closed, readOnly, onToggle, stillHeld }) {
   const [open, setOpen] = useState(!closed);
   const on = group.words.filter((w) => items.includes(w)).length;
-  const id = `role-words-${group.key}`;
+  const id = useId();
   return (
     <section className={`role-words-group${closed ? " is-closed" : ""}`} data-role-words-group={group.key}>
       <button className="role-words-head" type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>

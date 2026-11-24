@@ -7,7 +7,7 @@ import { api } from "./api.js";
 import { CENTRAL_CALENDAR_WRITE_BOUND_MS, centralCalendarErrorInfo, centralCalendarOutcomeUnknown, newCentralCalendarRequestKey } from "./central-calendar-data.js";
 import { heldPermissions } from "./permission-nav.js";
 import { emptyRolesState as emptyRoles, state } from "./state.js";
-import { resetClubRoles, resetPerson } from "./roles-layers-data.js";
+import { markClubRolesStale, markPersonStale, resetClubRoles, resetPerson } from "./roles-layers-data.js";
 
 export const ROLES_BASE = "/api/organization/roles";
 export const newRolesRequestKey = newCentralCalendarRequestKey;
@@ -88,6 +88,8 @@ export async function loadRoles(render) {
   const mine = ++generation;
   d.loading = true;
   d.stale = false;
+  // R4-4: the club's roles island reads its own list again with this one (entry, and after every R3 write).
+  markClubRolesStale();
   render?.();
   try {
     const [catalog, list] = await Promise.all([
@@ -189,6 +191,8 @@ export async function loadWho({ more = false } = {}, render) {
   const mine = ++whoGeneration;
   const key = `${who.clubId}|${who.roleId}`;
   const cursor = more ? who.nextCursor : "";
+  // R4-4: Access in this club (drift, the chosen person) is read again with who holds what.
+  if (!more) markPersonStale();
   who.loading = true;
   who.pendingKey = key;
   who.error = "";
@@ -229,4 +233,5 @@ export function markRolesUsersStale() {
   d.who.rows = [];
   d.who.nextCursor = "";
   d.assign.byClub = {};
+  markPersonStale();
 }

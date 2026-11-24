@@ -108,7 +108,7 @@ function newServer() {
     if (call.method === "GET") {
       if (url === `/api/organization/roles/clubs/${CLUB}/roles`) return { status: 200, body: view() };
       if (url === `/api/organization/roles/catalog?clubId=${CLUB}`) return { status: 200, body: CATALOG };
-      if (url === `/api/organization/roles/clubs/${CLUB}/custom-drift`) return { status: 200, body: { customs: server.customs } };
+      if (url === `/api/organization/roles/clubs/${CLUB}/custom-drift`) return { status: 200, body: { customs: server.customs.map((c) => ({ ...c, words: [...c.words] })) } };
       if (url === `/api/organization/roles/users/${USER}/clubs/${CLUB}`) return { status: 200, body: personView() };
       return { status: 404, body: { error: "notFound" } };
     }
@@ -376,15 +376,102 @@ test("12. a person's custom changed meanwhile is custom_changed with one plain s
   assert.doesNotMatch(data.person.notice, /custom_changed/);
 });
 
-test("13. drift: one word from the role's listed customs that hold it, then the list is read again", async () => {
+test("13. drift: one tap asks (names, editable reason), the second sends the role's customs that hold the word", async () => {
   await data.loadPersonClub(CLUB);
-  await data.removeDriftWord(COACH_ROLE, "org.view");
+  data.askDriftRemove(COACH_ROLE, "org.view");
+  assert.equal(posts().length, 0, "asking sends nothing");
+  assert.deepEqual(data.person.driftAsk.names, ["Bo Test"]);
+  assert.equal(data.person.driftAsk.reason, "Removed from Team coach in this club");
+  data.person.driftAsk = { ...data.person.driftAsk, reason: "Not needed any more" };
+  await data.removeDriftWord();
   const p = posts()[0];
   assert.deepEqual(p.body.customIds, [CUSTOM2]);
-  assert.equal(p.body.reason, "Removed from Team coach in this club");
+  assert.equal(p.body.reason, "Not needed any more");
+  assert.equal(data.person.notice, "Taken from 1 person: org.view.".replace("org.view", rules.wordsText(["org.view"])));
+  assert.equal(data.person.driftAsk, null);
   assert.deepEqual(data.person.drift.map((c) => c.customId), [CUSTOM1]);
-  await data.removeDriftWord(COACH_ROLE, "imports.run");
-  assert.equal(posts().length, 1, "no custom holds it: nothing sent");
+  data.askDriftRemove(COACH_ROLE, "imports.run");
+  assert.equal(data.person.driftAsk, null, "no custom holds it: nothing to ask");
+  data.askDriftRemove(COACH_ROLE, "calendar.edit");
+  data.cancelDriftAsk();
+  await data.removeDriftWord();
+  assert.equal(posts().length, 1, "cancelled: nothing sent");
+});
+
+test("15. the club's roles are read again after an R3 write (the R3 list read marks them stale); the list stays meanwhile", async () => {
+  const rolesData = await import("../roles-data.js");
+  await data.loadClubRoles(CLUB);
+  assert.equal(data.clubRolesNeedLoad(CLUB), false);
+  const view = data.clubRoles.view;
+  // R3's list read runs on entry and after every own-role write (roles-actions.js).
+  const { state } = await import("../state.js");
+  state.currentUser = { id: "u-admin", activeWorkspace: { type: "club", scopeId: CLUB }, clubs: [{ id: CLUB, role: "club_admin" }] };
+  try { await rolesData.loadRoles(); } finally { state.currentUser = null; }
+  assert.equal(data.clubRolesNeedLoad(CLUB), true);
+  assert.equal(data.clubRoles.view, view, "still shown until the new read");
+  await data.loadClubRoles(CLUB);
+  assert.equal(data.clubRolesNeedLoad(CLUB), false);
+});
+
+test("16. Access is read again when it is marked stale: drift and the chosen person", async () => {
+  await data.loadPersonClub(CLUB);
+  await data.loadPerson(USER);
+  server.customs.push({ customId: "44444444-0000-4000-8000-000000000009", userId: USER2, name: "Bo Test", roleId: COACH_ROLE, roleName: "Team coach", scopeType: "team", scopeId: TEAM, words: ["calendar.edit"] });
+  server.personCustom = { id: CUSTOM1, revision: 1, items: ["org.view"] };
+  await data.refreshPerson();
+  assert.equal(data.person.drift.length, 2, "not stale: nothing read");
+  data.markPersonStale();
+  await data.refreshPerson();
+  assert.equal(data.person.drift.length, 3);
+  assert.equal(data.person.view.holdings[0].custom.live, true);
+});
+
+test("17. Take it from them too: the caller's own custom is never listed; a cut list says so; the words add up", async () => {
+  const me = (await import("../state.js")).state;
+  me.currentUser = { id: USER };
+  try {
+    await data.loadClubRoles(CLUB);
+    data.openClubRole(COACH_ROLE);
+    data.toggleClubRoleWord("calendar.edit");
+    data.toggleClubRoleWord("org.view");
+    data.clubRoles.reason = "Narrow";
+    server.fail = null;
+    await data.saveClubRole();
+    assert.deepEqual(data.clubRoles.stillHolding.list.map((c) => c.customId), [CUSTOM2], "the caller's own custom is left out");
+    assert.deepEqual(data.clubRoles.stillHolding.words, ["org.view"]);
+    data.clubRoles.stillHolding = { ...data.clubRoles.stillHolding, truncated: true };
+    await data.removeFromCustoms();
+    assert.match(data.clubRoles.notice, /^Taken from 1 person: .+\. More people may still have it/);
+  } finally {
+    me.currentUser = null;
+  }
+});
+
+test("18. a removal refused as custom_changed drops the offer and says what happened", async () => {
+  await data.loadClubRoles(CLUB);
+  data.openClubRole(COACH_ROLE);
+  data.toggleClubRoleWord("calendar.edit");
+  data.clubRoles.reason = "x";
+  await data.saveClubRole();
+  assert.ok(data.clubRoles.stillHolding);
+  server.fail = { status: 409, body: { error: "custom_changed" } };
+  await data.removeFromCustoms();
+  assert.equal(data.clubRoles.stillHolding, null);
+  assert.match(data.clubRoles.notice, /Someone changed these people's access meanwhile/);
+  assert.doesNotMatch(data.clubRoles.notice, /newest version is shown/);
+  assert.equal(data.person.stale, true);
+  data.dismissStillHolding();
+});
+
+test("19. an O3 answer whose read failed reads the club's roles again", async () => {
+  server.coach.revision = 1;
+  server.coach.question = { systemRevision: 4, defaultChanges: { added: [], removed: [] } };
+  await data.loadClubRoles(CLUB);
+  const gets = () => calls.filter((c) => c.method === "GET").length;
+  const before = gets();
+  server.fail = { status: 200, body: { readError: true, roleId: COACH_ROLE } };
+  await data.answerClubRole(COACH_ROLE, "keep_mine");
+  assert.equal(gets(), before + 1);
 });
 
 test("14. a person of no role here reads one plain sentence; an older read never replaces a newer one", async () => {

@@ -304,8 +304,23 @@ re-review.
   3. *Take it from them too* sends one request per word, each naming only the customs that still hold that word (the
      server refuses a custom that does not: `custom_changed`); the reason is prefilled "Removed from <Role> in this
      club".
-  4. A saved club version whose read failed (`readError`) reads the club's roles again; a replay answer (no
-     `customsStillHolding`) offers no *Take it from them too*.
+  4. A saved club version or O3 answer whose read failed (`readError`) reads the club's roles again; a replay answer
+     (no `customsStillHolding`) offers no *Take it from them too*.
+- **After the internal review round** (code NOT READY: one HIGH, two MEDIUM; UX: six MEDIUM; mobile: LOW only):
+  - the club's roles are read again on entering Roles and after every write of the club's own roles (R3's list read
+    marks them stale; the list stays on screen until the new read); drift and the chosen person are read again on
+    entering Users, after a role is given or taken there, and after a club version or a removal in Roles;
+  - a failed list or catalog read is a sentence with *Try again*, as is a failed read in Access;
+  - Access in this club, with its drift, now opens Settings > Users (5.5: the top of Users);
+  - drift asks first: *Take it from them* opens a step with the names, an editable prefilled reason, *Take it from N
+    people* and *Cancel*; after a save, *Take it from them too* has *Leave it* beside it;
+  - every save waits for a reason and says "Write a reason to save." beside the button;
+  - the outcome of a removal names every word taken and the number of people, says when the list was cut, and a
+    `custom_changed` refusal drops the offer with its own sentence; the caller's own custom is never listed;
+  - a pending role's row says *Answer*; *All roles* is off while a write is open; the history uses DD.MM.YYYY.
+- **Recorded, not built (LOW):** an *Access* button on each user row; asking before an unsaved draft is dropped (*All
+  roles*, *Cancel*, another person); a shorter save bar on small phones; the iOS keyboard over the save bar (a physical
+  device).
 - **Tests.** `frontend/tests/roles-layers.data.test.mjs` (14, a fake server keeping the R4-3 rules; mutations of the
   per-word customs filter and of the Check-result 404 rule killed), `frontend/tests/roles-layers.islands.test.mjs` (8,
   the compiled islands; the self-block mutation killed), `frontend/tests/roles-r3.actions.test.mjs` (tests 2 and 3 moved

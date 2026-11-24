@@ -171,13 +171,69 @@ test("7. blocked: the caller's own access, and a club administrator unless a pla
   islands.unmountIsland(el);
 });
 
-test("8. drift: who still has what, with Take it from them too per word", () => {
-  const removed = [];
+test("9. a failed list or catalog read is a sentence with Try again, never a blank panel", () => {
+  const retries = [];
   const el = host();
-  islands.mountIsland(el, islands.PersonAccess, personProps({ drift: [{ customId: "c1", userId: "u1", name: "Ana Test", roleId: "r-coach", roleName: "Team coach", words: ["calendar.edit"] }], onDriftRemove: (r, w) => removed.push([r, w]) }));
-  const drift = el.querySelector("[data-person-drift]");
-  assert.match(drift.textContent, /1 person still has permissions their role no longer gives/);
-  click([...drift.querySelectorAll("button")].find((b) => b.textContent === "Take it from them too"));
-  assert.deepEqual(removed, [["r-coach", "calendar.edit"]]);
+  islands.mountIsland(el, islands.ClubRoles, clubProps({ catalog: null, rolesError: "x", onRetry: () => retries.push(1) }));
+  assert.match(el.textContent, /The roles could not be read\. Try again\./);
+  click([...el.querySelectorAll("button")].find((b) => b.textContent === "Try again"));
+  assert.deepEqual(retries, [1]);
+  islands.unmountIsland(el);
+});
+
+test("10. Save waits for a reason (said beside it); Leave it closes the offer; All roles is off while a write is open; a pending row says Answer", () => {
+  const left = [];
+  const el = host();
+  islands.mountIsland(el, islands.ClubRoles, clubProps({ openRoleId: "r-coach", draft: [], changes: { add: [], remove: ["org.view"] } }));
+  const save = el.querySelector("[data-club-roles-save]");
+  assert.equal([...save.querySelectorAll("button")].find((b) => /^Save for/.test(b.textContent)).disabled, true);
+  assert.match(save.textContent, /Write a reason to save\./);
+  islands.mountIsland(el, islands.ClubRoles, clubProps({ openRoleId: "r-coach", draft: [], changes: { add: [], remove: ["org.view"] }, reason: "Why" }));
+  assert.equal([...el.querySelectorAll("[data-club-roles-save] button")].find((b) => /^Save for/.test(b.textContent)).disabled, false);
+  const stillHolding = { roleId: "r-coach", roleName: "Team coach", words: ["org.view"], list: [{ customId: "c1", name: "Ana Test", words: ["org.view"] }], truncated: false };
+  islands.mountIsland(el, islands.ClubRoles, clubProps({ openRoleId: "r-coach", stillHolding, removalReason: "r", onLeaveIt: () => left.push(1) }));
+  click([...el.querySelectorAll("[data-club-roles-still] button")].find((b) => b.textContent === "Leave it"));
+  assert.deepEqual(left, [1]);
+  islands.mountIsland(el, islands.ClubRoles, clubProps({ openRoleId: "r-coach", command: { unconfirmed: true, busy: false } }));
+  assert.equal([...el.querySelectorAll("button")].find((b) => /All roles/.test(b.textContent)).disabled, true);
+  const pending = { ...COACH, state: "question_pending", question: { systemRevision: 5, defaultChanges: { added: [], removed: [] } }, actions: { change: true, answer: true } };
+  islands.mountIsland(el, islands.ClubRoles, clubProps({ view: { systemRoles: [pending], clubRoles: [], closedModules: [] } }));
+  assert.ok([...el.querySelector('[data-club-role="r-coach"]').querySelectorAll("button")].some((b) => b.textContent === "Answer"));
+  islands.unmountIsland(el);
+});
+
+test("11. drift: Take it from them opens a step with the names and an editable reason; Cancel and Take it from N people", () => {
+  const calls = [];
+  const el = host();
+  const drift = [{ customId: "c1", userId: "u1", name: "Ana Test", roleId: "r-coach", roleName: "Team coach", words: ["org.view"] }];
+  islands.mountIsland(el, islands.PersonAccess, personProps({ drift, onDriftAsk: (r, w) => calls.push(["ask", r, w]) }));
+  click([...el.querySelectorAll("[data-person-drift] button")].find((b) => b.textContent === "Take it from them"));
+  assert.deepEqual(calls, [["ask", "r-coach", "org.view"]]);
+  const driftAsk = { roleId: "r-coach", word: "org.view", roleName: "Team coach", names: ["Ana Test"], reason: "Removed from Team coach in this club" };
+  islands.mountIsland(el, islands.PersonAccess, personProps({ drift, driftAsk, onDriftRemove: () => calls.push(["send"]), onDriftCancel: () => calls.push(["cancel"]) }));
+  const ask = el.querySelector("[data-drift-ask]");
+  assert.match(ask.textContent, /from: Ana Test\?/);
+  assert.equal(ask.querySelector("textarea").value, "Removed from Team coach in this club");
+  click([...ask.querySelectorAll("button")].find((b) => b.textContent === "Take it from 1 person"));
+  click([...ask.querySelectorAll("button")].find((b) => b.textContent === "Cancel"));
+  assert.deepEqual(calls.slice(1), [["send"], ["cancel"]]);
+  islands.unmountIsland(el);
+});
+
+test("12. a read error in Access offers Try again; two holdings never share an id; no role reads as a sentence", () => {
+  const retries = [];
+  const el = host();
+  islands.mountIsland(el, islands.PersonAccess, personProps({ view: null, error: "This person's access could not be read. Try again.", onRetry: () => retries.push(1) }));
+  const alert = el.querySelector('[role="alert"]');
+  assert.match(alert.textContent, /could not be read/);
+  click([...alert.querySelectorAll("button")].find((b) => b.textContent === "Try again"));
+  assert.deepEqual(retries, [1]);
+  const two = personProps().view;
+  const second = { ...two.holdings[0], scopeId: "t2", custom: null };
+  islands.mountIsland(el, islands.PersonAccess, personProps({ view: { ...two, holdings: [two.holdings[0], second] } }));
+  const ids = [...el.querySelectorAll("[id]")].map((n) => n.id);
+  assert.equal(new Set(ids).size, ids.length, "unique ids");
+  islands.mountIsland(el, islands.PersonAccess, personProps({ view: { ...two, holdings: [] } }));
+  assert.match(el.textContent, /Ana Test has no role in this club yet\./);
   islands.unmountIsland(el);
 });

@@ -95,6 +95,25 @@ test("1. a club's admin changes Team coach for the club; Imports shows closed an
   }
 });
 
+test("1b. a new role of the club's own, made in the R3 form, is listed when the admin is back on the list", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "club_admin", WIDTHS.desktop);
+  try {
+    await openRoles(page);
+    await page.locator("[data-club-roles]").getByRole("button", { name: "New role", exact: true }).click();
+    const form = page.locator('[data-roles-form="role"]');
+    await form.waitFor();
+    await form.locator('[data-roles-field="name"]').fill("Video analyst");
+    const word = form.locator("[data-roles-word]:not([disabled])").first();
+    await word.evaluate((el) => { el.closest("details")?.setAttribute("open", ""); });
+    await word.check();
+    await form.getByRole("button", { name: "Create role" }).click();
+    await page.locator("[data-club-own-role]").filter({ hasText: "Video analyst" }).waitFor();
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});
+
 test("2. OptiMove changes Team coach's default: the club's admin answers Keep ours", async () => {
   await asPlatform(async (ctx) => {
     const role = JSON.parse((await request(ctx, world, `${R}/${coachRoleId}`)).text);
@@ -112,7 +131,7 @@ test("2. OptiMove changes Team coach's default: the club's admin answers Keep ou
     await openRoles(page);
     const row = page.locator(`[data-club-role="${coachRoleId}"]`);
     assert.match(await row.textContent(), /your answer is needed/);
-    await row.getByRole("button", { name: "Open" }).click();
+    await row.getByRole("button", { name: "Answer" }).click();
     const q = page.locator("[data-club-roles-question]");
     await q.waitFor();
     await q.getByRole("button", { name: "Keep ours" }).click();

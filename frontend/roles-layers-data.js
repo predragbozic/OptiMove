@@ -12,6 +12,7 @@ import { api } from "./api.js";
 import { CENTRAL_CALENDAR_WRITE_BOUND_MS, centralCalendarErrorInfo, centralCalendarOutcomeUnknown, newCentralCalendarRequestKey } from "./central-calendar-data.js";
 import { itemChanges, layersCheckSettles, layersRefusalText, wordsText } from "./roles-layers-rules.js";
 import { normalizeCatalog, rolesErrorInfo } from "./roles-data.js";
+import { state } from "./state.js";
 
 export const LAYERS_BASE = "/api/organization/roles";
 const enc = encodeURIComponent;
@@ -66,8 +67,14 @@ export const writeOpen = (holder) => Boolean(holder.command?.busy || holder.comm
 export function emptyClubRoles() {
   return {
     clubId: "", epoch: 0, view: null, loading: false, error: "", openRoleId: "", draft: null, reason: "",
-    command: null, notice: "", noticeTone: "ok", stillHolding: null, removalReason: "",
+    command: null, notice: "", noticeTone: "ok", stillHolding: null, removalReason: "", stale: false, takenWords: [],
   };
+}
+
+// The club's roles are read again on the next draw: on entering Roles, after a write of the club's own roles (R3, whose
+// list read runs then) and after an O3 answer whose read failed. The list on screen stays until the new read arrives.
+export function markClubRolesStale() {
+  clubRoles.stale = true;
 }
 export const clubRoles = emptyClubRoles();
 let clubGeneration = 0;
@@ -87,6 +94,7 @@ export async function loadClubRoles(clubId, render) {
   }
   const mine = ++clubGeneration;
   clubRoles.loading = true;
+  clubRoles.stale = false;
   render?.();
   try {
     const view = await api(`${LAYERS_BASE}/clubs/${enc(clubId)}/roles`);
@@ -105,8 +113,10 @@ export async function loadClubRoles(clubId, render) {
 export function clubRolesNeedLoad(clubId) {
   if (!clubId) return false;
   if (clubRoles.clubId !== clubId) return !writeOpen(clubRoles);
-  return !clubRoles.loading && !clubRoles.command && !clubRoles.view && !clubRoles.error;
+  return !clubRoles.loading && !clubRoles.command && (clubRoles.stale || (!clubRoles.view && !clubRoles.error));
 }
+
+const selfId = () => String(state.currentUser?.id || "");
 
 export const systemRoleOf = (roleId) => (clubRoles.view?.systemRoles || []).find((r) => r.roleId === roleId) || null;
 
@@ -125,6 +135,12 @@ export function closeClubRole() {
   clubRoles.openRoleId = "";
   clubRoles.draft = null;
   clubRoles.reason = "";
+  clubRoles.stillHolding = null;
+}
+
+// "Leave it": the offer after a save goes away; nothing is taken (Q15, 11a).
+export function dismissStillHolding() {
+  if (clubRoles.command) return;
   clubRoles.stillHolding = null;
 }
 
@@ -183,7 +199,10 @@ export async function saveClubRole(render, { check = false } = {}) {
       clubRoles.reason = "";
       clubRoles.notice = `Saved for this club: ${command.roleName}.`;
       clubRoles.noticeTone = "ok";
-      const list = Array.isArray(answer?.customsStillHolding) ? answer.customsStillHolding : [];
+      // The caller's own custom can never be changed by the caller (the server's self_custom): never listed.
+      const list = (Array.isArray(answer?.customsStillHolding) ? answer.customsStillHolding : []).filter((c) => String(c.userId) !== selfId());
+      clubRoles.takenWords = [];
+      markPersonStale();
       // The words the listed customs still hold, in the order they were taken from the role.
       const held = new Set(list.flatMap((c) => c.words || []));
       const words = command.body.remove.filter((w) => held.has(w));
@@ -217,12 +236,16 @@ export async function answerClubRole(roleId, choice, render, { check = false } =
       body: { requestKey: newCentralCalendarRequestKey(), systemRevision: role.question.systemRevision, choice },
     };
   }
+  let reread = false;
   await runCommand(clubRoles, command, render, {
     check,
     onSaved: (answer) => {
-      applyCurrentRole(answer?.role);
+      // A saved answer whose read failed carries no role: the old question would stay on screen, so read again.
+      if (answer?.role) applyCurrentRole(answer.role); else reread = true;
+      markPersonStale();
       const role = systemRoleOf(command.roleId);
-      if (clubRoles.openRoleId === command.roleId) clubRoles.draft = role ? [...role.effectiveItems] : null;
+      if (clubRoles.openRoleId === command.roleId) clubRoles.draft = role && !reread ? [...role.effectiveItems] : null;
+      if (reread && clubRoles.openRoleId === command.roleId) clubRoles.openRoleId = "";
       clubRoles.notice = command.body.choice === "accept_default"
         ? `${command.roleName} now follows OptiMove's default in this club.`
         : `${command.roleName} keeps this club's own version.`;
@@ -234,6 +257,7 @@ export async function answerClubRole(roleId, choice, render, { check = false } =
       clubRoles.noticeTone = "error";
     },
   });
+  if (reread) await loadClubRoles(clubRoles.clubId, render);
 }
 
 // Q15, Take it from them too: one request per word, one at a time, over the listed customs that still hold it.
@@ -270,14 +294,26 @@ export async function removeFromCustoms(render, { check = false } = {}) {
   await runCommand(clubRoles, command, render, {
     check,
     onSaved: () => {
-      const rest = (clubRoles.stillHolding?.words || []).filter((w) => w !== command.word);
-      clubRoles.notice = `Taken from them too: ${wordsText([command.word])}.`;
+      const sh = clubRoles.stillHolding;
+      const rest = (sh?.words || []).filter((w) => w !== command.word);
+      clubRoles.takenWords = [...clubRoles.takenWords.filter((w) => w !== command.word), command.word];
+      const count = command.body.customIds.length;
+      // Only the listed people were sent; with a cut list more may still hold it (the full list is in Users).
+      clubRoles.notice = `Taken from ${count} ${count === 1 ? "person" : "people"}: ${wordsText(clubRoles.takenWords)}.`
+        + (sh?.truncated ? " More people may still have it – see Access in Users." : "");
       clubRoles.noticeTone = "ok";
-      if (rest.length && clubRoles.stillHolding) clubRoles.stillHolding = { ...clubRoles.stillHolding, words: rest };
+      if (rest.length && sh) clubRoles.stillHolding = { ...sh, words: rest };
       else clubRoles.stillHolding = null;
+      markPersonStale();
     },
     onRefused: (info) => {
-      clubRoles.notice = layersRefusalText(info);
+      // custom_changed: someone changed these customs meanwhile; the list is no longer true, so the offer goes and the
+      // people are read again in Users.
+      if (info.code === "custom_changed") {
+        clubRoles.stillHolding = null;
+        clubRoles.notice = "Someone changed these people's access meanwhile. Nothing more was taken. Check Access in Users.";
+        markPersonStale();
+      } else clubRoles.notice = layersRefusalText(info);
       clubRoles.noticeTone = "error";
     },
   });
@@ -292,11 +328,25 @@ export function emptyPerson() {
   return {
     clubId: "", userId: "", epoch: 0, catalog: null, view: null, loading: false, error: "", editKey: "", draft: null,
     reason: "", command: null, notice: "", noticeTone: "ok", drift: null, driftError: "", endKey: "", endReason: "",
+    stale: false, driftAsk: null,
   };
 }
 export const person = emptyPerson();
 let personGeneration = 0;
 let driftGeneration = 0;
+
+// Drift and the chosen person are read again on the next draw: on entering Users, after a role is given or taken
+// there (R2), and after a club version or a removal in Roles.
+export function markPersonStale() {
+  person.stale = true;
+}
+
+export async function refreshPerson(render) {
+  if (!person.stale || !person.clubId || writeOpen(person)) return;
+  person.stale = false;
+  if (person.userId) await loadPerson(person.userId, render, { keepNotice: true });
+  await loadPersonClub(person.clubId, render);
+}
 
 export function resetPerson() {
   const epoch = person.epoch + 1;
@@ -481,32 +531,57 @@ export async function endPersonCustom(render, { check = false } = {}) {
   if (!person.command) await rereadPerson(render);
 }
 
-// Drift (5.5): take one word from the listed customs of one role that still hold it.
-export async function removeDriftWord(roleId, word, render, { check = false } = {}) {
+
+// Drift (5.5): take one word from the customs of one role that still hold it. One tap asks first (the names and an
+// editable reason), the second sends. The caller's own custom is never named (the server's self_custom).
+const driftCustoms = (roleId, word) => (person.drift || []).filter((c) => c.roleId === roleId && (c.words || []).includes(word) && String(c.userId) !== selfId());
+
+export function askDriftRemove(roleId, word) {
+  if (person.command) return;
+  const customs = driftCustoms(roleId, word);
+  if (!customs.length) return;
+  person.driftAsk = { roleId, word, roleName: customs[0].roleName, names: customs.map((c) => c.name || "Someone"), reason: `Removed from ${customs[0].roleName} in this club` };
+  person.notice = "";
+}
+
+export function cancelDriftAsk() {
+  if (writeOpen(person)) return;
+  person.driftAsk = null;
+}
+
+export async function removeDriftWord(render, { check = false } = {}) {
   if (person.command?.busy) return;
   let command;
   if (check) {
     if (!person.command?.unconfirmed || person.command.kind !== "drift") return;
     command = person.command;
   } else {
-    if (person.command) return;
-    const customs = (person.drift || []).filter((c) => c.roleId === roleId && c.words.includes(word));
-    if (!customs.length) return;
+    const ask = person.driftAsk;
+    if (person.command || !ask) return;
+    const reason = ask.reason.trim();
+    if (!reason) return;
+    const customs = driftCustoms(ask.roleId, ask.word);
+    if (!customs.length) { person.driftAsk = null; return; }
     command = {
-      kind: "drift", word,
-      path: `/${enc(roleId)}/clubs/${enc(person.clubId)}/custom-word-removal`,
-      body: { requestKey: newCentralCalendarRequestKey(), word, customIds: customs.map((c) => c.customId), reason: `Removed from ${customs[0].roleName} in this club` },
+      kind: "drift", word: ask.word,
+      path: `/${enc(ask.roleId)}/clubs/${enc(person.clubId)}/custom-word-removal`,
+      body: { requestKey: newCentralCalendarRequestKey(), word: ask.word, customIds: customs.map((c) => c.customId), reason },
     };
   }
   await runCommand(person, command, render, {
     check,
     onSaved: () => {
-      person.notice = `Taken from them too: ${wordsText([command.word])}.`;
+      const count = command.body.customIds.length;
+      person.notice = `Taken from ${count} ${count === 1 ? "person" : "people"}: ${wordsText([command.word])}.`;
       person.noticeTone = "ok";
+      person.driftAsk = null;
     },
     onRefused: (info) => {
-      person.notice = layersRefusalText(info);
+      person.notice = info.code === "custom_changed"
+        ? "Someone changed these people's access meanwhile. Nothing was taken; the list is read again."
+        : layersRefusalText(info);
       person.noticeTone = "error";
+      person.driftAsk = null;
     },
   });
   if (!person.command) await rereadPerson(render);

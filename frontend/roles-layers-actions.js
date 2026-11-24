@@ -4,13 +4,13 @@
 // imported lazily, only when a host exists) and passes the state and callbacks. Each island's state belongs to one club
 // (and Person access to one person); nothing is shown or written for a club that is not the host's.
 import {
-  answerClubRole, cancelHoldingEdit, clubRoleChanges, clubRoles, clubRolesNeedLoad, closeClubRole, editHolding,
-  endPersonCustom, loadClubRoles, loadPerson, loadPersonClub, openClubRole, person, personChanges, removeDriftWord,
+  answerClubRole, askDriftRemove, cancelDriftAsk, cancelHoldingEdit, clubRoleChanges, clubRoles, clubRolesNeedLoad, closeClubRole, dismissStillHolding, editHolding,
+  endPersonCustom, loadClubRoles, loadPerson, loadPersonClub, openClubRole, person, personChanges, refreshPerson, removeDriftWord,
   removeFromCustoms, saveClubRole, savePersonCustom, toggleClubRoleWord, togglePersonWord, writeOpen,
 } from "./roles-layers-data.js";
 import { handleRolesAction } from "./roles-actions.js";
 import { rolesCanWrite } from "./roles-view.js";
-import { rolesContext } from "./roles-data.js";
+import { loadRoles, rolesContext } from "./roles-data.js";
 import { state } from "./state.js";
 
 export const CLUB_ROLES_HOST = "[data-club-roles-host]";
@@ -37,7 +37,9 @@ function clubRolesProps(host) {
   const d = state.roles;
   const ctx = rolesContext();
   const rerender = () => rerenderRoles();
-  const base = { clubName: host.dataset.clubName || "", catalog: d.catalog, r2Roles: d.roles || [], platform: Boolean(ctx?.platform), onRetry: () => { clubRoles.error = ""; void loadClubRoles(hostClub(host), rerender); } };
+  const base = { clubName: host.dataset.clubName || "", catalog: d.catalog, r2Roles: d.roles || [], platform: Boolean(ctx?.platform), rolesError: d.error || "", rolesLoading: Boolean(d.loading),
+    // Try again reads what failed: the club's roles (R4-3) and the list and catalog (R2).
+    onRetry: () => { clubRoles.error = ""; void loadClubRoles(hostClub(host), rerender); if (d.error || !d.catalog) void loadRoles(renders.renderRoles || rerender); } };
   if (!same) return { ...base, loading: true, view: null };
   return {
     ...base,
@@ -62,6 +64,7 @@ function clubRolesProps(host) {
     onAnswer: (roleId, choice) => { void answerClubRole(roleId, choice, rerender); },
     onRemovalReason: (text) => { clubRoles.removalReason = text; rerender(); },
     onRemove: () => { void removeFromCustoms(rerender); },
+    onLeaveIt: () => { dismissStillHolding(); rerender(); },
     onCheck: () => {
       const kind = clubRoles.command?.kind;
       if (kind === "version") void saveClubRole(rerender, { check: true });
@@ -114,12 +117,17 @@ function personProps(host) {
     onAskEnd: (key) => { if (!person.command) { person.endKey = key; person.editKey = ""; person.draft = null; person.endReason = ""; } rerender(); },
     onEndReason: (text) => { person.endReason = text; rerender(); },
     onEnd: () => { void endPersonCustom(rerender); },
-    onDriftRemove: (roleId, word) => { void removeDriftWord(roleId, word, rerender); },
+    driftAsk: person.driftAsk,
+    onDriftAsk: (roleId, word) => { askDriftRemove(roleId, word); rerender(); },
+    onDriftReason: (text) => { if (person.driftAsk) person.driftAsk = { ...person.driftAsk, reason: text }; rerender(); },
+    onDriftCancel: () => { cancelDriftAsk(); rerender(); },
+    onDriftRemove: () => { void removeDriftWord(rerender); },
+    onRetry: () => { person.error = ""; person.driftError = ""; if (person.userId) void loadPerson(person.userId, rerender); void loadPersonClub(clubId, rerender); },
     onCheck: () => {
       const kind = person.command?.kind;
       if (kind === "custom") void savePersonCustom(rerender, { check: true });
       else if (kind === "end") void endPersonCustom(rerender, { check: true });
-      else if (kind === "drift") void removeDriftWord("", person.command.word, rerender, { check: true });
+      else if (kind === "drift") void removeDriftWord(rerender, { check: true });
     },
   };
 }
@@ -142,6 +150,7 @@ function rerenderPerson() {
   if (!host?.isConnected) return;
   const clubId = hostClub(host);
   if (clubId && person.clubId !== clubId && !writeOpen(person)) void loadPersonClub(clubId, rerenderPerson);
+  else if (clubId && person.clubId === clubId && person.stale) void refreshPerson(rerenderPerson);
   void mount("person", host, "PersonAccess", personProps, "person_access");
 }
 
