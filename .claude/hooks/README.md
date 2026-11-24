@@ -80,13 +80,37 @@ the test file as "removed by the relaxed policy", skipped with that reason).
 **No question any more** (the hook stays silent, and `settings.json` allows `Bash` as a whole):
 compound commands (`&&`, `;`, `|`, heredocs, redirections, subshells, `export`, `cd` chains) whose
 parts are each allowed; writing files anywhere through the shell (`cat >>`, `sed -i`, `tee`,
-`cp`, `mv`, `mkdir`, `touch`, a non-recursive `rm`); `git add` of named files, folders, globs and
-`-u`; `git commit` (also `-a`, `--no-verify`) on a branch that is not main/master; `git push` of a
-named branch, or of the current branch when it is not main/master (also a bare `git push`);
-`cherry-pick`, `revert`, `apply`, `am`, `tag`, `notes`, `worktree add`; any option of a read
-command; running tests, node / python one-off scripts; a local `pg_ctl` / `pg_ctlcluster`;
-`psql` and migrations against an `optimove_tests_*` database on this machine; edits of
-`.claude/rules`, `.claude/agents` and documents with the file tools.
+`cp`, `mv`, `mkdir`, `touch`, a non-recursive `rm`) to a target named on the line; `git add` of
+named files, folders and globs below the top; `git commit` (also `-a`, `--no-verify`) on a branch
+that is not main/master; `git push` of a named branch, or of the current branch when it is not
+main/master (also a bare `git push`); `cherry-pick`, `revert`, `am`, `tag`, `notes`,
+`worktree add`; any option of a read command; running tests, `node scripts/…`, `npm run`, `npx`,
+`make`, a tracked repository script, inline `node -e` / `python3 -c` / a Python heredoc that
+starts no process and reads no `.env`; a local `pg_ctl` / `pg_ctlcluster`; `psql` and migrations
+against an `optimove_tests_*` database on this machine; edits of `.claude/rules`,
+`.claude/agents` and documents with the file tools.
+
+**Added by the independent review of #750** (NO-GO on 9076d27, relayed by the manager, who
+decided item 11 for the owner) — each also asks:
+- an output redirection whose target is only known when the line runs (`> $(echo …)`, `` > `…` ``,
+  `> $VAR/x` for a variable the line did not set plainly);
+- writers that do not name what they write, run in or aimed at a git work tree: `git apply`
+  (except `--check` / `--stat` / `--numstat` / `--summary`), `patch`, `tar x`, `unzip`, `7z`,
+  `rsync`, `cp -r src/. dest` / `cp -r src/ dest`;
+- a write through a link into the guard's files (`echo x > sj` with `sj -> .claude/settings.json`,
+  `cp x hk/` with `hk -> .claude/hooks`), and `ln -s` whose target is unreadable or is the guard's files;
+- `eval "git push -f" origin x` (eval joins all its words);
+- `psql "$DATABASE_URL"` and the other database clients with a variable or substitution as target;
+- `rm -rf ../*` from a repository that lies in /tmp (a glob in a temporary path must sit below a
+  plain folder that holds no work tree);
+- `git reset` with a revision (`--soft HEAD~1`, `HEAD~1`, `--mixed HEAD~2`) on main or master;
+- `git add -u` / `--update`, `git add *` / `'*'`;
+- `pg://`, `pgsql://` and the other postgres URL schemes;
+- a file-tool edit of `.CLAUDE/hooks/…` (letter case ignored on every system);
+- rule 11, code the guard cannot read: `bash <(…)`, `source <(…)`, `. <(…)`; `bash|sh|source`
+  of a file written on the same line or not tracked in the repository; `node|python3|perl|ruby
+  -e/-c/-p/-` (and a heredoc fed to them) whose code contains `child_process`, `exec`, `spawn`,
+  `system`, `subprocess`, `popen` or reads `.env`.
 
 **Still denied:** `git add .` / `-A` / `--all`, `git reset --hard`, `git clean -f`, a force push,
 `rm -rf` of the repository root, a home or a drive root, `git checkout -- <path>` / `git restore`
@@ -141,6 +165,11 @@ wrapped in `bash -c`, in a substitution).
 - Writes outside the work tree (for example to `/etc`) do not ask.
 - A recursive `grep -r` / `rg` over a folder reads a `.env` in it without naming it (accepted: a
   question for every recursive search would undo the relaxation).
+- Accepted by the manager at the independent review (LOW): `git pull` can change
+  `.claude/hooks` (it brings what `main` holds, which a merge already gated); `git -C ../.. commit`
+  commits in another repository the hook does not check for main.
+- Rule 11 reads inline code as text: obfuscated code (`eval(atob(…))`, `getattr(os, 'sys'+'tem')`)
+  and a tracked script that itself starts a process are not caught.
 - A `cd` inside a subshell, a group or a substitution makes the rest of the line unknown, so a
   commit or push after it asks.
 - `settings.json` allows `Bash` as a whole: the hook is now the only layer that asks for a shell

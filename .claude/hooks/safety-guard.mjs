@@ -2039,12 +2039,16 @@ const DENY_REASONS = {
 const ASK_REASONS = {
   guardFiles: "This command changes (or does more than read) the safety guard's own files or its registration in the project's .claude folder, or git's own configuration, hooks or refs — needs your explicit confirmation.",
   gitRmForce: "'git rm -f' removes files together with their uncommitted changes — needs your explicit confirmation.",
+  unreadableTarget: "This command writes to a file whose name is only known when the line runs (a command substitution or a variable the line did not set) — needs your explicit confirmation.",
+  unnamedWriter: "This command writes files it does not name (a patch, an archive, a copied folder's contents) into a git work tree, where it could change the safety guard or .git — needs your explicit confirmation.",
+  resetMain: "This 'git reset' moves main or master to another commit — needs your explicit confirmation.",
+  unreadableCode: "This runs code the guard cannot read: a script made on this line or not tracked in the repository, a process substitution, or inline code that starts a process or reads .env — needs your explicit confirmation.",
   branchReset: "This resets or force-moves a branch (checkout -B, switch -C / --force-create, branch -f / -M / -C), which can drop its commits — needs your explicit confirmation.",
   recursiveDelete: "This recursive delete reaches outside the work tree's own files and the temporary folders (or the work tree's top, its .git, or the guard's files) — needs your explicit confirmation.",
   stashSave: "'git stash' puts uncommitted work aside, out of the working tree — needs your explicit confirmation.",
   commitAmend: "'git commit --amend' rewrites a commit that may already be pushed — needs your explicit confirmation.",
   pgControlNotTestCluster: "This stops, restarts, kills, promotes or reloads a PostgreSQL cluster that is not this session's test cluster (a data folder in its own temporary folder) — needs your explicit confirmation.",
-  stageBroad: "This git add also stages ignored files (-f / --force, which can take .env), reads its list from a file or an expansion, or names the whole work tree — needs your explicit confirmation.",
+  stageBroad: "This git add stages more than named files (-u / --update, a bare *, a pathspec file or expansion, the whole work tree) or also ignored files (-f / --force, which can take .env) — needs your explicit confirmation.",
   pushNotOwnBranch: "This push could reach main or master, or more than named branches (a bare push on main, --all / --tags / --mirror, a refspec, push.default matching, an upstream main, a configured push refspec, or a directory the hook cannot follow) — needs your explicit confirmation.",
   fileOpOutsideScratch: "This deletes, moves or changes a path that is not plainly inside this session's own temporary folder (or touches a git work tree, a hard link, or the folder itself) — needs your explicit confirmation.",
   mergeRebase:
@@ -2109,6 +2113,13 @@ function expandSegments(segments, depth = 0) {
     if (normalized && normalized !== segment.trim().replace(/\s+/g, " ")) expanded.push(...expandSegments([normalized], depth + 1));
     const inner = unwrapInterpreterCommand(normalized || segment);
     if (inner) expanded.push(...expandSegments(splitCommandSegments(inner), depth + 1));
+    // eval joins ALL its words into one command line: `eval "git push -f" origin x` runs
+    // `git push -f origin x` (unwrapInterpreterCommand only unquotes a single word)
+    const evalWords = /^eval\s+(.+)$/s.exec(normalized || "");
+    if (evalWords) {
+      const joined = tokenizeWords(evalWords[1]).map(shellWord).join(" ");
+      if (joined) expanded.push(...expandSegments(splitCommandSegments(joined), depth + 1));
+    }
     for (const sub of extractSubstitutions(segment)) expanded.push(...expandSegments(splitCommandSegments(sub), depth + 1));
     // A variable as the command word (`$GIT push -f`) is read as git, the only command
     // whose subcommands these rules know; for anything else it changes nothing.
@@ -2625,8 +2636,18 @@ function recursiveDeleteTargetAllowed(rawTarget, dir, variables) {
   if (mentionsGuardFiles(abs) || /(^|[\\/])\.claude$/.test(abs)) return false;
   const real = realPathOfNearestExisting(abs) ?? abs;
   for (const root of tempRoots()) {
+    if (!real.startsWith(root + path.sep)) continue;
+    // a glob is expanded after the hook looked (`../*` from a repository in /tmp is all of /tmp):
+    // the folder before the first glob must itself be a plain folder below the temporary root that
+    // holds no work tree
+    const parts = real.slice(root.length + 1).split(path.sep);
+    const g = parts.findIndex((p) => /[*?[{]/.test(p));
+    if (g >= 0) {
+      const prefix = path.join(root, ...parts.slice(0, g));
+      return g >= 1 && !insideGitWorkTreeOrGitDir(prefix) && !containsGitWorkTree(prefix);
+    }
     // not a work tree, not inside one, and not a folder that holds one (another session's worktree)
-    if (real.startsWith(root + path.sep) && !insideGitWorkTreeOrGitDir(real) && !containsGitWorkTree(real)) return true;
+    if (!insideGitWorkTreeOrGitDir(real) && !containsGitWorkTree(real)) return true;
   }
   const top = dir === null ? null : getWorkTreeTop(dir);
   const realTop = top ? realPathOrNull(top) : null;
@@ -2758,11 +2779,14 @@ export function gitAddForceOrTop(segment, dir) {
     if (/[$`]/.test(t)) return true;
     if (/^--/.test(t)) {
       const n = t.split("=")[0];
-      if (longOptionIs(n, "--force") || longOptionIs(n, "--pathspec-from-file")) return true;
+      if (longOptionIs(n, "--force") || longOptionIs(n, "--pathspec-from-file") || longOptionIs(n, "--update")) return true;
       continue;
     }
-    if (/^-[A-Za-z]+$/.test(t)) { if (t.includes("f")) return true; continue; }
+    // -u stages every tracked change, like commit -a on the whole tree (the independent review)
+    if (/^-[A-Za-z]+$/.test(t)) { if (/[fu]/.test(t)) return true; continue; }
     if (t.startsWith(":")) return true;
+    // `*` (quoted or not) at the top is every file there: the same as `git add .`
+    if (/^\*+$/.test(t)) return true;
     if (base && top && !/[*?[\]]/.test(t)) {
       const real = realPathOrNull(path.resolve(base, t));
       if (real && real === realPathOrNull(top)) return true;
@@ -2804,7 +2828,7 @@ export function relaxedGitCommandNeedsQuestion(segment) {
 export function namesRemoteDatabase(cmd) {
   // a backslash-newline continues the command: read the joined line
   const text = String(cmd).replace(/\\\r?\n/g, " ");
-  for (const m of text.matchAll(/\bpostgres(?:ql)?:\/\/[^\s'"`]*/gi)) {
+  for (const m of text.matchAll(/\b(?:postgres(?:ql)?|pg|pgsql|psql|postgis|cockroachdb|redshift)(?:\+[a-z0-9]+)?:\/\/[^\s'"`]*/gi)) {
     if (!isLoopbackDatabaseValue("DATABASE_URL", m[0].replace(/[),;]+$/, ""))) return true;
   }
   if (/[a-z0-9-]\.(?:supabase\.co|supabase\.com|render\.com|onrender\.com)\b/i.test(text) && /\b(psql|pg_dump|pg_dumpall|pg_restore|pgcli|DATABASE_URL|PGHOST|postgres)/i.test(text)) return true;
@@ -2870,6 +2894,183 @@ export function relaxedPersistentSqlWrite(segment) {
   }
   if (named.length === 0) return true;
   return !named.every((n) => (/^postgres(ql)?:\/\//i.test(n) ? isLoopbackDatabaseValue("DATABASE_URL", n) && /:\/\/[^/?#]*\/optimove_tests_[A-Za-z0-9_]+(?:[?#]|$)/.test(n) : /^optimove_tests_[A-Za-z0-9_]+$/.test(n)));
+}
+
+// ---------------------------------------------------------------------------
+// The independent review of #750 (NO-GO on 9076d27): what a write the hook cannot see through
+// needs. Each of these was silent at that head.
+// ---------------------------------------------------------------------------
+
+// The guard's own files, compared by real path (a symlink in the work tree that points into
+// them is them) and, for the letter case, without case on every system.
+const GUARDED_REAL_PATHS = () => [path.join(LIVE_CLAUDE_DIR, "hooks"), path.join(LIVE_CLAUDE_DIR, "settings.json"), path.join(LIVE_CLAUDE_DIR, "settings.local.json")];
+export function isGuardedPath(target) {
+  const real = realPathOfNearestExisting(target);
+  if (real === null) return true;
+  if (GUARDED_REAL_PATHS().some((g) => isInsideDir(real, g))) return true;
+  const rel = path.relative(path.dirname(LIVE_CLAUDE_DIR), real).replace(/\\/g, "/").toLowerCase();
+  return rel === ".claude" || /^\.claude\/(hooks(\/|$)|settings(\.local)?\.json$)/.test(rel);
+}
+
+// Every word of a part that could be a path it writes (its operands and its output redirections),
+// resolved against the directory the part runs in. A word that names the guard's files through a
+// link (`sj -> .claude/settings.json`, `hk -> .claude/hooks`) asks when the part does more than read.
+export function writesIntoGuardThroughLink(segment, dir) {
+  if (dir === null) return false;
+  const hits = (w) => w && !w.startsWith("-") && !/[$`]|SUBSTITUTED/.test(w) && w.length < 4096 && isGuardedPath(path.resolve(dir, w));
+  // an output redirection always writes, whatever the command (`echo x > sj`)
+  if (outputRedirectTargets(segment).map(shellWord).some(hits)) return true;
+  if (onlyReadsGuardFiles(segment)) return false;
+  return commandWords(segment).slice(1).some(hits);
+}
+
+// An output redirection whose target the hook cannot read before the line runs: a command
+// substitution, or a variable the line did not set plainly (`> $(echo .claude/hooks/x)`).
+export function redirectTargetUnreadable(segment, variables = new Map()) {
+  return outputRedirectTargets(segment).some((t) => {
+    if (t === "" || /^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/.test(shellWord(t))) return false;
+    if (/\$\(|`|\$\{?[A-Za-z_0-9!#?@*]/.test(t) && /[$`]/.test(substituteLineVariables(t, variables))) return true;
+    return t === "$";
+  });
+}
+
+// `ln -s <target> <name>`: a link whose target the hook cannot read, or that points into the
+// guard's files, asks (a later write through it would reach them).
+export function linkIntoGuard(segment, dir) {
+  const words = commandWords(segment);
+  if (path.basename(words[0] ?? "") !== "ln") return false;
+  const operands = words.slice(1).filter((w) => !w.startsWith("-"));
+  if (operands.length === 0) return false;
+  const raw = tokenizeWords(normalizeSegment(segment)).slice(1).filter((w) => !shellWord(w).startsWith("-"));
+  if (raw.some((w) => /[$`]/.test(w))) return true;
+  const target = operands[0];
+  const linkDir = operands.length > 1 ? path.dirname(path.resolve(dir ?? "/", operands[operands.length - 1])) : dir ?? "/";
+  return isGuardedPath(path.resolve(linkDir, target)) || isGuardedPath(path.resolve(dir ?? "/", target));
+}
+
+// Writers that do not name the files they write: a patch, an archive, a tree copied into the work
+// tree. Run inside a git work tree (or aimed at one) they can rewrite the guard and .git: they ask.
+function insideAnyWorkTree(p) {
+  const real = realPathOfNearestExisting(p) ?? p;
+  return insideGitWorkTreeOrGitDir(real);
+}
+export function unnamedTreeWriter(segment, dir) {
+  const words = commandWords(segment);
+  const name = path.basename(words[0] ?? "");
+  const args = words.slice(1);
+  const here = dir !== null && insideAnyWorkTree(dir);
+  if (name === "git") {
+    const parsed = extractGitSubcommandArgs(segment, "apply");
+    if (!parsed) return false;
+    const opts = parsed.rest.split(/\s+/).filter((t) => t.startsWith("-"));
+    // --check / --stat / --numstat / --summary only read the patch
+    return !(opts.length > 0 && opts.every((o) => ["--check", "--stat", "--numstat", "--summary", "-v", "--verbose"].includes(o)));
+  }
+  if (name === "patch") return dir === null || here || args.some((a, i) => (a === "-d" || a === "--directory") && insideAnyWorkTree(path.resolve(dir ?? "/", args[i + 1] ?? "")));
+  const target = (flag) => { const i = args.findIndex((a) => a === flag); return i >= 0 ? args[i + 1] : null; };
+  if (name === "tar") {
+    const extracts = args.some((a) => /^-?[A-Za-z]*x/.test(a) && !a.startsWith("--") || a === "--extract" || a === "--get");
+    if (!extracts) return false;
+    const c = target("-C") ?? (args.find((a) => a.startsWith("--directory="))?.slice(12) ?? target("--directory"));
+    return c !== null && c !== undefined ? dir === null || insideAnyWorkTree(path.resolve(dir, c)) : dir === null || here;
+  }
+  if (name === "unzip" || name === "7z" || name === "7za" || name === "bsdtar") {
+    // unzip: -d <dir> (its -o means "overwrite"); 7z: -o<dir> glued; a list (-l) or a test (-t) only reads
+    if (name === "unzip" && args.some((a) => /^-[A-Za-z]*[lt]/.test(a) && !/^-[A-Za-z]*d/.test(a))) return false;
+    const d = name === "unzip" ? target("-d") : (args.find((a) => /^-o./.test(a))?.slice(2) ?? null);
+    return d ? dir === null || insideAnyWorkTree(path.resolve(dir, d)) : dir === null || here;
+  }
+  if (name === "rsync" || name === "cp") {
+    const operands = args.filter((a) => !a.startsWith("-"));
+    if (operands.length < 2) return false;
+    const dest = operands[operands.length - 1];
+    const destInTree = dir === null || insideAnyWorkTree(path.resolve(dir, dest));
+    if (!destInTree) return false;
+    if (name === "rsync") return true;
+    // a copy of a folder's CONTENTS (`src/.`, `src/`) lands its dot files in the destination
+    const recursive = args.some((a) => /^-[A-Za-z]*[rRa]/.test(a) || a === "--recursive" || a === "--archive");
+    return recursive && operands.slice(0, -1).some((s) => /\/\.?$/.test(s) && s !== "./");
+  }
+  return false;
+}
+
+// A database target the hook cannot read: a variable or a substitution as the connection of psql
+// and the other clients (`psql "$DATABASE_URL"`, `pg_dump ${URL}`).
+export function databaseTargetUnreadable(segment) {
+  const words = tokenizeWords(normalizeSegment(segment));
+  const name = path.basename(shellWord(words[0] ?? ""));
+  if (!/^(psql|pg_dump|pg_dumpall|pg_restore|pgcli|usql|pgbench|createdb|dropdb|vacuumdb|reindexdb|pg_isready)$/.test(name)) return false;
+  return words.slice(1).some((w) => /\$|`/.test(w.replace(/^'[^']*'$/, "")));
+}
+
+// `git reset` that moves the branch (a revision operand, or --soft / --mixed with one) on main or
+// master: it rewrites main's history locally.
+export function resetOnProtectedBranch(segment, state) {
+  const parsed = extractGitSubcommandArgs(segment, "reset");
+  if (!parsed) return false;
+  const tokens = parsed.rest.split(/\s+/).filter(Boolean).map(stripQuotes);
+  const dashdash = tokens.indexOf("--");
+  const operands = (dashdash >= 0 ? tokens.slice(0, dashdash) : tokens).filter((t) => !t.startsWith("-"));
+  if (operands.length === 0) return false; // `git reset` alone only unstages
+  if (state.dir === null || state.branch === null) return true;
+  const ref = state.branch !== undefined && !parsed.dir ? state.branch : getCurrentBranchRef(parsed.dir ? path.resolve(state.dir, parsed.dir) : state.dir);
+  return isRefOneOf(ref, ["main", "master"]);
+}
+
+// Code the guard cannot read, run by an interpreter (the manager's narrow rule of the review of
+// #750, for the owner). Plain `node scripts/…`, `npm run`, `npx`, `make` stay allowed.
+// - a process substitution used as code: `bash <(…)`, `source <(…)`, `. <(…)`;
+// - a shell or `source` of a file written on the same line, or of a file that is not one of the
+//   repository's tracked files;
+// - `node|python|perl|ruby -e/-c/-p/-` (or a heredoc fed to them) whose code starts a process or
+//   reads .env.
+const CODE_RUNNERS = new Set(["node", "nodejs", "python", "python3", "perl", "ruby", "deno", "bun"]);
+const PROCESS_CODE_RE = /child_process|\bexecSync\b|\bexecFile|\bspawn|\bexec\s*\(|\bsystem\s*\(|\bos\.system|\bsubprocess|\bpopen|\bPopen|`[^`]*`|\bshell_exec|Deno\.run|Deno\.Command|Bun\.spawn|\.env\b/;
+function trackedInRepo(file, dir) {
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", "--", file], { cwd: dir, timeout: GIT_READ_TIMEOUT_MS, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+export function runsUnreadableCode(segment, { cmd, dir, writtenOnLine }) {
+  const masked = withoutRedirections(tokenizeWords(normalizeSegment(maskSubstitutions(segment)))).map(shellWord);
+  const name = path.basename(masked[0] ?? "");
+  const isShell = SHELLS.has(name);
+  if ((isShell || name === "source" || name === ".") && masked.slice(1).some((w) => w === "/dev/fd/63")) return true;
+  if (isShell || name === "source" || name === ".") {
+    if (isShell && masked.slice(1).some((w) => /^-[A-Za-z]*c/.test(w))) return false; // read by the interpreter-wrapper rules
+    const file = masked.slice(1).find((w) => !w.startsWith("-"));
+    if (!file) return false; // stdin: the unreadable-shell rule decides
+    if (/[$`]|SUBSTITUTED/.test(file)) return true;
+    if (writtenOnLine.has(file) || writtenOnLine.has(path.resolve(dir ?? "/", file))) return true;
+    return dir === null || !trackedInRepo(file, dir);
+  }
+  if (CODE_RUNNERS.has(name)) {
+    const inline = masked.slice(1).some((w) => /^-[A-Za-z]*[ecpr]$|^--eval$|^--print$|^-$/.test(w) || /^--eval=/.test(w));
+    if (!inline) return false;
+    return PROCESS_CODE_RE.test(String(cmd));
+  }
+  return false;
+}
+
+// The paths a line writes by name (redirections, and the last operand of cp / mv / tee / ln / install).
+export function pathsWrittenOnLine(segments) {
+  const out = new Set();
+  for (const s of segments) {
+    for (const t of outputRedirectTargets(s)) out.add(shellWord(t));
+    const words = commandWords(s);
+    const name = path.basename(words[0] ?? "");
+    const ops = words.slice(1).filter((w) => !w.startsWith("-"));
+    if (["cp", "mv", "ln", "install", "curl", "wget"].includes(name) && ops.length) out.add(ops[ops.length - 1]);
+    if (name === "tee") ops.forEach((o) => out.add(o));
+    if (name === "curl" || name === "wget") {
+      const i = words.findIndex((w) => w === "-o" || w === "-O" || w === "--output" || w === "--output-document");
+      if (i >= 0 && words[i + 1]) out.add(words[i + 1]);
+    }
+  }
+  return out;
 }
 
 // The directory and branch each top-level part of a line runs in. A plain `cd <existing dir>`
@@ -3038,6 +3239,7 @@ export function classifyShellCommand(cmd, cwd) {
   if (mentionsGuardFiles(cmd) && !segments.every(onlyReadsGuardFiles)) return { decision: "ask", reason: ASK_REASONS.guardFiles };
   if (hiddenRecursiveDelete(cmd, segments, lineHasCd ? null : cwd)) return { decision: "ask", reason: ASK_REASONS.recursiveDelete };
   const lineMakesLinks = segments.length > 1 && segments.some(makesLinksOrWorkTrees);
+  const writtenOnLine = pathsWrittenOnLine(segments);
 
   // Every segment is judged on its own and the strictest verdict wins: any deny above
   // already ended the call, and here the first segment that needs a confirmation ends it,
@@ -3078,6 +3280,13 @@ export function classifyShellCommand(cmd, cwd) {
     if (relaxedPushNeedsQuestion(segment, state)) return { decision: "ask", reason: ASK_REASONS.pushNotOwnBranch };
     if (recursiveDeleteNeedsQuestion(segment, state.dir, segmentVariables[index] ?? new Map(), { lineMakesLinks })) return { decision: "ask", reason: ASK_REASONS.recursiveDelete };
     if (isSwitchUserWrapper(segment)) return { decision: "ask", reason: ASK_REASONS.unreadable };
+    // the independent review of #750
+    if (redirectTargetUnreadable(segment, segmentVariables[index] ?? new Map())) return { decision: "ask", reason: ASK_REASONS.unreadableTarget };
+    if (writesIntoGuardThroughLink(segment, state.dir) || linkIntoGuard(segment, state.dir)) return { decision: "ask", reason: ASK_REASONS.guardFiles };
+    if (unnamedTreeWriter(segment, state.dir)) return { decision: "ask", reason: ASK_REASONS.unnamedWriter };
+    if (databaseTargetUnreadable(segment)) return { decision: "ask", reason: ASK_REASONS.nonLocalDatabase };
+    if (resetOnProtectedBranch(segment, state)) return { decision: "ask", reason: ASK_REASONS.resetMain };
+    if (runsUnreadableCode(segment, { cmd, dir: state.dir, writtenOnLine })) return { decision: "ask", reason: ASK_REASONS.unreadableCode };
     if (isDeployCommand(segment) || isHostingCli(segment)) return { decision: "ask", reason: ASK_REASONS.deploy };
     if (isMigrationRunner(segment)) {
       // the env in front of the command is read from the part as written (expandSegments also
@@ -3272,7 +3481,13 @@ export function classifyFileEdit(toolInput, cwd, { claudeDir = LIVE_CLAUDE_DIR }
   // The relaxed policy (owner, 2026-11-23): .claude/rules and .claude/agents are edited without a
   // question; the guard's folder and its registration still ask, and so does a secret file.
   const guarded = [path.join(claudeDir, "hooks"), path.join(claudeDir, "settings.json"), path.join(claudeDir, "settings.local.json")];
-  if (targets.some((v) => guarded.some((g) => isInsideDir(path.resolve(cwd, v), g)))) {
+  // also by letter case on every system (Windows reads .CLAUDE\hooks as .claude\hooks)
+  const guardedByCase = (v) => {
+    const real = realPathOfNearestExisting(path.resolve(cwd, v)) ?? path.resolve(cwd, v);
+    const rel = path.relative(path.dirname(claudeDir), real).replace(/\\/g, "/").toLowerCase();
+    return /^\.claude\/(hooks(\/|$)|settings(\.local)?\.json$)/.test(rel);
+  };
+  if (targets.some((v) => guardedByCase(v) || guarded.some((g) => isInsideDir(path.resolve(cwd, v), g)))) {
     return { decision: "ask", reason: "This edits the safety guard's own folder or its registration in the project's .claude folder; that needs your confirmation." };
   }
   // git's own configuration, hooks and refs: a hook or an alias written there changes what a later

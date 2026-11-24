@@ -47,7 +47,7 @@ It replaces the narrower list of 2026-11-20 (own work branch, own scratch folder
 cluster only).
 
 Routine work goes without a question: compound commands, heredocs and redirections; writing
-files; `git add` of named files, folders, globs and `-u`; `git commit` (also `-a`) and
+files; `git add` of named files, folders and globs (not `-u` or a bare `*`); `git commit` (also `-a`) and
 `git push` on a branch that is not `main`/`master` (also a bare `git push`); starting and
 stopping a local PostgreSQL cluster; test databases on this machine; edits of
 `.claude/rules` and `.claude/agents`.
