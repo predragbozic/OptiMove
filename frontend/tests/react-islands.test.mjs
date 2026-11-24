@@ -55,6 +55,25 @@ test("unmountIsland removes the island's DOM and root; a second unmount is a no-
   assert.equal(el.textContent, "again");
 });
 
+test("onError runs after React's own render error removed the tree (the bar's fallback path), never inside React's work", async () => {
+  capture.setReporterForTests(() => {});
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const el = host();
+    let got = null;
+    // A real render error (not a fake mountIsland that throws): mountIsland returns normally.
+    islands.mountIsland(el, () => { throw new TypeError("boom"); }, {}, { name: "probe", onError: (e) => { got = e; } });
+    assert.equal(got, null, "not called inside React's work");
+    await new Promise((r) => queueMicrotask(r));
+    assert.equal(got?.message, "boom");
+    assert.equal(el.childElementCount, 0, "the tree is gone");
+  } finally {
+    console.error = originalError;
+    capture.setReporterForTests(null);
+  }
+});
+
 test("mountIsland refuses anything but an element", () => {
   for (const bad of [null, undefined, {}, document.createTextNode("t")]) assert.throws(() => islands.mountIsland(bad, Hello, {}), TypeError);
 });
@@ -105,6 +124,17 @@ test("the bar: one button per section, the current one aria-current, labelled na
   assert.equal(buttons[0].querySelector(".om-bottom-nav-icon").getAttribute("aria-hidden"), "true");
   assert.equal(buttons[2].getAttribute("aria-haspopup"), "dialog");
   assert.equal(buttons[2].getAttribute("aria-expanded"), "false");
+});
+
+test("a count on a section shows on the bar and in More, with words for a screen reader", async () => {
+  const { el } = renderBar({ items: [{ ...ITEMS[0] }, { id: "tests", label: "Tests", icon: ICON, active: false, badge: "2" }], more: [{ ...MORE[0], badge: "5" }] });
+  const tests = el.querySelector('[data-nav-id="tests"]');
+  assert.equal(tests.querySelector('.om-bottom-nav-badge [aria-hidden="true"]').textContent, "2");
+  assert.equal(tests.querySelector(".om-bottom-nav-badge .visually-hidden").textContent, ", 2 waiting");
+  assert.ok(!el.querySelector('[data-nav-id="home"] .om-bottom-nav-badge'), "no badge without a count");
+  click(el.querySelector('[data-nav-id="more"]'));
+  await tick();
+  assert.equal(el.querySelector(".om-bottom-sheet-item .om-bottom-nav-badge [aria-hidden]").textContent, "5");
 });
 
 test("the bar without anything for More shows no More button", () => {

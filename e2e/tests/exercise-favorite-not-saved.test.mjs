@@ -4,7 +4,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -34,9 +34,7 @@ async function makeProgram(context, name) {
 
 async function openSection(page) {
   // Below 761 px the navigation is behind the menu button.
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.locator('[data-library-tab="builder"]').first().click();
+  await navTo(page, '[data-library-tab="builder"]');
   await page.getByText("Continue where you left off").first().click();
   await page.getByRole("button", { name: "Continue", exact: true }).first().click();
   await page.locator('[data-action="builder-select-node"]', { hasText: "Lower body" }).first().click();
@@ -93,9 +91,7 @@ for (const width of [360, 390]) {
     const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
     try {
       await makeProgram(context, `Favorites ${width}`);
-      const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-      if (await toggle.isVisible().catch(() => false)) await toggle.click();
-      await page.locator('[data-library-tab="exercises"]').first().click();
+      await navTo(page, '[data-library-tab="exercises"]');
       for (const [view, scope, actions] of [["details", ".exercise-card, .exercise-library-card, article:has(> .exercise-card-actions), article:has(.exercise-card-actions)", ".exercise-card-actions"], ["list", "article:has(.exercise-view-actions)", ".exercise-view-actions"], ["tile", "article:has(.exercise-view-actions)", ".exercise-view-actions"]]) {
         await page.locator(`.exercise-view-button[data-view="${view}"]:visible`).first().click();
         await page.locator(actions).first().waitFor({ timeout: 15_000 });

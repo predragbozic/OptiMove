@@ -85,6 +85,7 @@ for (const role of ["platform_admin", "club_admin", "team_coach", "athlete"]) {
         assert.equal(g.small, 0, "every control of the bar is at least 44 px");
         assert.ok(g.shellPadding >= g.height - 1, `the page ends above the bar (${g.shellPadding} >= ${g.height})`);
         assert.equal(g.overflow, 0);
+        assert.equal(await page.locator("#mobileNavToggle").isVisible(), false, "no header menu button on a phone");
         // Home is the current section after sign-in.
         assert.equal(await page.getAttribute(`${bar} [data-nav-id="home"]`, "aria-current"), "page");
         assert.deepEqual(pageErrors, []);
@@ -249,6 +250,86 @@ test("(team_coach, 390 px) Escape closes the More sheet only; the page under it 
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });
+
+test("(team_coach, 390 px) every Program Library and Settings section the menu offers is in More", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 390);
+  try {
+    await page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
+    const menu = await page.evaluate(() => [...document.querySelectorAll(".app-shell > .sidebar .sidebar-subnav-button")]
+      .filter((e) => !(e.hidden || e.closest("[hidden]"))).map((e) => e.textContent.trim()));
+    await page.click(`${bar} [data-nav-id="more"]`);
+    const sheet = await page.$$eval(".om-bottom-sheet-subitem", (e) => e.map((x) => x.textContent.trim()));
+    assert.ok(menu.includes("Requests") && menu.includes("Marketplace"), menu.join(", "));
+    assert.deepEqual(sheet, menu, "the same sub-sections, in the same order");
+    // Requests opens the Program Library's requests.
+    await page.locator('ul[aria-label="Program Library sections"]').getByRole("button", { name: "Requests", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.sidebar [data-program-library-section="requests"]')?.classList.contains("is-active"), null, { timeout: 20_000 });
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
+test("(team_coach, 390 px) if the bar's code cannot load, the header menu button comes back and opens the menu", async () => {
+  const account = world.accounts.find((a) => a.role === "team_coach");
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
+    await context.route("**/react-build/**", (route) => route.abort());
+    const page = await context.newPage();
+    await page.goto(world.baseUrl);
+    await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+    await page.waitForFunction(() => document.body.classList.contains("bottom-nav-unavailable"), null, { timeout: 20_000 });
+    assert.equal(await page.locator(bar).count(), 0);
+    await page.locator("#mobileNavToggle").click();
+    await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"), null, { timeout: 5_000 });
+    await page.getByText("Training load", { exact: true }).first().click();
+    await page.waitForSelector('[data-action="training-load-section"]', { timeout: 20_000 });
+  } finally { await context.close(); }
+});
+
+test("(team_coach, 390 px) if the bar's code loads but fails to draw, the header menu button comes back", async () => {
+  const account = world.accounts.find((a) => a.role === "team_coach");
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
+    await context.route("**/react-build/islands.js", (route) => route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: 'export const BottomNav = () => null; export function mountIsland() { throw new Error("e2e: the bar fails to draw"); } export function unmountIsland() { return false; }',
+    }));
+    const page = await context.newPage();
+    await page.goto(world.baseUrl);
+    await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+    await page.waitForFunction(() => document.body.classList.contains("bottom-nav-unavailable"), null, { timeout: 20_000 });
+    assert.equal(await page.locator(bar).count(), 0);
+    assert.equal(await page.locator("#mobileNavToggle").isVisible(), true);
+    await page.locator("#mobileNavToggle").click();
+    await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"), null, { timeout: 5_000 });
+  } finally { await context.close(); }
+});
+
+for (const width of [360, 375, 390]) {
+  test(`(athlete, ${width} px) the pending-tests count is on the bar's Tests, inside its button and the screen`, async () => {
+    const { context, page, pageErrors } = await openAs(browser, world, "athlete", width);
+    try {
+      await page.waitForSelector(`${bar} [data-nav-id="tests"]`, { timeout: 20_000 });
+      // The count the app shows in the menu (set here: the seed has no pending test).
+      await page.evaluate(() => { const c = document.querySelector("[data-tests-count]"); c.textContent = "12"; c.hidden = false; });
+      const badge = page.locator(`${bar} [data-nav-id="tests"] .om-bottom-nav-badge`);
+      await badge.waitFor({ timeout: 5_000 });
+      assert.match(await badge.textContent(), /12/);
+      const g = await page.evaluate(() => {
+        const item = document.querySelector('.om-bottom-nav [data-nav-id="tests"]').getBoundingClientRect();
+        const b = document.querySelector('.om-bottom-nav [data-nav-id="tests"] .om-bottom-nav-badge').getBoundingClientRect();
+        return { inside: b.left >= item.left && b.right <= item.right && b.top >= item.top && b.bottom <= item.bottom, onScreen: b.right <= innerWidth && b.left >= 0, overflow: document.documentElement.scrollWidth - innerWidth };
+      });
+      assert.deepEqual(g, { inside: true, onScreen: true, overflow: 0 });
+      // Gone again with the count.
+      await page.evaluate(() => { document.querySelector("[data-tests-count]").hidden = true; });
+      await page.waitForFunction(() => !document.querySelector(".om-bottom-nav .om-bottom-nav-badge"), null, { timeout: 5_000 });
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  });
+}
 
 test("(1280 px) a computer keeps the rail: no bar and React is never downloaded", async () => {
   const requested = [];

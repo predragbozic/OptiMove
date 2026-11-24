@@ -5,7 +5,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch } from "../lib/browser.mjs";
+import { launch, navTo } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -39,8 +39,7 @@ async function openAthlete(width, { trainingWeek, planWeek } = {}) {
   const under44 = (selector) => page.evaluate((sel) => [...document.querySelectorAll(sel)].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height < 43.5; }).map((e) => `${(e.innerText || "").trim()} ${Math.round(e.getBoundingClientRect().height)}`), selector);
   const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   const weeklyPlan = async () => {
-    await page.locator("#mobileNavToggle").click();
-    await page.locator('.sidebar [data-athlete-tab="calendar"]').first().click();
+    await navTo(page, '.sidebar [data-athlete-tab="calendar"]');
     await page.locator(".calendar-day, .calendar-week-empty").first().waitFor({ timeout: 20_000 });
   };
   return { context, page, pageErrors, under44, overflow, weeklyPlan };

@@ -7,7 +7,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch } from "../lib/browser.mjs";
+import { launch, navTo } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -72,10 +72,11 @@ async function openAthlete(width) {
 }
 
 async function openCalendar(page, phone) {
-  if (phone) await page.locator("#mobileNavToggle").click();
   const tabs = await page.$$eval(".sidebar [data-athlete-tab]", (els) => els.filter((e) => !e.hidden).map((e) => e.dataset.athleteTab));
   assert.equal(tabs[0], "athlete-calendar", `the Calendar is first in the rail (${tabs.join(", ")})`);
-  await page.locator('.sidebar [data-athlete-tab="athlete-calendar"]').first().click();
+  // A phone: the bottom bar's Calendar, right after Home.
+  if (phone) assert.deepEqual((await page.$$eval(".om-bottom-nav [data-nav-id]", (els) => els.map((e) => e.dataset.navId).slice(0, 2))), ["home", "athlete-calendar"]);
+  await navTo(page, '.sidebar [data-athlete-tab="athlete-calendar"]');
   await page.locator(".athlete-calendar .ac-card").first().waitFor({ timeout: 20_000 });
 }
 
@@ -233,8 +234,7 @@ for (const width of [1280, 390, 375, 360]) {
       const before2 = await toTraining();
       await backAt(before2, "browser Back");
       // The Weekly plan opened from the rail has no Back to calendar.
-      if (a.phone) await a.page.locator("#mobileNavToggle").click();
-      await a.page.locator('.sidebar [data-athlete-tab="calendar"]').first().click();
+      await navTo(a.page, '.sidebar [data-athlete-tab="calendar"]');
       await a.page.locator(".calendar-day, .calendar-week-empty").first().waitFor({ timeout: 20_000 });
       assert.equal(await a.page.locator(".ac-backbar").count(), 0, "no Back to calendar from the rail");
       assert.deepEqual(a.pageErrors, []);

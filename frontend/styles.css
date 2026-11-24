@@ -30536,6 +30536,11 @@ body.athlete-questions-prompt-open {
 
   body.has-bottom-nav:not(.login-mode) .om-bottom-nav-host { display: block; }
 
+  /* The header's menu button is gone on a phone (owner, 2026-11-24): the bar and its More sheet hold every section,
+     and the bar's Athletes opens the athlete list. Hidden from the first paint, so it never flashes before the bar
+     arrives; it comes back only if the bar's code cannot be loaded (bottom-nav.js marks the page). */
+  body:not(.login-mode):not(.bottom-nav-unavailable) .mobile-nav-toggle { display: none !important; }
+
   body.has-bottom-nav:not(.login-mode) .app-shell { padding-bottom: var(--om-bottom-nav-space); }
 
   body.has-bottom-nav:not(.login-mode) :is(.builder-mobile-sticky-bar, .tests-schedule-form-actions, .tl-roster-sticky, .gpexe-map .gpexe-map-results .gpexe-link-actions, .imports-batch .imports-batch-actions, .mb-savebar, .k3-save-bar, .node-detail-footer):not(:is([role="dialog"], [aria-modal="true"], .exercise-editor-overlay, .builder-section-overlay, .exercise-detail-overlay, .program-preview-overlay, .k3-sheet-layer) *) {
@@ -30649,6 +30654,30 @@ body.athlete-questions-prompt-open {
   }
 
   .om-bottom-nav-icon circle { fill: currentColor; stroke: none; }
+
+  /* A count from the menu's item (pending tests): on the icon's corner on the bar, a pill after the name in More. */
+  .om-bottom-nav-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: var(--om-radius-pill);
+    background: #b42318;
+    color: #fff;
+    font-size: 11px;
+    font-weight: var(--om-weight-semibold);
+    line-height: 1;
+  }
+
+  .om-bottom-nav-item .om-bottom-nav-badge {
+    position: absolute;
+    top: 4px;
+    left: calc(50% + 6px);
+  }
+
+  .om-bottom-sheet-item .om-bottom-nav-badge { margin-left: auto; }
 
   .om-bottom-sheet-backdrop {
     position: fixed;

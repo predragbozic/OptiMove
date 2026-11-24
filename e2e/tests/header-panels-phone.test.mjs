@@ -66,10 +66,10 @@ for (const width of [360, 390, 600]) {
   });
 }
 
-// The closed drawer is hidden (no focus, not in the accessibility tree) for a coach and an athlete alike; Escape
-// closes it and gives focus back to the menu button.
+// The closed drawer is hidden (no focus, not in the accessibility tree) for a coach and an athlete alike. A coach's opens
+// from the bottom bar's Athletes (the athlete list); Escape closes it and gives focus back to that button.
 for (const role of ["team_coach", "athlete"]) {
-  test(`(390 px, a phone, ${role}) the closed menu drawer is hidden and takes no focus; opened it is usable; Escape closes it and focus returns to the menu button`, async () => {
+  test(`(390 px, a phone, ${role}) the closed menu drawer is hidden and takes no focus; opened from the bar it is usable; Escape closes it and focus returns to the bar`, async () => {
     const account = world.accounts.find((a) => a.role === role);
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
@@ -78,7 +78,10 @@ for (const role of ["team_coach", "athlete"]) {
     page.on("pageerror", (e) => pageErrors.push(String(e)));
     try {
       await page.goto(world.baseUrl);
-      await page.locator("#mobileNavToggle").waitFor({ state: "visible", timeout: 20_000 });
+      // The drawer's opener on a phone is the bottom bar's Athletes (no header menu button; owner, 2026-11-24).
+      const opener = '.om-bottom-nav [data-nav-id="athletes"]';
+      await page.locator('.om-bottom-nav [data-nav-id="home"]').waitFor({ timeout: 20_000 });
+      assert.equal(await page.locator("#mobileNavToggle").isVisible(), false, "no header menu button");
       if (role === "athlete") {
         await page.waitForFunction(() => document.body.classList.contains("athlete-mode"), null, { timeout: 20_000 });
         await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
@@ -93,27 +96,33 @@ for (const role of ["team_coach", "athlete"]) {
       const drawerButtonsInTree = () => page.locator(".sidebar").getByRole("button").count();
       assert.deepEqual(await drawer(), { visibility: "hidden", focusedInside: false }, "closed: hidden, nothing inside can take focus");
       assert.equal(await drawerButtonsInTree(), 0, "closed: none of its buttons is in the accessibility tree");
+      // The athlete's bar has no Athletes: her drawer is never opened on a phone, the bar and More hold every section.
+      if (role === "athlete") {
+        assert.equal(await page.locator(opener).count(), 0);
+        assert.deepEqual(pageErrors, []);
+        return;
+      }
 
-      await page.locator("#mobileNavToggle").click();
+      await page.locator(opener).click();
       await page.waitForFunction(() => getComputedStyle(document.querySelector(".sidebar")).visibility === "visible", null, { timeout: 5_000 });
       assert.deepEqual(await drawer(), { visibility: "visible", focusedInside: true }, "open: visible and focusable");
       assert.ok(await drawerButtonsInTree() > 0, "open: its buttons are in the accessibility tree");
-      assert.equal(await page.getAttribute("#mobileNavToggle", "aria-expanded"), "true");
+      assert.equal(await page.getAttribute(opener, "aria-expanded"), "true");
 
-      // Focus is inside the drawer (on its first control); Escape closes it.
+      // Focus is inside the drawer (on its first control); Escape closes it and focus returns to the bar's Athletes.
       await page.keyboard.press("Escape");
       await page.waitForFunction(() => !document.body.classList.contains("mobile-nav-open") && getComputedStyle(document.querySelector(".sidebar")).visibility === "hidden", null, { timeout: 5_000 });
-      assert.equal(await page.evaluate(() => document.activeElement?.id), "mobileNavToggle", "focus returns to the menu button");
-      assert.equal(await page.getAttribute("#mobileNavToggle", "aria-expanded"), "false");
+      assert.equal(await page.evaluate(() => document.activeElement?.dataset?.navId), "athletes", "focus returns to the bar's Athletes");
+      await page.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("aria-expanded") === "false", opener, { timeout: 5_000 });
       assert.equal(await drawerButtonsInTree(), 0, "closed again: out of the accessibility tree");
 
-      // Closed with focus outside the drawer (the backdrop), focus is not moved to the menu button.
-      await page.locator("#mobileNavToggle").click();
+      // Closed with focus outside the drawer (the backdrop), focus is not moved.
+      await page.locator(opener).click();
       await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"), null, { timeout: 5_000 });
       await page.evaluate(() => { document.activeElement?.blur?.(); document.body.focus(); });
       await page.locator("#mobileNavBackdrop").dispatchEvent("click");
       await page.waitForFunction(() => !document.body.classList.contains("mobile-nav-open"), null, { timeout: 5_000 });
-      assert.notEqual(await page.evaluate(() => document.activeElement?.id), "mobileNavToggle", "focus outside the drawer stays where it was");
+      assert.notEqual(await page.evaluate(() => document.activeElement?.dataset?.navId), "athletes", "focus outside the drawer stays where it was");
       assert.deepEqual(pageErrors, []);
     } finally { await context.close(); }
   });
@@ -123,9 +132,10 @@ for (const width of [360, 390]) {
   test(`(${width} px, a phone) no header popup makes the page wider than the screen`, async () => {
     const { context, page, pageErrors } = await openPhone(width);
     try {
-      for (const selector of ["#mobileNavToggle", ".topbar [aria-label^='Workspace']", "#notificationToggle", "#messageToggle"]) {
+      for (const selector of ['.om-bottom-nav [data-nav-id="athletes"]', ".topbar [aria-label^='Workspace']", "#notificationToggle", "#messageToggle"]) {
         await page.goto(world.baseUrl);
         await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+        await page.locator('.om-bottom-nav [data-nav-id="home"]').waitFor({ timeout: 20_000 });
         await page.evaluate(() => {
           window.__widest = 0;
           const start = performance.now();

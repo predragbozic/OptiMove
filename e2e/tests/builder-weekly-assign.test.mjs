@@ -7,7 +7,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 const SHOTS = process.env.E2E_SHOTS || "";
 const cookieOf = (world, role) => `optimove_session=${world.accounts.find((a) => a.role === role).sessionToken}`;
@@ -76,9 +76,7 @@ for (const width of [1280, 390, 375, 360]) {
       const { athlete, wednesday, weekPlanId } = await setUp(world);
       const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
       try {
-        const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-        if (await toggle.isVisible().catch(() => false)) await toggle.click();
-        await page.locator('[data-library-tab="builder"]').first().click();
+        await navTo(page, '[data-library-tab="builder"]');
         await page.getByText("Continue where you left off").first().click();
         await page.locator('.builder-draft-row', { hasText: "Base weeks" }).getByRole("button", { name: "Continue", exact: true }).click();
         await page.locator(".builder-week-strip").waitFor();
@@ -143,9 +141,7 @@ test("(360x640) the question with three athletes: Replace and Skip can be reache
     const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 360);
     try {
       await page.setViewportSize({ width: 360, height: 640 });
-      const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-      if (await toggle.isVisible().catch(() => false)) await toggle.click();
-      await page.locator('[data-library-tab="builder"]').first().click();
+      await navTo(page, '[data-library-tab="builder"]');
       await page.getByText("Continue where you left off").first().click();
       await page.locator(".builder-draft-row", { hasText: "Base weeks" }).getByRole("button", { name: "Continue", exact: true }).click();
       await page.locator(".builder-week-strip").waitFor();

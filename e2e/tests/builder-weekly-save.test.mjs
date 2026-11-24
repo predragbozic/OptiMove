@@ -7,7 +7,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 const SHOTS = process.env.E2E_SHOTS || "";
 const cookieOf = (world, role) => `optimove_session=${world.accounts.find((a) => a.role === role).sessionToken}`;
@@ -66,9 +66,7 @@ for (const width of [1280, 390, 375, 360]) {
         // Open the first week in the Builder (its edit draft).
         const opened = await call(world, "team_coach", "POST", `/api/builder/plans/${ids[0]}/edit`);
         assert.equal(opened.status, 200, opened.text);
-        const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-        if (await toggle.isVisible().catch(() => false)) await toggle.click();
-        await page.locator('[data-library-tab="builder"]').first().click();
+        await navTo(page, '[data-library-tab="builder"]');
         await page.getByText("Continue where you left off").first().click();
         await page.getByRole("button", { name: "Continue", exact: true }).first().click();
         await page.locator('[data-action="builder-tw-save-open"]').click();

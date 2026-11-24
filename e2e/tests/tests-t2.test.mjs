@@ -5,7 +5,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 const WELLNESS = "7a386bd1-d25e-4651-9012-e76d9dc32559";
 let world;
@@ -37,9 +37,7 @@ before(async () => {
 after(async () => { await browser?.close(); await world?.stop(); });
 
 async function openTests(page, section) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.locator('[data-library-tab="tests"]').first().click();
+  await navTo(page, '[data-library-tab="tests"]');
   await page.locator('main [data-action="tests-section"][data-section="today"]').first().waitFor();
   if (section !== "today") await page.locator(`main [data-action="tests-section"][data-section="${section}"]`).first().click();
   await page.locator('[data-action="tests-weekly-prev-week"]').waitFor();

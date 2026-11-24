@@ -8,7 +8,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
 import { prepareImports } from "../lib/imports-setup.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 import { K54_SESSIONS } from "../lib/imports-fixture.mjs";
 
 const G = "/api/training-load/gpexe";
@@ -33,9 +33,7 @@ before(async () => {
 after(async () => { await browser?.close(); await world?.stop(); });
 
 async function openCalendar(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.locator("#calendarToggle").click();
+  await navTo(page, "#calendarToggle");
   await page.waitForSelector(".central-calendar .cc-nav-arrow", { timeout: 20_000 });
 }
 
@@ -152,9 +150,7 @@ test("the athlete's Calendar shows no mark and never reads Imports' calendar", a
   try {
     const reads = [];
     page.on("request", (r) => { if (GPS_READ.test(r.url())) reads.push(r.url()); });
-    const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-    if (await toggle.isVisible().catch(() => false)) await toggle.click();
-    await page.locator('.sidebar [data-athlete-tab="athlete-calendar"]').first().click();
+    await navTo(page, '.sidebar [data-athlete-tab="athlete-calendar"]');
     await page.waitForSelector(".athlete-calendar", { timeout: 20_000 });
     await page.waitForTimeout(500);
     assert.equal(await page.locator(".cc-daymark").count(), 0);
