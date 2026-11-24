@@ -47,6 +47,7 @@ import { startConfirmationRemovalSchedule } from "./sourceMetricConfirmationRemo
 import { appErrorsRouter } from "./routes/appErrors.js";
 import { collectRouteWords, recordServerError, setRouteWords, startAppErrorRetentionSchedule } from "./appErrorTracking.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
+import { organizationEntryGate } from "./organizationEntry.js";
 import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT, POOL_MAX } from "./db.js";
 import { canUseSimplePlatformPilot } from './dashboardSimple/platformPilot.js';
 import { resolveActiveDataWorkspace } from './trainingLoadDashboardAccess.js';
@@ -145,7 +146,9 @@ app.use("/api/builder", requireAuth, requireCoach, builderRouter);
 // only: its service answers the identical 404 for every caller it does not
 // serve, so it never answers 403 (contract section 5).
 app.use("/api/organization/roles", requireAuth, permissionRolesRouter);
-app.use("/api/organization", requireAuth, requireCoach, organizationRouter);
+// Roles R4-2: requireCoach, plus the read-only way in for a view workspace
+// (organizationEntry.js: GET / only, every other method and path 403 as before).
+app.use("/api/organization", requireAuth, organizationEntryGate, organizationRouter);
 app.use("/api/taxonomy", requireAuth, requireCoach, taxonomyRouter);
 app.use("/api/coaches", requireAuth, coachesRouter);
 app.use("/api/notifications", requireAuth, notificationsRouter);

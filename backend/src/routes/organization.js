@@ -9,7 +9,7 @@ import {
 import { can, clubScope, GLOBAL_SCOPE, teamScope } from "../permissions.js";
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
-import { resolveActiveWorkspace } from "../workspace.js";
+import { resolveActiveWorkspace, VIEW_WORKSPACE_TYPES } from "../workspace.js";
 import { canCreateInviteInContext, canRevokeInvite, INVITE_CONTEXT_TYPES, inviteContextShapeValid, lockAthleteInviteActions } from "../inviteContext.js";
 import {
   canCreateJoinLinkInContext,
@@ -48,7 +48,7 @@ const isProduction = process.env.NODE_ENV === "production";
 // before this function existed. A platform workspace (or no workspace at
 // all, e.g. right after a role was revoked) returns everything the account
 // is authorized to see, unfiltered - the same as pre-Phase-5 behavior.
-function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes, users, accessRequests }, actorUserId) {
+export function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes, users, accessRequests }, actorUserId) {
   if (!workspace || workspace.type === "platform" || workspace.type === "athlete") {
     return { clubs, teams, athletes, users, accessRequests };
   }
@@ -67,7 +67,9 @@ function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes,
   // this branch.
   const alwaysVisibleUser = (user) => isSelf(user) || (user.canManageLogin && !hasAnyActiveScopedRole(user));
 
-  if (workspace.type === "club") {
+  // A view workspace (roles R4-2) narrows exactly as its base type; what it is given to narrow is decided by
+  // viewWorkspaceOrganization below (no athletes, the account itself unless it holds staff.assign there).
+  if (workspace.type === "club" || workspace.type === "club_view") {
     const clubId = String(workspace.scopeId);
     const filteredClubs = clubs.filter((club) => String(club.id) === clubId);
     const filteredTeams = teams.filter((team) => String(team.club_id) === clubId);
@@ -79,17 +81,20 @@ function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes,
     const filteredAthletes = athletes.filter((athlete) =>
       (athlete.memberships || []).some((m) => String(m.clubId) === clubId),
     );
+    // A member through a live assignment only (roles R4-2, contract 11 (b)) is marked by loadUsers, and only for the
+    // club whose members this viewer may see (clubMembersViewClubId).
     const filteredUsers = users.filter((user) =>
       alwaysVisibleUser(user)
       || (user.clubRoles || []).some((r) => String(r.clubId) === clubId)
-      || (user.teamRoles || []).some((r) => filteredTeamIds.has(String(r.teamId))),
+      || (user.teamRoles || []).some((r) => filteredTeamIds.has(String(r.teamId)))
+      || user[CLUB_ASSIGNMENT_MEMBER] === clubId,
     );
     const filteredAthleteIds = new Set(filteredAthletes.map((athlete) => String(athlete.id)));
     const filteredAccessRequests = accessRequests.filter((r) => filteredAthleteIds.has(String(r.athlete_id)));
     return { clubs: filteredClubs, teams: filteredTeams, athletes: filteredAthletes, users: filteredUsers, accessRequests: filteredAccessRequests };
   }
 
-  if (workspace.type === "team") {
+  if (workspace.type === "team" || workspace.type === "team_view") {
     const teamId = String(workspace.scopeId);
     const filteredTeams = teams.filter((team) => String(team.id) === teamId);
     const filteredAthletes = athletes.filter((athlete) =>
@@ -110,7 +115,8 @@ function filterOrganizationDataForWorkspace(workspace, { clubs, teams, athletes,
     return { clubs: [], teams: [], athletes: filteredAthletes, users: [], accessRequests: filteredAccessRequests };
   }
 
-  return { clubs, teams, athletes, users, accessRequests };
+  // Fail closed (roles R4-2, contract 5.1): a workspace type this function does not know shows nothing.
+  return { clubs: [], teams: [], athletes: [], users: [], accessRequests: [] };
 }
 
 // Attaches, to each athlete row, the invite status the CURRENT viewer is
@@ -338,6 +344,14 @@ async function loadJoinApplicationsForWorkspace(req, activeWorkspace, links) {
 router.get("/", async (req, res, next) => {
   try {
     const workspacePromise = resolveActiveWorkspace(req.user.id, req.authz);
+    // Roles R4-2: an account that does not pass requireCoach reached this route only through the entry gate
+    // (organizationEntry.js) with a view workspace; it is decided again here on the workspace this request resolves,
+    // and none of the loaders below (keyed on the old role tables) runs for it.
+    if (!req.authz?.capabilities?.coachWorkspace) {
+      const { workspace } = await workspacePromise;
+      if (!VIEW_WORKSPACE_TYPES.has(workspace?.type)) return res.status(403).json({ error: "Forbidden" });
+      return res.json(await viewWorkspaceOrganization(req, workspace, workspacePromise));
+    }
     const [clubs, teams, athletes, users, accessRequests, { workspace: activeWorkspace }, archivedTeams] = await Promise.all([
       loadClubs(req),
       loadTeams(req),
@@ -347,6 +361,11 @@ router.get("/", async (req, res, next) => {
       workspacePromise,
       loadArchivedTeams(req),
     ]);
+    // A mixed account (a role of the old tables elsewhere) in a view workspace: the loaders above answered from its old
+    // roles; the view answer is built from the view workspace alone, so nothing of its other clubs reaches it.
+    if (VIEW_WORKSPACE_TYPES.has(activeWorkspace?.type)) {
+      return res.json(await viewWorkspaceOrganization(req, activeWorkspace, workspacePromise));
+    }
     const scoped = filterOrganizationDataForWorkspace(activeWorkspace, { clubs, teams, athletes, users, accessRequests }, req.user.id);
     // After the workspace filter, which decides on the full rows (an account whose only active role is in another club
     // must never become "unassigned" here and pass as the viewer's own creation).
@@ -401,6 +420,70 @@ router.get("/", async (req, res, next) => {
     next(error);
   }
 });
+
+// GET /api/organization for a view workspace (roles R4-2, contract 5.1). Built from the view workspace alone:
+//   - club_view C: club C and its active teams, while the account holds org.view in C (can()); team_view T: team T,
+//     while it holds org.view on T. Nothing else of any club, whatever other roles the account holds;
+//   - athletes: none (they open in the Athletes VIEW pull request, which moves every gate of athletes.view at once);
+//   - users: the club's members only while the account holds staff.assign in C (the members rule of #717, with its
+//     live assignments); otherwise the account itself only. Every row narrowed to this club;
+//   - access requests, invite statuses, archived teams, join links and applications: none;
+//   - every create flag false and no manageable id: writes stay behind requireCoach and their routes' own checks.
+// The keys are a fixed list (VIEW_ORGANIZATION_KEYS), pinned by a test.
+export const VIEW_ORGANIZATION_KEYS = Object.freeze([
+  "scope", "isPlatformAdmin", "canCreateClub", "canCreateTeam", "canCreateAthlete", "canCreateUser", "manageableClubIds",
+  "manageableTeamIds", "clubs", "teams", "archivedTeams", "athletes", "users", "accessRequests", "joinLinks",
+  "joinApplications", "activeWorkspace",
+]);
+
+async function viewWorkspaceOrganization(req, workspace, workspacePromise) {
+  const isClubView = workspace.type === "club_view";
+  const scopeId = String(workspace.scopeId);
+  const clubId = isClubView ? scopeId : (workspace.clubId ? String(workspace.clubId) : null);
+  const mayView = isClubView ? can(req.authz, "org.view", clubScope(scopeId)) : can(req.authz, "org.view", teamScope(scopeId));
+  const [clubsResult, teamsResult, users] = await Promise.all([
+    mayView && isClubView
+      ? query(`select id, name, short_name, logo_url, city, country from public.clubs where id = $1 and coalesce(is_active, true)`, [scopeId])
+      : { rows: [] },
+    mayView
+      ? query(
+        `select t.id, t.club_id, t.name, t.short_name, t.logo_url, c.name as club_name, coalesce(c.is_active, true) as club_active
+           from public.teams t join public.clubs c on c.id = t.club_id
+          where ${isClubView ? "t.club_id = $1" : "t.id = $1"} and coalesce(t.is_active, true) and coalesce(c.is_active, true)
+          order by t.name`,
+        [scopeId],
+      )
+      : { rows: [] },
+    loadUsers(req, workspacePromise),
+  ]);
+  const scoped = filterOrganizationDataForWorkspace(
+    workspace, { clubs: clubsResult.rows, teams: teamsResult.rows, athletes: [], users, accessRequests: [] }, req.user.id,
+  );
+  const memberClubId = clubMembersViewClubId(req, workspace);
+  const visibleUsers = memberClubId
+    ? scoped.users.filter((row) => clubMemberRowVisible(row, memberClubId, req.user.id))
+    : users.filter((row) => String(row.id) === String(req.user.id));
+  const body = {
+    scope: req.user?.role_hint || "coach",
+    isPlatformAdmin: isPlatformAdministrator(req.authz),
+    canCreateClub: false,
+    canCreateTeam: false,
+    canCreateAthlete: false,
+    canCreateUser: false,
+    manageableClubIds: [],
+    manageableTeamIds: [],
+    clubs: scoped.clubs,
+    teams: scoped.teams,
+    archivedTeams: [],
+    athletes: [],
+    users: visibleUsers.map((row) => narrowUserRowToClub(row, clubId)),
+    accessRequests: [],
+    joinLinks: [],
+    joinApplications: [],
+    activeWorkspace: workspace,
+  };
+  return Object.fromEntries(VIEW_ORGANIZATION_KEYS.map((k) => [k, body[k]]));
+}
 
 // Mirrors PLATFORM_ROLES / INDEPENDENT_COACH_ROLE_HINTS (access.js/authz.js)
 // and the 20260802_user_global_roles.sql backfill mapping - kept as a
@@ -3366,17 +3449,39 @@ const CLUB_MEMBERS_ACTIVE_ROLES_ONLY = true;
 // The club whose members this viewer sees as a club's admin: the active club workspace's club, when the viewer is not a
 // platform admin (whose branch sees everything already) and holds staff.assign there (the club's admin, a system-role
 // word). Anyone else: null, and loadUsers behaves exactly as before.
+// Roles R4-2 (contract 5.1 and 11 (a)): the same rule in a club_view workspace - the gate can(staff.assign) is then the
+// only thing that keeps the members list from a role holder of org.view alone (who sees only its own account).
 function clubMembersViewClubId(req, workspace) {
   if (isPlatformAdministrator(req.authz)) return null;
-  if (workspace?.type !== "club" || !workspace.scopeId) return null;
+  if ((workspace?.type !== "club" && workspace?.type !== "club_view") || !workspace.scopeId) return null;
   return can(req.authz, "staff.assign", clubScope(workspace.scopeId)) ? String(workspace.scopeId) : null;
+}
+
+// Roles R4-2 (contract 11 (b)): an account with a LIVE new-style assignment in the club or one of its teams (not revoked,
+// not expired, its role not archived) is a member too. loadUsers marks such a row with the club's id under this symbol,
+// only for the club clubMembersViewClubId named; a symbol key never reaches the JSON answer. Former (revoked or expired)
+// assignments never make a member, whatever CLUB_MEMBERS_ACTIVE_ROLES_ONLY says.
+const CLUB_ASSIGNMENT_MEMBER = Symbol("clubAssignmentMember");
+
+async function loadClubAssignmentMemberIds(clubId) {
+  const result = await query(
+    `select distinct a.user_id
+       from public.user_role_assignments a
+       join public.permission_roles pr on pr.id = a.role_id and pr.archived_at is null
+       left join public.teams t on a.scope_type = 'team' and t.id = a.scope_id
+      where a.revoked_at is null and (a.expires_at is null or a.expires_at > now())
+        and ((a.scope_type = 'club' and a.scope_id = $1::uuid) or (a.scope_type = 'team' and t.club_id = $1::uuid))`,
+    [clubId],
+  );
+  return result.rows.map((row) => row.user_id);
 }
 
 // Whether a club's admin sees this full row in its club's workspace: its own account, an own creation that holds no active
 // club or team role anywhere (today's rule, unchanged), or a member of the club - a club role in it or a team role on one of
-// its teams, active only while CLUB_MEMBERS_ACTIVE_ROLES_ONLY is true.
+// its teams, active only while CLUB_MEMBERS_ACTIVE_ROLES_ONLY is true, or a live assignment (CLUB_ASSIGNMENT_MEMBER).
 function clubMemberRowVisible(row, clubId, actorUserId) {
   if (String(row.id) === String(actorUserId)) return true;
+  if (row[CLUB_ASSIGNMENT_MEMBER] === clubId) return true;
   const counts = (r) => String(r.clubId) === clubId && (r.isActive || !CLUB_MEMBERS_ACTIVE_ROLES_ONLY);
   if ((row.clubRoles || []).some(counts) || (row.teamRoles || []).some(counts)) return true;
   const hasAnyActiveScopedRole = (row.clubRoles || []).some((r) => r.isActive) || (row.teamRoles || []).some((r) => r.isActive);
@@ -3398,6 +3503,8 @@ async function loadUsers(req, workspacePromise) {
   const actorIsPlatformAdmin = isPlatformAdministrator(req.authz);
   const { workspace } = await workspacePromise;
   const memberClubId = clubMembersViewClubId(req, workspace);
+  const assignmentMemberIds = memberClubId ? await loadClubAssignmentMemberIds(memberClubId) : [];
+  const assignmentMembers = new Set(assignmentMemberIds.map(String));
   const result = await query(
     `select distinct
        u.id, u.email, coalesce(u.display_name, u.full_name, u.email) as name,
@@ -3453,6 +3560,10 @@ async function loadUsers(req, workspacePromise) {
          or exists (select 1 from public.user_global_roles ugr where ugr.user_id = u.id and ugr.is_active = true)
          or exists (select 1 from public.user_club_roles ucr2 where ucr2.user_id = u.id and ucr2.is_active = true)
          or exists (select 1 from public.user_team_roles utr2 where utr2.user_id = u.id and utr2.is_active = true)
+         -- Roles R4-2: a live assignment is a staff role too (an athlete holding one stays a member), and the viewer
+         -- always sees its own account (a view-workspace viewer may be an athlete with nothing but an assignment).
+         or u.id = any($5::uuid[])
+         or u.id = $1
        )
        and (
          $2::boolean
@@ -3490,13 +3601,22 @@ async function loadUsers(req, workspacePromise) {
                  and member_team.club_id = $3::uuid
                  and (member_role.is_active = true or not $4::boolean)
              )
+             or u.id = any($5::uuid[])
            )
          )
        )
      order by name`,
-    [req.user.id, actorIsPlatformAdmin, memberClubId, CLUB_MEMBERS_ACTIVE_ROLES_ONLY],
+    [req.user.id, actorIsPlatformAdmin, memberClubId, CLUB_MEMBERS_ACTIVE_ROLES_ONLY, assignmentMemberIds],
   );
   return result.rows.map((row) => {
+    const mapped = mapUserRow(req, actorIsPlatformAdmin, row);
+    if (memberClubId && assignmentMembers.has(String(row.id))) mapped[CLUB_ASSIGNMENT_MEMBER] = memberClubId;
+    return mapped;
+  });
+}
+
+function mapUserRow(req, actorIsPlatformAdmin, row) {
+  { // (the body of loadUsers' former row mapper, unchanged)
     const activeGlobalRoles = new Set(row.global_roles.filter((r) => r.isActive).map((r) => r.role));
     const hasActiveClubRole = row.club_roles.some((r) => r.isActive);
     const hasActiveTeamRole = row.team_roles.some((r) => r.isActive);
@@ -3521,7 +3641,7 @@ async function loadUsers(req, workspacePromise) {
         platformAdministration,
       },
     };
-  });
+  }
 }
 
 // Takes the full req (not req.user) - canManageAthlete reads req.authz,
