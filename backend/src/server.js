@@ -1,3 +1,4 @@
+import { createReferenceRouter } from "./dashboardReferences/router.js";
 import { pagesEnabled } from './dashboardPages/config.js';
 import { createPagesRouter } from './dashboardPages/router.js';
 import { captureSimplePreviewRequestBytes } from './dashboardSimple/previewRouter.js';
@@ -205,6 +206,7 @@ app.use("/api/training-load/gpexe", requireAuth, gpexeImportRouter);
 // Source metric mapping administration (M2): a platform admin, or a club's
 // own admin in that club's workspace; everyone else the same 404. Mounted
 // before the source connections so this prefix never reaches that router.
+app.use("/api/training-load/reference-tables", requireAuth, createReferenceRouter());
 app.use("/api/training-load/sources/metrics", requireAuth, sourceMetricsRouter);
 // Source credential connections (F3c2d): platform admin only inside the
 // router; every other caller gets the same 404 as a missing connection.
