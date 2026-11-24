@@ -2785,8 +2785,8 @@ export function gitAddForceOrTop(segment, dir) {
     // -u stages every tracked change, like commit -a on the whole tree (the independent review)
     if (/^-[A-Za-z]+$/.test(t)) { if (/[fu]/.test(t)) return true; continue; }
     if (t.startsWith(":")) return true;
-    // `*` (quoted or not) at the top is every file there: the same as `git add .`
-    if (/^\*+$/.test(t)) return true;
+    // `*` (quoted or not) at the top is every file there: the same as `git add .` (also `./*`)
+    if (/^(?:\.\/)*\*+$/.test(t)) return true;
     if (base && top && !/[*?[\]]/.test(t)) {
       const real = realPathOrNull(path.resolve(base, t));
       if (real && real === realPathOrNull(top)) return true;
@@ -2961,10 +2961,18 @@ export function unnamedTreeWriter(segment, dir) {
   const here = dir !== null && insideAnyWorkTree(dir);
   if (name === "git") {
     const parsed = extractGitSubcommandArgs(segment, "apply");
-    if (!parsed) return false;
-    const opts = parsed.rest.split(/\s+/).filter((t) => t.startsWith("-"));
-    // --check / --stat / --numstat / --summary only read the patch
-    return !(opts.length > 0 && opts.every((o) => ["--check", "--stat", "--numstat", "--summary", "-v", "--verbose"].includes(o)));
+    if (parsed) {
+      const opts = parsed.rest.split(/\s+/).filter((t) => t.startsWith("-"));
+      // --check / --stat / --numstat / --summary only read the patch
+      return !(opts.length > 0 && opts.every((o) => ["--check", "--stat", "--numstat", "--summary", "-v", "--verbose"].includes(o)));
+    }
+    // git am applies a mailbox's patches and commits them: the same writer as git apply
+    const am = extractGitSubcommandArgs(segment, "am");
+    if (am) {
+      const toks = am.rest.split(/\s+/).filter(Boolean);
+      return !(toks.length > 0 && toks.every((t) => ["--abort", "--quit", "--show-current-patch", "--show-current-patch=diff", "--show-current-patch=raw"].includes(t)));
+    }
+    return false;
   }
   if (name === "patch") return dir === null || here || args.some((a, i) => (a === "-d" || a === "--directory") && insideAnyWorkTree(path.resolve(dir ?? "/", args[i + 1] ?? "")));
   const target = (flag) => { const i = args.findIndex((a) => a === flag); return i >= 0 ? args[i + 1] : null; };
@@ -2989,18 +2997,29 @@ export function unnamedTreeWriter(segment, dir) {
     if (name === "rsync") return true;
     // a copy of a folder's CONTENTS (`src/.`, `src/`) lands its dot files in the destination
     const recursive = args.some((a) => /^-[A-Za-z]*[rRa]/.test(a) || a === "--recursive" || a === "--archive");
-    return recursive && operands.slice(0, -1).some((s) => /\/\.?$/.test(s) && s !== "./");
+    // -T / --no-target-directory copies the folder's contents onto the destination
+    const intoContents = args.some((a) => /^-[A-Za-z]*T/.test(a) || a === "--no-target-directory");
+    return recursive && (intoContents || operands.slice(0, -1).some((s) => (/\/\.?$/.test(s) && s !== "./") || /(^|\/)\.[^/]*[*?[]/.test(s)));
   }
   return false;
 }
 
 // A database target the hook cannot read: a variable or a substitution as the connection of psql
 // and the other clients (`psql "$DATABASE_URL"`, `pg_dump ${URL}`).
-export function databaseTargetUnreadable(segment) {
+export function databaseTargetUnreadable(segment, variables = new Map()) {
   const words = tokenizeWords(normalizeSegment(segment));
   const name = path.basename(shellWord(words[0] ?? ""));
   if (!/^(psql|pg_dump|pg_dumpall|pg_restore|pgcli|usql|pgbench|createdb|dropdb|vacuumdb|reindexdb|pg_isready)$/.test(name)) return false;
-  return words.slice(1).some((w) => /\$|`/.test(w.replace(/^'[^']*'$/, "")));
+  return words.slice(1).some((w) => {
+    const raw = w.replace(/^'[^']*'$/, "");
+    if (!/\$|`/.test(raw)) return false;
+    // a variable the line set plainly is read with its value: a loopback test database passes
+    // (a remote value was already caught by namesRemoteDatabase on the whole line)
+    const value = substituteLineVariables(raw, variables);
+    if (/\$|`/.test(value)) return true;
+    const url = shellWord(value);
+    return !(isLoopbackDatabaseValue("DATABASE_URL", url) && /:\/\/[^/?#]*\/optimove_tests_[A-Za-z0-9_]+(?:[?#]|$)/.test(url));
+  });
 }
 
 // `git reset` that moves the branch (a revision operand, or --soft / --mixed with one) on main or
@@ -3025,7 +3044,40 @@ export function resetOnProtectedBranch(segment, state) {
 // - `node|python|perl|ruby -e/-c/-p/-` (or a heredoc fed to them) whose code starts a process or
 //   reads .env.
 const CODE_RUNNERS = new Set(["node", "nodejs", "python", "python3", "perl", "ruby", "deno", "bun"]);
-const PROCESS_CODE_RE = /child_process|\bexecSync\b|\bexecFile|\bspawn|\bexec\s*\(|\bsystem\s*\(|\bos\.system|\bsubprocess|\bpopen|\bPopen|`[^`]*`|\bshell_exec|Deno\.run|Deno\.Command|Bun\.spawn|\.env\b/;
+// What starts a process or reads .env in the runner's OWN code (never matched against the rest of
+// the line): a method call `.exec(` and `process.env` are not it.
+const PROCESS_CODE_RE = /child_process|\bexecSync\b|\bexecFile|\bspawn|(?<![.\w$])exec\s*\(|(?<![.\w$])system\s*\(|\bos\.(?:system|exec\w*|spawn\w*|popen|fork)|\bsubprocess|\bpopen|\bPopen|\bshell_exec|\bpassthru\b|Deno\.run|Deno\.Command|Bun\.spawn|(?:^|[\s'"\/(=,`])\.env(?:\.[\w-]+)?(?=['"\s),;`]|$)/;
+// perl and ruby also run a command from backticks and qx
+const PROCESS_CODE_PERL_RUBY_RE = /`[^`]*`|\bqx\s*[({\/|'"]|%x[({[]/;
+// The bodies of heredocs and here-strings, each with the text of the part that owns it.
+export function heredocBodies(cmd) {
+  const out = [];
+  const lines = String(cmd).split(/\r?\n/);
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    const unquoted = line.replace(/(<<-?\s*)?'[^']*'/g, (m, op) => (op ? m : " ".repeat(m.length)));
+    const here = /(^|[^<])<<<\s*(.+)$/.exec(unquoted);
+    if (here) out.push({ owner: unquoted.slice(0, here.index + here[1].length).split(/&&|\|\||;|\|/).pop().trim(), body: stripQuotes(line.slice(here.index + here[1].length + 3).trim()) });
+    const re = /(^|[^<])<<(-?)\s*(?:'([A-Za-z_][\w.-]*)'|"([A-Za-z_][\w.-]*)"|\\?([A-Za-z_][\w.-]*))/g;
+    let m;
+    const pending = [];
+    while ((m = re.exec(unquoted)) !== null) {
+      const at = m.index + m[1].length;
+      pending.push({ word: m[3] || m[4] || m[5], tabs: m[2] === "-", owner: unquoted.slice(0, at).split(/&&|\|\||;|\|/).pop().trim() });
+    }
+    for (const doc of pending) {
+      const body = [];
+      while (li + 1 < lines.length) {
+        li++;
+        const candidate = doc.tabs ? lines[li].replace(/^\t+/, "") : lines[li];
+        if (candidate === doc.word) break;
+        body.push(lines[li]);
+      }
+      out.push({ owner: doc.owner, body: body.join("\n") });
+    }
+  }
+  return out;
+}
 function trackedInRepo(file, dir) {
   try {
     execFileSync("git", ["ls-files", "--error-unmatch", "--", file], { cwd: dir, timeout: GIT_READ_TIMEOUT_MS, stdio: "ignore" });
@@ -3034,7 +3086,19 @@ function trackedInRepo(file, dir) {
     return false;
   }
 }
-export function runsUnreadableCode(segment, { cmd, dir, writtenOnLine }) {
+// A script file the line itself writes (by its raw word or its resolved path), or a tracked file
+// with uncommitted changes (an earlier line may have rewritten it).
+function scriptChanged(file, dir, writtenOnLine) {
+  if (writtenOnLine.has(file) || writtenOnLine.has(path.resolve(dir ?? "/", file))) return true;
+  if (dir === null) return true;
+  try {
+    execFileSync("git", ["diff", "--quiet", "HEAD", "--", file], { cwd: dir, timeout: GIT_READ_TIMEOUT_MS, stdio: "ignore" });
+    return false;
+  } catch {
+    return true;
+  }
+}
+export function runsUnreadableCode(segment, { cmd, dir, writtenOnLine, bodies = heredocBodies(cmd) }) {
   const masked = withoutRedirections(tokenizeWords(normalizeSegment(maskSubstitutions(segment)))).map(shellWord);
   const name = path.basename(masked[0] ?? "");
   const isShell = SHELLS.has(name);
@@ -3044,32 +3108,74 @@ export function runsUnreadableCode(segment, { cmd, dir, writtenOnLine }) {
     const file = masked.slice(1).find((w) => !w.startsWith("-"));
     if (!file) return false; // stdin: the unreadable-shell rule decides
     if (/[$`]|SUBSTITUTED/.test(file)) return true;
-    if (writtenOnLine.has(file) || writtenOnLine.has(path.resolve(dir ?? "/", file))) return true;
-    return dir === null || !trackedInRepo(file, dir);
+    if (dir === null || !trackedInRepo(file, dir)) return true;
+    return scriptChanged(file, dir, writtenOnLine);
   }
   if (CODE_RUNNERS.has(name)) {
-    const inline = masked.slice(1).some((w) => /^-[A-Za-z]*[ecpr]$|^--eval$|^--print$|^-$/.test(w) || /^--eval=/.test(w));
-    if (!inline) return false;
-    return PROCESS_CODE_RE.test(String(cmd));
+    // the runner's own code: an inline argument (-e / -c / -p / -E / --eval), or what it reads from
+    // stdin (a heredoc or here-string of this part); a script file named on the line is code too
+    // when the line writes it, when it is stdin / a descriptor, or when its name is not readable
+    const raw = withoutRedirections(tokenizeWords(normalizeSegment(segment))).slice(1);
+    const code = [];
+    let script;
+    for (let k = 0; k < raw.length; k++) {
+      const w = shellWord(raw[k]);
+      if (/^-[A-Za-z]*[ecpE]$/.test(w) || w === "--eval" || w === "--print") { code.push(shellWord(raw[k + 1] ?? "")); k++; continue; }
+      if (/^--eval=/.test(w)) { code.push(w.slice(7)); continue; }
+      if (w === "-") { script = "-"; break; }
+      if (w.startsWith("-")) continue;
+      script = raw[k];
+      break;
+    }
+    const codeRe = (c) => PROCESS_CODE_RE.test(c) || ((name === "perl" || name === "ruby") && PROCESS_CODE_PERL_RUBY_RE.test(c));
+    if (code.length) return code.some(codeRe);
+    const head = segment.trim().split(/\s<</)[0].trim();
+    const fed = bodies.filter((b) => b.owner === segment.trim() || b.owner.startsWith(head) || head.startsWith(b.owner)).map((b) => b.body);
+    if (script === undefined || script === "-" || /^\/dev\/(stdin|fd\/\d+)$/.test(shellWord(script))) {
+      if (fed.length) return fed.some(codeRe);
+      return script !== undefined; // `python3 -` / `node /dev/stdin` with code from a pipe: unreadable
+    }
+    if (/[$`]/.test(script) || /SUBSTITUTED/.test(shellWord(script))) return true;
+    return writtenOnLine.has(shellWord(script)) || writtenOnLine.has(path.resolve(dir ?? "/", shellWord(script)));
   }
   return false;
 }
 
+// A writing command whose target operand is only known when the line runs (`tee "$(…)"`,
+// `rm "$(… | base64 -d)"`, `cp x $(cat n)`): the same rule as an unreadable redirection target.
+const OPERAND_WRITERS = new Set(["cp", "mv", "tee", "touch", "rm", "rmdir", "install", "ln", "truncate", "mkdir", "chmod", "chown", "dd", "shred", "unlink"]);
+export function writerOperandUnreadable(segment, variables = new Map()) {
+  const words = withoutRedirections(tokenizeWords(normalizeSegment(segment)));
+  const name = path.basename(shellWord(words[0] ?? ""));
+  const inPlace = (name === "sed" || name === "perl") && words.slice(1).some((w) => /^-[A-Za-z]*i/.test(shellWord(w)) || /^--in-place/.test(shellWord(w)));
+  if (!OPERAND_WRITERS.has(name) && !inPlace) return false;
+  return words.slice(1).some((w) => {
+    if (/^'[^']*'$/.test(w)) return false; // a single-quoted word is literal (a sed script `'$d'`)
+    if (!/[$`]/.test(w)) return false;
+    return /[$`]/.test(substituteLineVariables(w, variables));
+  });
+}
+
 // The paths a line writes by name (redirections, and the last operand of cp / mv / tee / ln / install).
-export function pathsWrittenOnLine(segments) {
+// Each path is kept as written and resolved against the directory its part runs in.
+export function pathsWrittenOnLine(segments, dirOf = () => null) {
   const out = new Set();
-  for (const s of segments) {
-    for (const t of outputRedirectTargets(s)) out.add(shellWord(t));
+  segments.forEach((s, i) => {
+    const dir = dirOf(i);
+    const add = (p) => { if (!p) return; out.add(p); out.add(path.resolve(dir ?? "/", p)); };
+    for (const t of outputRedirectTargets(s)) add(shellWord(t));
     const words = commandWords(s);
     const name = path.basename(words[0] ?? "");
     const ops = words.slice(1).filter((w) => !w.startsWith("-"));
-    if (["cp", "mv", "ln", "install", "curl", "wget"].includes(name) && ops.length) out.add(ops[ops.length - 1]);
-    if (name === "tee") ops.forEach((o) => out.add(o));
+    if (["cp", "mv", "ln", "install", "curl", "wget"].includes(name) && ops.length) add(ops[ops.length - 1]);
+    if (["tee", "touch", "truncate"].includes(name)) ops.forEach(add);
+    // an in-place edit writes every file it names (sed -i, perl -i)
+    if ((name === "sed" || name === "perl") && words.slice(1).some((w) => /^-[A-Za-z]*i/.test(w) || /^--in-place/.test(w))) ops.forEach(add);
     if (name === "curl" || name === "wget") {
-      const i = words.findIndex((w) => w === "-o" || w === "-O" || w === "--output" || w === "--output-document");
-      if (i >= 0 && words[i + 1]) out.add(words[i + 1]);
+      const k = words.findIndex((w) => w === "-o" || w === "-O" || w === "--output" || w === "--output-document");
+      if (k >= 0 && words[k + 1]) add(words[k + 1]);
     }
-  }
+  });
   return out;
 }
 
@@ -3239,7 +3345,7 @@ export function classifyShellCommand(cmd, cwd) {
   if (mentionsGuardFiles(cmd) && !segments.every(onlyReadsGuardFiles)) return { decision: "ask", reason: ASK_REASONS.guardFiles };
   if (hiddenRecursiveDelete(cmd, segments, lineHasCd ? null : cwd)) return { decision: "ask", reason: ASK_REASONS.recursiveDelete };
   const lineMakesLinks = segments.length > 1 && segments.some(makesLinksOrWorkTrees);
-  const writtenOnLine = pathsWrittenOnLine(segments);
+  const writtenOnLine = pathsWrittenOnLine(segments, (i) => stateOf(i).dir);
 
   // Every segment is judged on its own and the strictest verdict wins: any deny above
   // already ended the call, and here the first segment that needs a confirmation ends it,
@@ -3284,7 +3390,8 @@ export function classifyShellCommand(cmd, cwd) {
     if (redirectTargetUnreadable(segment, segmentVariables[index] ?? new Map())) return { decision: "ask", reason: ASK_REASONS.unreadableTarget };
     if (writesIntoGuardThroughLink(segment, state.dir) || linkIntoGuard(segment, state.dir)) return { decision: "ask", reason: ASK_REASONS.guardFiles };
     if (unnamedTreeWriter(segment, state.dir)) return { decision: "ask", reason: ASK_REASONS.unnamedWriter };
-    if (databaseTargetUnreadable(segment)) return { decision: "ask", reason: ASK_REASONS.nonLocalDatabase };
+    if (databaseTargetUnreadable(segment, segmentVariables[index] ?? new Map())) return { decision: "ask", reason: ASK_REASONS.nonLocalDatabase };
+    if (writerOperandUnreadable(segment, segmentVariables[index] ?? new Map())) return { decision: "ask", reason: ASK_REASONS.unreadableTarget };
     if (resetOnProtectedBranch(segment, state)) return { decision: "ask", reason: ASK_REASONS.resetMain };
     if (runsUnreadableCode(segment, { cmd, dir: state.dir, writtenOnLine })) return { decision: "ask", reason: ASK_REASONS.unreadableCode };
     if (isDeployCommand(segment) || isHostingCli(segment)) return { decision: "ask", reason: ASK_REASONS.deploy };

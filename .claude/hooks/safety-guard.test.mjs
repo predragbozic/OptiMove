@@ -742,10 +742,9 @@ const RELAXED_2026_11_23 = [
   /^(?:[A-Z]=\S+ *(?:;|&&) *)*(?:.*;\s*)?(?:cat|head|cut|diff|wc|grep) .*(?:>|>>|>\||&>) *(?!.*\.git[\\/])/,
   /^(?:[A-Z]+=\S+;?\s*)+.*>/,
   /^(?:false|true) (?:&&|\|\|) S=/,
-  /^(?:f\(\)|bash -c)/,
   /^git (?:worktree add|clone|init|-C \S+ init)\b.*(?:&&|;) *(?:cat|grep)/,
   // git: subcommands and options that are not plumbing, history loss or a protected branch
-  /^git (notes|am|tag|restore --staged --pathspec|switch --cre|checkout --det|clean --forc --dry|branch --del (?!--forc)|restore --stag|pull --(?:reb=false|no-reb))\b/,
+  /^git (notes|tag|restore --staged --pathspec|switch --cre|checkout --det|clean --forc --dry|branch --del (?!--forc)|restore --stag|pull --(?:reb=false|no-reb))\b/,
   /^git worktree add\b/,
   /^git commit (?:--no-verify|-am|-a |--all)/,
   /^git add (?:'src\/\*\.js'|\.\.|\/|gone\/|backend\/src)/,
@@ -2029,7 +2028,7 @@ test("relaxed policy: every kept protection still asks or is denied when chained
       ["parallel 'git push origin {}' ::: main", ASK], ["echo main | xargs -I X sh -c 'git push origin X'", ASK],
       ["gh api -XDELETE repos/o/r/git/refs/heads/main", ASK], ["gh api -XPUT repos/o/r/pulls/1/merge", ASK], ["gh api -XGET repos/o/r", ALLOW],
       ["sed -i 's/.*TODO//' f", ALLOW], ["sed -i -E 's/(.*)=.*/\\1/' f", ALLOW], ["node -e \"console.log('.*')\"", ALLOW], ["npm test -- --grep \"x.*y\"", ALLOW],
-      ["sed -i 's/a/b/' .claude/rules/*.md", ALLOW], ["cp x .claude/agents/$n.md", ALLOW], ["cp x .cl*/set*", ASK], ["sed -i s/a/b/ .claude/s*.json", ASK],
+      ["sed -i 's/a/b/' .claude/rules/*.md", ALLOW], ["n=x; cp x .claude/agents/$n.md", ALLOW], ["cp x .claude/agents/$n.md", ASK], ["cp x .cl*/set*", ASK], ["sed -i s/a/b/ .claude/s*.json", ASK],
       ["true || export DATABASE_URL=postgresql://127.0.0.1/optimove_tests_x; npm --prefix backend run migrate", ASK],
       ["export DATABASE_URL=postgresql://127.0.0.1/optimove_tests_x | cat; npm --prefix backend run migrate", ASK],
       ["(export DATABASE_URL=postgresql://127.0.0.1/optimove_tests_x); npm --prefix backend run migrate", ASK],
@@ -2130,7 +2129,9 @@ test("relaxed policy: every exact command of the independent review of #750 (NO-
     writeFileSync(path.join(repo, "run.sh"), "echo ok\n");
     assert.equal(verdict("bash run.sh", repo), ASK, "untracked");
     execFileSync("git", ["add", "run.sh"], { cwd: repo });
-    assert.equal(verdict("bash run.sh", repo), ALLOW, "tracked");
+    assert.equal(verdict("bash run.sh", repo), ASK, "staged, not committed: it may differ from what was reviewed");
+    execFileSync("git", ["commit", "-qm", "run"], { cwd: repo });
+    assert.equal(verdict("bash run.sh", repo), ALLOW, "tracked and unchanged");
     assert.equal(verdict("echo x > run.sh; bash run.sh", repo), ASK, "rewritten on the same line");
     // 6 rm -rf ../* from the root of a repository that lies in /tmp reaches all of /tmp
     assert.equal(verdict("rm -rf ../*", repo), ASK);
@@ -2149,6 +2150,44 @@ test("relaxed policy: every exact command of the independent review of #750 (NO-
     assert.equal(verdict("ln -s /tmp/x l2", links), ALLOW);
   } finally {
     for (const d of [repo, onMain, links]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("relaxed policy: the code re-review of c67bf67 — every form of the same write or code asks; the routine forms do not", () => {
+  const repo = makeRepo("sg-relax-rr-", "feature/own");
+  const onMain = makeRepo("sg-relax-rr-main-", "main");
+  try {
+    mkdirSync(path.join(repo, "scripts"));
+    writeFileSync(path.join(repo, "scripts", "x.sh"), "echo ok\n");
+    execFileSync("git", ["add", "scripts/x.sh"], { cwd: repo });
+    execFileSync("git", ["commit", "-qm", "x"], { cwd: repo });
+    expectAll([
+      // HIGH 1: an unreadable operand of a writer, like an unreadable redirect target
+      ['echo \'{}\' | tee "$(echo LmNsYXVkZS9zZXR0aW5ncy5qc29u | base64 -d)"', ASK], ['rm "$(echo a | base64 -d)"', ASK], ["cp /tmp/x $(cat /tmp/n)", ASK],
+      ['sed -i s/a/b/ "$(cat /tmp/n)"', ASK], ["L=/tmp/x; cp a $L", ALLOW], ["sed -i '$d' f.txt", ALLOW],
+      // HIGH 2: the same code fed to the runner in every form
+      ["python3 <<'EOF'\nimport subprocess\nsubprocess.run(['x'])\nEOF", ASK], ["echo 'import os;os.system(1)' > /tmp/e.py; python3 /tmp/e.py", ASK],
+      ["node /dev/stdin <<'EOF'\nrequire('child_process')\nEOF", ASK], ["python3 <<< 'import os; os.system(\"x\")'", ASK], ["node scripts/test-runner.mjs --list", ALLOW],
+      // MEDIUM: only the runner's own code is read
+      ["python3 - <<'EOF'\ns='`a`'\nEOF", ALLOW], ["node -e 'console.log(process.env.HOME)'", ALLOW], ["python3 -c 'print(1)'; grep -rn spawn backend/src", ALLOW],
+      ["node -e \"/x/.exec('y')\"", ALLOW], ["node -e \"require('fs').readFileSync('.env')\"", ASK], ["perl -e 'print `id`'", ASK],
+      // MEDIUM: a tracked script changed on the same line
+      ["echo x > ./scripts/x.sh; bash scripts/x.sh", ASK], ["sed -i '1i git push -f origin main' scripts/x.sh && bash scripts/x.sh", ASK], ["bash scripts/x.sh", ALLOW],
+      // MEDIUM: relatives of the unnamed writers
+      ["git am /tmp/evil.mbox", ASK], ["cp -rT /tmp/c .", ASK], ["cp -r /tmp/c/.[!.]* .", ASK], ["git am --abort", ALLOW],
+      // MEDIUM: ./* is * ; LOW: a test database set by the line's own export
+      ["git add ./*", ASK], ["git add ./src/*.js", ALLOW],
+      ["export DATABASE_URL=postgresql://postgres@127.0.0.1/optimove_tests_x; psql \"$DATABASE_URL\" -c 'select 1'", ALLOW],
+      ["export DATABASE_URL=postgresql://postgres@127.0.0.1/OPTIMOVE; psql \"$DATABASE_URL\" -c 'select 1'", ASK],
+    ], repo, { exact: true });
+    // a tracked script with uncommitted changes (rewritten by an earlier line) asks
+    writeFileSync(path.join(repo, "scripts", "x.sh"), "git push -f origin main\n");
+    assert.equal(verdict("bash scripts/x.sh", repo), ASK);
+    // LOW (test honesty): the merge protection inside bash -c is pinned by a row of its own
+    assert.equal(verdict(`bash -c "cd ${onMain} && git merge feature/x"`, repo), ASK);
+    assert.equal(verdict("bash -c 'git merge feature/x'", onMain), ASK);
+  } finally {
+    for (const d of [repo, onMain]) rmSync(d, { recursive: true, force: true });
   }
 });
 

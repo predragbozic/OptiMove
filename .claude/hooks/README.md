@@ -83,20 +83,23 @@ parts are each allowed; writing files anywhere through the shell (`cat >>`, `sed
 `cp`, `mv`, `mkdir`, `touch`, a non-recursive `rm`) to a target named on the line; `git add` of
 named files, folders and globs below the top; `git commit` (also `-a`, `--no-verify`) on a branch
 that is not main/master; `git push` of a named branch, or of the current branch when it is not
-main/master (also a bare `git push`); `cherry-pick`, `revert`, `am`, `tag`, `notes`,
-`worktree add`; any option of a read command; running tests, `node scripts/…`, `npm run`, `npx`,
-`make`, a tracked repository script, inline `node -e` / `python3 -c` / a Python heredoc that
-starts no process and reads no `.env`; a local `pg_ctl` / `pg_ctlcluster`; `psql` and migrations
+main/master (also a bare `git push`); `cherry-pick`, `revert`, `tag`, `notes`, `worktree add`;
+any option of a read command; running tests, `node scripts/…`, `npm run`, `npx`, `make`, a
+committed and unchanged repository script, inline `node -e` / `python3 -c` / a Python heredoc
+whose own code starts no process and reads no `.env` file; a local `pg_ctl` / `pg_ctlcluster`; `psql` and migrations
 against an `optimove_tests_*` database on this machine; edits of `.claude/rules`,
 `.claude/agents` and documents with the file tools.
 
 **Added by the independent review of #750** (NO-GO on 9076d27, relayed by the manager, who
 decided item 11 for the owner) — each also asks:
-- an output redirection whose target is only known when the line runs (`> $(echo …)`, `` > `…` ``,
-  `> $VAR/x` for a variable the line did not set plainly);
+- an output redirection, or an operand of a writer (`cp`, `mv`, `tee`, `rm`, `touch`, `ln`,
+  `install`, `truncate`, `dd`, `sed -i`, `perl -i`, …), whose target is only known when the line
+  runs (`> $(echo …)`, `` > `…` ``, `tee "$(… | base64 -d)"`, `$VAR/x` for a variable the line
+  did not set plainly);
 - writers that do not name what they write, run in or aimed at a git work tree: `git apply`
-  (except `--check` / `--stat` / `--numstat` / `--summary`), `patch`, `tar x`, `unzip`, `7z`,
-  `rsync`, `cp -r src/. dest` / `cp -r src/ dest`;
+  (except `--check` / `--stat` / `--numstat` / `--summary`), `git am` (except `--abort` /
+  `--quit` / `--show-current-patch`), `patch`, `tar x`, `unzip`, `7z`, `rsync`,
+  `cp -r src/. dest` / `cp -r src/ dest` / `cp -rT` / a source glob of dot names;
 - a write through a link into the guard's files (`echo x > sj` with `sj -> .claude/settings.json`,
   `cp x hk/` with `hk -> .claude/hooks`), and `ln -s` whose target is unreadable or is the guard's files;
 - `eval "git push -f" origin x` (eval joins all its words);
@@ -108,9 +111,12 @@ decided item 11 for the owner) — each also asks:
 - `pg://`, `pgsql://` and the other postgres URL schemes;
 - a file-tool edit of `.CLAUDE/hooks/…` (letter case ignored on every system);
 - rule 11, code the guard cannot read: `bash <(…)`, `source <(…)`, `. <(…)`; `bash|sh|source`
-  of a file written on the same line or not tracked in the repository; `node|python3|perl|ruby
-  -e/-c/-p/-` (and a heredoc fed to them) whose code contains `child_process`, `exec`, `spawn`,
-  `system`, `subprocess`, `popen` or reads `.env`.
+  of a file written on the same line (by a redirect, `cp`, `tee`, `sed -i`, …), not tracked in the
+  repository, or with uncommitted changes; `node|python3|perl|ruby` code in any form it is fed —
+  `-e` / `-c` / `-p`, a heredoc or here-string with or without `-`, `/dev/stdin`, a script file
+  written on the same line — whose OWN code (never the rest of the line) contains
+  `child_process`, `exec(`, `spawn`, `system(`, `os.system`, `subprocess`, `popen` or names a
+  `.env` file (`process.env` is not that); for perl and ruby also backticks and `qx`.
 
 **Still denied:** `git add .` / `-A` / `--all`, `git reset --hard`, `git clean -f`, a force push,
 `rm -rf` of the repository root, a home or a drive root, `git checkout -- <path>` / `git restore`
