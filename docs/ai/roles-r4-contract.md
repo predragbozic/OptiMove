@@ -863,10 +863,26 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
 - **Members with live assignments** (11 (b)): for the club whose members a viewer may see, an account with a live
   assignment (not revoked, not expired, role not archived) of club scope in C or team scope on a team of C is a member,
   in `club` and `club_view` alike; revoked or expired assignments never count, whatever `CLUB_MEMBERS_ACTIVE_ROLES_ONLY`
-  says. The mark is a symbol key, never in the JSON.
-- **`/me`**: `permissionsForWorkspace` maps the view types to their scope (checked words only, as before);
-  `closedModules` = the closed modules of the active workspace's club, read only from an entry the account itself holds
-  in that club (none for a platform admin without one).
+  says. The mark is a symbol key, never in the JSON. An account with an athlete profile whose only staff role is a live
+  assignment stays a member, and a view-workspace viewer always sees its own row (the code review's MEDIUM 2: the first
+  WHERE group of `loadUsers` dropped them).
+- **`/me`**: `permissionsForWorkspace` maps the view types to their scope (checked words only, as before) and, in a view
+  workspace, lists only the words its routes let through (`VIEW_WORKSPACE_USABLE_WORDS`: `org.view` in R4-2; a held
+  `org.teams.manage` is not offered, since `POST /teams` answers it 403 - the code review's MEDIUM 1); `closedModules` =
+  the closed modules of the active workspace's club, read only from an entry the account itself holds in that club (none
+  for a platform admin without one). A module's VIEW pull request (or R4-3 / R4-4 for Settings) adds its words to that
+  list with the route that lets them through.
+- **Recorded, not changed (internal review LOWs):**
+  - `FALLBACK_ORDER` puts the view types before `athlete` (as section 5.1 says: "after `team`"): an athlete who gets an
+    assignment and has no preference lands in `club_view` and that is persisted; the athlete switches back once. If the
+    owner prefers the athlete workspace first for such an account, it is a one-line order change.
+  - The workspace is resolved twice on `GET /api/organization` for a non-coach (read-only in the gate, then by the
+    route); safe, both from the same `req.authz`, and the route decides again.
+  - The `club_view` members path (`staff.assign` in a view workspace) is not reachable in R4-2: `staff.assign` is
+    system-role-only and basic roles are not assignable; it becomes reachable with R4-3's club versions and customs. L3's
+    test proves the gate that keeps the list away.
+  - A mixed account in a view workspace and a view holder without `staff.assign` run loaders whose rows are discarded
+    (cost only); the leftover braces in `mapUserRow` (readability).
 - **Not in R4-2:** the frontend of 5.2 (R4-4); no module of section 6 learns the view types (each in its VIEW pull
   request). `requireCoach`, `computeCapabilities`, `managedTeamIds` and the old helpers are unchanged.
 - **Tests changed because they pinned "until R4":** `me-permissions-r3` test 4 (an assignment-only account now lands in
@@ -874,7 +890,7 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
   that `club` / `team` come only from the old rows), `permissions-r1` b1 / b2z (two new `org.view` call sites, club and
   team), `roles-r4-checked-gates` B1 counts and B3 (the view types named only in `workspace.js` and
   `routes/organization.js`).
-- **Evidence:** `backend/tests/roles-r4-2-view-workspace.test.mjs` (13 tests, disposable database, the real server:
+- **Evidence:** `backend/tests/roles-r4-2-view-workspace.test.mjs` (15 tests, disposable database, the real server:
   offers, preference mapping and forged rows, the fixed keys, the entry gate's 403 on every other method and path, no
   preference written by a refused request, cross-club identical 404, the mixed account, the members list and L3, closed
   modules, the end of an assignment, L1, `org.view` as the right, the fail-closed filter, and section 6's mandatory sweep:

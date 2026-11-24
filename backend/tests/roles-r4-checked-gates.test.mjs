@@ -106,7 +106,7 @@ const REVIEWED = Object.freeze({
   "mediaStorage.js": 2,
   "organizationEntry.js": 1, // R4-2: lets a non-coach through only with a view workspace (contract 5.1)
   "permissionRolesService.js": 5,
-  "permissions.js": 7, // R4-2: closedModulesForWorkspace maps a workspace to its scope (+3, a scope, not an offer)
+  "permissions.js": 8, // R4-2: closedModulesForWorkspace maps a workspace to its scope, /me narrows a view workspace's words (+4, never an offer)
   "positionService.js": 8,
   "routes/auth.js": 1,
   "routes/builder.js": 4,
