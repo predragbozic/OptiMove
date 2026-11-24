@@ -87,6 +87,8 @@ cookie stays `HttpOnly` + `SameSite`.
   `team_view` types, which those helpers do not recognize (fail closed).
 - Proof: `backend/tests/roles-r4-checked-gates.test.mjs` B1 enumerates every workspace-type branch in `backend/src`
   against a reviewed list (a new branch fails until it is reviewed against this rule) and B2 pins that only
-  `workspace.js` offers a club or team workspace, from the old role rows only.
+  `workspace.js` offers a club or team workspace, from the old role rows only. B3 pins the files that name `club_view` /
+  `team_view` (R4-2: `workspace.js`, `routes/organization.js`); a module's VIEW pull request adds its file there and
+  checks `can()` next to the workspace match, never instead of it.
 - A word acts only once every route that gives what it means calls `can()` with it: `ENFORCED_PERMISSIONS`
   (`backend/src/permissions.js`) lists, per word, its gate files; the same test file (A1, A2) proves both directions.

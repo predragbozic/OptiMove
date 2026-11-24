@@ -337,6 +337,12 @@ const ROUTE_TABLE = {
     ["staff.assign", "clubScope(club.id)", "can", "canAssignClubRole"],
     ["staff.assign", "teamScope(team.id)", "can", "canAssignTeamRole"],
   ],
+  // Roles R4-2 (contract 5.1): GET / for a view workspace. No predicate stood here before (the route was behind
+  // requireCoach); for an account of the old tables org.view on a club is the club's admin, on a team its managers.
+  viewWorkspaceOrganization: [
+    ["org.view", "clubScope(scopeId)", "can", "canManageClub"],
+    ["org.view", "teamScope(scopeId)", "can", "canManageTeamById"],
+  ],
   "GET /clubs-summary": [["platform.admin", "GLOBAL_SCOPE", "can", "isPlatformAdministrator"]],
   "POST /users/:userId/email-change/request": [["accounts.manage", "GLOBAL_SCOPE", "!can", "isPlatformAdministrator"]],
   "POST /users/:userId/email-change/resend": [["accounts.manage", "GLOBAL_SCOPE", "!can", "isPlatformAdministrator"]],
@@ -457,10 +463,10 @@ test("b1. the per-call-site table is exactly the can() calls of routes/organizat
   const expected = Object.fromEntries(Object.entries(ROUTE_TABLE).map(([handler, sites]) => [handler, sites.map(([word, scope, shape]) => [word, scope, shape])]));
   assert.deepEqual(table, expected);
   assert.deepEqual(Object.keys(table), Object.keys(ROUTE_TABLE), "handlers in source order");
-  assert.equal(Object.keys(ROUTE_TABLE).length, 30);
-  assert.equal(CALL_SITES.length, 37);
+  assert.equal(Object.keys(ROUTE_TABLE).length, 31);
+  assert.equal(CALL_SITES.length, 39);
   // The comment that mentions can() is not a call: the raw text has one more.
-  assert.equal([...ORGANIZATION_JS.matchAll(/(?<![\w.$])can\(req\.authz\b/g)].length, 38);
+  assert.equal([...ORGANIZATION_JS.matchAll(/(?<![\w.$])can\(req\.authz\b/g)].length, 40);
   for (const site of CALL_SITES) {
     assert.ok(Object.hasOwn(PERMISSIONS, site.permission), `${site.handler}: ${site.permission} is a catalog word`);
     assert.ok(OLD[site.oldName], `${site.handler}: ${site.oldName} is a predicate of authz.js`);
@@ -605,6 +611,7 @@ test("b2z. every (word, scope type) organization.js checks is one the word may b
     "athletes.remove @ team: assignable",
     "org.club.edit @ club: assignable",
     "org.teams.manage @ club: assignable",
+    "org.view @ club: assignable",
     "org.view @ team: assignable",
     "platform.admin @ global: assignable",
     "staff.assign @ club: assignable",
