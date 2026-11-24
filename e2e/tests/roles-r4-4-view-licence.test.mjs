@@ -28,6 +28,9 @@ before(async () => {
       ["viewer@example.invalid", hashPassword(`Demo-${crypto.randomBytes(9).toString("base64url")}`)])).rows[0].id;
     const sessionToken = await createSession(id, client);
     world.accounts.push({ role: "role_holder", id, email: "viewer@example.invalid", label: "Viewer Example", sessionToken });
+    // A notification is the person's, not the workspace's: one that opens a module (Program Library's requests).
+    await client.query(`insert into public.app_notifications (recipient_user_id, type, title, body, entity_type, entity_id, href, metadata)
+      values ($1, 'program_access_requested', 'Program access request', 'Someone requested a program.', 'program_access', gen_random_uuid(), '/app?tab=templates&section=requests', '{}'::jsonb)`, [id]);
   } finally {
     await client.end();
   }
@@ -76,7 +79,7 @@ test("1. a platform administrator takes Imports out of Example Club's licence (1
     await licence.getByText("Take out: Imports.").waitFor();
     await licence.locator("textarea").fill("No import licence this season");
     await licence.getByRole("button", { name: /Save licence/ }).click();
-    await licence.getByText(/Licence saved: 1 part taken out/).waitFor();
+    await licence.getByText("Licence saved – taken out: Imports.").waitFor();
     assert.equal(await licence.locator('[data-licence-module="imports"]').isChecked(), false);
     const read = await request(context, world, `${R}/clubs/${world.ids.clubA}/ceiling`);
     const imports = JSON.parse(read.text).modules.find((m) => m.module === "imports");
@@ -140,6 +143,12 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await page.click('[data-action="organization-section"][data-section="clubs"]');
       await page.waitForSelector('[data-action="organization-select-club"]');
       assert.equal(await page.locator('[data-action="organization-edit"], [data-action="organization-delete"]').count(), 0, "no Edit or Delete");
+      // A chosen club: its teams, and nothing that writes (the server sends no athlete, no archived team, no add right).
+      await page.click('[data-action="organization-select-club"]');
+      await page.waitForSelector(".organization-lists-browser");
+      const writes = await page.$$eval("#content [data-action]", (els) => els.map((e) => e.dataset.action)
+        .filter((a) => !/^organization-(section|select-club|select-team|clear-selection)$/.test(a)));
+      assert.deepEqual(writes, [], `only reading controls under a chosen club (${writes.join(", ")})`);
       assert.equal(await noSideScroll(page), true, "no horizontal scroll");
       assert.deepEqual(pageErrors, []);
     } finally {
@@ -147,6 +156,26 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
     }
   });
 }
+
+test("5. a notification that opens a module takes a role holder to Home, never into the module", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "role_holder", WIDTHS.desktop);
+  try {
+    await page.locator("#notificationToggle").click();
+    // Home is drawn again after the click: the old Home is marked so the new one is told apart.
+    await page.evaluate(() => document.querySelector(".coach-home-view")?.setAttribute("data-before-click", "1"));
+    await page.locator('[data-action="notification-open-program-requests"]').first().click();
+    await page.waitForFunction(() => {
+      const home = document.querySelector("#content .coach-home-view");
+      const title = document.querySelector("#screenTitle")?.textContent || "";
+      return (home && !home.hasAttribute("data-before-click")) || /Program/i.test(title);
+    }, null, { timeout: 15_000 });
+    assert.equal((await page.textContent("#screenTitle")).trim(), "Home", "the screen is Home, not a module");
+    assert.equal(await page.locator("#content .coach-home-view").count(), 1, "the short Home is drawn");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});
 
 test("4. the role holder's workspace switcher names the club as a view workspace; Settings opens from the menu", async () => {
   const { context, page } = await openAs(browser, world, "role_holder", WIDTHS.desktop);

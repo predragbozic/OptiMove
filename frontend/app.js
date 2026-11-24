@@ -181,7 +181,7 @@ import { CALENDAR_SETTINGS_ICON_HOST, calendarSettingsMayBeLeft, handleCalendarS
 import { calendarSettingsNeedLoad, enterCalendarSettingsSection, loadCalendarSettings, resetCalendarSettingsForWorkspaceChange } from "./calendar-settings-data.js";
 import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
 import { handleRolesAction, handleRolesBeforeUnload, handleRolesInput, rolesMayBeLeft, submitRolesForm } from "./roles-actions.js";
-import { syncClubLicence } from "./club-licence-actions.js";
+import { leaveClubLicence, syncClubLicence } from "./club-licence-actions.js";
 import { resetClubLicence } from "./club-licence-data.js";
 import { enterRolesSection, loadRoles, markRolesUsersStale, loadWho, resetRolesForWorkspaceChange, rolesContext, rolesNeedLoad, rolesUsersAvailable, whoNeedsLoad } from "./roles-data.js";
 import { renderRolesAssignHtml, renderRolesPanelHtml, renderRolesWhoHtml } from "./roles-view.js";
@@ -2106,7 +2106,7 @@ async function handleGlobalClick(event) {
   if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) && rolesMayBeLeft({ final: "switch" }) })) {
     return;
   }
-  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openCalendarQuestion: (questionId) => openCalendarQuestion(questionId, athleteQuestionHandlers()), openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
+  if (await handleNotificationAction(action, { openProgramRequests: notInViewWorkspace(openProgramRequests), openTestAssignment: notInViewWorkspace(openTestAssignment), openTestsToday: notInViewWorkspace(openTestsToday), openTestsResults: notInViewWorkspace(openTestsResults), openTrainingLoadAssignment: notInViewWorkspace(openTrainingLoadAssignment), openTrainingLoadResults: notInViewWorkspace(openTrainingLoadResults), openCalendarQuestion: notInViewWorkspace((questionId) => openCalendarQuestion(questionId, athleteQuestionHandlers())), openWeeklyPlanFromNotification: notInViewWorkspace(openWeeklyPlanOnDate), openSpecificProgramFromNotification: notInViewWorkspace(openSpecificProgramFromNotification), confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
     renderMessages();
     return;
   }
@@ -2518,10 +2518,22 @@ async function loadAthletes() {
   }
 }
 
+// Roles R4-4: a notification is the person's, not the workspace's. In a view workspace (club_view / team_view) a
+// notification that opens a module goes to Home instead: the module is not reachable there (its menu entry is hidden).
+function notInViewWorkspace(open) {
+  return (...args) => {
+    if (!isViewWorkspace()) return open(...args);
+    state.activeTab = "coach-home";
+    return loadActiveTab();
+  };
+}
+
 async function loadActiveTab() {
   if (isAthleteMode() && state.activeTab === "coach-home") state.activeTab = "athlete-home";
   renderTabs();
   renderLibraryNav();
+  // Roles R4-4: the Club licence island lives only in Settings; leaving it unmounts the island at once.
+  if (state.activeTab !== "organization") leaveClubLicence();
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
   if (state.activeTab === "coach-account") return renderCoachAccount();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();

@@ -16,6 +16,7 @@ let state;
 
 const CLUB = "11111111-0000-4000-8000-0000000000c1";
 const OTHER = "11111111-0000-4000-8000-0000000000c2";
+const CLUB2 = "11111111-0000-4000-8000-0000000000c3";
 const MODULES = [
   { word: "organization", label: "Organization" }, { word: "athletes", label: "Athletes" }, { word: "calendar", label: "Calendar" },
   { word: "imports", label: "Imports" },
@@ -34,39 +35,51 @@ before(async () => {
   ({ state } = await import("../state.js"));
 });
 
-// The fake server: the club's closed parts, its history, and the saved answers by requestKey.
+// The fake server: each club's closed parts and history, and the request records by requestKey. Like the real route
+// (permissionRolesService.js runWrite): the first answer is the licence plus what changed (`closed`, `opened`); a replay
+// answers the licence as it is now, WITHOUT `closed` / `opened`. `server.hold[clubId]` holds that club's next GET until
+// released.
 let server;
+const CLUBS = new Set([CLUB, CLUB2]);
 function newServer() {
-  server = { closed: new Set(), history: [], saved: new Map(), fail: null };
-  return installFetchMock((call) => {
+  server = { closed: new Map([[CLUB, new Set()], [CLUB2, new Set()]]), history: new Map([[CLUB, []], [CLUB2, []]]), saved: new Map(), fail: null, hold: {} };
+  return installFetchMock(async (call) => {
+    // A planted answer for the next request (a function may wait before answering).
     if (server.fail) {
       const f = server.fail;
-      server.fail = typeof f === "function" ? f(call) : null;
-      if (typeof f !== "function") return f;
+      server.fail = null;
+      return typeof f === "function" ? f(call) : f;
     }
     const m = String(call.url).match(/^\/api\/organization\/roles\/clubs\/([^/]+)\/ceiling$/);
-    if (!m || m[1] !== CLUB) return { status: 404, body: { error: "notFound" } };
+    if (!m || !CLUBS.has(m[1])) return { status: 404, body: { error: "notFound" } };
+    const club = m[1];
+    const closed = server.closed.get(club);
     const view = () => ({
-      clubId: CLUB,
-      modules: MODULES.map((x) => ({ module: x.word, label: x.label, closed: server.closed.has(x.word), ceilingEffective: EFFECTIVE.has(x.word), reason: null, closedBy: null })),
-      history: [...server.history],
+      clubId: club,
+      modules: MODULES.map((x) => ({ module: x.word, label: x.label, closed: closed.has(x.word), ceilingEffective: EFFECTIVE.has(x.word), reason: null, closedBy: null })),
+      history: [...server.history.get(club)],
     });
-    if (call.method === "GET") return { status: 200, body: view() };
+    if (call.method === "GET") {
+      if (server.hold[club]) await server.hold[club];
+      return { status: 200, body: view() };
+    }
     const body = call.body;
-    const hash = JSON.stringify({ close: body.close, open: body.open, reason: body.reason });
+    const hash = JSON.stringify({ club, close: body.close, open: body.open, reason: body.reason });
     const replay = server.saved.get(body.requestKey);
-    if (replay) return replay.hash === hash ? { status: 200, body: replay.answer } : { status: 409, body: { error: "request_key_reused", message: "x" } };
+    if (replay) return replay === hash ? { status: 200, body: { ...view(), replayed: true } } : { status: 409, body: { error: "request_key_reused", message: "x" } };
     if ((body.close || []).includes("organization")) return { status: 409, body: { error: "module_not_closable", message: "x" } };
-    const toClose = body.close.filter((w) => !server.closed.has(w));
-    const toOpen = body.open.filter((w) => server.closed.has(w));
+    const toClose = body.close.filter((w) => !closed.has(w));
+    const toOpen = body.open.filter((w) => closed.has(w));
     if (!toClose.length && !toOpen.length) return { status: 409, body: { error: "ceiling_unchanged", message: "x", current: view() } };
-    for (const w of toClose) { server.closed.add(w); server.history.unshift({ module: w, action: "close", by: "u1", reason: body.reason, at: "2026-11-24T10:00:00Z" }); }
-    for (const w of toOpen) { server.closed.delete(w); server.history.unshift({ module: w, action: "open", by: "u1", reason: body.reason, at: "2026-11-24T10:00:00Z" }); }
-    const answer = { ...view(), closed: toClose, opened: toOpen };
-    server.saved.set(body.requestKey, { hash, answer });
-    return { status: 200, body: answer };
+    for (const w of toClose) { closed.add(w); server.history.get(club).unshift({ module: w, action: "close", by: "u1", reason: body.reason, at: "2026-11-24T10:00:00Z" }); }
+    for (const w of toOpen) { closed.delete(w); server.history.get(club).unshift({ module: w, action: "open", by: "u1", reason: body.reason, at: "2026-11-24T10:00:00Z" }); }
+    server.saved.set(body.requestKey, hash);
+    if (server.loseAnswer) { server.loseAnswer = false; return { throwNetworkError: true }; }
+    if (server.readError) { server.readError = false; return { status: 200, body: { readError: true, clubId: club } }; }
+    return { status: 200, body: { ...view(), closed: toClose, opened: toOpen } };
   });
 }
+const closedOf = (club) => server.closed.get(club);
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 async function settle() { for (let i = 0; i < 6; i += 1) await tick(); }
@@ -100,7 +113,7 @@ beforeEach(() => {
 
 test("1. the island reads the chosen club's licence once, folded; opened it shows every part with its state in words", async () => {
   const calls = newServer();
-  server.closed.add("imports");
+  closedOf(CLUB).add("imports");
   const root = hostFor();
   await actions.syncClubLicence(root);
   await settle();
@@ -124,7 +137,7 @@ test("1. the island reads the chosen club's licence once, folded; opened it show
 
 test("2. Save sends ONE request with the parts to close and to open, a reason and a requestKey; nothing without a reason", async () => {
   const calls = newServer();
-  server.closed.add("imports");
+  closedOf(CLUB).add("imports");
   const root = await openLicence();
   click(box(root, "calendar"));
   await settle();
@@ -145,7 +158,7 @@ test("2. Save sends ONE request with the parts to close and to open, a reason an
   assert.deepEqual(posts[0].body.open, ["imports"]);
   assert.equal(posts[0].body.reason, "Season change");
   assert.match(posts[0].body.requestKey, /^[0-9a-f-]{36}$/);
-  assert.match(root.textContent, /Licence saved: 1 part taken out, 1 put back\./);
+  assert.match(root.textContent, /Licence saved – taken out: Calendar; put back: Imports\./);
   assert.equal(box(root, "calendar").checked, false);
   assert.equal(box(root, "imports").checked, true);
   assert.ok(!root.querySelector("[data-licence-save]"), "no draft left");
@@ -178,8 +191,44 @@ test("3. a lost answer: Result not confirmed; Check result sends the SAME body a
   assert.ok(posts.every((p) => JSON.stringify(p.body) === JSON.stringify(first)), "the same request every time");
   assert.doesNotMatch(root.textContent, /Result not confirmed/);
   assert.match(root.textContent, /Licence saved/);
-  assert.equal(server.closed.has("calendar"), true);
-  assert.equal(server.history.length, 1, "written once");
+  assert.equal(closedOf(CLUB).has("calendar"), true);
+  assert.equal(server.history.get(CLUB).length, 1, "written once");
+});
+
+test("3b. written, answer lost: Check result gets the replay (no list of changes) and still says what was saved", async () => {
+  const calls = newServer();
+  const root = await openLicence();
+  click(box(root, "calendar"));
+  await settle();
+  type(root.querySelector("textarea"), "Licence ended");
+  await settle();
+  server.loseAnswer = true;
+  click(button(root, "Save licence"));
+  await settle();
+  assert.match(root.textContent, /Result not confirmed/);
+  click(button(root, "Check result"));
+  await settle();
+  assert.equal(calls.filter((c) => c.method === "POST").length, 2);
+  assert.equal(server.history.get(CLUB).length, 1, "written once: the second was the replay");
+  assert.match(root.textContent, /Licence saved – taken out: Calendar\./);
+  assert.doesNotMatch(root.textContent, /0 parts/);
+  assert.equal(box(root, "calendar").checked, false);
+});
+
+test("3c. a save whose read-back failed (readError) says saved and reads the licence again", async () => {
+  const calls = newServer();
+  const root = await openLicence();
+  click(box(root, "calendar"));
+  await settle();
+  type(root.querySelector("textarea"), "Licence ended");
+  await settle();
+  server.readError = true;
+  const gets = calls.filter((c) => c.method === "GET").length;
+  click(button(root, "Save licence"));
+  await settle();
+  assert.match(root.textContent, /Licence saved – taken out: Calendar\./);
+  assert.equal(calls.filter((c) => c.method === "GET").length, gets + 1, "read again");
+  assert.equal(box(root, "calendar").checked, false, "the fresh state");
 });
 
 test("4. someone else made the same change meanwhile: ceiling_unchanged settles with the current state, no draft left", async () => {
@@ -189,7 +238,7 @@ test("4. someone else made the same change meanwhile: ceiling_unchanged settles 
   await settle();
   type(root.querySelector("textarea"), "Test");
   await settle();
-  server.closed.add("athletes"); // someone else closed it meanwhile
+  closedOf(CLUB).add("athletes"); // someone else closed it meanwhile
   click(button(root, "Save licence"));
   await settle();
   assert.match(root.textContent, /Nothing changed – the licence was already like this\./);
@@ -239,7 +288,7 @@ test("7. leaving with an open licence write asks (the roles guards); without one
   click(button(root, "Save licence"));
   await settle();
   assert.equal(rolesActions.rolesMayBeLeft({ final: "switch" }), false);
-  assert.match(asked[0], /not confirmed\. Switch without checking\?/);
+  assert.match(asked[0], /^The last licence change is not confirmed\. Switch without checking\?/);
   const event = { preventDefault() { this.prevented = true; }, returnValue: undefined };
   rolesActions.handleRolesBeforeUnload(event);
   assert.equal(event.prevented, true);
@@ -269,4 +318,93 @@ test("9. Settings > Clubs draws the host only for a platform administrator on a 
   state.organization.selectedClubId = CLUB;
   state.organization.selectedTeamId = "t1";
   assert.doesNotMatch(orgView.renderOrganizationBrowser({ ...base, isPlatformAdmin: true }), /data-club-licence-host/);
+});
+
+test("10. HIGH (code review): a club switched while the first club's read is under way never shows its parts under the new name; Save goes to the club on screen", async () => {
+  const calls = newServer();
+  closedOf(CLUB).add("imports");
+  let release;
+  server.hold[CLUB] = new Promise((r) => { release = r; });
+  await actions.syncClubLicence(hostFor(CLUB, "Test Club"));
+  await settle();
+  const root = hostFor(CLUB2, "Second Club");
+  await actions.syncClubLicence(root);
+  await settle();
+  delete server.hold[CLUB];
+  release();
+  await settle();
+  assert.ok(calls.some((c) => c.method === "GET" && c.url.includes(CLUB2)), "the club on screen is read");
+  click(button(root, "Show"));
+  await settle();
+  assert.match(root.textContent, /Second Club's licence/);
+  assert.equal(box(root, "imports").checked, true, "Second Club's own parts, not Test Club's");
+  click(box(root, "athletes"));
+  await settle();
+  type(root.querySelector("textarea"), "Second club only");
+  await settle();
+  click(button(root, "Save licence"));
+  await settle();
+  const post = calls.find((c) => c.method === "POST");
+  assert.ok(post.url.includes(CLUB2) && !post.url.includes(CLUB + "/"), post.url);
+  assert.equal(closedOf(CLUB2).has("athletes"), true);
+  assert.equal(closedOf(CLUB).has("athletes"), false);
+});
+
+test("11. a club switched while a save is not confirmed: the open write stays on screen under its own club, nothing of it is drawn under the new name, and no draft goes anywhere", async () => {
+  const calls = newServer();
+  let root = await openLicence(CLUB);
+  click(box(root, "calendar"));
+  await settle();
+  type(root.querySelector("textarea"), "Test");
+  await settle();
+  server.fail = { throwNetworkError: true };
+  click(button(root, "Save licence"));
+  await settle();
+  root = hostFor(CLUB2, "Second Club");
+  await actions.syncClubLicence(root);
+  await settle();
+  assert.doesNotMatch(root.textContent, /Second Club's licence/, "never the other club's name over this write");
+  assert.match(root.textContent, /Test Club's licence/);
+  assert.match(root.textContent, /open change of Test Club's licence/);
+  assert.match(root.textContent, /Result not confirmed/);
+  assert.ok(!calls.some((c) => c.method === "GET" && c.url.includes(CLUB2)), "not read while the write is open");
+  // Checking settles the write of Test Club; then Second Club is read.
+  click(button(root, "Check result"));
+  await settle();
+  assert.equal(closedOf(CLUB).has("calendar"), true);
+  assert.ok(calls.some((c) => c.method === "GET" && c.url.includes(CLUB2)), "read once the write is settled");
+  assert.match(root.textContent, /Second Club's licence/);
+  assert.ok(calls.filter((c) => c.method === "POST").every((c) => c.url.includes(CLUB + "/")), "every write went to Test Club");
+});
+
+test("12. an answer for a state replaced by a workspace switch settles nothing of the new state", async () => {
+  newServer();
+  let root = await openLicence(CLUB);
+  click(box(root, "calendar"));
+  await settle();
+  type(root.querySelector("textarea"), "First");
+  await settle();
+  let release;
+  server.fail = async () => { await new Promise((r) => { release = r; }); return { status: 200, body: { readError: true, clubId: CLUB } }; };
+  click(button(root, "Save licence"));
+  await settle();
+  data.resetClubLicence();
+  root = await openLicence(CLUB);
+  click(box(root, "athletes"));
+  await settle();
+  const draft = data.licence.draftClosed;
+  release();
+  await settle();
+  assert.deepEqual(data.licence.draftClosed, draft, "the new draft is kept");
+  assert.equal(data.licence.command, null);
+});
+
+test("13. leaving Settings unmounts the island at once", async () => {
+  newServer();
+  const root = await openLicence(CLUB);
+  const host = root.querySelector("[data-club-licence-host]");
+  const islands = await import("../react-build/islands.js");
+  assert.equal(islands.isIslandMounted(host), true);
+  actions.leaveClubLicence();
+  assert.equal(islands.isIslandMounted(host), false);
 });

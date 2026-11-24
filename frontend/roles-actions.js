@@ -92,8 +92,10 @@ const rolesWriteOpen = () => rolesCommands().some((c) => c?.busy || c?.unconfirm
 // A workspace switch, a sign-out or the app's reload asks first, like the calendar's settings ("final" leaves the page).
 export function rolesMayBeLeft({ final = false } = {}) {
   const verb = final === "sign-out" || final === true ? "Sign out" : final === "switch" ? "Switch" : "Leave";
-  if (rolesCommands().some((c) => c?.busy)) return rolesAsk(`A role change is still being saved. ${verb} anyway? Its result will not be shown here.`);
-  if (rolesCommands().some((c) => c?.unconfirmed)) return rolesAsk(`The last role change is not confirmed. ${verb} without checking?`);
+  // The question names what is open: a licence write alone is a licence change, anything else a role change.
+  const noun = rolesCommands().slice(0, 3).some((c) => c?.busy || c?.unconfirmed) ? "role change" : "licence change";
+  if (rolesCommands().some((c) => c?.busy)) return rolesAsk(`A ${noun} is still being saved. ${verb} anyway? Its result will not be shown here.`);
+  if (rolesCommands().some((c) => c?.unconfirmed)) return rolesAsk(`The last ${noun} is not confirmed. ${verb} without checking?`);
   return true;
 }
 export function handleRolesBeforeUnload(event) {

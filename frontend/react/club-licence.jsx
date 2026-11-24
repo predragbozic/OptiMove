@@ -35,7 +35,7 @@ function ModuleRow({ module, closed, disabled, onToggle }) {
 
 export function ClubLicence({
   clubName = "", open = false, loading = false, error = "", view = null, draftClosed = [], changes = { close: [], open: [] },
-  reason = "", command = null, notice = "", noticeTone = "ok",
+  reason = "", command = null, notice = "", noticeTone = "ok", elsewhere = false,
   onOpen, onToggle, onReason, onSave, onCancel, onCheck, onRetry,
 }) {
   const titleId = useId();
@@ -62,6 +62,11 @@ export function ClubLicence({
       </div>
       {open ? (
         <div className="club-licence-body">
+          {elsewhere ? (
+            <p className="club-licence-elsewhere" role="status" data-licence-elsewhere>
+              {`This is the open change of ${clubName || "another club"}'s licence. Finish it before changing this club's licence.`}
+            </p>
+          ) : null}
           {notice ? (
             <p className={`club-licence-notice ${noticeTone === "error" ? "builder-error" : "muted"}`} role={noticeTone === "error" ? "alert" : "status"}>{notice}</p>
           ) : null}

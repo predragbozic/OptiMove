@@ -10,15 +10,19 @@ export const LICENCE_BASE = "/api/organization/roles/clubs";
 const ALWAYS_OPEN = new Set(["organization"]);
 
 export function emptyClubLicence() {
-  return { clubId: "", open: false, view: null, loading: false, error: "", draftClosed: null, reason: "", command: null, notice: "", noticeTone: "ok" };
+  return { clubId: "", clubName: "", open: false, view: null, stale: false, loading: false, error: "", draftClosed: null, reason: "", command: null, notice: "", noticeTone: "ok" };
 }
 
 export const licence = emptyClubLicence();
+// `generation`: the newest read wins. `epoch`: changes when the state is replaced (another club, a workspace switch),
+// so an answer of a write sent before it never settles the state that replaced it.
 let generation = 0;
+let epoch = 0;
 
 export function resetClubLicence() {
   Object.assign(licence, emptyClubLicence());
   generation += 1;
+  epoch += 1;
 }
 
 const closedOf = (view) => (view?.modules || []).filter((m) => m.closed).map((m) => m.module).sort();
@@ -44,12 +48,16 @@ export function describeLicenceReadError(error) {
   return "The licence could not be read. Try again.";
 }
 
-// Reads the club's licence. A newer read (another club, a retry) always wins over an older answer.
-export async function loadClubLicence(clubId, render) {
+// Reads a club's licence. Another club replaces the state at once (never while a write of the first club is open:
+// that write stays on screen under its own club); a newer read always wins over an older answer.
+export async function loadClubLicence(clubId, render, clubName = "") {
   if (!clubId) return;
   if (licence.clubId !== clubId) {
     if (licenceWriteOpen()) return;
-    Object.assign(licence, emptyClubLicence(), { clubId });
+    Object.assign(licence, emptyClubLicence(), { clubId, clubName });
+    epoch += 1;
+  } else if (clubName) {
+    licence.clubName = clubName;
   }
   const mine = ++generation;
   licence.loading = true;
@@ -59,6 +67,7 @@ export async function loadClubLicence(clubId, render) {
     if (mine !== generation || licence.clubId !== clubId) return;
     licence.view = view && Array.isArray(view.modules) ? view : { modules: [], history: [] };
     licence.error = "";
+    licence.stale = false;
   } catch (error) {
     if (mine !== generation || licence.clubId !== clubId) return;
     licence.error = describeLicenceReadError(error);
@@ -68,9 +77,13 @@ export async function loadClubLicence(clubId, render) {
   render?.();
 }
 
+// Whether the club on screen must be read: another club (whatever is loading for the old one, unless a write of the
+// old one is open), or the same club not read yet or out of date after a write.
 export function licenceNeedsLoad(clubId) {
-  if (!clubId || licence.loading) return false;
-  return licence.clubId !== clubId || (!licence.view && !licence.error);
+  if (!clubId) return false;
+  if (licence.clubId !== clubId) return !licenceWriteOpen();
+  if (licence.loading || licence.command) return false;
+  return licence.stale || (!licence.view && !licence.error);
 }
 
 export function toggleLicenceModule(module) {
@@ -116,8 +129,20 @@ function send(body) {
   return api(`${LICENCE_BASE}/${encodeURIComponent(licence.clubId)}/ceiling`, { method: "POST", body: JSON.stringify(body), ...(signal ? { signal } : {}) });
 }
 
+// What a saved request did, from the request itself: a replayed answer and an answer whose read-back failed carry no
+// list of what changed (permissionRolesService.js runWrite / answerAfterCommit).
+function savedText(body) {
+  const label = (word) => (licence.view?.modules || []).find((m) => m.module === word)?.label || word;
+  const parts = [];
+  if (body.close.length) parts.push(`taken out: ${body.close.map(label).join(", ")}`);
+  if (body.open.length) parts.push(`put back: ${body.open.map(label).join(", ")}`);
+  return `Licence saved – ${parts.join("; ")}.`;
+}
+
 function settle(view, notice, tone = "ok") {
+  // An answer without the licence (a failed read-back) leaves the view out of date: it is read again.
   if (view && Array.isArray(view.modules)) licence.view = view;
+  else licence.stale = true;
   licence.command = null;
   licence.draftClosed = null;
   licence.reason = "";
@@ -146,17 +171,19 @@ export async function saveClubLicence(render, { check = false } = {}) {
     body = { requestKey: newCentralCalendarRequestKey(), close, open, reason };
   }
   const clubId = licence.clubId;
+  const mine = epoch;
+  // Only an answer for the state that sent it settles it (not one replaced by another club or a workspace switch).
+  const current = () => mine === epoch && licence.clubId === clubId;
   licence.command = { body, busy: true, unconfirmed: check };
   licence.notice = "";
   render?.();
   try {
     const answer = await send(body);
-    if (licence.clubId !== clubId) return;
-    const closed = Array.isArray(answer?.closed) ? answer.closed.length : 0;
-    const opened = Array.isArray(answer?.opened) ? answer.opened.length : 0;
-    settle(answer, `Licence saved: ${closed} part${closed === 1 ? "" : "s"} taken out, ${opened} put back.`);
+    if (!current()) return;
+    settle(answer, savedText(body));
+    if (licence.stale) void loadClubLicence(clubId, render);
   } catch (error) {
-    if (licence.clubId !== clubId) return;
+    if (!current()) return;
     const info = centralCalendarErrorInfo(error);
     if (check ? !licenceCheckSettles(info) : centralCalendarOutcomeUnknown(info)) {
       licence.command = { body, busy: false, unconfirmed: true };

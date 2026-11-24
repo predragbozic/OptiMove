@@ -395,6 +395,9 @@ export function renderOrganizationBrowser(data) {
   // S2 (the Settings plan): one section, one list. Each section draws its own list under one heading with its count;
   // Overview is the summary that links to them. A selected club or team still opens its detail (its teams, its roster).
   const coach = isCoachSettings();
+  // A view workspace (roles R4): athletes open only with the Athletes VIEW step, so a chosen club or team shows no
+  // roster here (the server sends none; "No athletes" would be untrue).
+  const viewOnly = isViewWorkspace();
   const showAll = state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : "";
   const addToggle = renderOrganizationAddToggle(data);
   const addForm = renderOrganizationAddForm(data);
@@ -427,14 +430,14 @@ export function renderOrganizationBrowser(data) {
         ${renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId, { bare: true })}
         ${selectedClub && !selectedTeam && isPlatformAdmin ? renderClubLicenceHost(selectedClub) : ""}
         ${selectedClub ? renderOrganizationSelectableList(`Teams - ${selectedClub.name}`, visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team) }) : ""}
-        ${selectedClub ? athletesBlock() : ""}
+        ${selectedClub && !viewOnly ? athletesBlock() : ""}
       </section>`;
   } else if (section === "teams") {
     const archived = archivedTeamsOffered(data, isPlatformAdmin) ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-teams">${state.organization.showArchivedTeams ? "Hide archived" : `Show archived (${data.archivedTeams.length})`}</button>` : "";
     body = `${head(selectedTeam?.name || (selectedClub ? `Teams - ${selectedClub.name}` : "Teams"), selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : countLabel(visibleTeams.length, "team"), `${archived}${showAll}`)}
       <section class="organization-lists organization-lists-browser">
         ${renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team), bare: !selectedTeam })}
-        ${selectedTeam ? athletesBlock() : ""}
+        ${selectedTeam && !viewOnly ? athletesBlock() : ""}
       </section>`;
   } else {
     // Athletes (the coach's only list): the whole list, or the selected club's or team's roster.
