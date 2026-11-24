@@ -103,6 +103,8 @@ for (const width of [360, 375, 390]) {
       assert.deepEqual(await smallTargets(page, "[data-club-licence]"), [], "every control 44 px");
       const font = await licence.locator("textarea").evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
       assert.ok(font >= 16, `textarea ${font}px`);
+      const widths = await licence.locator("textarea").evaluate((el) => ({ field: el.getBoundingClientRect().width, card: el.closest("[data-club-licence]").getBoundingClientRect().width }));
+      assert.ok(widths.field >= widths.card * 0.8, `the reason field spans the card (${widths.field} of ${widths.card})`);
       assert.deepEqual(pageErrors, []);
     } finally {
       await context.close();
@@ -121,6 +123,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       assert.equal((await page.textContent(".coach-home-view h2")).trim(), "Example Club");
       assert.deepEqual(await page.$$eval('[data-action="view-home-open-settings"]', (e) => e.map((x) => x.dataset.section)), ["overview", "clubs", "teams"]);
       assert.equal(await page.locator(".coach-home-grid").count(), 0);
+      assert.deepEqual(await page.$$eval(".coach-home-view-section", (e) => e.filter((x) => x.getBoundingClientRect().height < 43.5).map((x) => x.textContent.trim())), [], "Home's buttons are 44 px");
       // The menu (computer) or the bar and its More sheet (phone) offer no module.
       const offered = width > 760
         ? await page.$$eval(".sidebar .rail-button", (e) => e.filter((x) => !(x.hidden || x.closest("[hidden]"))).map((x) => x.getAttribute("title") || x.textContent.trim()))
