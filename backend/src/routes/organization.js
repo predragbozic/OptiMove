@@ -3560,6 +3560,10 @@ async function loadUsers(req, workspacePromise) {
          or exists (select 1 from public.user_global_roles ugr where ugr.user_id = u.id and ugr.is_active = true)
          or exists (select 1 from public.user_club_roles ucr2 where ucr2.user_id = u.id and ucr2.is_active = true)
          or exists (select 1 from public.user_team_roles utr2 where utr2.user_id = u.id and utr2.is_active = true)
+         -- Roles R4-2: a live assignment is a staff role too (an athlete holding one stays a member), and the viewer
+         -- always sees its own account (a view-workspace viewer may be an athlete with nothing but an assignment).
+         or u.id = any($5::uuid[])
+         or u.id = $1
        )
        and (
          $2::boolean

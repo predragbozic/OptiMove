@@ -121,7 +121,9 @@ test("4. a non-basic assignment: its words appear where can() grants them; an ac
   // club_view type, which the six workspace-authorizing modules do not recognize (contract section 6).
   assert.deepEqual([onlyMe.activeWorkspace?.type, onlyMe.activeWorkspace?.scopeId], ["club_view", w.A]);
   assert.deepEqual(onlyMe.availableWorkspaces.map((x) => x.type), ["club_view"]);
-  assert.deepEqual(onlyMe.permissions, ["org.teams.manage"]);
+  // A view workspace lists only the words its routes let through (VIEW_WORKSPACE_USABLE_WORDS: org.view in R4-2), so
+  // the held org.teams.manage is not offered there: POST /api/organization/teams answers it 403.
+  assert.deepEqual(onlyMe.permissions, []);
 });
 
 test("5. an expired assignment, an archived role and a revoked assignment give nothing", async () => {

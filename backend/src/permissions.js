@@ -335,6 +335,15 @@ const WORKSPACE_SCOPE_TYPES = Object.freeze({
   platform: "global", club: "club", team: "team", private_coach: "private", club_view: "club", team_view: "team",
 });
 
+// The words a view workspace can actually use (roles R4-2): /me lists only these there, so navigation never offers what
+// the server always refuses it. In R4-2 the organization entry gate (organizationEntry.js) lets a view workspace
+// through on GET / only, which is org.view; a module's VIEW pull request (or R4-3/R4-4 for Settings) adds its words here
+// together with the route that lets them through.
+export const VIEW_WORKSPACE_USABLE_WORDS = Object.freeze({
+  club_view: Object.freeze(["org.view"]),
+  team_view: Object.freeze(["org.view"]),
+});
+
 // The closed modules (the club's ceiling, contract 7.1) of the ACTIVE workspace's club, for /me's navigation (5.1):
 // read only from an entry the account itself holds in that club (each loaded entry carries its own club's closed
 // modules), so a module list is never shown to an account without a role there - a platform admin without one gets
@@ -366,5 +375,7 @@ export function permissionsForWorkspace(authz, workspace) {
     ? GLOBAL_SCOPE
     : { type: scopeType, id: scopeType === "private" ? authz.userId : workspace.scopeId };
   const candidates = platform ? Object.keys(PERMISSIONS) : HONOURED_PERMISSIONS;
-  return { permissions: candidates.filter((word) => can(authz, word, scope)), unavailable: false };
+  const usable = VIEW_WORKSPACE_USABLE_WORDS[workspace.type];
+  const words = candidates.filter((word) => can(authz, word, scope));
+  return { permissions: usable ? words.filter((word) => usable.includes(word)) : words, unavailable: false };
 }

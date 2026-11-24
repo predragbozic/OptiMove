@@ -354,6 +354,31 @@ test("12. org.view is the right: a holder of a role without it gets the way in b
   assert.deepEqual([body.clubs, body.teams, body.users.map((x) => x.id)], [[], [], [p.id]]);
 });
 
+test("14. /me in a view workspace lists only the words its routes let through: a held org.teams.manage is not offered, and its route answers 403", async () => {
+  const role = ok(await srv.api(w.adminA.cookie, R, { method: "POST", body: {
+    requestKey: key(), clubId: w.A, scopeTypes: ["club"], items: ["org.view", "org.teams.manage"], name: `Teams ${key().slice(0, 6)}` } })).role;
+  const p = await person("teamsword");
+  await grant(w.adminA, p.id, role.id, "club", w.A);
+  const u = await me(p);
+  assert.equal(u.activeWorkspace.type, "club_view");
+  assert.deepEqual(u.permissions, ["org.view"]);
+  const res = await srv.api(p.cookie, "/api/organization/teams", { method: "POST", body: { name: "Never", clubId: w.A } });
+  assert.deepEqual([res.status, res.body], [403, { error: "Forbidden" }]);
+});
+
+test("15. an athlete with a live assignment is a member of the club for its admin, and sees its own account in club_view", async () => {
+  const p = await person("athleteMember", (id) => F.makeAthlete(id));
+  await grant(w.adminA, p.id, w.roleA.id, "team", w.TA1);
+  await setPref(w.adminA, "club", w.A);
+  assert.ok(ok(await org(w.adminA)).users.some((u) => u.id === p.id));
+  const q = await person("athleteViewer", (id) => F.makeAthlete(id));
+  await grant(w.adminA, q.id, w.roleA.id, "club", w.A);
+  await setPref(q, "club", w.A);
+  const body = ok(await org(q));
+  assert.equal(body.activeWorkspace.type, "club_view");
+  assert.deepEqual(body.users.map((u) => u.id), [q.id]);
+});
+
 test("13. filterOrganizationDataForWorkspace fails closed: an unknown workspace type shows nothing", async () => {
   const { filterOrganizationDataForWorkspace } = await import("../src/routes/organization.js");
   const data = { clubs: [{ id: w.A }], teams: [{ id: w.TA1, club_id: w.A }], athletes: [{ id: w.athA.id, memberships: [{ clubId: w.A }] }],
