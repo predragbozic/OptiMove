@@ -357,6 +357,27 @@ test("6. tags, presets and session types (presets.use): a view workspace reads t
   assert.deepEqual(idsOf(t.presets).filter((id) => [sysP, aClubP, aTeamP, aUserP, bClubP].some((p) => String(p.id) === id)).sort(),
     idsOf([sysP, aTeamP]).sort(), "team_view: system and the team's rows");
   assert.ok(t.types.types.some((x) => x.key === aType.key), "team_view: its team's club's session types");
+  // Every library kind's view read is valid SQL and gives the club's row of that kind (the security review's LOW 4).
+  // (An attractor cannot be created through the route today - its table's NOT NULL kind column is never filled, a
+  // 500 that predates V-1 - so for that kind only the read is checked.)
+  for (const kind of ["domain", "category", "section", "tag", "attractor"]) {
+    const row = kind === "attractor" ? null : await make(w.adminA, `${T}/library/${kind}`, { name: n(`Alpha ${kind}`), scope: "club", clubId: w.A });
+    for (const who of [clubHolder, teamHolder]) {
+      const rows = ok(await srv.api(who.cookie, `${T}/library/${kind}`)).rows;
+      if (row) assert.equal(idsOf(rows).includes(String(row.id)), who === clubHolder, `${kind}: the club's row for club_view only`);
+      assert.ok(rows.every((r) => r.can_manage === false), kind);
+    }
+  }
+  // An archived team's rows are not "its teams" (as the other V-1 reads, and as no team_view is offered for it).
+  const archivedTeam = await F.team(w.A, "TA-archived");
+  const archivedP = await make(w.adminA, `${T}/node-presets`, { nodeType: "domain", name: n("Archived team preset"), scope: "team", teamId: archivedTeam });
+  await k.query(`update public.teams set is_active = false where id = $1`, [archivedTeam]);
+  assert.ok(!idsOf(ok(await srv.api(clubHolder.cookie, `${T}/node-presets`)).presets).includes(String(archivedP.id)), "no archived team's preset");
+  // The coach path's can() compares canonical ids: a club id sent in upper case is accepted as before V-1.
+  const upper = await make(w.adminA, `${T}/node-presets`, { nodeType: "domain", name: n("Upper id preset"), scope: "club", clubId: String(w.A).toUpperCase() });
+  assert.equal(String(upper.owner_club_id), String(w.A).toLowerCase());
+  assert.equal((await srv.api(w.adminA.cookie, `${T}/node-presets`, { method: "POST", body: { nodeType: "domain", name: "Nope", scope: "club", clubId: "not-a-uuid" } })).status, 403,
+    "a club id that is not a uuid is outside the caller's access");
   // Only the three reads; every write answers what requireCoach / the session-type router answer, and lands nothing.
   for (const who of [clubHolder, teamHolder]) {
     assert.equal((await srv.api(who.cookie, `${T}/library/bogus`)).status, 403, "a kind not on the list");

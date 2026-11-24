@@ -497,6 +497,32 @@ Branch `feature/roles-v1-config-presets` from `1e83d9c6`. No migration.
 - The word lists of five role suites now include the two checked words: `me-permissions-r3`, `permission-roles-v84`
   2b, `roles-api-r2` 17-honoured, `roles-r4-2-view-workspace` 11 and `roles-r4-api` 1.
 
+**Internal review notes (code and security, READY WITH NON-BLOCKING NOTES; recorded, not built).**
+- **MEDIUM (security, documented, not fixed in V-1).** `variables.view` gates the club admin's whole Data configuration
+  administration, because `resolveMappingAdminWith` is the one context for mappings, activations, the board,
+  confirmations, classification and variable writes. A club whose licence closes Data configuration closes all of it
+  for its admin: that is choice 2, as intended. A club whose own version of the Club admin role drops `variables.view`
+  closes it too, although the word is a view word. The words `variables.manage`, `variables.rename_archive` and
+  `mappings.manage` exist but are not checked yet; a later MANAGE step gates those writes with them.
+- **Fixed in V-1, with tests:**
+  - `viewScopeSql` leaves an archived team's rows out of a `club_view` read. Sweep test 6 checks it, and the mutation
+    that drops the filter is killed.
+  - `resolveOwnerScope` lower-cases a body's club or team id before `can()`, so a coach's upper-case id is accepted as
+    before. A non-uuid id is outside the caller's access (403).
+  - Sweep test 6 reads all five library kinds.
+- **LOW, recorded:**
+  - A coach whose club closed Tags & Presets can still hide a system preset in their own lists (a per-user row, with no
+    `can()`).
+  - A role-assignment account's workspace is resolved twice: by the gate, and again by the module's own resolver for a
+    non-view workspace. This fails closed.
+  - The taxonomy rows carry `created_by_user_id` / `owner_user_id`, as on the coach path.
+  - A platform admin in a view workspace is limited to the listed reads.
+  - The coach-path writes read the ceiling from the request's snapshot without the ceiling lock (R4 contract 7.6
+    requires the lock only from `lock_permission_actor` callers). A licence close that commits while one such write is
+    in flight lets that one write land.
+  - Creating an attractor through `POST /api/taxonomy/library/attractor` fails (a NOT NULL `kind` column the route never
+    fills). This predates V-1.
+
 **Follow-ups (not built).**
 - A Home entry for Training Load's Data configuration in a view workspace (today the menu opens it).
 - A Positions read for the Athletes step (V-2).

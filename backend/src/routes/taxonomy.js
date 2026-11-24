@@ -7,6 +7,7 @@ import { viewEntryGate } from "../moduleView.js";
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
 const SCOPES = new Set(["system", "club", "team", "user"]);
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const LIBRARY_LOOKUPS = {
   domain: { table: "domains", parentColumn: null },
   category: { table: "categories", parentColumn: "domain_id" },
@@ -40,7 +41,7 @@ function viewScopeSql(alias, scope, params) {
   const at = `$${params.length}::uuid`;
   if (scope.type === "club") {
     return `((${alias}.owner_scope = 'club' and ${alias}.owner_club_id = ${at})
-             or (${alias}.owner_scope = 'team' and ${alias}.owner_team_id in (select t.id from public.teams t where t.club_id = ${at})))`;
+             or (${alias}.owner_scope = 'team' and ${alias}.owner_team_id in (select t.id from public.teams t where t.club_id = ${at} and coalesce(t.is_active, true))))`;
   }
   return `(${alias}.owner_scope = 'team' and ${alias}.owner_team_id = ${at})`;
 }
@@ -450,15 +451,18 @@ async function resolveOwnerScope(req, body) {
     return { scope, clubId: null, teamId: null, userId: null };
   }
   if (scope === "club") {
-    const clubId = clean(body?.clubId);
+    // Roles V-1: the id goes to can(), which compares canonical (lower-case) ids; a uuid in any case is accepted as before.
+    const clubId = clean(body?.clubId).toLowerCase();
     if (!clubId) return { error: "Club is required for club-scoped entries.", status: 400 };
+    if (!UUID_TEXT.test(clubId)) return { error: "Club is outside your access.", status: 403 };
     const allowed = await canManagePreset(req, { owner_scope: "club", owner_club_id: clubId });
     if (!allowed) return { error: "Club is outside your access.", status: 403 };
     return { scope, clubId, teamId: null, userId: null };
   }
   if (scope === "team") {
-    const teamId = clean(body?.teamId);
+    const teamId = clean(body?.teamId).toLowerCase();
     if (!teamId) return { error: "Team is required for team-scoped entries.", status: 400 };
+    if (!UUID_TEXT.test(teamId)) return { error: "Team is outside your access.", status: 403 };
     const allowed = await canManagePreset(req, { owner_scope: "team", owner_team_id: teamId });
     if (!allowed) return { error: "Team is outside your access.", status: 403 };
     return { scope, clubId: null, teamId, userId: null };
