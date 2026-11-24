@@ -97,15 +97,21 @@ wrapped in `bash -c`, in a substitution).
 - main/master: a push that reaches main or master (an explicit refspec, a bare push while on
   main, `push.default matching`, an upstream main under `push.default upstream`, a configured push
   refspec, `--all` / `--tags` / `--mirror`), a commit on main or master (after a plain `cd` or
-  `git checkout|switch <name>` on the same line, followed; any cd the hook cannot follow asks), a
-  merge or rebase (except a plain `git merge origin/main` into a working branch), `gh pr merge`;
+  `git checkout|switch <name>` on the same line, followed only when the rest runs after `&&` and
+  the branch is new or exists; any cd or checkout the hook cannot follow asks), a `cherry-pick`,
+  `revert` or `am` on main or master, a merge or rebase (except a plain `git merge origin/main`
+  into a working branch), `gh pr merge`, `gh api` with a method other than GET (or with fields),
+  the GitHub MCP merge tools and its file writes to main, master or an unnamed (default) branch;
+  git run through `xargs`, `parallel` or `find -exec` (its operands arrive at run time);
 - history and work: `git stash` / `stash push` / `stash pop`, `git commit --amend`, `checkout -B`,
   `switch -C`, `branch -f/-M/-C/-D`, `git rm -f`, `reset --merge/--keep`, a forced switch,
   `worktree remove --force`, `pull --rebase`, a push that deletes, git plumbing (`update-ref`,
   `filter-branch`, `reflog expire`, `gc`, `prune`, …), a configuration write (`git config`, `git -c`,
   a remote change), a git word that is not a git subcommand (an alias could be `push -f`);
 - a recursive delete (`rm -r`, `find -delete`, `xargs rm -r`) that reaches outside the work tree
-  the line runs in and the temporary folders, or reaches the work tree's top, its `.git`, a folder
+  the line runs in and the temporary folders, or uses a glob at the top of the work tree or one
+  that can reach a dot folder (`rm -rf *`, `.g*`, `.[g]it`, `.claude/h*`), or reaches the work
+  tree's top, its `.git`, a folder
   holding another work tree, the guard's files, a target behind a variable or a substitution, or a
   path after a link or work tree made on the same line; the raw-text backstop also catches it in
   `case … in x) …;;`, after `coproc` and in a function body;
@@ -118,19 +124,34 @@ wrapped in `bash -c`, in a substitution).
   MCP writes;
 - secrets: a command that names `.env`, a pgpass, a key or credentials file; a file-tool edit of one;
 - the guard itself and git's own settings: any shell line that names `.claude/hooks`, the settings
-  files, the guard's files, `.git/<anything>`, `~/.gitconfig` or `~/.config/git` and does more than
-  read them (or stage and commit them); a file-tool edit of `.claude/hooks/*`,
-  `.claude/settings.json` or `.claude/settings.local.json`;
+  files, the guard's files, the `.claude` folder as a whole, `.git/<anything>`, `~/.gitconfig` or
+  `~/.config/git` and does more than read them (or stage and commit them) — also when the name is
+  split by quotes, a variable or a glob (`sett''ings.json`, `.claude/$s.json`, `.cl*`), and
+  `git diff/log/show --output=` counts as a write; a file-tool edit of `.claude/hooks/*`,
+  `.claude/settings.json`, `.claude/settings.local.json`, anything under a `.git` folder,
+  `~/.gitconfig` or `~/.config/git`;
 - what the hook cannot read: a shell fed by a pipe (`… | bash`), `eval $X`, `bash -c "$X"`, a
   command word that is a substitution or a variable (`$(echo git) push -f`), `su` / `runuser`,
   an alias definition, `NODE_OPTIONS` / `PATH` / `GIT_*` and the other environment variables that
   change what runs.
 
-**Known limits of the relaxed policy:** a program the line runs may itself do anything (a
-`node -e` or a Python script can push or delete) — the hook judges the command line, not what the
-program does, as before; writes outside the work tree (for example to `/etc`) do not ask; a `cd`
-inside a subshell, a group or a substitution makes the rest of the line unknown, so a commit or
-push after it asks.
+**Known limits of the relaxed policy:**
+- A program the line runs may itself do anything (a `node -e` or a Python script can push or
+  delete): the hook judges the command line, not what the program does, as before.
+- Writes outside the work tree (for example to `/etc`) do not ask.
+- A recursive `grep -r` / `rg` over a folder reads a `.env` in it without naming it (accepted: a
+  question for every recursive search would undo the relaxation).
+- A `cd` inside a subshell, a group or a substitution makes the rest of the line unknown, so a
+  commit or push after it asks.
+- `settings.json` allows `Bash` as a whole: the hook is now the only layer that asks for a shell
+  command (the settings deny and ask lists stay as a second layer for what they name). If the hook
+  does not run (not registered, killed, timed out), every other shell command runs without a
+  question; the session-start self-check ("If the hook does not run" below) is what catches that.
+  The older `Bash(...)` allow entries are redundant now and stay only so that dropping the bare
+  `Bash` entry restores the previous allow list unchanged.
+- The functions of the removed rules (`scratchFileOpNeedsQuestion`, `pgControlNeedsQuestion`,
+  `gitPushNeedsQuestion`, `allowedCommandNeedsQuestion`, …) are still in `safety-guard.mjs` without
+  a caller; removing them is a separate clean-up.
 
 ## What it decides
 

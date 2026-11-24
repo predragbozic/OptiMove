@@ -37,27 +37,27 @@ git diff --staged   # if there are staged changes
   `git push` whose target is not visible. Merging into `main` is done only by the
   Rukovodilac, through GitHub.
 
-## Without a question (owner's decision, 2026-11-20)
+## Without a question (the owner's order of 2026-11-23)
 
-Executor sessions may, without asking each time:
+The owner's order: „Ublaži najmaksimalnije zaštitu zato što poslednjih godinu dana nisam
+nikada kliknuo deny", confirmed: „Zaštite za main, produkciju, lozinke i sam hook ostaju."
+It replaces the narrower list of 2026-11-20 (own work branch, own scratch folder, own test
+cluster only).
 
-- commit on their own work branch (files staged by name; `git add -u`, `-f`, globs,
-  `git commit -a` and `git commit --amend` still ask) and push it with `git push [-u] origin <the branch checked out
-  there>` — never `main`/`master`, never a force push;
-- start the local test database (`pg_ctlcluster 16 main start|status`, `pg_ctl … start`,
-  `initdb`), and stop a test cluster whose data folder is in their own temporary folder.
-  Stopping, restarting or reloading any other cluster asks — in a cloud container that
-  includes 16/main, because nothing on the command line says it is a test cluster;
-- delete, move and change files in their own temporary folder (the session's scratchpad):
-  `rm`, `rmdir`, `cp`, `mv`, `mkdir`, `ln -s`, `touch`, and writing over a file there. Not
-  the folder itself, not a git worktree inside it, not a hard link, and not a path the hook
-  cannot read on the command line.
+Routine work goes without a question: compound commands, heredocs and redirections; writing
+files; `git add` of named files, folders, globs and `-u`; `git commit` (also `-a`) and
+`git push` on a branch that is not `main`/`master` (also a bare `git push`); starting and
+stopping a local PostgreSQL cluster; test databases on this machine; edits of
+`.claude/rules` and `.claude/agents`.
 
-Still asked every time: merging into `main`, production (deploys, migrations, persistent
-databases), passwords and secret files, and deleting or changing anything outside the own
-temporary folder. The safety hook (`.claude/hooks/safety-guard.mjs`) enforces these limits:
-`.claude/settings.json` lets the commands through by name, and the hook asks for every form
-outside the scope above.
+Still asked or refused every time: pushing to, committing on or merging into
+`main`/`master`; force pushes and history rewrites (`--amend`, branch resets, plumbing);
+`git add .`/`-A`, `stash`, `clean`, `reset --hard`, `git rm -f`; a recursive delete outside
+the work tree and the temporary folders; any database that is not this machine, deploys,
+hosting CLIs and migrations against a non-disposable database; secret files; and changes to
+the safety hook, its registration and git's own configuration. `.claude/settings.json`
+allows `Bash` as a whole, so the safety hook (`.claude/hooks/safety-guard.mjs`) is the layer
+that asks; the full list is the README section "The relaxed policy" in `.claude/hooks/`.
 
 ## Feature branches
 

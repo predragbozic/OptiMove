@@ -2001,7 +2001,31 @@ test("relaxed policy: every kept protection still asks or is denied when chained
       ["cat .env", ASK], ["echo '{}' > .claude/settings.json", ASK], ["cd .claude && echo x > settings.json", ASK], ["cp /tmp/x .claude/hooks/safety-guard.mjs", ASK],
       ["python3 - <<'EOF'\nopen('.claude/hooks/safety-guard.mjs','w').write('')\nEOF", ASK], ["su postgres -c 'git push -f origin main'", ASK], ["runuser -u postgres -- ls", ASK],
       ["git rm -f f.txt", ASK], ["git rm --cached f.txt", ALLOW],
+      // the security review of the relaxed policy (2026-11-24): each of these was silent at 6bf4c2a
+      ["echo main | xargs git push origin", ASK], ["printf -- '-f\\n' | xargs git push origin HEAD", ASK], ["find . -maxdepth 0 -exec git push origin {} \\;", ASK],
+      ["rm -rf .git?", ASK], ["rm -rf .[g]it", ASK], ["rm -rf .cl*", ASK], ["rm -rf .claude/*", ASK], ["rm -rf .claude/h*", ASK], ["rm -rf *", ASK],
+      ["cp /tmp/x .claude/sett''ings.json", ASK], ['cp x ".claude/sett"ings.json', ASK], ["s=settings; cp x .claude/$s.json", ASK], ["cp x .cl*/set*", ASK],
+      ["sed -i s/a/b/ .claude/s*.json", ASK],
+      ["DATABASE_URL=postgresql://u@127.0.0.1/optimove_tests_a true; npm --prefix backend run migrate", ASK],
+      ["echo DATABASE_URL=postgresql://localhost/optimove_tests_x; npm run migrate", ASK],
+      ["export DATABASE_URL=postgresql://u@127.0.0.1/optimove_tests_a; npm --prefix backend run migrate", ALLOW],
+      ["DATABASE_URL=postgresql://u@127.0.0.1/optimove_tests_a npm --prefix backend run migrate", ALLOW],
+      ["psql \\\n -h db.example.com -c 'select 1'", ASK], ["pgcli -h db.example.com", ASK], ["usql postgres://u@db.example.com/p", ASK], ["pg_isready -h db.example.com", ASK],
+      ["gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=x", ASK], ["gh api repos/o/r/pulls", ALLOW],
+      // the code review of the relaxed policy (2026-11-24)
+      ["DATABASE_URL=postgresql://127.0.0.1:5432/optimove_tests_x node scripts/seed.mjs && npm --prefix backend run migrate", ASK],
+      ["DATABASE_URL=postgresql://127.0.0.1:5432/optimove_tests_x npm start", ALLOW],
+      ["export DATABASE_URL=postgresql://127.0.0.1/optimove_tests_x; unset DATABASE_URL; npm --prefix backend run migrate", ASK],
+      ["git diff --output=.claude/settings.json HEAD~1", ASK], ["git diff --out=.claude/hooks/safety-guard.mjs", ASK],
+      ["mv .claude /tmp/x", ASK], ["cp -r /tmp/x/.claude .", ASK], ["rm -r ./.claude/", ASK], ["ls .claude", ALLOW],
     ], repo, { exact: true });
+    // a checkout that may fail leaves HEAD on main: the commit after it asks
+    execFileSync("git", ["checkout", "-q", "main"], { cwd: repo });
+    for (const c of ["git checkout nope; git commit -qm x", "git checkout -b fresh; git commit -qm x", "git checkout feature/own || true; git commit -m x", "git cherry-pick abc", "git revert HEAD", "git am p.patch"]) {
+      assert.equal(verdict(c, repo), c.startsWith("git checkout nope") ? DENY : ASK, c);
+    }
+    assert.equal(verdict("git checkout -b fresh && git commit -qm x", repo), ALLOW);
+    assert.equal(verdict("git checkout feature/own && git commit -qm x", repo), ALLOW);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
@@ -2036,11 +2060,39 @@ test("relaxed policy (proof by execution): a recursive delete through a link, or
       ["ls | xargs rm -r", ASK], [`S=${s}/empty; rm -rf $S; S=${outside}; rm -rf $S`, ASK], [`for S in ${s}/empty ${outside}; do rm -rf $S; done`, ASK],
       [`find ${outside} -name '*.txt' -delete`, ASK], ["find dist -name '*.map' -delete", ALLOW], ['git commit -m "docs: note about rm -rf"', ALLOW],
     ];
-    const wrong = rows.filter(([c, e]) => verdictIn(c, repo) !== e).map(([c, e]) => `${c}: expected ${e}, got ${verdictIn(c, repo)}`);
+    // every way of setting a variable that the hook cannot follow, ported from the superseded redirect
+    // tests (HIGH-1) to the recursive delete they still protect: the value is unknown, so it asks
+    const e = `${s}/empty`;
+    for (const setter of ["read S < list", "S=$(echo /home/x)", "eval S=/home/x", "printf -v S /home/x", "declare -n R=S", "export S=/home/x", "S+=x", "unset S",
+      "time read S < list", "env A=1 read S < l", "{ read S; } < l", "(( S = 1 ))", ": ${S:=/home/x}", "source x.sh", ". x.sh", "mapfile S < l", "let S=1",
+      "if true; then S=/home/x; fi", "select S in a; do break; done", "T=S; read $T < l"]) {
+      rows.push([`S=${e}; ${setter}; rm -rf $S`, ASK]);
+    }
+    rows.push([`S=${e}; rm -rf $S/old; rm -rf $S/older`, ALLOW]);
+    // proof by execution for one of them: bash really deletes what read put in the variable
+    const victim = mkdtempSync(path.join(tmpdir(), "sg-relax-victim-"));
+    writeFileSync(path.join(s, "list"), `${victim}\n`);
+    execFileSync("bash", ["-c", `S=${e}; read S < ${s}/list; rm -rf $S`]);
+    assert.equal(existsSync(victim), false, "bash did not delete the folder named by read");
+    const wrong = rows.filter(([c, ex]) => verdictIn(c, repo) !== ex).map(([c, ex]) => `${c}: expected ${ex}, got ${verdictIn(c, repo)}`);
     assert.deepEqual(wrong, []);
   } finally {
     for (const d of [base, repo, outside]) rmSync(d, { recursive: true, force: true });
   }
+});
+
+test("relaxed policy: GitHub MCP writes to main/master or the default branch, and merges, ask; a feature branch does not", () => {
+  const mcp = (name, input = {}) => classifyToolCall({ tool_name: name, tool_input: input, cwd: process.cwd() })?.decision ?? null;
+  assert.equal(mcp("mcp__github__merge_pull_request", { pullNumber: 1 }), ASK);
+  assert.equal(mcp("mcp__github__enable_pr_auto_merge"), ASK);
+  for (const name of ["mcp__github__create_or_update_file", "mcp__github__push_files", "mcp__github__delete_file"]) {
+    assert.equal(mcp(name, { branch: "main" }), ASK, `${name} main`);
+    assert.equal(mcp(name, { branch: "refs/heads/master" }), ASK, `${name} master`);
+    assert.equal(mcp(name, {}), ASK, `${name} without a branch`);
+    assert.equal(mcp(name, { branch: "feature/x" }), ALLOW, `${name} feature`);
+  }
+  assert.equal(mcp("mcp__github__create_pull_request", { base: "main", head: "feature/x" }), ALLOW);
+  assert.equal(mcp("mcp__github__pull_request_read", {}), ALLOW);
 });
 
 test("relaxed policy: push follows the branch and git configuration; main and master always ask", () => {
@@ -2345,6 +2397,10 @@ test("file tools: an edit of the guard's folder, its registration or a secret fi
   }
   assert.equal(ask("NotebookEdit", { notebook_path: ".claude/hooks/x.ipynb" })?.decision, "ask");
   assert.equal(ask("Edit", { file_path: "settings.json" }, claudeDir)?.decision, "ask", "relative to a cwd inside .claude");
+  // git's own configuration and hooks (security review of the relaxed policy, finding 8)
+  for (const p of [".git/hooks/pre-push", ".git/config", path.join(tmpdir(), "r", ".git", "HEAD"), path.join(homedir(), ".gitconfig"), path.join(homedir(), ".config", "git", "config")]) {
+    assert.equal(ask("Write", { file_path: p })?.decision, "ask", p);
+  }
   // the owner's order of 2026-11-23: rules, agent briefs and the rest of .claude are routine edits
   for (const p of ["README.md", "backend/src/app.js", ".claudefoo/x", "docs/.claude-notes.md", path.join(tmpdir(), "x.txt"), "./.claude/rules/git-safety.md", ".claude/agents/new-brief.md", ".claude/x.md", ".env.example"]) {
     assert.equal(ask("Write", { file_path: p }), null, p);
