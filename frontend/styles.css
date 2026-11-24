@@ -30732,12 +30732,8 @@ body.athlete-questions-prompt-open {
   }
 
   /* Edit menu: the three places after Home. */
-  .om-bottom-sheet-foot {
-    display: flex;
-    justify-content: flex-start;
-    padding-top: 8px;
-    border-top: 1px solid var(--om-border-subtle);
-  }
+  .om-bottom-sheet-head .om-bottom-sheet-title { flex: 1; }
+  .om-bottom-sheet-edit-open { flex: none; }
 
   .om-bottom-sheet-edit {
     display: grid;

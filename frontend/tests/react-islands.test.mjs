@@ -192,8 +192,8 @@ async function openEdit(props) {
   const r = renderBar({ items: ITEMS, more: MORE, slots: SLOTS, defaults: SLOTS, options: OPTIONS, onSaveSlots: (s) => saved.push(s), ...props });
   click(r.el.querySelector('[data-nav-id="more"]'));
   await tick();
-  const edit = [...r.el.querySelectorAll(".om-bottom-sheet-foot button")].find((b) => b.textContent === "Edit menu");
-  assert.ok(edit, "More offers Edit menu");
+  const edit = [...r.el.querySelectorAll(".om-bottom-sheet-head button")].find((b) => b.textContent === "Edit menu");
+  assert.ok(edit, "More offers Edit menu in its header, above the list");
   click(edit);
   await tick();
   return { ...r, saved };
@@ -249,6 +249,6 @@ test("no Edit menu without a choice to make (as many sections as places) or with
     const { el } = renderBar({ items: ITEMS, more: MORE, slots: SLOTS, defaults: SLOTS, options: OPTIONS, onSaveSlots: () => {}, ...props });
     click(el.querySelector('[data-nav-id="more"]'));
     await tick();
-    assert.ok(!el.querySelector(".om-bottom-sheet-foot"));
+    assert.ok(![...el.querySelectorAll(".om-bottom-sheet button")].some((b) => b.textContent === "Edit menu"));
   }
 });

@@ -95,6 +95,7 @@ function MoreSheet({ groups, titleId, onClose, onSelect, edit }) {
         <>
         <div className="om-bottom-sheet-head">
           <h2 className="om-bottom-sheet-title" id={titleId}>More</h2>
+          {edit ? <button className="om-bottom-sheet-secondary om-bottom-sheet-edit-open" type="button" onClick={() => setEditing(true)}>Edit menu</button> : null}
           <button className="om-bottom-sheet-close" type="button" aria-label="Close More" onClick={() => onClose({ restoreFocus: true })}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
@@ -120,11 +121,6 @@ function MoreSheet({ groups, titleId, onClose, onSelect, edit }) {
             </li>
           ))}
         </ul>
-        {edit ? (
-          <div className="om-bottom-sheet-foot">
-            <button className="om-bottom-sheet-secondary" type="button" onClick={() => setEditing(true)}>Edit menu</button>
-          </div>
-        ) : null}
         </>
         )}
       </div>
