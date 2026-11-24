@@ -1,6 +1,6 @@
 # P3: reference tables and Radar contract
 
-Status: proposal for owner and independent review; documentation only.
+Status: owner decisions recorded (2026-11-24); documentation only. Implementation waits for the React foundation commit.
 Verified base: `963e1c0fc0a4a2ba27c45539a5f8fc28ae5856db` (2026-11-24).
 No implementation, migration, activation, merge or deployment is authorized by this document.
 P2 #742 is under review and is not changed here.
@@ -123,7 +123,7 @@ replaced by a similarly named variable.
 | No cell/named value | “Reference not available for this position and metric.” / “Choose another reference value.” |
 | Missing/hidden variable or revoked reference access | “This reference is not available.” / “Choose another reference table.” |
 | Incompatible unit or aggregation | “This reference does not match the metric's unit or calculation.” / “Choose a matching reference.” |
-| Mixed positions in a group | “This group has more than one position.” / “Choose one position.” |
+| Too few team-average contributors | “Team average not available: fewer than three athletes have matching measurements.” / “Choose another period.” |
 
 Unavailable reference metadata is per axis/series; the actual result and other
 valid references remain visible. Use a visible “Not available” state and reason,
@@ -131,18 +131,55 @@ not a fabricated polygon point, zero, infinity or misleading complete band.
 Normal metric conflicts retain their existing status. No athlete ids, source ids,
 raw JSON, tokens or fingerprints in rendered text, attributes or collapsed content.
 
+### Owner decision: group reference is the team average
+
+An individual athlete uses the preset for his CURRENT position in the club.
+A group uses the TEAM AVERAGE for the same variable and period, not a
+single-position preset or an average of target cells. Historical positions stay later.
+Label this computed reference "Team average", with team, period and contributor count.
+Its binding selects a source kind and team, not a fictitious preset cell/version.
+
+Use v87's measured-basis rules in `backend/src/metricEstimateService.js`
+(`positionAverage`, `teamAverage`): effective numeric imported measurements
+(api_import/csv_import), matching units and comparable activity type. Estimates,
+manual values, derived values and unresolved conflicts do not enter the basis.
+Only authorized roster athletes of the selected team's activities within the period
+count; the existing data_workspace and shell intersection still narrow the cohort.
+Do not require a shared position. Group members count when eligible: unlike an
+individual estimate, there is no single target athlete to exclude.
+
+For the period, compute each eligible athlete's value using the same variable,
+period and applicable widget aggregation, then take the arithmetic mean of those
+athlete values, with equal athlete weights. Do not weight an athlete more because
+he has more occasions. Keep compatible units and the same activity-type selection
+for actual and reference. Preserve v87's minimum of three distinct contributors
+and reference rounding to three decimals before the app's display formatter.
+This is the period extension of the existing session average; test it explicitly.
+
+Missing values are omitted from the numerator and contributor count, never zero.
+A measured zero counts. Show the number contributing and authorized roster athletes
+without a usable value. No usable values or fewer than three contributors means
+"Team average not available" with the reason and "Choose another period."
+Never fall back to another team, position target or invented number. A multi-team
+selection requires an explicit team per comparison; do not silently pool teams.
+
+The v87 basis excludes calculated values. For those variables this computed
+reference is unavailable; do not average stored ratios. Actual ratio computation
+and preset references remain unchanged. Any extension of the team-average basis
+to calculated variables needs an explicit math contract.
+
 ## 5. Binding a chart and evaluating Radar
 
-A widget's presentation binds a published table version and an explicit reference
+For preset references, a widget's presentation binds a published table version and an explicit reference
 club context. Each axis/series maps a metric definition to that version's column,
 selects named value ids, and selects position resolution (`athleteCurrentPosition`
-or an explicitly chosen position for a single-position group). This is one binding
+or `teamAverage` with an explicit authorized team identity for a group). This is one binding
 model for line/bar references, bands and Radar, not separate target stores.
 
 Recommendation: pin a published version. “Update reference version” is an explicit
 widget edit with preview and optimistic concurrency; publishing alone does not
 rewrite existing charts. Query/cache identity includes table version, binding,
-position resolution and existing runtime context. Current access/assignment changes
+position resolution or team-average source/team and existing runtime context. Current access/assignment changes
 invalidate relevant results even when the published version remains pinned.
 Copy/clone remaps widget/series identities but retains authorized pinned bindings;
 if destination access is absent, report an unavailable binding, never copy private
@@ -168,8 +205,7 @@ confirmation (question 3), including metrics requiring another scale.
 
 A band requires two explicitly selected compatible named values with lower <= upper;
 it is not inferred from labels. Missing one endpoint means no band, with a reason.
-For group Radar, recommend one position cohort at a time; do not average targets
-from different positions. Use the existing authorized roster comparator and safe
+For group Radar, use the computed team average in section 4, not a position preset. Mixed positions do not make the group unavailable. Use the existing authorized roster comparator and safe
 names; legend items can be hidden/restored, preserve widget legend settings and
 remain distinct for athletes with identical names. Tooltips/tables use DD.MM.YYYY,
 short date axes DD.MM.; use the existing number formatter and units.
@@ -268,7 +304,7 @@ connection or migration execution belongs to this planning PR.
 - Schema/write tests: extensible named values, duplicate cells, units, bands,
   immutable versions, stale edit, idempotent replay and parallel publication/save.
 - Math tests: zero vs absence, multiple lines/band, incompatible reference, positive
-  anchors, ratio weighted actuals, mixed-position refusal, partial-axis availability.
+  anchors, ratio weighted actuals, mixed-position team cohorts, three-contributor minimum, missing vs zero, equal athlete weights, excluded estimates/derived values, and partial-axis availability.
 - Preview/saved parity and fingerprint mutations; clone/copy authorization; shell
   and existing data_workspace narrowing never widened by references.
 - React/browser tests at 360, 390 and 1280 px: keyboard cell editing, names/legend,
@@ -297,19 +333,22 @@ against current main when code starts. No mapping migrations, calculatedValues.j
 GPS import files or position registry rewrite. Changes to a shared query file are
 coordinated with its owning stream before implementation.
 
-Owner questions (recommendations, not decisions already taken):
+Owner decisions (2026-11-24; all four questions decided):
 
-1. **Ownership/permission mapping:** start with club-owned tables using
-   `variables.view`/`variables.manage`, dashboard bindings using existing dashboard
-   words, and defer system templates? Recommend yes; confirm with the R4 stream.
-2. **Version choice:** pin published versions with explicit widget updates?
-   Recommend yes, for reproducible comparisons.
-3. **Radar scale:** use a coach-selected positive anchor =100, with unavailable
-   axes where that scale is invalid? Recommend yes initially; do not invent a
-   universal score or reverse lower-is-better metrics silently.
-4. **Position timing/group:** use current per-club position and one position per
-   group comparison? Recommend yes; historical assignment and mixed-position
-   target weighting require their own explicit contract.
+1. **Ownership/permissions - accepted as recommended:** club-owned tables use
+   variables.view/variables.manage; bindings use the existing dashboard words.
+   System templates are deferred. R4 enforcement dependencies still apply.
+2. **Version choice - accepted as recommended:** published versions are pinned;
+   updating the version in a widget is explicit.
+3. **Radar scale - accepted as recommended:** coach-selected positive anchor =100;
+   invalid axes unavailable, no universal score or silent lower-is-better reversal.
+4. **Position/group - accepted with change:** an athlete uses his CURRENT per-club
+   position; a GROUP uses the TEAM AVERAGE for the same variable and period,
+   with contributors and missing-value behavior specified in sections 4 and 5.
+   There is no single-position requirement for a group; historical positions stay later.
+
+P3 implementation starts in React after the owner supplies the merged foundation
+commit. This docs-only update starts no code and allocates no migration.
 
 Unknown until implementation planning: React foundation commit/helper API, then-current
 R4 module gate completion, migration slot/checksums/live md5 manifest and final
