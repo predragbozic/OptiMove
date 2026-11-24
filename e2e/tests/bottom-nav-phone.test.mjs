@@ -85,6 +85,7 @@ for (const role of ["platform_admin", "club_admin", "team_coach", "athlete"]) {
         assert.equal(g.small, 0, "every control of the bar is at least 44 px");
         assert.ok(g.shellPadding >= g.height - 1, `the page ends above the bar (${g.shellPadding} >= ${g.height})`);
         assert.equal(g.overflow, 0);
+        assert.equal(await page.locator("#mobileNavToggle").isVisible(), false, "no header menu button on a phone");
         // Home is the current section after sign-in.
         assert.equal(await page.getAttribute(`${bar} [data-nav-id="home"]`, "aria-current"), "page");
         assert.deepEqual(pageErrors, []);
@@ -247,6 +248,41 @@ test("(team_coach, 390 px) Escape closes the More sheet only; the page under it 
     assert.equal(await page.evaluate(() => document.activeElement?.dataset?.navId), "more", "focus back on More");
     assert.equal(await page.getAttribute(`${bar} [data-nav-id="home"]`, "aria-current"), "page", "still on Home");
     assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
+test("(team_coach, 390 px) every Program Library and Settings section the menu offers is in More", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "team_coach", 390);
+  try {
+    await page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
+    const menu = await page.evaluate(() => [...document.querySelectorAll(".app-shell > .sidebar .sidebar-subnav-button")]
+      .filter((e) => !(e.hidden || e.closest("[hidden]"))).map((e) => e.textContent.trim()));
+    await page.click(`${bar} [data-nav-id="more"]`);
+    const sheet = await page.$$eval(".om-bottom-sheet-subitem", (e) => e.map((x) => x.textContent.trim()));
+    assert.ok(menu.includes("Requests") && menu.includes("Marketplace"), menu.join(", "));
+    assert.deepEqual(sheet, menu, "the same sub-sections, in the same order");
+    // Requests opens the Program Library's requests.
+    await page.locator('ul[aria-label="Program Library sections"]').getByRole("button", { name: "Requests", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.sidebar [data-program-library-section="requests"]')?.classList.contains("is-active"), null, { timeout: 20_000 });
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});
+
+test("(team_coach, 390 px) if the bar's code cannot load, the header menu button comes back and opens the menu", async () => {
+  const account = world.accounts.find((a) => a.role === "team_coach");
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    await context.addCookies([{ name: "optimove_session", value: account.sessionToken, url: world.baseUrl }]);
+    await context.route("**/react-build/**", (route) => route.abort());
+    const page = await context.newPage();
+    await page.goto(world.baseUrl);
+    await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+    await page.waitForFunction(() => document.body.classList.contains("bottom-nav-unavailable"), null, { timeout: 20_000 });
+    assert.equal(await page.locator(bar).count(), 0);
+    await page.locator("#mobileNavToggle").click();
+    await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"), null, { timeout: 5_000 });
+    await page.getByText("Training load", { exact: true }).first().click();
+    await page.waitForSelector('[data-action="training-load-section"]', { timeout: 20_000 });
   } finally { await context.close(); }
 });
 

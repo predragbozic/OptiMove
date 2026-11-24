@@ -9,7 +9,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const DAY = iso(new Date());
@@ -58,13 +58,8 @@ async function withPlans(page) {
     await route.fulfill({ response: res, json: body });
   });
 }
-async function openNav(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-}
 async function openCalendar(page, width) {
-  await openNav(page);
-  await page.locator("#calendarToggle").click();
+  await navTo(page, "#calendarToggle");
   await page.waitForSelector(".central-calendar .athlete-switcher", { timeout: 20_000 });
   if (width < 761 && (await page.locator(".athlete-switcher-fold").getAttribute("aria-expanded")) !== "true") await page.locator(".athlete-switcher-fold").click();
 }
@@ -157,8 +152,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         body.event = { ...body.event, sessionLinks: ["Ana Example", "Cara Example", "Dario Example"].map(link) };
         return route.fulfill({ response: res, json: body });
       });
-      await openNav(page);
-      await page.locator("#calendarToggle").click();
+      await navTo(page, "#calendarToggle");
       await page.waitForSelector(".central-calendar", { timeout: 20_000 });
       const card = page.locator(`.cc-card[data-key^="event:${eventId}"]`).first();
       await card.waitFor({ timeout: 20_000 });
@@ -217,8 +211,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         body.event = { ...body.event, sessionLinks: links };
         return route.fulfill({ response: res, json: body });
       });
-      await openNav(page);
-      await page.locator("#calendarToggle").click();
+      await navTo(page, "#calendarToggle");
       await page.waitForSelector(".central-calendar", { timeout: 20_000 });
       const card = page.locator(`.cc-card[data-key^="event:${eventId}"]`).first();
       await card.waitFor({ timeout: 20_000 });

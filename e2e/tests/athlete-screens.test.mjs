@@ -2,7 +2,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch } from "../lib/browser.mjs";
+import { launch, navTo } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -22,8 +22,7 @@ async function openAthlete(width) {
   };
   const menu = async (tab) => {
     await home();
-    await page.locator("#mobileNavToggle").click();
-    await page.locator(`.sidebar [data-athlete-tab="${tab}"]`).first().click();
+    await navTo(page, `.sidebar [data-athlete-tab="${tab}"]`);
   };
   const under44 = (selector) => page.evaluate((sel) => [...document.querySelectorAll(sel)].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height < 44; }).map((e) => `${(e.innerText || e.getAttribute("aria-label") || "").trim()} ${Math.round(e.getBoundingClientRect().height)}`), selector);
   const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
@@ -36,10 +35,11 @@ for (const width of [360, 390]) {
     try {
       await a.home();
       assert.deepEqual(await a.under44(".training-load-week-button"), [], "the This week button");
-      await a.page.locator("#mobileNavToggle").click();
-      await a.page.waitForTimeout(400);
-      assert.equal(await a.page.locator(".sidebar [data-tests-count]").isVisible(), false, "no count of 0 on Tests");
-      assert.deepEqual(await a.under44(".sidebar .brand-mark"), [], "the menu's logo");
+      // A phone's main navigation is the bottom bar (no header menu): no count of 0 on its Tests, and 44 px items.
+      await a.page.waitForSelector('.om-bottom-nav [data-nav-id="tests"]', { timeout: 20_000 });
+      assert.equal(await a.page.locator('.om-bottom-nav [data-nav-id="tests"] .om-bottom-nav-badge').count(), 0, "no count of 0 on Tests");
+      assert.deepEqual(await a.under44(".om-bottom-nav button"), [], "the bar's items");
+      assert.equal(await a.page.locator("#mobileNavToggle").isVisible(), false, "no menu button in the header");
 
       await a.home();
       await a.page.locator(".athlete-home-week-head .training-load-week-button").click();

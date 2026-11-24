@@ -6,7 +6,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -41,9 +41,7 @@ async function sectionCount(context, ids) {
 
 async function openSection(page) {
   // Below 761 px the navigation is behind the menu button.
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.locator('[data-library-tab="builder"]').first().click();
+  await navTo(page, '[data-library-tab="builder"]');
   await page.getByText("Continue where you left off").first().click();
   await page.getByRole("button", { name: "Continue", exact: true }).first().click();
   await page.locator('[data-action="builder-select-node"]', { hasText: "Lower body" }).first().click();

@@ -10,7 +10,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 
 const SHOTS = process.env.E2E_SHOTS || "";
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -31,10 +31,6 @@ async function call(role, method, path, body) {
   let parsed = {};
   try { parsed = JSON.parse(text); } catch { parsed = {}; }
   return { status: res.status, body: parsed, text };
-}
-async function openNav(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
 }
 const overflow = (page, width) => page.evaluate((w) => Math.max(window.innerWidth - w, document.documentElement.scrollWidth - w), width);
 // Every visible button of the panel shorter or narrower than a 44 px target.
@@ -99,8 +95,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
         body.event = { ...body.event, sessionLinks, activityLinks };
         return route.fulfill({ response: res, json: body });
       });
-      await openNav(page);
-      await page.locator("#calendarToggle").click();
+      await navTo(page, "#calendarToggle");
       await page.waitForSelector(".central-calendar", { timeout: 20_000 });
       const card = page.locator(`.cc-card[data-key^="event:${eventId}"]`).first();
       await card.waitFor({ timeout: 20_000 });

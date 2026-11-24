@@ -65,12 +65,13 @@ test("an imported session: Home and the menu lead to her sessions; a session sho
         assert.deepEqual(await a.under44(".my-training-home"), []);
         assert.equal(await a.overflow(), 0, "Home");
         await shot(a.page, `my-training-home-${width}`);
-        // A computer goes in from Home; a phone from the menu (both ways are there).
+        // A computer goes in from Home; a phone from the bottom bar's More (both ways are there).
         if (width < 800) {
-          await a.page.locator("#mobileNavToggle").click();
-          const item = a.page.locator('.sidebar [data-athlete-tab="my-training"]').first();
-          assert.equal(await item.isVisible(), true, "the menu item");
-          assert.deepEqual(await a.under44('.sidebar [data-athlete-tab="my-training"]'), []);
+          await a.page.waitForSelector('.om-bottom-nav [data-nav-id="more"]', { timeout: 20_000 });
+          await a.page.click('.om-bottom-nav [data-nav-id="more"]');
+          const item = a.page.locator(".om-bottom-sheet-item", { has: a.page.getByText("My training", { exact: true }) });
+          assert.equal(await item.isVisible(), true, "the More item");
+          assert.deepEqual(await a.under44(".om-bottom-sheet-item"), []);
           await item.click();
         } else {
           assert.equal(await a.page.locator('.sidebar [data-athlete-tab="my-training"]').first().isVisible(), true, "the menu item");

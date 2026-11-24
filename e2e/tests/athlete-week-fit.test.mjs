@@ -7,7 +7,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch } from "../lib/browser.mjs";
+import { launch, navTo } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -44,8 +44,7 @@ async function measure(width) {
   try {
     await page.goto(`${world.baseUrl}/athlete`, { waitUntil: "load" });
     await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
-    if (await page.locator("#mobileNavToggle").isVisible()) await page.locator("#mobileNavToggle").click();
-    await page.locator('.sidebar [data-athlete-tab="calendar"]').first().click();
+    await navTo(page, '.sidebar [data-athlete-tab="calendar"]');
     await page.locator(".calendar-day").first().waitFor({ timeout: 20_000 });
     // The reported path: pressing Today scrolls the week to its day, and on the old strip layout that gave the grid
     // about 1,200 px of trailing space (Saturday cut, Sunday out of reach).

@@ -5,7 +5,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, openTrainingLoad, WIDTHS } from "../lib/browser.mjs";
 
 const SHOTS = process.env.E2E_SHOTS || "";
 let world;
@@ -20,10 +20,6 @@ const localDay = () => {
 const overflow = (page, width) => page.evaluate((w) => Math.max(window.innerWidth - w, document.documentElement.scrollWidth - w), width);
 async function shot(page, name) {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true }).catch(() => {});
-}
-async function openNav(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
 }
 async function opener(page, scope) {
   const button = page.locator(`${scope} [data-action="open-in-central-calendar"]`).first();
@@ -61,8 +57,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       await page.waitForSelector(".coach-home-day", { timeout: 20_000 });
 
       // --- Tests' week: another day of the week, its bar, then its day link.
-      await openNav(page);
-      await page.locator('[data-library-tab="tests"]').first().click();
+      await navTo(page, '[data-library-tab="tests"]');
       await page.locator('[data-action="tests-weekly-prev-week"]').waitFor({ timeout: 20_000 });
       const lastDay = await page.locator('[data-action="tests-weekly-select-day"]').last().getAttribute("data-date");
       await page.locator(`[data-action="tests-weekly-select-day"][data-date="${lastDay}"]`).click();

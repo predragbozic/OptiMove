@@ -107,6 +107,17 @@ test("the bar: one button per section, the current one aria-current, labelled na
   assert.equal(buttons[2].getAttribute("aria-expanded"), "false");
 });
 
+test("a count on a section shows on the bar and in More, with words for a screen reader", async () => {
+  const { el } = renderBar({ items: [{ ...ITEMS[0] }, { id: "tests", label: "Tests", icon: ICON, active: false, badge: "2" }], more: [{ ...MORE[0], badge: "5" }] });
+  const tests = el.querySelector('[data-nav-id="tests"]');
+  assert.equal(tests.querySelector('.om-bottom-nav-badge [aria-hidden="true"]').textContent, "2");
+  assert.equal(tests.querySelector(".om-bottom-nav-badge .visually-hidden").textContent, ", 2 waiting");
+  assert.ok(!el.querySelector('[data-nav-id="home"] .om-bottom-nav-badge'), "no badge without a count");
+  click(el.querySelector('[data-nav-id="more"]'));
+  await tick();
+  assert.equal(el.querySelector(".om-bottom-sheet-item .om-bottom-nav-badge [aria-hidden]").textContent, "5");
+});
+
 test("the bar without anything for More shows no More button", () => {
   const { el } = renderBar({ items: ITEMS, more: [] });
   assert.ok(!el.querySelector('[data-nav-id="more"]'));

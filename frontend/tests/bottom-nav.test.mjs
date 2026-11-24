@@ -179,6 +179,27 @@ test("Messages: a tap runs the header's own Messages button", () => {
   assert.equal(clicked, "messageToggle");
 });
 
+test("a count on the menu's item (the athlete's pending tests) is carried to the bar; a hidden one is not", () => {
+  const doc = shell("athlete.html");
+  const badge = doc.querySelector("[data-tests-count]");
+  assert.equal(buildBottomNavModel(doc, {}, null).items.find((i) => i.id === "tests").badge, undefined, "hidden 0: no badge");
+  badge.hidden = false;
+  badge.textContent = "3";
+  assert.equal(buildBottomNavModel(doc, {}, null).items.find((i) => i.id === "tests").badge, "3");
+  // In More as well, when Tests is not one of the three places.
+  assert.equal(buildBottomNavModel(doc, {}, ["athlete-calendar", "calendar", "programs"]).more.find((s) => s.id === "tests").badge, "3");
+});
+
+test("the header's menu button is hidden on a phone from the first paint, and comes back only when the bar cannot load", () => {
+  const css = read("styles.css");
+  const block = css.slice(css.indexOf("React island: the phone's bottom navigation"));
+  const phone = block.slice(block.indexOf("@media (max-width: 760px)"));
+  assert.match(phone, /body:not\(\.login-mode\):not\(\.bottom-nav-unavailable\) \.mobile-nav-toggle \{ display: none !important; \}/);
+  assert.match(read("bottom-nav.js"), /classList\?\.add\?\.\("bottom-nav-unavailable"\)/);
+  // A drawer closed on a phone gives focus back to the bar's Athletes (its opener there).
+  assert.match(read("app.js"), /document\.querySelector\('\.om-bottom-nav \[data-nav-id="athletes"\]'\)/);
+});
+
 test("no menu, no bar: a page without the app shell (sign-in, invite) gives no model", () => {
   const doc = new JSDOM("<!doctype html><body><form class='login-form'></form></body>").window.document;
   assert.equal(buildBottomNavModel(doc, {}), null);

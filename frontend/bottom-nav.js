@@ -89,6 +89,9 @@ export function buildBottomNavModel(doc = globalThis.document, appState = state,
     if (!id || targets.has(id)) continue;
     targets.set(id, el);
     const section = { id, label: labelOf(el), icon: el.querySelector("svg.rail-icon")?.outerHTML || "", active: el.classList.contains("is-active") };
+    // A count the menu shows on its item (the athlete's pending tests): the bar shows it too, the drawer being gone.
+    const badge = el.querySelector("[data-tests-count], .notification-count, .sidebar-count");
+    if (badge && !isHidden(badge) && badge.textContent.trim()) section.badge = badge.textContent.trim();
     // The Athletes control opens the athlete list (in the menu drawer), it is not a section of its own.
     // Screen readers hear whether the list is open (aria-expanded on the bar's button).
     if (id === "athletes") {
@@ -181,7 +184,7 @@ export function syncBottomNav({ doc = globalThis.document, win = globalThis.wind
   if (watchedSidebar !== sidebar && typeof win.MutationObserver === "function") {
     observer?.disconnect();
     observer = new win.MutationObserver(scheduleSync);
-    observer.observe(sidebar, { subtree: true, attributes: true, attributeFilter: ["hidden", "class"] });
+    observer.observe(sidebar, { subtree: true, attributes: true, attributeFilter: ["hidden", "class"], childList: true, characterData: true });
     // Messages: its header button appears once the inbox is read, and the panel marks the body while open.
     const messages = doc.getElementById("messageToggle");
     if (messages) observer.observe(messages, { attributes: true, attributeFilter: ["hidden"] });
@@ -192,8 +195,9 @@ export function syncBottomNav({ doc = globalThis.document, win = globalThis.wind
     // React is downloaded only for a phone; the bar stays mounted (hidden by CSS) if the screen later widens.
     if (!phoneQuery?.matches || loading) return;
     loading = import("./react-build/islands.js").then((mod) => { islands = mod; loading = null; scheduleSync(); }, (error) => {
-      // Without the island the menu button still opens the full menu.
+      // Without the island the header's menu button comes back (styles.css) and opens the full menu.
       loading = null;
+      doc.body.classList?.add?.("bottom-nav-unavailable");
       reportHandlerError(error, "bottom_nav_load");
     });
     return;
@@ -213,7 +217,7 @@ export function syncBottomNav({ doc = globalThis.document, win = globalThis.wind
   const userId = state.currentUser?.id;
   islands.mountIsland(host, islands.BottomNav, {
     items: model.items,
-    more: model.more.map(({ id, label, icon, active, children }) => ({ id, label, icon, active, children })),
+    more: model.more.map(({ id, label, icon, active, badge, children }) => ({ id, label, icon, active, badge, children })),
     slots: model.slots,
     defaults: model.defaults,
     options: model.options,

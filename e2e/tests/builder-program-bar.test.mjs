@@ -9,7 +9,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -25,9 +25,7 @@ async function openBar(width) {
     assert.ok(res.status() < 300, `create the program: ${res.status()}`);
     made = true;
   }
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.locator('[data-library-tab="builder"]').first().click();
+  await navTo(page, '[data-library-tab="builder"]');
   await page.getByText("Continue where you left off").first().click();
   await page.getByRole("button", { name: "Continue", exact: true }).first().click();
   await page.locator(".builder-program-bar").first().waitFor();

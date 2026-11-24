@@ -1932,7 +1932,10 @@ function closeMobileNav() {
   const focusInDrawer = Boolean(document.activeElement?.closest?.(".sidebar"));
   state.mobileNavOpen = false;
   renderMobileNavState();
-  if (focusInDrawer && els.mobileNavToggle?.offsetParent) els.mobileNavToggle.focus({ preventScroll: true });
+  if (!focusInDrawer) return;
+  // On a phone the drawer is opened by the bottom bar's Athletes (the header's menu button is hidden there).
+  const opener = els.mobileNavToggle?.offsetParent ? els.mobileNavToggle : document.querySelector('.om-bottom-nav [data-nav-id="athletes"]');
+  opener?.focus({ preventScroll: true });
 }
 
 function collapseRailAfterNav() {
