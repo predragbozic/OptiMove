@@ -1,6 +1,7 @@
 # P2 validation evidence — not a freeze notice
 
-Candidate includes main e0417733fb6be0b1e190deca62b5cdbb6769e7b5. Date: 2026-11-23.
+Final base: b1b4a8ea36770a990919e3e1522b4ed9657fb032. Final revalidation: 2026-11-24.
+The earlier whole-package runs below used main e0417733; this distinction is intentional.
 Local environment: Windows, PostgreSQL 17.11, Node 22.22.0, Chrome 158.0.8127.36.
 All database writes in this packet use self-created optimove_tests_* databases on
 owned loopback PostgreSQL clusters. No production access, migration or deploy.
@@ -20,18 +21,19 @@ The final eight tests run the previous production build
 3cf0f7f92ec82ee75ed470149c9ab688c1fd384b against the migrated schema.
 The migration suite executes the actual owner staging CLI, rollback SQL, catalog
 equality and reapply, and the changed-body / later-migration / real-use refusals.
-v92/v93 recorded-order staging is simulated; their actual SQL is not present in
-this base, so no claim is made about executing those future migration bodies.
+Recorded-order staging covers both optional slots. On the final base, actual v93
+is present and both Node20 and Node22 rehearsals pass 47/47 again. The v94-only
+CLI test also proves it records only v94 when v93 is pending (6/6). v92 is absent;
+its future body is not claimed tested.
 
 ## Whole frontend comparison
 
 node scripts/test-runner.mjs --preset frontend-fast
 
-Final full run: P2 305 files (278 pass, 4 known-fail, 23 fail),
-4185 pass / 61 fail. Clean main e0417733: 302 files (275 pass, 4 known-fail,
-23 fail), 4162 pass / 61 fail. Same failing tests and messages, normalizing only
-the worktree name in a Windows ENOENT path. This full run includes the final
-52 analysis actions, 6 gallery editor, 9 gallery option and 6 PDF tests.
+Final full run on b1b4a8ea: P2 307 files (280 pass, 4 known-fail, 23 fail),
+4204 pass / 61 fail. Clean main: 304 files (277 pass, 4 known-fail, 23 fail),
+4181 pass / 61 fail. Same failing tests and messages, normalizing only the
+worktree name in a Windows ENOENT path. All latest dashboard tests are included.
 
 ## Backend-fast comparison
 
@@ -131,13 +133,35 @@ source was contacted. The first crash remains in the raw whole-run count above.
 The existing tests-athlete-device-timezone manifest entry XPASSed (26/26).
 No P2 manifest entry is added or widened.
 
-## Final completion record
+## Whole e2e and final-base follow-up
 
-Still pending: completion/classification of the whole e2e preset,
-and the frozen-head PR packet. Until recorded here, this is not a full-gate GO or
-freeze notice. Final build passes; the expected bundle-size warning remains.
-No Linux, production PG17.6 or production activation was run locally.
-The owner and both reviewers still control review, migration order and deployment.
+node scripts/test-runner.mjs --preset e2e
+
+Earlier whole run: 78 files, 77 pass / 1 fail; 407 pass / 1 fail of 408.
+The single failure is tests-t2, the team-coach 390 px empty Results day waiting
+for its Today action. Clean main's isolated file passed 10/10; it is NOT labelled
+as a confirmed baseline failure. A first P2 repeat was interrupted by the machine's
+long sleep/runtime interruption (7159-second wall time), so that result is unusable.
+
+Final-base command:
+node scripts/test-runner.mjs --project e2e --file dashboard-gallery.test.mjs --file dashboard-pages.test.mjs --file dashboard-simple.test.mjs --file tests-t2.test.mjs
+
+All four files PASS, 35/35 (8 + 7 + 10 + 10), including that Results case.
+The original whole-run failure is retained; its cause is UNKNOWN/non-reproduced.
+It is not silently replaced with an all-green whole-preset claim.
+
+The final base was merged after the overnight interruption. Conflicts were append-only
+in .gitattributes and styles.css; both P2 and calendar blocks were kept. Both complete
+frontend-fast runs and backend-fast runs were repeated against that exact new base;
+PG17 rehearsal on actual Node20 and Node22 passed again. Build PASS (expected existing
+bundle-size warning). git diff --check PASS. Migration blob SHA256 matches the manifest
+and is LF. v90/v91, trainingLoadDashboardQuery.js, calculatedValues.js and GPS are unchanged.
+
+Not run: whole disposable and whole e2e presets again after the final calendar/main
+merge; the earlier complete runs and final-base focused checks are reported separately.
+No Linux, production PostgreSQL17.6, persistent migration, activation, merge or deploy.
+The owner/reviewers run the full gate on their final merge preview. This Draft is a
+review packet, not a production GO. Final head and file list are in PR #742.
 
 ## Committed visual evidence
 

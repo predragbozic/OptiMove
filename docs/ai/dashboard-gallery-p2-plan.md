@@ -1,10 +1,10 @@
 # P2 — chart gallery, interactions and browser PDF
 
-Status: implementation in progress; Draft and NOT frozen.
+Status: implemented; Draft review packet and frozen head are recorded in PR #742.
 Level: RISKY (stored presentation validation and server-side derived chart data).
 P1 #741 is merged and deployed as 3cf0f7f92ec82ee75ed470149c9ab688c1fd384b.
 This implementation includes that main; the final evidence packet records the final base.
-Date: 2026-11-23. This branch does not modify or push the reviewed P1 branch.
+Contract date: 2026-11-23; final revalidation: 2026-11-24. This branch does not modify or push the reviewed P1 branch.
 
 ## Delivery boundary
 
@@ -14,9 +14,8 @@ with the accepted P2 gallery/output topic from #715: all seven chart forms toget
 with one validation design and one focused RISKY implementation PR. This document is
 its shared contract; the owner authorized continued work while P1 finishes its gate.
 
-Keep this PR Draft and unfrozen until #741 merges. Findings on #741 take priority;
-incorporate the corrected P1 head before continuing dependent P2 work. After merge,
-retarget to main and repeat relevant validation. Do not merge or deploy this branch.
+P1 is merged. This branch targets main b1b4a8ea36770a990919e3e1522b4ed9657fb032.
+Both independent reviews and an owner order are still required; do not merge or deploy.
 
 ## Verified base and migration need
 
@@ -35,14 +34,14 @@ Read against the checked-out P1 head, not the old draft descriptions:
   contract; its query service is the selected-page entry point. P2 must validate both
   Page and legacy entry points and reuse their authorization and query results.
 
-One NEW migration is expected for consolidated validation and compatible-series
+One new migration consolidates validation and compatible-series
 checks, rather than the six sequential validator replacements from #391–#397.
-Owner confirmed v94 / 202611261000. The new file will be
+Owner confirmed v94 / 202611261000. The file is
 migrations_v2/202611261000_training_load_v94_chart_shapes.sql.
 v92 / 202611241000 (roles) and v93 / 202611251000 (calendar delete) are independent. Never rename/replay
 an old migration or widen dashboard_builtin_series for these display variants.
-Whether any sanctioned function body also needs replacement is part of the final
-SQL dependency inventory, not assumed to be CREATE-only.
+v94 replaces four bodies: presentation validation, compatibility, Page copy and
+atomic Simple save. The runbook records their predecessor and resulting body gates.
 
 ## One presentation contract
 
@@ -68,7 +67,7 @@ follows the new server deployment. Record the exact compatibility boundary in ru
 | Stacked bar | Explicit named additive components aligned to the same athlete/bucket/grain and known unit. | Never stack ratios, percentages, unknown/mixed units or an undeclared total with its components. Missing/conflicting components leave the stack unavailable. |
 | Box plot | Distribution of authorized returned athlete aggregates for each bucket and unit. | Not unseen raw observations. State sample count; use one documented quartile/outlier convention in server and tests. Missing/conflicting values are excluded and counted. |
 
-Proposed box convention for review: sorted finite samples, linearly interpolated
+Chosen box convention: sorted finite samples, linearly interpolated
 quantiles at (n-1)*p, median Q2, whiskers to the outermost sample within 1.5 IQR,
 remaining samples as outliers. One sample is a degenerate box; no samples is no data.
 Do not hide a mathematical choice inside ECharts defaults.

@@ -17,9 +17,10 @@ No trigger is disabled and session_replication_role is never used.
 Required: the exact deployed v91 checksum 1da5706c418c0f3262d6a88689e8d1355247a97d7d31bad4a82a59d396c52247,
 which transitively requires v90. v92 (roles) and v93 (calendar) are unrelated and can
 be absent or recorded in either merge order. There is no highest-label prerequisite.
-Their SQL files were not present in the initial main used here; their implementations
-are not claimed tested by the simulated staging-order tests. The final merge preview
-must contain no duplicate migration prefix.
+v93 is present in the final base and is exercised with v94 by the actual PG17
+rehearsals on Node20 and Node22. The owner staging test proves that an unrecorded
+v93 is not applied by the v94-only command. v92 is absent; its body is not claimed
+tested. Recorded/absent staging-order checks remain explicit simulations.
 
 Before the server switch, an older binary cannot author chartShape: its JS schema
 rejects the field. Ordinary widgets and old Simple requests keep their behavior and

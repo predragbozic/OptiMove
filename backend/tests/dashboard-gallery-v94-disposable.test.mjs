@@ -25,8 +25,10 @@ async function fixture({type='bar_chart',keys=['duration_minutes']}={}){
 }
 test('v94 applies → actual rollback → identical catalog → reapply with old rows unchanged',async()=>{
  const fixtureBefore=await fixture();const before=(await q.query(PAGE_CATALOG_SQL)).rows[0];const rowBefore=(await q.query('select to_jsonb(w) row from training_load.dashboard_widgets w where id=$1',[fixtureBefore.widget.id])).rows[0].row;
+ const recordedBefore=new Set((await q.query('select migration_name from public.schema_migrations')).rows.map(r=>r.migration_name));
  const applied=await new Promise((resolve,reject)=>{const child=spawn(process.execPath,[fileURLToPath(new URL('../scripts/dashboard-gallery-stage.mjs',import.meta.url)),'--apply',file],{env:{...process.env,DATABASE_URL:db.url},stdio:['ignore','pipe','pipe']});let output='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>output+=b);child.on('error',reject);child.on('close',code=>resolve({code,output}));});
  assert.equal(applied.code,0,applied.output);assert.match(applied.output,/Only v94 was eligible to apply/);
+ assert.deepEqual((await q.query('select migration_name from public.schema_migrations order by migration_name')).rows.map(r=>r.migration_name).filter(name=>!recordedBefore.has(name)),['migrations_v2/'+file]);
  assert.deepEqual((await q.query('select to_jsonb(w) row from training_load.dashboard_widgets w where id=$1',[fixtureBefore.widget.id])).rows[0].row,rowBefore);
  for(const runbook of ['postcheck']){const results=await q.query(fs.readFileSync(new URL('../../docs/runbooks/dashboard-chart-shapes-v94-'+runbook+'.sql',import.meta.url),'utf8'));for(const result of results)for(const row of result.rows??[])for(const value of Object.values(row))if(typeof value==='boolean')assert.equal(value,true);}
  await q.query(rollback);assert.deepEqual((await q.query(PAGE_CATALOG_SQL)).rows[0],before);
