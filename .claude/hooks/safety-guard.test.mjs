@@ -785,6 +785,9 @@ const TIGHTENED_2026_11_23 = [
   /^psql \$DATABASE_URL /,
   /^bash script\.sh$/,
   /^\$S\/pwsh\/pwsh .*-File /,
+  // the independent re-check of 8812fc8 (LOW, recommended): `env` alone prints every credential
+  // of the environment, also when a filter follows it (`env | grep KEY` would print them)
+  /^env \| grep /,
   /^\$EDITOR /, // a variable as the command word cannot be read
   /^git branch -f /, // a branch force-move can drop commits
 ];
@@ -2198,6 +2201,37 @@ test("relaxed policy: the code re-review of c67bf67 — every form of the same w
     assert.equal(verdict("bash -c 'git merge feature/x'", onMain), ASK);
   } finally {
     for (const d of [repo, onMain]) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test("relaxed policy: the independent re-check of 8812fc8 — inline code naming .claude, writes through links in code, and printed credentials ask", () => {
+  const repo = makeRepo("sg-relax-rc-", "feature/own");
+  const links = mkdtempSync(path.join(tmpdir(), "sg-relax-rc-links-"));
+  const claudeDir = fileURLToPath(new URL("../", import.meta.url)).replace(/[\\/]$/, "");
+  try {
+    expectAll([
+      // HIGH: the .claude folder named as a whole inside interpreter code
+      ["python3 -c \"import shutil; shutil.copytree('/tmp/c','.claude',dirs_exist_ok=True)\"", ASK],
+      ["node -e \"require('fs').cpSync('/tmp/c','.claude',{recursive:true})\"", ASK],
+      ["node -e \"require('fs').rmSync('.claude',{recursive:true})\"", ASK],
+      ["python3 -c \"import os; os.symlink('.claude','zz')\"", ASK],
+      ["node -e \"require('fs').symlinkSync('.claude','zz')\"", ASK],
+      ["python3 - <<'EOF'\nimport shutil\nshutil.rmtree(\".claude\")\nEOF", ASK],
+      ["python3 -c \"print(open('.claude/rules/x.md').read())\"", ALLOW], ["node -e \"require('fs').writeFileSync('out.txt','x')\"", ALLOW], ["ls .claude", ALLOW],
+      // LOW (recommended by the reviewer, small and safe): a credential printed into the transcript
+      ["printenv", ASK], ["env", ASK], ["env -0", ASK], ["printenv DATABASE_URL", ASK], ["echo $DATABASE_URL", ASK], ['echo "$GITHUB_TOKEN"', ASK],
+      ["printf '%s' \"$API_KEY\"", ASK], ["echo ${DB_PASSWORD}", ASK], ["export -p", ASK],
+      ["echo $PATH", ALLOW], ["printenv HOME", ALLOW], ["env NODE_ENV=test node scripts/test-runner.mjs --list", ALLOW], ["echo '$API_KEY'", ALLOW],
+    ], repo, { exact: true });
+    // MEDIUM: interpreter code that writes through an existing link into the guard's files
+    symlinkSync(path.join(claudeDir, "settings.json"), path.join(links, "sj"));
+    symlinkSync(path.join(claudeDir, "hooks", "safety-guard.mjs"), path.join(links, "hg"));
+    for (const c of ["python3 -c \"open('sj','w').write('{}')\"", "node -e \"require('fs').writeFileSync('hg','')\"", "python3 - <<'EOF'\nopen(\"sj\",\"w\").write(\"{}\")\nEOF"]) {
+      assert.equal(verdict(c, links), ASK, c);
+    }
+    assert.equal(verdict("node -e \"require('fs').writeFileSync('other.txt','')\"", links), ALLOW);
+  } finally {
+    for (const d of [repo, links]) rmSync(d, { recursive: true, force: true });
   }
 });
 

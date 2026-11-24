@@ -2042,6 +2042,7 @@ const ASK_REASONS = {
   unreadableTarget: "This command writes to a file whose name is only known when the line runs (a command substitution or a variable the line did not set) — needs your explicit confirmation.",
   unnamedWriter: "This command writes files it does not name (a patch, an archive, a copied folder's contents) into a git work tree, where it could change the safety guard or .git — needs your explicit confirmation.",
   resetMain: "This 'git reset' moves main or master to another commit — needs your explicit confirmation.",
+  printsCredential: "This prints a credential (a variable whose name ends in URL, KEY, SECRET, TOKEN or PASSWORD, or the whole environment) into the transcript — needs your explicit confirmation.",
   unreadableCode: "This runs code the guard cannot read: a script made on this line or not tracked in the repository, a process substitution, or inline code that starts a process or reads .env — needs your explicit confirmation.",
   branchReset: "This resets or force-moves a branch (checkout -B, switch -C / --force-create, branch -f / -M / -C), which can drop its commits — needs your explicit confirmation.",
   recursiveDelete: "This recursive delete reaches outside the work tree's own files and the temporary folders (or the work tree's top, its .git, or the guard's files) — needs your explicit confirmation.",
@@ -2576,8 +2577,10 @@ export function mentionsGuardFiles(cmd) {
   const unquoted = text.replace(/['"\\]/g, ""); // a name split by quotes (`sett''ings.json`)
   const outsideQuotes = text.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, " ");
   // the .claude folder itself as a word (`mv .claude /tmp/x`, `cp -r /tmp/x/.claude .`, `rm -r ./.claude/`)
-  const wholeFolder = /(?:^|[\s=(])(?:[^\s;&|<>]*[\\/])?\.claude[\\/]?(?=$|[\s;&|)<>])/;
-  return PROTECTED_GUARD_RE.test(text) || PROTECTED_GUARD_RE.test(unquoted) || GUARD_NAME_PIECES_RE.test(unquoted) || DOT_GLOB_RE.test(outsideQuotes) || wholeFolder.test(unquoted);
+  // — also inside code, as a string: `copytree('/tmp/c','.claude')`, `rmSync(".claude")`
+  const wholeFolder = /(?:^|[\s=(,[{:])(?:[^\s;&|<>'",]*[\\/])?\.claude[\\/]?(?=$|[\s;&|)<>,\]}])/;
+  const inCode = /(?:^|[^A-Za-z0-9_.-])(?:[^\s'"`,()]*[\\/])?\.claude[\\/]?['"`]/;
+  return PROTECTED_GUARD_RE.test(text) || PROTECTED_GUARD_RE.test(unquoted) || GUARD_NAME_PIECES_RE.test(unquoted) || DOT_GLOB_RE.test(outsideQuotes) || wholeFolder.test(unquoted) || inCode.test(text);
 }
 
 const READ_ONLY_COMMANDS = new Set(["cat", "head", "tail", "grep", "egrep", "fgrep", "rg", "wc", "ls", "diff", "cmp", "sha256sum", "sha1sum",
@@ -3161,6 +3164,41 @@ export function runsUnreadableCode(segment, { cmd, dir, writtenOnLine, bodies = 
   return false;
 }
 
+// The string literals of an interpreter's code that resolve, through a symlink, to the guard's
+// files (`open('sj','w')` with sj -> .claude/settings.json): asked as a write into the guard.
+export function codeNamesGuardThroughLink(segment, { cmd, dir }) {
+  if (dir === null) return false;
+  const words = tokenizeWords(normalizeSegment(segment)).map(shellWord);
+  if (!CODE_RUNNERS.has(path.basename(words[0] ?? ""))) return false;
+  const code = [segment, ...heredocBodies(cmd).map((b) => b.body)].join("\n");
+  for (const m of code.matchAll(/(['"`])([^'"`\n]{1,1024})\1/g)) {
+    const lit = m[2];
+    if (/[$*?{}]/.test(lit) || /^\s|\s$/.test(lit)) continue;
+    if (isGuardedPath(path.resolve(dir, lit))) return true;
+  }
+  return false;
+}
+
+// Printing a credential into the transcript: `printenv` / `env` / `export -p` with nothing else
+// (the whole environment), `printenv <NAME>`, and `echo` / `printf` of a variable whose name ends
+// in URL, KEY, SECRET, TOKEN, PASSWORD, PASS or CREDENTIAL(S).
+const SECRET_VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*(?:URL|KEY|SECRET|TOKEN|PASSWORD|PASSWD|PASS|CREDENTIALS?|DSN)$/i;
+export function printsCredential(segment) {
+  // `env` with no command prints everything (normalizeSegment reads env as a wrapper and drops it)
+  const rawWords = withoutRedirections(tokenizeWords(stripLeadingEnvAssignments(String(segment).trim()))).map(shellWord);
+  if (path.basename(rawWords[0] ?? "") === "env" && rawWords.slice(1).every((w) => w.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(w))) return true;
+  const words = withoutRedirections(tokenizeWords(normalizeSegment(segment)));
+  const name = path.basename(shellWord(words[0] ?? ""));
+  const rest = words.slice(1).map(shellWord);
+  if ((name === "printenv" || name === "env") && rest.filter((w) => !w.startsWith("-")).length === 0) return true;
+  if (name === "printenv") return rest.some((w) => SECRET_VAR_RE.test(w));
+  if ((name === "export" || name === "declare" || name === "typeset") && rest.length > 0 && rest.every((w) => /^-[A-Za-z]*[px]/.test(w))) return true;
+  if (name === "echo" || name === "printf") {
+    return words.slice(1).some((w) => !/^'[^']*'$/.test(w) && [...w.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].some((m) => SECRET_VAR_RE.test(m[1])));
+  }
+  return false;
+}
+
 // A writing command whose target operand is only known when the line runs (`tee "$(…)"`,
 // `rm "$(… | base64 -d)"`, `cp x $(cat n)`): the same rule as an unreadable redirection target.
 const OPERAND_WRITERS = new Set(["cp", "mv", "tee", "touch", "rm", "rmdir", "install", "ln", "truncate", "mkdir", "chmod", "chown", "dd", "shred", "unlink"]);
@@ -3476,6 +3514,8 @@ export function classifyShellCommand(cmd, cwd) {
     if (writerOperandUnreadable(segment, segmentVariables[index] ?? new Map()) || writerThroughOperandAdder(segment)) return { decision: "ask", reason: ASK_REASONS.unreadableTarget };
     if (resetOnProtectedBranch(segment, state)) return { decision: "ask", reason: ASK_REASONS.resetMain };
     if (runsUnreadableCode(segment, { cmd, dir: state.dir, writtenOnLine, piped: pipedParts.has(segmentTop[index]) })) return { decision: "ask", reason: ASK_REASONS.unreadableCode };
+    if (codeNamesGuardThroughLink(segment, { cmd, dir: state.dir })) return { decision: "ask", reason: ASK_REASONS.guardFiles };
+    if (printsCredential(segment)) return { decision: "ask", reason: ASK_REASONS.printsCredential };
     if (isDeployCommand(segment) || isHostingCli(segment)) return { decision: "ask", reason: ASK_REASONS.deploy };
     if (isMigrationRunner(segment)) {
       // the env in front of the command is read from the part as written (expandSegments also

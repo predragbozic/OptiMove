@@ -120,6 +120,13 @@ decided item 11 for the owner) — each also asks:
   `child_process`, `exec(`, `spawn`, `system(`, `.system(` / `.popen(` / `.exec[lv]…(` (any
   alias of os), `subprocess`, `popen` or names a `.env` file (`process.env` and a JavaScript
   `/re/.exec(` are not that); for perl and ruby also backticks and `qx`.
+- the independent re-check of 8812fc8: interpreter code that names the `.claude` folder as a whole
+  (`shutil.copytree('/tmp/c','.claude')`, `rmSync('.claude')`, `os.symlink('.claude','zz')`), and
+  a string in interpreter code that resolves through an existing link to the guard's files
+  (`open('sj','w')` with `sj -> .claude/settings.json`); printing a credential into the
+  transcript: `env` / `printenv` / `export -p` with nothing else, `printenv <NAME>`, and
+  `echo` / `printf` of a variable whose name ends in URL, KEY, SECRET, TOKEN, PASSWORD, PASS,
+  CREDENTIAL(S) or DSN (the reviewer's LOW, added because it is small);
 - a writer run by `xargs` / `parallel` (its target comes from stdin), and a `cp -r` source with a
   dot name in a brace list (`src/{.claude,x}`); a `$` that is only a sed / perl anchor
   (`sed -i "s/ *$//"`) is not an expansion and passes.
