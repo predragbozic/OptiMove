@@ -324,11 +324,41 @@ export function can(authz, permission, scope) {
 //     (`unavailable: true`), for a platform admin as well (fail closed: the
 //     list is navigation, the routes still decide);
 //   - a role the account holds through a non-basic assignment counts as can()
-//     says. Such an account reaches a club or team workspace only through a
-//     role of the old tables (loadAvailableWorkspaces), so a word listed here
-//     is never one that requireCoach (O8 (a), until R4) stands in front of.
+//     says. Since roles R4-2 such an account reaches its club or team through a
+//     club_view / team_view workspace (loadAvailableWorkspaces), which names the
+//     same scope; the words listed are only the checked ones (a module whose
+//     word is not checked yet stays closed for a view workspace).
 // Pure: no query. Returns { permissions: string[], unavailable: boolean }.
-const WORKSPACE_SCOPE_TYPES = Object.freeze({ platform: "global", club: "club", team: "team", private_coach: "private" });
+// Roles R4-2 (contract 5.1): a view workspace names the same scope as its base type, so a role holder's /me lists the
+// checked words it holds in that club or team (can() never reads the workspace type itself).
+const WORKSPACE_SCOPE_TYPES = Object.freeze({
+  platform: "global", club: "club", team: "team", private_coach: "private", club_view: "club", team_view: "team",
+});
+
+// The words a view workspace can actually use (roles R4-2): /me lists only these there, so navigation never offers what
+// the server always refuses it. In R4-2 the organization entry gate (organizationEntry.js) lets a view workspace
+// through on GET / only, which is org.view; a module's VIEW pull request (or R4-3/R4-4 for Settings) adds its words here
+// together with the route that lets them through.
+export const VIEW_WORKSPACE_USABLE_WORDS = Object.freeze({
+  club_view: Object.freeze(["org.view"]),
+  team_view: Object.freeze(["org.view"]),
+});
+
+// The closed modules (the club's ceiling, contract 7.1) of the ACTIVE workspace's club, for /me's navigation (5.1):
+// read only from an entry the account itself holds in that club (each loaded entry carries its own club's closed
+// modules), so a module list is never shown to an account without a role there - a platform admin without one gets
+// none (the ceiling never limits a platform admin). Module words only, never data. Pure: no query.
+export function closedModulesForWorkspace(authz, workspace) {
+  const entries = authz?.rolePermissions;
+  if (!Array.isArray(entries) || !workspace?.scopeId) return [];
+  const scopeType = WORKSPACE_SCOPE_TYPES[workspace.type];
+  if (scopeType !== "club" && scopeType !== "team") return [];
+  const id = String(workspace.scopeId);
+  const held = entries.find((e) => (scopeType === "club"
+    ? String(e.clubId) === id
+    : (e.scopeType === "team" && String(e.scopeId) === id) || (e.scopeType === "club" && e.teamIds.some((t) => String(t) === id))));
+  return held ? [...held.closedModules].sort() : [];
+}
 
 export function permissionsForWorkspace(authz, workspace) {
   if (authz?.rolePermissions && !Array.isArray(authz.rolePermissions)) {
@@ -345,5 +375,7 @@ export function permissionsForWorkspace(authz, workspace) {
     ? GLOBAL_SCOPE
     : { type: scopeType, id: scopeType === "private" ? authz.userId : workspace.scopeId };
   const candidates = platform ? Object.keys(PERMISSIONS) : HONOURED_PERMISSIONS;
-  return { permissions: candidates.filter((word) => can(authz, word, scope)), unavailable: false };
+  const usable = VIEW_WORKSPACE_USABLE_WORDS[workspace.type];
+  const words = candidates.filter((word) => can(authz, word, scope));
+  return { permissions: usable ? words.filter((word) => usable.includes(word)) : words, unavailable: false };
 }

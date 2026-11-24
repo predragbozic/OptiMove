@@ -108,3 +108,11 @@ backend/scripts/calendar-event-delete-v93-rehearsal.sh text eol=lf
 migrations_v2/202611241000_roles_v92_layers_foundation.sql text eol=lf
 docs/runbooks/roles-layers-v92*.sql text eol=lf
 backend/scripts/roles-layers-v92-rehearsal.sh text eol=lf
+# Roles v95: the rollback restores v92's four bodies verbatim and checks them by md5; the preflight and the post-check
+# compare bodies by md5; the rehearsal runs them as written. New files only, same reason as above.
+migrations_v2/202611271000_roles_v95_closed_module_dominance.sql text eol=lf
+docs/runbooks/roles-closed-module-dominance-v95*.sql text eol=lf
+docs/runbooks/roles-closed-module-dominance-v95.md text eol=lf
+backend/scripts/roles-closed-module-dominance-v95-rehearsal.sh text eol=lf
+backend/scripts/roles-closed-module-dominance-v95-rehearsal.ps1 text eol=lf
+backend/scripts/roles-closed-module-dominance-v95-rehearsal.mjs text eol=lf

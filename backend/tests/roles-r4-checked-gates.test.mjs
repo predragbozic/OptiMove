@@ -104,14 +104,15 @@ const REVIEWED = Object.freeze({
   "inviteContext.js": 6,
   "joinLinkContext.js": 5,
   "mediaStorage.js": 2,
+  "organizationEntry.js": 1, // R4-2: lets a non-coach through only with a view workspace (contract 5.1)
   "permissionRolesService.js": 5,
-  "permissions.js": 4,
+  "permissions.js": 8, // R4-2: closedModulesForWorkspace maps a workspace to its scope, /me narrows a view workspace's words (+4, never an offer)
   "positionService.js": 8,
   "routes/auth.js": 1,
   "routes/builder.js": 4,
   "routes/calendar.js": 1,
   "routes/gpexeImport.js": 3,
-  "routes/organization.js": 19,
+  "routes/organization.js": 22, // R4-2: the view branch of GET /, its fail-closed filter and the members rule (+3)
   "routes/tests.js": 1,
   "routes/trainingActivity.js": 3,
   "routes/trainingLoad.js": 13,
@@ -131,7 +132,7 @@ const REVIEWED = Object.freeze({
   "trainingLoadDashboardWidgets.js": 1,
   "trainingLoadMetricsAccess.js": 15,
   "trainingLoadOccurrenceService.js": 4,
-  "workspace.js": 1,
+  "workspace.js": 4, // R4-2: a stored club / team preference maps to club_view / team_view without the old row; L1 keeps such a preference (+3)
 });
 
 test("B0. the branch pattern finds a branch whatever the variable is called", () => {
@@ -145,9 +146,13 @@ test("B0. the branch pattern finds a branch whatever the variable is called", ()
     "if (!MIME_TYPES.includes(x)) fail()", "if (!NODE_TYPES.has(nodeType)) return"]) assert.ok(!WORKSPACE_BRANCH.test(line), line);
 });
 
-test("B3. the R4-2 workspace types (club_view, team_view) are named nowhere in backend/src yet (a tripwire for their first helper)", () => {
-  const named = SOURCES.filter((s) => /["'](?:club_view|team_view)["']/.test(s.text)).map((s) => s.rel);
-  assert.deepEqual(named, []);
+// R4-2 (contract 5.1): the view types are named by the way in (workspace.js) and the organization read path only. Each
+// module's VIEW pull request that opens its module to a view workspace adds its file here, reviewed against section 6
+// (can() next to the workspace match, never instead of it). permissions.js maps them to a scope by object keys.
+const VIEW_TYPE_FILES = ["routes/organization.js", "workspace.js"];
+test("B3. the R4-2 workspace types (club_view, team_view) are named only where R4-2 opened them (a tripwire for the next helper)", () => {
+  const named = SOURCES.filter((s) => /["'](?:club_view|team_view)["']/.test(s.text)).map((s) => s.rel).sort();
+  assert.deepEqual(named, VIEW_TYPE_FILES);
 });
 
 test("B1. every workspace-type branch in backend/src is on the reviewed list (the R4-1 standing rule)", () => {

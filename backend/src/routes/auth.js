@@ -12,7 +12,7 @@ import {
 } from "../auth.js";
 import { accessScope, publicRole } from "../access.js";
 import { resolveActiveWorkspace, saveWorkspacePreference, validateWorkspaceSelection } from "../workspace.js";
-import { permissionsForWorkspace } from "../permissions.js";
+import { closedModulesForWorkspace, permissionsForWorkspace } from "../permissions.js";
 import { closeOtherOpenInvitesForAthlete, loadUsableInvite, lockAthleteInviteActions } from "../inviteContext.js";
 import { closeUnusableJoinLinkApplications, loadJoinLinkContextName, loadUsableJoinLink, lockJoinLinkActions } from "../joinLinkContext.js";
 import { resolveAppOrigin } from "../appOrigin.js";
@@ -103,6 +103,10 @@ router.get("/me", async (req, res, next) => {
         // not be read for this request (fail closed).
         permissions: workspacePermissions.permissions,
         permissionsUnavailable: workspacePermissions.unavailable,
+        // Roles R4-2 (contract 5.1): the modules closed by the active
+        // workspace's club licence, only when the account holds a role in
+        // that club; navigation only.
+        closedModules: closedModulesForWorkspace(authz, activeWorkspace),
         // The language of exercise content (names, instructions), not of the
         // interface.
         contentLanguage: languageResult.rows[0]?.content_language === "en" ? "en" : "sr",
