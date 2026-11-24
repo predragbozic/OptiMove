@@ -31,3 +31,15 @@ test('a table-only widget has one values heading and no orphan chart sheet',()=>
  const source=fixture();source.querySelectorAll('article')[0].remove();const target=new JSDOM().window.document;buildDashboardReport(source,target);
  assert.equal(target.querySelector('.report-widget'),null);assert.equal(target.querySelectorAll('h2').length,1);assert.equal(target.querySelector('h2').textContent,'First — values');
 });
+
+for(const path of ['printSvg','outerHTML'])test('PDF scrubs active SVG before insertion via '+path,()=>{
+ const source=fixture(),chart=source.querySelector('optimove-dashboard-chart'),svg='<svg xmlns="http://www.w3.org/2000/svg" width="600" height="300" onload="window.bad=true"><script>window.bad=true</script><foreignObject><div xmlns="http://www.w3.org/1999/xhtml">unsafe</div></foreignObject><image href="https://svg-test.invalid/leak"/><use href="javascript:bad()"/><a href="https://svg-test.invalid/leak"><text>unsafe link</text></a><defs><clipPath id="zr0-c0"><rect width="2" height="2"/></clipPath></defs><path d="M0 0" clip-path="url(#zr0-c0)" onmouseover="bad()" fill="url(https://svg-test.invalid/leak)"/><text style="font-size:12px;position:fixed;fill:url(https://svg-test.invalid/leak)">Safe label</text></svg>';
+ if(path==='printSvg')chart.printSvg=()=>svg;else chart.innerHTML=svg;
+ const target=new JSDOM().window.document;buildDashboardReport(source,target);
+ assert.equal(target.querySelector('script,foreignObject,image,use,a'),null);assert.equal(target.querySelector('[onload],[onmouseover],[href]'),null);assert.doesNotMatch(target.body.innerHTML,/svg-test|javascript:|position:|window.bad/);assert.ok(target.querySelector('#zr0-c0'));assert.equal(target.querySelector('path').getAttribute('clip-path'),'url(#zr0-c0)');assert.equal(target.querySelector('text').style.fontSize,'12px');
+});
+test('PDF rejects malformed or entity-bearing SVG without inserting it',()=>{
+ for(const svg of ['<svg><broken>','<!DOCTYPE svg [<!ENTITY x SYSTEM "https://svg-test.invalid">]><svg xmlns="http://www.w3.org/2000/svg"/>']){
+  const source=fixture();source.querySelector('optimove-dashboard-chart').printSvg=()=>svg;const target=new JSDOM().window.document;assert.throws(()=>buildDashboardReport(source,target),/Try PDF again/);assert.equal(target.querySelector('svg'),null);
+ }
+});

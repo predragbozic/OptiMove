@@ -64,12 +64,14 @@ all chart/table headings and contents are present. Controls and collapsed data a
 excluded. A separate 250-row print probe spans 8 pages: every row is present and
 every page repeats Series / Bucket headers (checked with pypdf).
 
-## Mutations
+## Original mutation evidence (SQL attribution superseded)
 
 DATABASE_URL=loopback-maintenance-url node backend/scripts/dashboard-gallery-mutations.mjs
 (The same environment variable uses normal PowerShell syntax on Windows.)
 
-13 mutations killed; controls pass; none survived:
+The original packet reported 13 mutations. SQL attribution is superseded by
+[the conditional-review delta](dashboard-gallery-p2-review-delta.md), which runs
+named functional tests against post-apply installed-body replacements:
 
 - duplicate candidate chosen as a winner;
 - conflict flag ignored;

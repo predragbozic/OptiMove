@@ -1,3 +1,4 @@
+import {prepareReportSvg} from './training-load-dashboard-svg.js';
 const PRINT_CSS=`@page{size:A4;margin:12mm}*{box-sizing:border-box}body{margin:0;color:#14233b;background:white;font:11pt Arial,sans-serif}h1{font-size:20pt}h2{font-size:14pt}p{margin:4mm 0}.report-widget{break-inside:avoid;margin:0 0 7mm}.report-widget figure{margin:3mm 0}.report-legend{list-style:none;display:flex;flex-wrap:wrap;gap:2mm 4mm;padding:0;margin:2mm 0;font-size:9pt}.report-legend li{display:flex;align-items:center;gap:2mm;break-inside:avoid}.report-legend span{display:inline-block;width:5mm;height:2mm}h2{break-after:avoid}.report-widget svg{display:block;width:100%;height:auto;max-height:145mm}.report-values{break-before:page;break-after:page;break-inside:avoid;margin:0 0 7mm}.report-values.is-long{break-inside:auto}table{border-collapse:collapse;width:100%;font-size:9pt;table-layout:auto}th,td{border-bottom:1px solid #cbd5e1;padding:2mm;text-align:left;overflow-wrap:anywhere}thead{display:table-header-group}tr{break-inside:avoid}caption{text-align:left;font-weight:bold;padding:2mm 0}.muted{color:#475569}.tl-analysis-kpi-value{font-size:26pt}button,input,select,textarea,summary{display:none!important}@media screen{body{max-width:186mm;margin:12mm auto}}`;
 const numbers=(node,key)=>Number(node.style.getPropertyValue(key))||0;
 export function orderedReportWidgets(root){
@@ -25,7 +26,7 @@ export function buildDashboardReport(source,target,{title='Dashboard',subtitle='
    const original=originalCharts[index];let svg=original?.printSvg?.();
    if(!svg&&original?.querySelector('svg'))svg=original.querySelector('svg').outerHTML;
    if(!svg)throw Error('Charts are still loading. Try PDF again.');
-   const holder=target.createElement('div');holder.innerHTML=svg;const drawing=holder.querySelector('svg');if(!drawing)throw Error('A chart could not be prepared. Try PDF again.');
+   const drawing=prepareReportSvg(svg,target);
    if(!drawing.hasAttribute('viewBox'))drawing.setAttribute('viewBox',`0 0 ${drawing.getAttribute('width')||600} ${drawing.getAttribute('height')||300}`);
    drawing.removeAttribute('width');drawing.removeAttribute('height');
    const names=original.printLegend?.()??[],legend=target.createElement('ul');legend.className='report-legend';

@@ -1,3 +1,4 @@
+import pg from 'pg';
 import {PAGE_CATALOG_SQL as catalogSql} from './support/dashboard-pages-catalog.mjs';
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -180,16 +181,14 @@ for(const scenario of [
  const apply=async file=>{const bytes=fs.readFileSync(new URL('../../migrations_v2/'+file,import.meta.url));await q.query('begin');try{await q.query(bytes.toString());await q.query("insert into public.schema_migrations(migration_name,checksum,execution_time_ms,runner_version) values($1,$2,0,'p1-registry')",['migrations_v2/'+file,crypto.createHash('sha256').update(bytes).digest('hex')]);await q.query('commit')}catch(e){await q.query('rollback');throw e}};
  const a='202611231000_training_load_v90_dashboard_pages_home.sql',b='202611231100_training_load_v91_dashboard_page_writers.sql';
  const check=async file=>{
-  // A fresh disposable database can still have a finishing bootstrap connection.
-  // Ignore PostgreSQL background workers, then wait boundedly for actual client
-  // transactions to settle. Production preflight SQL is left unchanged.
-  const text=fs.readFileSync(new URL('../../docs/runbooks/'+file,import.meta.url),'utf8').replace('and pid<>pg_backend_pid() and xact_start is not null',"and backend_type='client backend' and pid<>pg_backend_pid() and xact_start is not null");
-  const deadline=Date.now()+5000;
-  while(true){const results=await q.query(text);let quiet=true;
-   for(const result of Array.isArray(results)?results:[results])for(const row of result.rows??[])for(const [key,value] of Object.entries(row))if(typeof value==='boolean'){
-    if(key==='quiet_moment')quiet=value;else assert.equal(value,true,scenario.name+': '+file+': '+key);
-   }
-   if(quiet)return;assert.ok(Date.now()<deadline,scenario.name+': '+file+': quiet_moment');await new Promise(r=>setTimeout(r,25));
+  // Execute the owner's SQL byte-for-byte. In a loaded test run quiet_moment may
+  // correctly refuse; assert it reflects the activity rows instead of rewriting
+  // its predicate or pretending the database was quiet. All other gates stay true.
+  const text=fs.readFileSync(new URL('../../docs/runbooks/'+file,import.meta.url),'utf8');
+  const response=await q.query(text),results=Array.isArray(response)?response:[response];
+  const active=results.flatMap(result=>result.rows??[]).filter(row=>Object.hasOwn(row,'pid')&&Object.hasOwn(row,'xact_start'));
+  for(const result of results)for(const row of result.rows??[])for(const [key,value]of Object.entries(row))if(typeof value==='boolean'){
+   assert.equal(value,key==='quiet_moment'?active.length===0:true,scenario.name+': '+file+': '+key);
   }
  };
  await check('dashboard-pages-v90-preflight.sql');await apply(a);await check('dashboard-pages-v90-postcheck.sql');await check('dashboard-pages-v91-preflight.sql');await apply(b);await check('dashboard-pages-v91-postcheck.sql');
@@ -219,4 +218,14 @@ test('v90 rollback independently refuses a non-Home Page even with legacy-lookin
   await q.query('rollback');
   assert.equal((await q.query('select count(*)::int n from training_load.dashboard_pages where not is_home')).rows[0].n,0);
  }finally{await q.query('rollback');await other.drop()}
+});
+
+test('unaltered owner preflight reports an actual other transaction as not quiet',async()=>{
+ const target=await createPagesDatabase({through:'202611201500',label:'pages_raw_preflight'}),other=new pg.Client({connectionString:target.url});
+ try{
+  await other.connect();await other.query('begin');const pid=(await other.query('select pg_backend_pid() pid')).rows[0].pid;
+  const text=fs.readFileSync(new URL('../../docs/runbooks/dashboard-pages-v90-preflight.sql',import.meta.url),'utf8');
+  const results=await target.client.query(text),rows=results.flatMap(result=>result.rows??[]);
+  assert.ok(rows.some(row=>row.pid===pid&&row.xact_start));assert.equal(rows.find(row=>Object.hasOwn(row,'quiet_moment')).quiet_moment,false);
+ }finally{await other.query('rollback').catch(()=>{});await other.end();await target.drop()}
 });

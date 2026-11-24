@@ -75,3 +75,14 @@ test('an existing gallery can become a table without a hidden gallery setting bl
   await page.locator('[data-analysis-widget-id="'+gallery.widgets[2]+'"] table').waitFor();assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
+
+test('PDF never executes or fetches active content from a live SVG snapshot',async()=>{
+ const {context,page}=await openAs(browser,world,'platform_admin',1280),unsafeRequests=[];
+ context.on('request',request=>{if(request.url().includes('svg-test.invalid'))unsafeRequests.push(request.url())});
+ try{
+  await context.addInitScript(()=>{window.print=()=>{}});await openDashboard(page,gallery.dashboard.id);
+  await page.locator('optimove-dashboard-chart').first().evaluate(host=>{host.printSvg=()=>'<svg xmlns="http://www.w3.org/2000/svg" width="600" height="300" onload="window.__svgExecuted=true"><script>window.__svgExecuted=true</script><foreignObject><body xmlns="http://www.w3.org/1999/xhtml"><img src="https://svg-test.invalid/leak" onerror="window.__svgExecuted=true"/></body></foreignObject><image href="https://svg-test.invalid/leak"/><rect width="20" height="20" fill="green"/></svg>'});
+  const next=page.waitForEvent('popup');await action(page,'analysis-print').click();const report=await next;await report.locator('.report-widget svg').first().waitFor();
+  assert.equal(await report.locator('script,foreignObject,image,[onload],[onerror]').count(),0);assert.equal(await report.evaluate(()=>window.__svgExecuted),undefined);assert.deepEqual(unsafeRequests,[]);await report.close();
+ }finally{await context.close()}
+});
