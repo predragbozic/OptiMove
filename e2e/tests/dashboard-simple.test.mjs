@@ -207,8 +207,19 @@ for(const width of [390,1280])test(`(${width}px) Dashboards applies and clears t
     const w=await context.request.post(`${world.baseUrl}/api/training-load/dashboards/${dashboard.id}/widgets`,{data:{expectedDashboardRevision:dashboard.revision,widgetType:'table',title:'Shell sessions',groupBy:'athlete',widgetOrder:0,x:0,y:0,width:6,height:4,mobileOrder:0}});assert.equal(w.status(),201,await w.text());const {widgetId}=await w.json();
     const series=await context.request.post(`${world.baseUrl}/api/training-load/dashboards/${dashboard.id}/widgets/${widgetId}/series`,{data:{expectedWidgetRevision:1,seriesOrder:0,builtInSeriesKey:'session_count',dataScopeLevel:'day',analyticalAggregation:'sum'}});assert.equal(series.status(),201,await series.text());
     await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();await page.getByRole('tab',{name:'Dashboards'}).click();await action(page,'analysis-open-picker').click();await page.locator(`[data-dashboard-id="${dashboard.id}"]`).first().click();
-    await page.locator('[data-action="training-load-analysis-period-from"]').fill('2026-11-01');
-    await page.locator('[data-action="training-load-analysis-period-to"]').fill('2026-11-07');
+    const period=page.getByRole('button',{name:/^Period:/});
+    await period.click();
+    const panel=page.locator('#dashboard-period-panel');
+    await panel.waitFor({state:'visible'});
+    await panel.getByLabel('From',{exact:true}).fill('2026-11-01');
+    await panel.getByLabel('To',{exact:true}).fill('2026-11-07');
+    await panel.getByRole('button',{name:'Close period and activity',exact:true}).click();
+    assert.equal(await panel.isVisible(),false);
+    // Reopening must preserve both real dates after the query repaints.
+    await period.click();
+    assert.equal(await panel.getByLabel('From',{exact:true}).inputValue(),'2026-11-01');
+    assert.equal(await panel.getByLabel('To',{exact:true}).inputValue(),'2026-11-07');
+    await panel.getByRole('button',{name:'Close period and activity',exact:true}).click();
     await action(page,'filter-open').click();
     for(const [tab,kind,id] of [['clubs','club',world.ids.clubB],['teams','team',world.ids.teamA2],['athletes','athlete',world.ids.athleteIds[0]]]){
       await page.locator(`[data-action="training-load-filter-set-tab"][data-filter-tab="${tab}"]`).click();

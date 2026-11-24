@@ -5,8 +5,7 @@ export function renderDashboardPages(){
  const busy=a.saving||a.pageLoading||a.pageSaving||Boolean(a.pagePending),off=busy?'disabled':'';
  const page=a.page,form=a.pageForm;
  return `<section class="tl-dashboard-pages" aria-label="Dashboard pages">
- <nav aria-label="Pages">${(a.pages??[]).map(p=>`<button type="button" data-action="training-load-pages-select" data-page-id="${escapeAttr(p.id)}" aria-current="${p.id===a.selectedPageId?'page':'false'}" ${off}>${escapeHtml(p.name)}${p.is_home&&p.name!=='Home'?' · Home':''}</button>`).join('')}</nav>
- ${a.pageCanManage?`<div class="tl-page-actions"><button type="button" data-action="training-load-pages-create" ${off}>New page</button>${page?`<button type="button" data-action="training-load-pages-rename" ${off}>Rename</button><button type="button" data-action="training-load-pages-defaults" ${off}>Default period</button>${!page.is_home?`<button type="button" data-action="training-load-pages-up" ${busy||page.position<=1?'disabled':''}>Move left</button><button type="button" data-action="training-load-pages-down" ${busy||page.position>=(a.pages??[]).length-1?'disabled':''}>Move right</button><button type="button" data-action="training-load-pages-delete" ${off}>Delete page</button>`:''}`:''}</div>`:''}
+ <div data-dashboard-controls="pages"></div>
  ${busy?'<p role="status">◷ Updating page…</p>':''}
  ${a.pageError?`<p role="alert">${escapeHtml(a.pageError)}</p><button type="button" data-action="${a.pagePending?'training-load-pages-check':'training-load-pages-reload'}" ${a.pageSaving?'disabled':''}>${a.pagePending?'Check update':'Reload dashboard'}</button>`:''}
  ${form?`<div class="tl-page-form" role="group" aria-label="${escapeAttr(form.operation==='create'?'New page':form.operation==='delete'?'Delete page':form.operation==='defaults'?'Default period':form.operation==='copy'?'Copy widget':'Rename page')}">
