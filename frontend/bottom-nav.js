@@ -89,6 +89,9 @@ export function buildBottomNavModel(doc = globalThis.document, appState = state,
     if (!id || targets.has(id)) continue;
     targets.set(id, el);
     const section = { id, label: labelOf(el), icon: el.querySelector("svg.rail-icon")?.outerHTML || "", active: el.classList.contains("is-active") };
+    // A count the menu shows on its item (the athlete's pending tests): the bar shows it too, the drawer being gone.
+    const badge = el.querySelector("[data-tests-count], .notification-count, .sidebar-count");
+    if (badge && !isHidden(badge) && badge.textContent.trim()) section.badge = badge.textContent.trim();
     // The Athletes control opens the athlete list (in the menu drawer), it is not a section of its own.
     // Screen readers hear whether the list is open (aria-expanded on the bar's button).
     if (id === "athletes") {
@@ -145,12 +148,28 @@ let observer = null;
 let queued = false;
 let phoneQuery = null;
 const memorySlots = new Map();
+// How long a phone waits for the bar before the header's menu button comes back (bottom-nav-unavailable).
+export const FALLBACK_MS = 6000;
+let fallbackTimer = null;
+// Once the bar failed to draw it is not tried again on this page (a reload tries again): every attempt changes the
+// body's watched class and would start the next one, forever. The header's menu button stays.
+let broken = false;
+function giveUp(doc) {
+  broken = true;
+  teardown(doc);
+  markUnavailable(doc);
+}
+function markUnavailable(doc) {
+  const list = doc?.body?.classList;
+  if (list?.contains?.("bottom-nav-unavailable") === false) list.add("bottom-nav-unavailable");
+}
 
 function teardown(doc) {
   if (host && islands) islands.unmountIsland(host);
   host?.remove();
   host = null;
-  doc?.body?.classList?.remove?.("has-bottom-nav");
+  // Only when present: a remove writes the watched class attribute even for an absent class (a sync loop).
+  if (doc?.body?.classList?.contains?.("has-bottom-nav")) doc.body.classList.remove("has-bottom-nav");
 }
 
 // The menu's render asks for a sync after it (coalesced; never a nested React render inside the bar's own click).
@@ -162,7 +181,10 @@ function scheduleSync() {
   queueMicrotask(() => {
     queued = false;
     // The bar never breaks the screen it sits on: a failure is reported and the menu button keeps working.
-    try { syncBottomNav(); } catch (error) { reportHandlerError(error, "bottom_nav_sync"); }
+    try { syncBottomNav(); } catch (error) {
+      if (!broken) giveUp(globalThis.document);
+      reportHandlerError(error, "bottom_nav_sync");
+    }
   });
 }
 
@@ -172,7 +194,7 @@ export function syncBottomNav({ doc = globalThis.document, win = globalThis.wind
   if (!win || typeof doc?.querySelector !== "function" || typeof doc.body?.classList?.contains !== "function") return;
   const sidebar = doc.querySelector(".app-shell > .sidebar");
   const signedIn = Boolean(state.currentUser) && Boolean(sidebar) && !doc.body.classList.contains("login-mode");
-  if (!signedIn) { teardown(doc); return; }
+  if (!signedIn || broken) { teardown(doc); return; }
   if (!phoneQuery && typeof win.matchMedia === "function") {
     phoneQuery = win.matchMedia(PHONE_QUERY);
     phoneQuery.addEventListener?.("change", scheduleSync);
@@ -182,6 +204,9 @@ export function syncBottomNav({ doc = globalThis.document, win = globalThis.wind
     observer?.disconnect();
     observer = new win.MutationObserver(scheduleSync);
     observer.observe(sidebar, { subtree: true, attributes: true, attributeFilter: ["hidden", "class"] });
+    // A count's text (the athlete's pending tests) changes without an attribute: only those elements are watched for
+    // text, not the whole menu (the coach's athlete list is drawn again on every search key).
+    for (const count of sidebar.querySelectorAll("[data-tests-count]")) observer.observe(count, { childList: true, characterData: true, subtree: true });
     // Messages: its header button appears once the inbox is read, and the panel marks the body while open.
     const messages = doc.getElementById("messageToggle");
     if (messages) observer.observe(messages, { attributes: true, attributeFilter: ["hidden"] });
@@ -191,9 +216,13 @@ export function syncBottomNav({ doc = globalThis.document, win = globalThis.wind
   if (!islands) {
     // React is downloaded only for a phone; the bar stays mounted (hidden by CSS) if the screen later widens.
     if (!phoneQuery?.matches || loading) return;
+    // A phone is never left without navigation: if the bar is not on screen soon (a slow download), the header's
+    // menu button comes back until it is.
+    if (!fallbackTimer) fallbackTimer = win.setTimeout(() => { if (!host) markUnavailable(doc); }, FALLBACK_MS);
     loading = import("./react-build/islands.js").then((mod) => { islands = mod; loading = null; scheduleSync(); }, (error) => {
-      // Without the island the menu button still opens the full menu.
+      // Without the island the header's menu button comes back (styles.css) and opens the full menu.
       loading = null;
+      markUnavailable(doc);
       reportHandlerError(error, "bottom_nav_load");
     });
     return;
@@ -211,9 +240,9 @@ export function syncBottomNav({ doc = globalThis.document, win = globalThis.wind
   }
   if (!doc.body.classList.contains("has-bottom-nav")) doc.body.classList.add("has-bottom-nav");
   const userId = state.currentUser?.id;
-  islands.mountIsland(host, islands.BottomNav, {
+  const props = {
     items: model.items,
-    more: model.more.map(({ id, label, icon, active, children }) => ({ id, label, icon, active, children })),
+    more: model.more.map(({ id, label, icon, active, badge, children }) => ({ id, label, icon, active, badge, children })),
     slots: model.slots,
     defaults: model.defaults,
     options: model.options,
@@ -225,5 +254,16 @@ export function syncBottomNav({ doc = globalThis.document, win = globalThis.wind
       memorySlots.set(memoryKey, isDefault ? null : slots);
       scheduleSync();
     },
-  }, { name: "bottom_nav" });
+  };
+  try {
+    // A render error removes the bar's tree (React): the bar goes and the header's menu button comes back.
+    islands.mountIsland(host, islands.BottomNav, props, { name: "bottom_nav", onError: () => giveUp(doc) });
+  } catch (error) {
+    // The bar could not be drawn: it goes, and the header's menu button comes back.
+    giveUp(doc);
+    throw error;
+  }
+  // On screen: the fallback menu button (a slow first load) goes again. Only when it is there: classList.remove writes
+  // the class attribute even for an absent class, and the body's class is watched (that would sync forever).
+  if (doc.body.classList.contains("bottom-nav-unavailable")) doc.body.classList.remove("bottom-nav-unavailable");
 }

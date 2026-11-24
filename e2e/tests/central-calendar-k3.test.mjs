@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 const SHOTS = process.env.E2E_SHOTS || "";
 const cookieOf = (world, role) => `optimove_session=${world.accounts.find((a) => a.role === role).sessionToken}`;
@@ -60,9 +60,7 @@ for (const width of [1280, 390, 375, 360]) {
       const event = await makeEvent(world);
       const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
       try {
-        const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-        if (await toggle.isVisible().catch(() => false)) await toggle.click();
-        await page.locator("#calendarToggle").click();
+        await navTo(page, "#calendarToggle");
         const card = `[data-action="central-calendar-open-item"][data-key^="event:${event.id}"]`;
         await page.waitForSelector(card, { timeout: 20_000 });
         await page.locator(card).first().click();

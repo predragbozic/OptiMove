@@ -5,7 +5,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch } from "../lib/browser.mjs";
+import { launch, navTo } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -34,9 +34,12 @@ for (const width of [360, 390, 600, 760]) {
   test(`(${width} px) the athlete's header controls are 44 px and no header panel makes the page wider`, async () => {
     const { context, page, pageErrors } = await openAthlete(width);
     try {
-      const controls = await page.evaluate(() => [".athlete-topbar-brand", "#mobileNavToggle", "#notificationToggle", "#messageToggle", "#signOutButton"]
+      const controls = await page.evaluate(() => [".athlete-topbar-brand", "#notificationToggle", "#messageToggle", "#signOutButton"]
         .map((selector) => { const box = document.querySelector(selector)?.getBoundingClientRect(); return [selector, box && Math.round(box.width), box && Math.round(box.height)]; }));
       for (const [selector, w, h] of controls) assert.ok(w >= 44 && h >= 44, `${selector}: ${w}x${h}`);
+      // No menu button in the header on a phone: the bottom bar is the main navigation.
+      assert.equal(await page.locator("#mobileNavToggle").isVisible(), false, "no header menu button");
+      await page.waitForSelector('.om-bottom-nav [data-nav-id="home"]', { timeout: 20_000 });
 
       for (const [toggle, panelSelector] of [["#notificationToggle", "#notificationPanel"], ["#messageToggle", "#messagePanel"]]) {
         await page.goto(`${world.baseUrl}/athlete`);
@@ -68,7 +71,7 @@ for (const width of [360, 390, 600, 760]) {
 test("(390 px) the sticky row under the athlete's bar (Account) starts where the 44 px bar ends", async () => {
   const { context, page, pageErrors } = await openAthlete(390);
   try {
-    await page.getByText("Account", { exact: true }).filter({ visible: true }).first().click();
+    await navTo(page, '.sidebar [data-athlete-tab="athlete-settings"]');
     await page.waitForSelector(".athlete-settings-identity", { timeout: 20_000 });
     const result = await page.evaluate(() => {
       window.scrollTo(0, document.documentElement.scrollHeight);
@@ -81,37 +84,34 @@ test("(390 px) the sticky row under the athlete's bar (Account) starts where the
   } finally { await context.close(); }
 });
 
-test("(390 px) a menu tap made before app.js is ready opens the menu once it is; two taps leave it closed", async () => {
-  for (const [taps, expected] of [[1, "true"], [2, "false"]]) {
-    const { context, page, pageErrors, release } = await openAthlete(390, { holdApp: true });
-    try {
-      // The page's own HTML has drawn the button; app.js has not loaded, so nothing is bound yet.
-      await page.locator("#mobileNavToggle").waitFor({ state: "visible", timeout: 20_000 });
-      assert.equal(await page.evaluate(() => Boolean(window.__omMenuBound)), false, "app.js is not bound yet");
-      for (let i = 0; i < taps; i += 1) await page.locator("#mobileNavToggle").click();
-      assert.equal(await page.getAttribute("#mobileNavToggle", "aria-expanded"), "false", "nothing happens before app.js");
-      release();
-      await page.waitForFunction(() => window.__omMenuBound === true, null, { timeout: 20_000 });
-      await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
-      assert.equal(await page.getAttribute("#mobileNavToggle", "aria-expanded"), expected, `${taps} early tap(s)`);
-      assert.equal(await page.evaluate(() => document.body.classList.contains("mobile-nav-open")), expected === "true");
-      assert.deepEqual(pageErrors, []);
-    } finally {
-      release();
-      await context.close();
-    }
+// The header's menu button is gone on a phone (owner, 2026-11-24): hidden from the page's first paint, so there is no
+// button to tap before app.js is ready (the early-tap replay of index.html / athlete.html stays for the fallback when
+// the bar cannot load). The bar arrives with the signed-in app and never on the sign-in screen.
+test("(390 px) no header menu button from the first paint; the bottom bar comes with the signed-in app", async () => {
+  const { context, page, pageErrors, release } = await openAthlete(390, { holdApp: true });
+  try {
+    await page.locator(".athlete-topbar").waitFor({ timeout: 20_000 });
+    assert.equal(await page.evaluate(() => Boolean(window.__omMenuBound)), false, "app.js is not bound yet");
+    assert.equal(await page.locator("#mobileNavToggle").isVisible(), false, "no menu button before app.js");
+    release();
+    await page.getByText("Today's training", { exact: false }).first().waitFor({ timeout: 20_000 });
+    await page.waitForSelector('.om-bottom-nav [data-nav-id="home"]', { timeout: 20_000 });
+    assert.equal(await page.locator("#mobileNavToggle").isVisible(), false, "nor after it");
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    release();
+    await context.close();
   }
 });
 
-test("(390 px) an early menu tap on a page that becomes the sign-in screen is not carried past it", async () => {
+test("(390 px) the sign-in screen has neither the header menu button nor the bottom bar", async () => {
   const { context, page, pageErrors, release } = await openAthlete(390, { holdApp: true, signedIn: false });
   try {
-    await page.locator("#mobileNavToggle").waitFor({ state: "visible", timeout: 20_000 });
-    await page.locator("#mobileNavToggle").click();
     release();
     await page.waitForSelector("#loginForm", { timeout: 20_000 });
-    assert.equal(await page.evaluate(() => document.body.classList.contains("mobile-nav-open")), false, "no menu state behind the sign-in screen");
-    assert.equal(await page.getAttribute("#mobileNavToggle", "aria-expanded"), "false");
+    await page.waitForTimeout(500);
+    assert.equal(await page.locator("#mobileNavToggle").isVisible(), false);
+    assert.equal(await page.locator(".om-bottom-nav").count(), 0);
     assert.deepEqual(pageErrors, []);
   } finally {
     release();

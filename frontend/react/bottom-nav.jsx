@@ -9,6 +9,17 @@ function Icon({ markup }) {
   return markup ? <span className="om-bottom-nav-icon" aria-hidden="true" dangerouslySetInnerHTML={{ __html: markup }} /> : <span className="om-bottom-nav-icon" aria-hidden="true" />;
 }
 
+// A count from the menu's own item (e.g. pending tests). Read as ", 2 waiting" after the label.
+function Badge({ value }) {
+  if (!value) return null;
+  return (
+    <span className="om-bottom-nav-badge">
+      <span aria-hidden="true">{value}</span>
+      <span className="visually-hidden">{`, ${value} waiting`}</span>
+    </span>
+  );
+}
+
 function MoreIcon() {
   return (
     <span className="om-bottom-nav-icon" aria-hidden="true">
@@ -109,6 +120,7 @@ function MoreSheet({ groups, titleId, onClose, onSelect, edit }) {
               <button className={`om-bottom-sheet-item${group.active ? " is-active" : ""}`} type="button" aria-current={group.active ? "page" : undefined} onClick={() => onSelect(group.id)}>
                 <Icon markup={group.icon} />
                 <span>{group.label}</span>
+                <Badge value={group.badge} />
               </button>
               {group.children?.length ? (
                 <ul className="om-bottom-sheet-sublist" aria-label={`${group.label} sections`}>
@@ -168,6 +180,7 @@ export function BottomNav({ items = [], more = [], onSelect = () => {}, slots = 
             >
               <Icon markup={item.icon} />
               <span className="om-bottom-nav-label">{item.label}</span>
+              <Badge value={item.badge} />
             </button>
           </li>
         ))}

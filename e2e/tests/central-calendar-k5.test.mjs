@@ -11,7 +11,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, WIDTHS } from "../lib/browser.mjs";
+import { launch, navTo, openAs, WIDTHS } from "../lib/browser.mjs";
 
 const SHOTS = process.env.E2E_SHOTS || "";
 const WELLNESS = "7a386bd1-d25e-4651-9012-e76d9dc32559";
@@ -83,13 +83,8 @@ before(async () => {
 });
 after(async () => { await browser?.close(); await world?.stop(); });
 
-async function openNav(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-}
 async function openCalendar(page) {
-  await openNav(page);
-  await page.locator("#calendarToggle").click();
+  await navTo(page, "#calendarToggle");
   await page.waitForSelector(`.central-calendar [data-key^="event:${ids.event}"]`, { timeout: 20_000 });
   // A phone: the day strip points at the fixtures' day.
   const select = page.locator(`[data-action="central-calendar-select-day"][data-date="${DAY}"]`);
@@ -220,8 +215,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
 test("the athlete's K4a Calendar shows no mark, chip or Show only", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "athlete", WIDTHS.phone);
   try {
-    await openNav(page);
-    await page.locator('.sidebar [data-athlete-tab="athlete-calendar"]').first().click();
+    await navTo(page, '.sidebar [data-athlete-tab="athlete-calendar"]');
     await page.locator(".athlete-calendar .ac-card").first().waitFor({ timeout: 20_000 });
     assert.equal(await page.locator(".cc-card-marks, .cc-daychip, .cc-showonly").count(), 0);
     assert.deepEqual(pageErrors, []);

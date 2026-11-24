@@ -4,7 +4,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -88,9 +88,7 @@ test("forgot password answers an existing and an unknown email with the same sen
 for (const width of [390, 1280]) test(`(team_coach, ${width} px) the coach directory: no marketplace line without a marketplace entry, a 44 px button`, async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width);
   try {
-    const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-    if (await toggle.isVisible().catch(() => false)) await toggle.click();
-    await page.locator('[data-library-tab="coaches"]').first().click();
+    await navTo(page, '[data-library-tab="coaches"]');
     await page.locator(".coach-directory").waitFor();
     const d = await page.evaluate(() => {
       const s = document.querySelector(".coach-directory");

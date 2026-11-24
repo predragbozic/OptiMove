@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs } from "../lib/browser.mjs";
+import { launch, navTo, openAs } from "../lib/browser.mjs";
 
 const SHOTS = process.env.E2E_SHOTS || "";
 const cookieOf = (world, role) => `optimove_session=${world.accounts.find((a) => a.role === role).sessionToken}`;
@@ -111,9 +111,7 @@ async function shot(page, name) {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true }).catch(() => {});
 }
 async function openCalendar(page) {
-  const toggle = page.locator('[data-action="mobile-nav-toggle"]');
-  if (await toggle.isVisible().catch(() => false)) await toggle.click();
-  await page.locator("#calendarToggle").click();
+  await navTo(page, "#calendarToggle");
 }
 const cardOf = (eventId) => `[data-action="central-calendar-open-item"][data-key^="event:${eventId}"]`;
 

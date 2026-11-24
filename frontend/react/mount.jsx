@@ -8,20 +8,29 @@ import { reportHandlerError } from "../app-errors-capture.js";
 
 const roots = new WeakMap();
 
-export function mountIsland(container, Component, props = {}, { name = "island" } = {}) {
+// options.onError: called after an uncaught error has removed the island's tree, so the plain side can put a fallback
+// back (the bottom bar gives the header's menu button back).
+export function mountIsland(container, Component, props = {}, { name = "island", onError } = {}) {
   if (!container || typeof container !== "object" || container.nodeType !== 1) throw new TypeError("mountIsland needs a container element");
   let entry = roots.get(container);
   if (!entry) {
     // An error inside an island is reported like a failed click handler (the app's closed error shape), never shown
     // as text; React then removes that island's tree, and the plain app around it keeps working.
-    const root = createRoot(container, { onUncaughtError: (error) => reportHandlerError(error, `react_${name}`) });
+    const root = createRoot(container, {
+      onUncaughtError: (error) => {
+        reportHandlerError(error, `react_${name}`);
+        // React is still finishing its own work here: the fallback runs right after it.
+        if (typeof entry?.onError === "function") queueMicrotask(() => entry.onError(error));
+      },
+    });
     entry = { root };
     roots.set(container, entry);
   }
+  entry.onError = onError;
   // Synchronously: the plain code that called this reads the island's DOM right after (focus, measuring, tests).
   flushSync(() => entry.root.render(<Component {...props} />));
   return {
-    update: (next) => mountIsland(container, Component, next, { name }),
+    update: (next) => mountIsland(container, Component, next, { name, onError }),
     unmount: () => unmountIsland(container),
   };
 }
