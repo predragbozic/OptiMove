@@ -297,8 +297,23 @@ const LAST_BEFORE_CONFIRMATION_GATE = "202611131310_training_load_v69_scale_reco
 export const GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE = GPEXE_TEST_MIGRATIONS.filter(
   (m) => m !== "202611131000_training_load_v66_club_activation_confirmation_gate.sql" && m <= LAST_BEFORE_CONFIRMATION_GATE);
 
-export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migrations = GPEXE_TEST_MIGRATIONS }) {
+// Roles V-1: the server's role read (authz.js ROLE_PERMISSIONS_SQL) needs the objects of v84 and v92. Since V-1 a club
+// admin's and a team coach's Data configuration and Tags & Presets paths ask can(), which fails closed (503
+// permissions_unavailable) on a database without them. A suite that pins an earlier migration as its last one passes
+// `roleRead: true`: the runner applies v84 and v92 after the suite's own list (their seed guards need the runner's own
+// record in the same transaction), and their two records are then deleted, so every assertion about the database's
+// migration record (the last migration, "later migrations are applied", the list of names) sees the suite's own list
+// only. A state production never has (role objects without their record); for the server's role read only.
+const FORGOTTEN_TABLE = "public.optimove_disposable_forgotten_migrations";
+export const ROLE_READ_MIGRATIONS = Object.freeze([
+  "202611201300_roles_v84_permission_roles.sql",
+  "202611241000_roles_v92_layers_foundation.sql",
+]);
+
+export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migrations = GPEXE_TEST_MIGRATIONS, roleRead = false }) {
   if (!baseDatabaseUrl) throw new Error("baseDatabaseUrl (DATABASE_URL) is required to reach the local Postgres server.");
+  const roleExtra = roleRead ? ROLE_READ_MIGRATIONS.filter((m) => !migrations.includes(m)) : [];
+  if (roleExtra.length) migrations = [...migrations, ...roleExtra];
   // The database itself - the loopback-only server rule, the admin
   // connection on "postgres", CREATE DATABASE, and a drop that first ends
   // every other session - is the shared test support's (T1,
@@ -322,6 +337,14 @@ export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migratio
       await fsp.copyFile(path.resolve(__dirname, "../../migrations_v2", file), path.join(migrationsDir, file));
     }
     await runner.runMigrations({ databaseUrl: url, migrationsRoot: migrationsDir });
+    if (roleExtra.length) {
+      // Kept aside (never read by the application), so applyGpexeTestMigrations puts them back before it brings the
+      // database up to date: the runner then sees v84 and v92 as applied, with their real checksums.
+      const names = roleExtra.map((m) => `migrations_v2/${m}`);
+      await client.query(`create table ${FORGOTTEN_TABLE} as select * from public.schema_migrations where migration_name = any($1::text[])`, [names]);
+      const forgotten = await client.query(`delete from public.schema_migrations where migration_name = any($1::text[])`, [names]);
+      assert.equal(forgotten.rowCount, roleExtra.length, "the role read's records were written by the runner and are forgotten");
+    }
     await client.query(`create table ${DISPOSABLE_MARKER_TABLE} (purpose text not null, created_at timestamptz not null default now())`);
     await client.query(`insert into ${DISPOSABLE_MARKER_TABLE} (purpose) values ('gpexe-pilot')`);
   } catch (error) {
@@ -348,6 +371,18 @@ export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migratio
 export async function applyGpexeTestMigrations(databaseUrl, migrations = GPEXE_TEST_MIGRATIONS) {
   const name = new URL(databaseUrl).pathname.slice(1);
   assertDisposableName(name, databaseUrl);
+  // A database built with `roleRead` gets the role read's records back first (createGpexeDisposableDb), so the runner
+  // treats v84 and v92 as the applied migrations they are.
+  const client = new pg.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    if ((await client.query(`select to_regclass($1) as t`, [FORGOTTEN_TABLE])).rows[0].t) {
+      await client.query(`insert into public.schema_migrations select * from ${FORGOTTEN_TABLE}`);
+      await client.query(`drop table ${FORGOTTEN_TABLE}`);
+    }
+  } finally {
+    await client.end();
+  }
   const { tempRoot, migrationsDir } = await migrationsFolder();
   try {
     for (const file of migrations) {

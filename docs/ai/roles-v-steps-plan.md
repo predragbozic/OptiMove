@@ -451,13 +451,16 @@ Branch `feature/roles-v1-config-presets` from `1e83d9c6`. No migration.
   - The Settings tab and the Home button of an opened section carry their labels (`VIEW_SETTINGS_LABELS`). V-0
     labelled only Overview, Clubs and Teams.
 
-**The executor's choices (for the manager).**
+**The executor's choices (accepted by the manager, 2026-11-24).**
 1. **`GET /classification` is opened too.** It is the variable editor's reduced read, the same audience as a team
    coach's, and offers no action there. Without it, Data configuration's start screen (the Domains and Categories
    cards) and the categories of a variable would not load. Plan 2.1 named only the two variable reads.
-2. **The licence now also limits the club's old roles here.** A club that closes Data configuration or Tags & Presets
-   closes it for its club admin and team coaches too. Their paths ask `can()`, and `can()` applies the ceiling. A
-   platform admin is not limited.
+2. **The licence now also limits the club's old roles here: a visible behaviour change for a club that is licensed out.**
+   A club whose licence closes Data configuration or Tags & Presets no longer shows it to its own club admin and team
+   coaches either: Data configuration answers them the identical 404, and Tags & Presets keeps only the system rows
+   and their own rows, with no club write. Their paths ask `can()`, and `can()` applies the ceiling, as the R4 design
+   makes the ceiling the club's licence. A platform admin is not limited. No club had a closed module in production
+   when this was decided (the manager's v95 preflight: `closed_modules = 0`).
 3. **Session types under a closed licence.** In a club or team workspace whose club closed Tags & Presets, the
    session-type list shows the system types only (not a 404), so a screen that offers types keeps working.
 4. **Unchanged:** a club admin without a team role still does not see a team's presets in the coach list (today's
@@ -476,6 +479,23 @@ Branch `feature/roles-v1-config-presets` from `1e83d9c6`. No migration.
 - `source-metric-access-7a-context` test 7 covers the club admin's word and the licence.
 - On the frontend: `roles-v1-view.test.mjs` and `view-modules.test.mjs` (3, 3b).
 - e2e: `roles-v1-view-config-presets.test.mjs` at 1280, 390 and 360 px.
+- **Older suites on earlier migrations (the manager's option A, test only).** Seven suites build their database only
+  up to their own migration, before the role tables, so the new `can()` failed closed there
+  (`503 permissions_unavailable`):
+  - `source-metric-mapping-v35`;
+  - `source-metric-mapping-club-admin-7h`;
+  - `source-metric-variables-club-7i`;
+  - `calculated-variables-v77`;
+  - `lock-order-lo1`;
+  - `team-dashboards-club-variables-o7`;
+  - `source-metric-confirmations-v65`.
+
+  `createGpexeDisposableDb({ roleRead: true })` (`backend/tests/_gpexe-disposable-db.mjs`) has the runner apply v84 and
+  v92 after the suite's list, then sets their two records aside. Every assertion about the migration record (the last
+  migration, "later migrations are applied", the list of names) still sees the suite's own list, and no assertion was
+  changed. `applyGpexeTestMigrations` puts the records back before it brings such a database up to date.
+- The word lists of five role suites now include the two checked words: `me-permissions-r3`, `permission-roles-v84`
+  2b, `roles-api-r2` 17-honoured, `roles-r4-2-view-workspace` 11 and `roles-r4-api` 1.
 
 **Follow-ups (not built).**
 - A Home entry for Training Load's Data configuration in a view workspace (today the menu opens it).

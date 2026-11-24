@@ -41,7 +41,8 @@ const originalConsole = {};
 
 before(async () => {
   const migrations = GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V55));
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "o7", migrations });
+  // roleRead: the club admin's variable route asks can() since roles V-1 (_gpexe-disposable-db.mjs ROLE_READ_MIGRATIONS).
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "o7", migrations, roleRead: true });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
