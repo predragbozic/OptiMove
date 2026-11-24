@@ -1,0 +1,388 @@
+# Roles: the V steps (view rights per module) – discovery and plan
+
+Status: **Proposed** (docs only; nothing built). Base: `main` `2ea5213e`. Author: the executor of the Settings and roles
+stream, on the manager's order of 2026-11-24 (the owner's GO for the V steps).
+
+Builds on `docs/ai/roles-r4-contract.md` (section 4.1 the VIEW package, section 6 the six workspace-trusting modules,
+section 13 the V-1 … V-n row, section 14 the tests), its as-built sections 16–18, and R4-4
+(`docs/ai/roles-r4-4-screens-contract.md`). What a V step is, in one line: a holder of a module's view word, in a
+`club_view` / `team_view` workspace, **reads** that module for its club or team; nothing else changes for anyone else,
+except that every route of the module also asks for the view word (R4 section 6, decided).
+
+## 1. What is true today (the facts the plan builds on)
+
+- **A view workspace reaches one module.** `organizationEntry.js` lets a view workspace through to `GET /api/organization`
+  only; `/me` offers only `org.view` there (`permissions.js:342-345`, `VIEW_WORKSPACE_USABLE_WORDS`). The R4-2 sweep
+  (`backend/tests/roles-r4-2-view-workspace.test.mjs` test 11) proves that an account holding every view word gets from
+  23 module reads exactly what an account with no role gets, and that no write of 5 lands.
+- **Four ways the modules decide today**, and what each does with a view workspace:
+
+  | Way | Where | A view workspace gets |
+  |---|---|---|
+  | `requireCoach` on the router (any old role row anywhere; **not** the active workspace) | `server.js:142-152` (`/api/exercises`, `/api/exercise-collections`, `/api/builder`, `/api/taxonomy`), `auth.js:158` | 403; a **mixed** account (an old row elsewhere) passes |
+  | `requireCoachWorkspace` (the same capability, in the route) | `routes/tests.js:146`, `routes/trainingLoad.js:67` | 403; a mixed account passes |
+  | The active workspace as the right (R4 section 6) | `calendarAccess.js:41-51`, `trainingActivityAccess.js:20-27`, `trainingLoadAccess.js:25-86`, `trainingLoadMetricsAccess.js:28-56`, `trainingLoadDashboardAccess.js:46-64`, `sessionTypeService.js:43-55` | `{type:null}` → 403 / 404 (fail closed) |
+  | Old role rows only | `gpexeImportAccess.js:19-42`, `sourceMetricAccess.js:93-110`, `activityRoster.js:78-84`, `calendarEventAccess.js:76-101`, `calendarSettingsService.js:51-63`, taxonomy `:234-394`, metrics catalog `trainingLoadMetricsAccess.js:116-135` | 404 / 403 / only system rows |
+
+- **Per user, not per club:** Messages (`routes/messages.js`, participants only) and Notifications
+  (`routes/notifications.js`, `recipient_user_id`) already work in a view workspace and need no V step.
+- **No club or team scope exists** for the Exercise library (system, own and collection grants: `exerciseAccess.js:11-48`),
+  the Program Library (`templates.js:140`: admin, own or public) or Builder drafts (own `created_by_user_id`,
+  `builder.js:220`). A club role holder has nothing club-shaped to "view" there yet (owner question P-2).
+- **Hazards found** (each V step must handle its own):
+  1. **Reads that write.**
+     - `resolveActiveWorkspace` writes the fallback preference (`workspace.js:180-199`); every read that calls it can
+       write. The view path must use `resolveActiveWorkspaceReadOnly`.
+     - Tests `GET /today` materializes occurrences (`routes/tests.js:1645`).
+     - Training Load `GET /weekly` and `GET /calendar` call `ensureCurrentExternalOccurrencesForCoach`
+       (`routes/trainingLoad.js:1175`, `:1588`).
+     - Messages `GET /:conversationId` writes `last_read_at` (per user; not a V route).
+  2. **A secret in a read:** Tests `GET /schedules/:id` returns the active link's `publicToken`
+     (`routes/tests.js:1192-1213`).
+  3. **Owner fallbacks that stamp `user`:**
+     - `ownerContextFromWorkspace` and its copies (`trainingActivityAccess.js:33`, `trainingLoadAccess.js:49`,
+       `trainingLoadMetricsAccess.js:41`) and `resolveScheduleOwnerContext` (`testsAccess.js:32-41`) give owner `user`
+       for an unknown type.
+     - They are safe today only because the scope is null first. A V step that maps a view type to a scope must never
+       let a write reach them.
+  4. **Write helpers trust the workspace with no role check:** `canManageActivityInScope`
+     (`trainingActivityAccess.js:51-57`) and `canManageMetricEventInScope` compare the row's owner with the workspace. If
+     a view workspace's data context ever reached them, a view holder could write.
+  5. **Old role rows ANDed into reads:** `athleteRosterScope.js:5-22` is the role predicate **and** the workspace, so a
+     view branch alone still answers an empty list. The taxonomy and metrics-catalog reads are role SQL across **all** the
+     caller's clubs, not narrowed to the workspace.
+  6. **Non-standard 404 bodies:** Tests answers `{error:"Schedule not found."}` and `{error:"Result not found."}`
+     (`routes/tests.js:1189`, `:1858`). They are fine as they are, but a V step must keep "another club's id" and "no such
+     id" identical.
+
+## 2. Per module
+
+Size: S under a day, M one to two days, L three or more (each with its tests and reviews). **Risk class** for every V
+step: **risky**, trigger 2 (access and info hiding), so internal security and code review plus the *Nezavisni revizor*.
+**Migration:** none in any V step. The VIEW package is already storable (v92); `ENFORCED_PERMISSIONS` is a code
+constant.
+
+### 2.1 Data configuration – `variables.view`
+
+1. **Today:** `resolveVariableEditor` (`canonicalVariableAdminService.js:1097-1125`) → `resolveMappingAdmin`
+   (`sourceMetricAccess.js:93-110`, a platform admin or `holdsClubAdminRole` in a club workspace), or, in a team
+   workspace, a live `team_coach` row (C99, reduced view `view:"coach"`). Everyone else gets the identical 404.
+2. **Word:** `variables.view` covers it. Nothing is missing.
+3. **A view holder sees:** `GET /variables` and `GET /variables/:id` in the reduced C99 shape: the system variables and
+   the club's variables, with names, units and categories. Hidden: mappings, fields, sources, the admin actions and every
+   write. No athlete data exists here.
+   - Also behind this word: the club variable **names** in activity results (`routes/trainingActivity.js:172-180`) and in
+     the GPEXE preview (`gpexeImport.js:36-46`). The GPEXE preview stays closed (Imports has no view word). The
+     activity-results names follow when Training Load opens.
+4. **Risk** risky; **size S**; no migration.
+5. **Tests:** the sweep row; the reduced shape is identical to C99's coach view; another club's variable gives the
+   identical 404; the admin reads (`/fields`, `/mappings`) stay 404.
+
+### 2.2 Tags, presets and session types – `presets.use`
+
+1. **Today:**
+   - Taxonomy: `requireCoach`, then role SQL across all the caller's clubs (`taxonomy.js:234-325`); writes through
+     `canManagePreset` / `resolveOwnerScope` (`:346-394`).
+   - Session types: `workspaceClub` (`sessionTypeService.js:43-55`, workspace); writes through `writableOwner` (`:62-68`,
+     `club_admin`) and the database's `training.session_type_basis`.
+2. **Word:** `presets.use` covers tags and presets. Session types have no word of their own. **Decided (executor):** they
+   go with `presets.use` (same Settings tab, "Tags & Presets", `organization-view.js:163`). The same word also opens them
+   inside Training Load later.
+3. **A view holder sees** (read only): `GET /api/taxonomy/node-presets`, `/template-tags`, `/library/:kind` for the system
+   and **this club** (and its teams) only – not every club the account touches; and `GET /api/training-activity/session-types`
+   for the club. Hidden: every write; other clubs' rows.
+4. **Risk** risky; **size S–M** (the taxonomy read needs a scope argument instead of "every role row"); no migration.
+5. **Tests:** the sweep row; a mixed account in `club_view` B sees B's presets only; another club's preset id gives the
+   identical 404 / 403 today's route answers; old-vs-new for a coach: unchanged lists.
+
+### 2.3 Athletes – `athletes.view`
+
+1. **Today**, five gate families:
+   - **A.** `athleteAccessPredicate` (`access.js:208-246`, old rows and the athlete's own login): `canAccessAthlete`,
+     `athleteListAccessFilter`, `canAccessPlan`, the Builder, the templates, `tests.js:886`, `linkedSessionTimes.js:23`.
+   - **B.** `athleteRosterScope` (A **and** the workspace).
+   - **C.** The workspace mappers of the modules (`isAthleteInWorkspaceScope`, `calendarAthleteScopeSql`, …).
+   - **D.** The organization athlete read (`organization.js:425-447`, empty for a view workspace in R4-2).
+   - **E.** Other membership readers (GPEXE, invites).
+2. **Word:** `athletes.view` covers the athlete list, profile and the organization athletes. R4 section 4: it is checked
+   only when **every** gate of A, B and D moves at once.
+3. **A view holder sees:** `GET /api/athletes` (the club's or team's athletes, on the membership of the day),
+   `GET /api/athletes/:id` (profile), the athletes of `GET /api/organization` for its club, and `GET /api/positions`
+   (reads). Hidden: `/:id/plans` and `/:id/program-data` (those are `programs.view`), every write (`POST /athletes`,
+   logins, join links), other clubs' athletes (identical 403 / 404 as today).
+4. **Risk** risky (personal data); **size L** (A–D move together); no migration.
+5. **Tests:** the sweep row; old-vs-new for every account kind on every A–D gate; `enforced_word_covers_all_gates`; a
+   coach whose club version removes `athletes.view` loses the list **and** the writes (R4 section 6, decided); a minor's
+   data appears only in its own club.
+
+### 2.4 Calendar – `calendar.view`
+
+1. **Today:**
+   - Reads: `resolveCalendarContext` → `activityScopeForWorkspace` (`calendarAccess.js:41-51`, `{type:null}` for a view
+     type), the scope SQL (`:129-240`) and `calendarQuery.js`.
+   - Event writes: `eventWriteBasis` (`calendarEventAccess.js:76-101`, workspace and old rows).
+   - Settings: `settingsClub` (`calendarSettingsService.js:51-63`, `club_admin`).
+2. **Word:** `calendar.view` covers the reads; `calendar.events.manage` and `calendar.settings.manage` are MANAGE. Nothing
+   is missing.
+3. **A view holder sees:**
+   - `GET /api/calendar` (sessions, activities, external and test days, events; counts on the cards);
+   - `GET /api/calendar/events/:id` in the **reduced** view the code already has for a non-manager
+     (`calendarEventService.js:642-652`);
+   - `GET /api/calendar/events/types` (the club's types).
+
+   Hidden:
+   - `notes` and `details` (only with `canManage`, as today);
+   - event questions (`/events/:id/questions`: managers only);
+   - settings, every write, other clubs.
+
+   Athlete **names** (`?include=athletes`, the reduced view's target list) depend on P-1.
+4. **Risk** risky; **size M** (17 reviewed branches in `calendarAccess.js`, 11 in `calendarQuery.js`); no migration.
+   Stream manager: the Calendar stream (R4 section 13).
+5. **Tests:** the sweep row; a forged `club` preference; the reduced event view is byte-identical to today's non-manager
+   view; `include=athletes` per P-1; every event write (create, update, cancel, sessions, activities, fields, questions)
+   answers today's refusal; another club's event id gives the identical 404.
+
+### 2.5 Tests – `tests.view`, `tests.results.view`
+
+1. **Today:** `requireCoachWorkspace` (`routes/tests.js:146`, old rows anywhere), then
+   `manageableClubIds` / `manageableTeamIds` across **all** the account's clubs (`testsAccess.js:47-56`) and
+   `canManageSchedule` per row.
+2. **Words:** `tests.view` covers the schedule (the library, the schedules list, the weekly counts, a schedule's detail).
+   `tests.results.view` covers results and the per-athlete group and today views. Nothing is missing.
+3. **A view holder sees:**
+   - With `tests.view`: `GET /library`, `/schedules`, `/weekly`, `/schedules/:id` **without `publicToken`** and without
+     the link block.
+   - With `tests.results.view` as well: `/schedules/:id/group`, `/results`, `/results/:assessmentId`.
+   - `GET /today` only in a **read-only variant** (no `ensureCurrentOccurrence`; the occurrence of the day is computed,
+     not written), or not at all in V (**decided (executor): not at all in V**; it is a coach's working screen and writes).
+
+   Hidden: every write (create, bulk, patch, delete, link, revoke, remind), the link token, other clubs.
+4. **Risk** risky (a secret, and per-athlete wellness and injury data); **size M**; no migration.
+5. **Tests:** the sweep row; `publicToken` never in any view answer (a grep of every response); results only with
+   `tests.results.view`; `GET /today` answers today's refusal to a view holder; the schedule owner fallback
+   (`resolveScheduleOwnerContext`) is never reached by a view workspace (mutation).
+
+### 2.6 Training Load – `load.view.team`, `load.view.athlete`
+
+Four parts (R4 section 6): activities and roster, weekly / RPE / external schedules, measurements, session types (2.2).
+
+1. **Today:**
+   - Activities: the workspace (`trainingActivityAccess.js:20-27`, `:97-117`); writes `canManageActivityInScope`
+     (workspace only).
+   - Roster: old rows (`activityRoster.js:78-84`).
+   - Weekly / calendar: `requireCoachWorkspace` plus `coachWorkspaceScopeSqlForWorkspace` (`routes/trainingLoad.js:1012-1034`).
+   - Schedules: `resolveExternalScheduleWorkspaceScope`.
+   - Measurements: the workspace (`trainingLoadMetricsAccess.js:28-56`); the catalog by old rows (`:116-135`).
+2. **Words:** `load.view.team` covers team totals; `load.view.athlete` covers named athletes. Nothing is missing.
+3. **A view holder sees** – the split the code allows, read by read:
+
+   | Read | Team totals (`load.view.team`) | Named athletes (`load.view.athlete`) |
+   |---|---|---|
+   | `GET /training-load/calendar` | the activity items' counts (`participantCount`, `rpe.requested/rated`, `metrics.total/withData`) | planned and external items with `athleteName` |
+   | `GET /training-load/weekly` | – (every row is an athlete) | the whole answer |
+   | `GET /external-schedules`, `/:id` | the list with `target_count`; occurrences with counts | the targets with names |
+   | `GET /training-activity`, `/:id` | – (one row per participant) | the whole answer |
+   | `GET /:id/roster` | `counts` only | the rows |
+   | `GET /metrics/results`, `/occasions/:id` | – | the whole answer |
+   | `GET /metrics/definitions` and the catalog | the club's and system rows (a scope argument instead of the role SQL) | same |
+
+   Hidden: every write, including PATCH RPE settings, schedule actions, roster decisions, estimates, manual values, match
+   / merge / reparent / materialize and metric events; the occurrence writes inside `/weekly` and `/calendar` (skipped for
+   a view workspace); other clubs.
+   - **Decided (executor):** a read that is athlete-only in the table answers today's refusal to a holder of
+     `load.view.team` alone. No new "totals" endpoint is built in V.
+4. **Risk** risky; **size L** (24 + 17 + 15 + 13 reviewed branches, two write helpers that trust the workspace); no
+   migration. Stream manager: the *Rukovodilac* of OptiMove.
+5. **Tests:**
+   - the sweep rows per read, with each word;
+   - the write helpers `canManageActivityInScope` / `canManageMetricEventInScope` and every `ownerContextFromWorkspace`
+     copy are never reached with a view workspace (mutation: map the view type to the base in each, and a test must
+     fail);
+   - no occurrence row is written by a view read;
+   - old-vs-new for coaches and club admins on every read and write.
+
+### 2.7 Dashboards – `dashboards.view`
+
+1. **Today (ADR-002, two checks):**
+   - The data workspace: `dataWorkspaceFromActiveWorkspace` (`trainingLoadDashboardAccess.js:46-64`).
+   - The owner: `canManageDashboardRow` (`:216-222`, old rows).
+   - `canViewDashboardRow` (`:252-257`); the list `dashboardVisibilitySql` (`:319-362`).
+   - The query layer throws on an unknown data workspace type (`trainingLoadDashboardQuery.js:45-51`).
+2. **Word:** `dashboards.view`. The data it charts is Training Load's: an `athlete`-grouped widget needs
+   `load.view.athlete`.
+3. **A view holder sees:**
+   - `GET /dashboards`: the system templates and the club's dashboards whose data workspace is its club or team;
+   - `GET /dashboards/:id`;
+   - `POST /:id/query` (a read) over its club's data;
+   - `GET /active`.
+
+   Hidden:
+   - every write; `POST`/`DELETE /active` (a write of a personal selection: **decided (executor), closed in V**);
+   - private dashboards of others; the preview (a manage gate).
+
+   **Decided (executor):** without `load.view.athlete`, a widget grouped by athlete answers a fixed "needs Named athletes"
+   result, never the rows.
+4. **Risk** risky; **size M**; no migration. **After** Training Load (it reads the same data).
+5. **Tests:** the sweep row; the data workspace stays the club's (ADR-002: the view holder's query never reads another
+   workspace); athlete grouping with and without `load.view.athlete`; another club's dashboard gives the identical 404.
+
+### 2.8 Programs, exercises (and the Program Library) – `programs.view`, `exercises.use`
+
+1. **Today:** `requireCoach` on `/api/builder`, `/api/exercises`, `/api/exercise-collections`. Plans by creator or
+   athlete access (`canAccessPlan`, `access.js:69-173`). The Program Library by owner or public. Exercises by system, own
+   or collection grant. **No club scope.**
+2. **Words:** `programs.view` and `exercises.use` exist, but what they mean for a club is not decided (P-2).
+3. **A view holder sees:** per P-2. The recommendation:
+   - `programs.view`: the weekly plans and programs **assigned to the club's athletes** (`GET /api/plans/:id/weekly`,
+     `/program`, the athlete's plans) and the public Program Library, read only;
+   - `exercises.use`: the system exercise library, read only.
+
+   Hidden: drafts, every Builder route (42 routes, 36 writes), favorites / hide / personal tags (per-user writes), every
+   other coach's private items.
+4. **Risk** risky; **size L** (a new scope for plans); no migration. Stream manager: the Exercise stream. **Last**, and
+   only after P-2.
+5. **Tests:** the sweep rows; a mixed account; a draft of another coach never shown; `requireCoach` still answers 403 for
+   every Builder write.
+
+### 2.9 Imports, Messages, Notifications, Settings
+
+- **Imports:** no view word (R4 Q16). It stays closed (404) for a view workspace and gets no V step. The sweep keeps
+  asserting it.
+- **Messages and Notifications:** per user. They already work and need no V step.
+  - **Decided (executor):** once a module opens, the frontend lets that module's notification links through in a view
+    workspace (today `notInViewWorkspace` sends every module link Home, `app.js:2531-2542`); each V step adds its own.
+- **Settings:** Organization is done (R4-2, R4-4). The Settings sections follow their module:
+  - *Tags & Presets* opens with 2.2.
+  - *Athletes* and *Positions* with 2.3.
+  - *Calendar* settings stays closed (MANAGE).
+  - *Storage* stays platform-only; *Icons* is static.
+
+## 3. One shared helper: every module asks the same question
+
+New `backend/src/moduleView.js` (one file, pure plus one read-only workspace resolve):
+
+```js
+// The view word of each module (R4 4.1); a module enters here in its V pull request.
+export const MODULE_VIEW_WORDS = { data_configuration: ["variables.view"], presets: ["presets.use"],
+  athletes: ["athletes.view"], calendar: ["calendar.view"], tests: ["tests.view"], tests_results: ["tests.results.view"],
+  load_team: ["load.view.team"], load_athlete: ["load.view.athlete"], dashboards: ["dashboards.view"], ... };
+
+// canView(authz, workspace, module) -> boolean
+//   platform workspace + platform admin -> true; private_coach -> true (R4 Q10: unchanged);
+//   club / team / club_view / team_view -> can(authz, word, scope of the workspace) (the ceiling is inside can());
+//   anything else -> false.
+// viewReadScope(workspace) -> { type: "club" | "team", id } for club_view / team_view, else null.
+// viewEntryGate(module, READ_ROUTES) -> express middleware, the generalization of organizationEntry.js:
+//   an account whose active workspace (read-only resolve, never a preference write) is NOT a view one goes on exactly as
+//   today; a view workspace reaches ONLY the listed GET routes of the module and only with canView(); everything else
+//   answers what that router answers today to an account with no role (403 or the identical 404).
+```
+
+How a module uses it:
+
+- **The entry gate first.** Every write route stays closed to a view workspace by construction, the way
+  `organizationEntry.js` closes `POST /athletes`. This is the answer to hazards 3 and 4: a view workspace never reaches a
+  write helper or an owner fallback.
+- **On a listed read,** the route takes `viewReadScope(workspace)` as its **data context** (ADR-002: the workspace stays
+  the data context) and maps it where it maps `club` / `team` today. This is the only new branch in each scope helper,
+  and it is used by reads only.
+- **For every workspace** (coach workspaces included), each route of the module also requires `canView()` (R4 section 6,
+  decided). Old-vs-new: a basic Club admin or Team coach holds every seeded view word, so nobody loses anything until a
+  club version takes a word away.
+- **Registration:**
+  - `ENFORCED_PERMISSIONS` gets the word with its gate files (`roles-r4-checked-gates` A1, A2);
+  - `VIEW_WORKSPACE_USABLE_WORDS` gets the word (so `/me` offers it);
+  - `VIEW_TYPE_FILES` (B3) and the `REVIEWED` counts (B1) get the module's files;
+  - `permission-nav.js` gets the tab.
+
+Why a gate and not only `canView()` inside each helper: the six helpers of R4 section 6 already have 100+ reviewed
+branches; one gate per router makes "a view workspace never writes" true by one list per module, provable by one sweep.
+
+## 4. The fail-closed sweep, extended per module
+
+New `backend/tests/roles-v-sweep.test.mjs` (disposable database, the real server), built in V-0 and extended by every V
+step. Each module adds one table row: `{ module, words, reads: [paths], writes: [[method, path, body]], hidden: [paths] }`.
+
+1. **Without the word** (holder of every other view word): every read and write answers exactly what an account with no
+   role gets (status and body). This is R4-2 test 11, kept.
+2. **With the word**: every listed read answers 200 with rows of club A only (no id of club B in the text); every `hidden`
+   path and every write answers today's refusal; no row is written in any table the module owns (a row count before and
+   after); no `user_workspace_preferences` write.
+3. **A forged `club` preference** resolves to `club_view` and gives the same answers.
+4. **A mixed account** (club admin of A, holder in B) in `club_view` B gets nothing of A from any read.
+5. **The ceiling:** the module closed for club A answers like "without the word".
+6. **Old-vs-new:** a basic Club admin and Team coach get byte-identical answers before and after the V step on every read
+   and write of the module (a golden capture from `main`).
+7. **The word taken from a coach** (a club version without it): the module's reads **and writes** answer the refusal
+   (R4 section 6).
+8. **Mutations**, each failing a test:
+   - drop `canView()` from the gate;
+   - add a write to the module's `READ_ROUTES`;
+   - map a view type to its base type in any write helper or owner fallback of the module;
+   - use `resolveActiveWorkspace` (the writing one) in the gate;
+   - drop the `publicToken` strip (Tests);
+   - drop the athlete-grouping check (Dashboards).
+9. **Info hiding:** another club's id on every `/:id` read answers exactly what a missing id answers.
+
+The e2e of each V step: a role holder with the word opens the module, sees its club's data read-only, sees no write
+control, at 1280 and 390 px.
+
+## 5. Order and pull requests
+
+Smallest and safest first; a batch shares one pattern. Every PR is risky (trigger 2): internal security and code review,
+`ux-design-reviewer` and `mobile-qa` where a screen changes, and the *Nezavisni revizor*.
+
+| PR | Contents | Pattern | Size | Depends on |
+|---|---|---|---|---|
+| **V-0** | `moduleView.js` (`canView`, `viewReadScope`, `viewEntryGate`), the sweep test file with today's rows, the frontend plumbing (`permission-nav.js` per word, `notInViewWorkspace` per module). No module opens. | foundation | S | – |
+| **V-1** | Data configuration (2.1) + Tags, presets and session types (2.2) | read-only catalogs, no athlete data | S–M | V-0 |
+| **V-2** | Athletes (2.3) | personal data, every gate at once | L | V-0, P-1 |
+| **V-3** | Calendar (2.4) | schedule reads, reduced views | M | V-0, P-1 (names) |
+| **V-4** | Tests (2.5) | schedule reads, a secret, results split | M | V-0, P-1 |
+| **V-5** | Training Load (2.6) | team totals against named athletes | L | V-0, V-1 (session types), P-1 |
+| **V-6** | Dashboards (2.7) | ADR-002 data workspace | M | V-5 |
+| **V-7** | Programs and exercises (2.8) | a new club scope | L | V-0, P-2 |
+
+V-3 and V-4 do not share files and may run in parallel with different stream managers. V-2 goes before the modules that
+show names if P-1 is answered "names need `athletes.view`".
+
+## 6. Small choices decided by the executor (for the manager's review)
+
+1. Session types go with `presets.use` (2.2); no new word.
+2. Tests `GET /today` is not opened in V (it writes occurrences); a read-only variant can come later.
+3. Tests `publicToken` and the link block are never in a view answer.
+4. Training Load reads that are athlete-only answer today's refusal to a holder of `load.view.team` alone; no new totals
+   endpoint in V.
+5. The occurrence writes inside Training Load `/weekly` and `/calendar` are skipped for a view workspace.
+6. Dashboards: `POST` / `DELETE /active` (a personal selection) stay closed in V; an athlete-grouped widget needs
+   `load.view.athlete`.
+7. The view path always resolves the workspace read-only (no preference write).
+8. Imports, Messages and Notifications get no V step; module notification links open per V step.
+9. A V step changes no MANAGE gate; event questions, calendar settings and the roster stay managers'.
+
+## 7. Questions for the owner (only real product decisions)
+
+**P-1. Imena sportista u modulima.** Kada osoba ima pravo da gleda neki modul (npr. kalendar, testove ili trenažno
+opterećenje), da li u tom modulu sme da vidi i **imena sportista** ili samo brojeve (npr. „12 sportista, 9 uneli RPE")?
+Pravo „Sportisti – pregled" (`athletes.view`) već postoji kao posebno pravo.
+
+*Preporuka:* **imena samo uz pravo „Sportisti – pregled"**. Bez njega osoba vidi brojeve i datume, a mesto imena piše
+„Sportista". Ovako jedno pravo jasno kaže „ova osoba sme da vidi ko su sportisti", a ostala prava ne otkrivaju imena
+(maloletnici, zdravstveni podaci u testovima). Za trenažno opterećenje ovo se poklapa sa već postojećom podelom „Ukupno
+za tim" / „Imenovani sportisti".
+
+**P-2. Šta znači „Programi – pregled" i „Vežbe – korišćenje" za osobu iz kluba.** Danas programi i vežbe pripadaju
+treneru koji ih je napravio (ili su sistemske i javne), a ne klubu. Šta treba da vidi osoba sa tim pravom u klubu?
+
+*Preporuka:*
+- **„Programi – pregled":** samo programe i nedeljne planove **dodeljene sportistima tog kluba**, plus javnu biblioteku
+  programa, sve samo za čitanje. Nikada tuđe nacrte.
+- **„Vežbe – korišćenje":** sistemsku biblioteku vežbi, samo za čitanje.
+
+Ovo je poslednji korak (V-7), pa se može odlučiti i kasnije.
+
+**P-3. Redosled.** Predlog je: prvo podešavanja bez podataka o sportistima (varijable, oznake), zatim sportisti,
+kalendar, testovi, trenažno opterećenje, tabele (dashboards), a programi i vežbe na kraju.
+
+*Preporuka:* **ovako**, osim ako vam neki modul treba ranije za konkretnu osobu u klubu. Tada taj modul ide odmah posle
+V-0.
