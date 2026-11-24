@@ -1,3 +1,4 @@
+import { mountDashboardControls, disposeDashboardControls, closeDashboardControlPanel } from "./dashboard-controls.js";
 import { captureChangedFields, restoreChangedFields } from "./form-keep.js";
 import { api } from "./api.js";
 import { openExerciseClassification } from "./exercise-classification.js";
@@ -3030,7 +3031,9 @@ function renderTrainingLoad() {
   // IMP1: a search repaints Imports every 2 s; the tab row keeps where the person scrolled it, and the active tab is
   // brought into view only when it is not.
   const importsRowLeft = state.trainingLoad.section === "imports" ? els.content.querySelector(".imports-tabs")?.scrollLeft || 0 : 0;
+  disposeDashboardControls();
   els.content.innerHTML = renderTrainingLoadCoachHtml();
+  void mountDashboardControls(els.content, renderTrainingLoad);
   renderImportsBackBand();
   if (state.trainingLoad.section === "imports") keepImportsTabRow(importsRowLeft);
   if (state.trainingLoad.section === "analysis") {
@@ -5283,3 +5286,7 @@ function renderEmpty(message) {
 function renderError(error) {
   els.content.innerHTML = `<div class="error">${escapeHtml(error.message || String(error))}</div>`;
 }
+
+// React dashboard disclosures share the existing action delegation.
+document.addEventListener("pointerdown", closeDashboardControlPanel);
+document.addEventListener("keydown", closeDashboardControlPanel, true);

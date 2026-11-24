@@ -24,11 +24,34 @@ for(const width of [360,390,1280])test(`(${width}px) Pages create, rename, reord
   await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();const tab=page.getByRole('tab',{name:'Dashboards'});if(await tab.isVisible())await tab.click();
   await action(page,'analysis-open-picker').click();await page.locator(`[data-dashboard-id="${dashboard.id}"]`).click();
   await page.locator('.tl-dashboard-pages nav').waitFor();
+  assert.equal(await page.locator('#dashboard-period-panel').isVisible(),false);
+  const sizes=await (await page.waitForFunction(()=>{
+    const top=document.querySelector('.tl-analysis-topbar-compact'), strip=document.querySelector('.tl-compact-page-row');
+    if(!top||!strip) return false;
+    const height=top.getBoundingClientRect().height, pagesHeight=strip.getBoundingClientRect().height;
+    return height>0&&pagesHeight>0?{height,pagesHeight}:false;
+  })).jsonValue();
+  assert.ok(sizes.height<=64,'toolbar stays one compact row: '+sizes.height);
+  assert.ok(sizes.pagesHeight<=58,'Pages stays one compact row: '+sizes.pagesHeight);
+  await page.getByRole('button',{name:/^Period:/}).click();
+  await page.locator('[data-action="training-load-analysis-period-from"]').waitFor();
+  assert.equal(await page.getByRole('button',{name:'Choose activity',exact:true}).isVisible(),true);
+  await page.locator('.tl-compact-presets button[data-preset="7d"]').click();
+  await page.getByRole('button',{name:'Period: Last 7 days',exact:true}).waitFor();
+  assert.equal(await page.locator('#dashboard-period-panel').isVisible(),true,'period selection does not dismiss its panel');
+  const customDate=await page.locator('[data-action="training-load-analysis-period-from"]').inputValue();
+  const dayBefore=new Date(customDate+'T00:00:00Z');dayBefore.setUTCDate(dayBefore.getUTCDate()-1);
+  await page.locator('[data-action="training-load-analysis-period-from"]').fill(dayBefore.toISOString().slice(0,10));
+  await page.getByRole('button',{name:'Period: Custom period',exact:true}).waitFor();
+  if(process.env.DASHBOARD_COMPACT_SCREENSHOTS){await mkdir(process.env.DASHBOARD_COMPACT_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.DASHBOARD_COMPACT_SCREENSHOTS,'dashboard-filters-'+width+'.png')});}
+  await page.getByRole('button',{name:'Close period and activity',exact:true}).click();
+  assert.equal(await page.locator('#dashboard-period-panel').isVisible(),false);
+  if(process.env.DASHBOARD_COMPACT_SCREENSHOTS){await mkdir(process.env.DASHBOARD_COMPACT_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.DASHBOARD_COMPACT_SCREENSHOTS,'dashboard-compact-'+width+'.png')});}
   await action(page,'pages-create').click();await action(page,'pages-name').fill('Home');await action(page,'pages-save').click();await page.getByText('A page with that name already exists. Choose a different name.',{exact:true}).waitFor();await action(page,'pages-name').fill('Performance');await action(page,'pages-preset').selectOption('last_7_days');await action(page,'pages-save').click();
   await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Performance'}).waitFor();
-  await action(page,'pages-rename').click();await action(page,'pages-name').fill('Peak');await action(page,'pages-save').click();
+  await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-rename').click();await action(page,'pages-name').fill('Peak');await action(page,'pages-save').click();
   await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Peak'}).waitFor();
-  await action(page,'pages-defaults').click();await action(page,'pages-preset').selectOption('today');await action(page,'pages-save').click();await page.locator('.tl-page-form').waitFor({state:'hidden'});
+  await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-defaults').click();await action(page,'pages-preset').selectOption('today');await action(page,'pages-save').click();await page.locator('.tl-page-form').waitFor({state:'hidden'});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
   await action(page,'analysis-add-widget').click();await page.locator('[data-action="training-load-simple-metric"][data-kind="builtin"][data-id="session_count"]').click();
   await action(page,'simple-next').click();await action(page,'simple-next').click();await action(page,'simple-title').fill('Page sessions');await action(page,'simple-preview').click();await page.locator('.tl-simple-preview-status[data-ready=true]').waitFor();await action(page,'simple-save').click();await page.locator('.tl-simple-editor').waitFor({state:'hidden'});
@@ -36,8 +59,8 @@ for(const width of [360,390,1280])test(`(${width}px) Pages create, rename, reord
   await page.getByText('Widget copied to Home.',{exact:true}).waitFor();await page.locator('.tl-dashboard-pages nav button').filter({hasText:'Home'}).click();await page.getByRole('button',{name:'Widget actions: Page sessions'}).waitFor();
   await page.locator('.tl-dashboard-pages nav button').filter({hasText:'Peak'}).click();await page.getByRole('button',{name:'Widget actions: Page sessions'}).waitFor();
   await page.reload();await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();const reopenedTab=page.getByRole('tab',{name:'Dashboards'});if(await reopenedTab.isVisible())await reopenedTab.click();await action(page,'analysis-open-picker').click();await page.locator('[data-dashboard-id="'+dashboard.id+'"]').first().click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Peak'}).waitFor();
-  await action(page,'pages-delete').click();await page.locator('.tl-page-form [data-action="training-load-pages-save"]').click();await page.getByText('This page still has widgets. Remove them before deleting the page.',{exact:true}).waitFor();await action(page,'pages-cancel').click();
-  await action(page,'pages-create').click();await action(page,'pages-name').fill('Empty');await action(page,'pages-save').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Empty'}).waitFor();await action(page,'pages-up').focus();await action(page,'pages-up').press('Enter');await page.locator('.tl-dashboard-pages nav button').nth(1).filter({hasText:'Empty'}).waitFor();await action(page,'pages-down').click();await page.locator('.tl-dashboard-pages nav button').nth(2).filter({hasText:'Empty'}).waitFor();await action(page,'pages-delete').click();await page.locator('.tl-page-form [data-action="training-load-pages-save"]').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Home'}).waitFor();
+  await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-delete').click();await page.locator('.tl-page-form [data-action="training-load-pages-save"]').click();await page.getByText('This page still has widgets. Remove them before deleting the page.',{exact:true}).waitFor();await action(page,'pages-cancel').click();
+  await action(page,'pages-create').click();await action(page,'pages-name').fill('Empty');await action(page,'pages-save').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Empty'}).waitFor();await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-up').focus();await action(page,'pages-up').press('Enter');await page.locator('.tl-dashboard-pages nav button').nth(1).filter({hasText:'Empty'}).waitFor();await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-down').click();await page.locator('.tl-dashboard-pages nav button').nth(2).filter({hasText:'Empty'}).waitFor();await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-delete').click();await page.locator('.tl-page-form [data-action="training-load-pages-save"]').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Home'}).waitFor();
   assert.deepEqual(pageErrors,[]);assert.equal(await page.locator('.tl-layout-bar').count(),0);
   if(process.env.DASHBOARD_PAGES_SCREENSHOTS){await mkdir(process.env.DASHBOARD_PAGES_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.DASHBOARD_PAGES_SCREENSHOTS,`pages-${width}.png`)})}
  }finally{await context.close()}
