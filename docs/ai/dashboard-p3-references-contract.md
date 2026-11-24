@@ -5,6 +5,24 @@ Verified base: `963e1c0fc0a4a2ba27c45539a5f8fc28ae5856db` (2026-11-24).
 No implementation, migration, activation, merge or deployment is authorized by this document.
 P2 #742 is under review and is not changed here.
 
+## Implementation authorization update (owner, 2026-11-24)
+
+The owner supersedes the section 2 wait for R4 module steps: P3 proceeds using
+TODAY's shared dashboard/widget access checks for bindings and existing
+canonical-variable administration checks for reference tables, with identical-404
+info hiding. Do not add variables.* or dashboards.* to ENFORCED_PERMISSIONS and
+do not partially activate an R4 permission word. R4 Training Load / Dashboards /
+Data configuration VIEW and MANAGE steps, owned by the manager stream after
+R4-4, will move P3 gates together with every other gate of those modules.
+The club-owned-only first delivery remains unchanged.
+
+React foundation is main fd555885d334d2b7cf12d8f6d97fab8d778bb22c (#753).
+Components use frontend/react/*.jsx and the shared mountIsland/unmountIsland
+bridge; compiled frontend/react-build output is committed and drift-tested.
+Migration v97 / 202611291000 is reserved for P3, based on v94 and independent
+of v95/v96. Confirm the exact registry again at freeze. This allocation does not
+authorize applying it to any persistent database.
+
 ## 1. Outcome and boundaries
 
 A coach chooses a named reference table, such as **Game targets by position** or
