@@ -30541,6 +30541,25 @@ body.athlete-questions-prompt-open {
      arrives; it comes back only if the bar's code cannot be loaded (bottom-nav.js marks the page). */
   body:not(.login-mode):not(.bottom-nav-unavailable) .mobile-nav-toggle { display: none !important; }
 
+  /* Without the menu button the coach's header row has no first 44 px column for it: the workspace switcher takes
+     the free width (at least 96 px), and its name stays on one line with an ellipsis (the full name is its title and
+     accessible name). Before this the switcher fell into the menu button's 44 px column and its name broke letter by
+     letter. */
+  body:not(.athlete-mode):not(.login-mode):not(.bottom-nav-unavailable) .topbar-actions {
+    grid-template-columns: minmax(96px, 1fr) repeat(3, var(--om-tap-target));
+  }
+  body:not(.athlete-mode):not(.login-mode):not(.bottom-nav-unavailable) .topbar-actions > .workspace-menu { min-width: 96px; }
+  body:not(.athlete-mode):not(.login-mode):not(.bottom-nav-unavailable) .topbar .workspace-toggle-label {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The desktop athlete drawer's scrim (body.athletes-drawer-open::before) is never a phone's: there the athlete list
+     is inside the menu drawer, whose own backdrop dims the page while it is open. */
+  body.has-bottom-nav:not(.athlete-mode):not(.login-mode).athletes-drawer-open::before { content: none; }
+
   body.has-bottom-nav:not(.login-mode) .app-shell { padding-bottom: var(--om-bottom-nav-space); }
 
   body.has-bottom-nav:not(.login-mode) :is(.builder-mobile-sticky-bar, .tests-schedule-form-actions, .tl-roster-sticky, .gpexe-map .gpexe-map-results .gpexe-link-actions, .imports-batch .imports-batch-actions, .mb-savebar, .k3-save-bar, .node-detail-footer):not(:is([role="dialog"], [aria-modal="true"], .exercise-editor-overlay, .builder-section-overlay, .exercise-detail-overlay, .program-preview-overlay, .k3-sheet-layer) *) {
