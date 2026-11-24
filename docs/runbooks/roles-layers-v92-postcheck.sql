@@ -14,7 +14,7 @@ select bool_and(md5(p.prosrc) is not distinct from e.want) as v92_bodies_ok, cou
   select 'permission_club_rule7_ok' as fn, '0f97c7a6c365e73e19c649bfe1a304b5' as want union all
   select 'permission_requests_guard' as fn, '92299209ef9b664261566218c0504437' as want union all
   select 'permission_role_club_items' as fn, '1359f7661c664d6f1f59762ca083d254' as want union all
-  select 'permission_rule7_check' as fn, '4e54f03c388bab7686dde6a26e12632f' as want union all
+  select 'permission_rule7_check' as fn, '52321df9f64d8d88315cbad3cccbb65a' as want union all
   select 'permission_user_holdings' as fn, '7c8511a90c202c5cd94d22fe707de1ce' as want union all
   select 'permission_word_honoured' as fn, '0c47ce1a6b157c1c9205d4f48438a5ac' as want union all
   select 'user_has_permission' as fn, '3ee2c276f7caf9fb50066aa753e7c079' as want union all

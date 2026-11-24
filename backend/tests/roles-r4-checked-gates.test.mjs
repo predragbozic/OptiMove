@@ -62,9 +62,19 @@ test("A3. the lists nest: checked (HONOURED) = ENFORCED keys, checked is inside 
 });
 
 // A line that branches on a workspace type, whatever the variable is called: `workspace.type` / `activeWorkspace?.type`,
-// any `<x>.type` compared with a workspace type word (either side), or a `case "<type>":`.
+// any `<x>.type` or a local `type` / `<name>Type` compared with a workspace type word (either side), a `case "<type>":`,
+// a list of type words or a `*_TYPES` constant asked `.includes(` / `.has(`.
 const TYPES = "club|team|club_view|team_view|platform|private_coach|athlete";
-export const WORKSPACE_BRANCH = new RegExp(`(?:workspace|Workspace)\\??\\.type\\b|\\.type\\s*[!=]==?\\s*["'](?:${TYPES})["']|["'](?:${TYPES})["']\\s*[!=]==?\\s*[A-Za-z_.?]+\\.type\\b|case\\s+["'](?:${TYPES})["']\\s*:`);
+const WORD = `["'](?:${TYPES})["']`;
+const NAMED_TYPE = "(?:\\.type\\b|(?:^|[^\\w.])\\w*[tT]ype\\b)";
+export const WORKSPACE_BRANCH = new RegExp([
+  "(?:workspace|Workspace)\\??\\.type\\b",
+  `${NAMED_TYPE}\\s*[!=]==?\\s*${WORD}`,
+  `${WORD}\\s*[!=]==?\\s*[A-Za-z_.?]*[tT]ype\\b`,
+  `case\\s+${WORD}\\s*:`,
+  `\\[[^\\]]*${WORD}[^\\]]*\\]\\s*\\.(?:includes|has)\\(`,
+  "\\b[A-Z_]*(?:WORKSPACE|SCOPE|CONTEXT)[A-Z_]*TYPES\\.(?:includes|has)\\(",
+].join("|"));
 
 // The reviewed list (roles R4-1, at the R4-1 base 4a24996): file -> number of lines that branch on a workspace type.
 // Every one is pre-existing code; none offers a workspace (B2). The six modules of contract section 6 (calendar, training
@@ -72,6 +82,10 @@ export const WORKSPACE_BRANCH = new RegExp(`(?:workspace|Workspace)\\??\\.type\\
 // context and, for now, as their right; they recognize only the five existing types, so the R4-2 types fall through to
 // "no scope" (fail closed). Each module's VIEW pull request revisits its rows. Changing or adding a count needs a review
 // of that file against the rule (.claude/rules/backend-security.md), recorded in the pull request.
+// The R4-1 files (permissions.js, permissionRolesService.js, clubCeilingLock.js) branch on a resource's or a role
+// assignment's scope type ("club" / "team"), never on an offered workspace; inviteContext.js / joinLinkContext.js branch
+// on an invitation's context and check the inviter's role rows; dashboardShellFilter.js and trainingLoadDashboardQuery.js
+// read the dashboard's data workspace (one of the five existing types, anything else refused).
 const REVIEWED = Object.freeze({
   "activityRoster.js": 3,
   "athleteRosterScope.js": 4,
@@ -82,19 +96,25 @@ const REVIEWED = Object.freeze({
   "calendarQuestionService.js": 2,
   "calendarSettingsService.js": 3,
   "canonicalVariableAdminService.js": 1,
+  "clubCeilingLock.js": 2,
+  "dashboardShellFilter.js": 5,
   "dashboardSimple/platformPilot.js": 1,
   "gpexeAthleteIdentityService.js": 3,
   "gpexeImportAccess.js": 5,
-  "mediaStorage.js": 1,
-  "permissions.js": 1,
+  "inviteContext.js": 6,
+  "joinLinkContext.js": 5,
+  "mediaStorage.js": 2,
+  "permissionRolesService.js": 5,
+  "permissions.js": 4,
   "positionService.js": 8,
   "routes/auth.js": 1,
   "routes/builder.js": 4,
   "routes/calendar.js": 1,
   "routes/gpexeImport.js": 3,
-  "routes/organization.js": 14,
+  "routes/organization.js": 19,
+  "routes/tests.js": 1,
   "routes/trainingActivity.js": 3,
-  "routes/trainingLoad.js": 12,
+  "routes/trainingLoad.js": 13,
   "routes/trainingLoadDashboard.js": 1,
   "routes/trainingLoadMetrics.js": 5,
   "sessionTypeService.js": 5,
@@ -107,16 +127,27 @@ const REVIEWED = Object.freeze({
   "trainingLoadAccess.js": 24,
   "trainingLoadDashboardAccess.js": 7,
   "trainingLoadDashboardCatalog.js": 3,
+  "trainingLoadDashboardQuery.js": 13,
+  "trainingLoadDashboardWidgets.js": 1,
   "trainingLoadMetricsAccess.js": 15,
   "trainingLoadOccurrenceService.js": 4,
+  "workspace.js": 1,
 });
 
 test("B0. the branch pattern finds a branch whatever the variable is called", () => {
   for (const line of ['if (ws.type === "club") return', 'w.type !== "team"', 'scope?.type === "club_view"', 'ctx.type == "platform"',
-    '"team" === active.type', 'case "private_coach":', 'if (workspace?.type) x', 'const t = activeWorkspace.type;']) {
+    '"team" === active.type', 'case "private_coach":', 'if (workspace?.type) x', 'const t = activeWorkspace.type;',
+    "if (type === 'club') x", 'else if (type === "club" || type === "team")', 'if (dataWorkspaceType !== "platform")',
+    "['platform','club','team'].includes(type)", "RECOGNIZED_DATA_WORKSPACE_TYPES.includes(dataWorkspaceType)"]) {
     assert.ok(WORKSPACE_BRANCH.test(line), line);
   }
-  for (const line of ['const type = "club";', 'row.type === "drill"', 'event.kind === "club"']) assert.ok(!WORKSPACE_BRANCH.test(line), line);
+  for (const line of ['const type = "club";', 'row.type === "drill"', 'event.kind === "club"', 'if (subtype === "drill")',
+    "if (!MIME_TYPES.includes(x)) fail()", "if (!NODE_TYPES.has(nodeType)) return"]) assert.ok(!WORKSPACE_BRANCH.test(line), line);
+});
+
+test("B3. the R4-2 workspace types (club_view, team_view) are named nowhere in backend/src yet (a tripwire for their first helper)", () => {
+  const named = SOURCES.filter((s) => /["'](?:club_view|team_view)["']/.test(s.text)).map((s) => s.rel);
+  assert.deepEqual(named, []);
 });
 
 test("B1. every workspace-type branch in backend/src is on the reviewed list (the R4-1 standing rule)", () => {
@@ -126,6 +157,7 @@ test("B1. every workspace-type branch in backend/src is on the reviewed list (th
     if (n) found[src.rel] = n;
   }
   assert.ok(Object.hasOwn(found, "calendarEventAccess.js") && found["positionService.js"] >= 8, "the pattern sees branches on any variable");
+  assert.ok(Object.hasOwn(found, "dashboardShellFilter.js") && Object.hasOwn(found, "trainingLoadDashboardQuery.js"), "and on a local type variable or a type list");
   for (const [file, n] of Object.entries(found)) {
     assert.ok(Object.hasOwn(REVIEWED, file), `${file} branches on a workspace type and is not on the reviewed list`);
     assert.ok(n <= REVIEWED[file], `${file}: ${n} workspace-type branches, ${REVIEWED[file]} reviewed`);

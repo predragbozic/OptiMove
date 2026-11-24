@@ -688,10 +688,12 @@ test("18. truth table rows 5 and 9 (a club version WIDENS a role; a second role 
   // 14.7a: a custom made on an assignment that then expires is dead at read time.
   const y = await world();
   const user3 = await F.user("expiring");
-  const a = await assign(y.pa, user3, analyst, y.club, new Date(Date.now() + 1500));
+  // Generous expiry (the setup below runs several locked transactions; a slow machine must not expire it early).
+  const expiresAt = new Date(Date.now() + 6000);
+  const a = await assign(y.pa, user3, analyst, y.club, expiresAt);
   await makeCustom(y.pa, user3, analyst, "club", y.club, y.club, { holding: { assignmentId: a }, add: [W] });
   assert.equal(await twin(user3, W, "club", y.club), true, "the custom acts while the assignment lives");
-  await new Promise((r) => setTimeout(r, 1700));
+  await new Promise((r) => setTimeout(r, Math.max(0, expiresAt.getTime() - Date.now()) + 300));
   assert.equal(await twin(user3, W, "club", y.club), false, "expired: the custom is dead");
   assert.equal(await canOf(user3, W, perms.clubScope(y.club)), false);
 });
@@ -719,11 +721,33 @@ test("19. a default-role writer and a club version writer serialize (7.2 H4): th
   assert.equal(await asLocked(w.admin, [w.club], "exclusive", async (c) => (await c.query(`select public.lock_permission_actor($1, 'club', $2, null, null, null, true) as b`, [w.admin, w.club])).rows[0].b), "club_admin");
 });
 
+test("21. rule 7 across clubs holds when two writes of one client message fire in immediate mode (no per-batch cache)", async () => {
+  const w = await world();
+  await makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] });
+  await makeVersion(w.pa, w.club, ROLE_IDS.club_admin, { remove: ["athletes.remove"] });
+  const sys = await systemRole(w.pa, ["org.view"]);
+  const c = new pg.Client({ connectionString: db.url }); await c.connect();
+  try {
+    // One simple-query message: both inserts share statement_timestamp(); the first is harmless, the second breaks club w.
+    const q = `begin;
+      select set_config('optimove.permission_actor', '${w.pa}' || ':' || pg_current_xact_id()::text, true);
+      set constraints public.permission_role_items_rule7 immediate;
+      update public.permission_roles set revision = 2 where id = '${sys}';
+      insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ('${sys}', 'org.club.edit', '${w.pa}');
+      insert into public.permission_role_items (role_id, permission_word, added_by_user_id) values ('${sys}', 'athletes.remove', '${w.pa}');
+      insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason, items_added) values ('${sys}', 2, 'change', '${w.pa}', 'platform_admin', 'x', '{org.club.edit,athletes.remove}');
+      commit;`;
+    await refused(c.query(q), "23514", /a club's Club admin would lack/);
+    await c.query("rollback");
+  } finally { await c.end(); }
+  assert.equal((await one(`select count(*)::int as n from public.permission_role_items where role_id = $1`, [sys])).n, 1, "nothing written");
+});
+
 test("20. the rollback refuses after a later migration was applied and after a basic role changed (7.7)", async () => {
   const rollback = fs.readFileSync(path.join(RUNBOOKS, "roles-layers-v92-rollback.sql"), "utf8");
-  for (const [label, plant] of [
-    ["a later migration", (c) => c.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ('migrations_v2/209912312359_later.sql', repeat('0', 64), 1, 'test')`)],
-    ["a basic role changed", (c, pa, url) => asActor(url, pa, async (x) => {
+  for (const [label, expected, plant] of [
+    ["a later migration", /v92 rollback refused: later migrations are applied/, (c) => c.query(`insert into public.schema_migrations (migration_name, checksum, execution_time_ms, runner_version) values ('migrations_v2/209912312359_later.sql', repeat('0', 64), 1, 'test')`)],
+    ["a basic role changed", /v92 rollback refused: the basic roles changed after v92/, (c, pa, url) => asActor(url, pa, async (x) => {
       await x.query(`update public.permission_roles set revision = revision + 1 where id = $1`, [ROLE_IDS.team_coach]);
       const rev = (await x.query(`select revision from public.permission_roles where id = $1`, [ROLE_IDS.team_coach])).rows[0].revision;
       await x.query(`delete from public.permission_role_items where role_id = $1 and permission_word = 'athletes.remove'`, [ROLE_IDS.team_coach]);
@@ -736,7 +760,7 @@ test("20. the rollback refuses after a later migration was applied and after a b
       await runMigrations({ databaseUrl: pre.url, migrationsRoot: MIGRATIONS });
       const pa = await fixtures(c).user("pa"); await fixtures(c).grantPlatform(pa);
       await plant(c, pa, pre.url);
-      await refused(c.query(rollback), "23514", /v92 rollback refused: (later migrations|the basic roles changed)/);
+      await refused(c.query(rollback), "23514", expected);
       await c.query("rollback");
       assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows[0].n, 1, `${label}: v92 still recorded`);
     } finally { await c.end(); await pre.drop(); }

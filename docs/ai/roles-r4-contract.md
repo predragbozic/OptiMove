@@ -804,14 +804,19 @@ Migration `migrations_v2/202611241000_roles_v92_layers_foundation.sql`; runbook 
     passes true and locks every live system role `FOR SHARE`, so it serializes with a platform admin's default change
     of any system role (7.2, H4) instead of reading a default that is about to change (test 19). The six-argument v84
     body is dropped; the rollback drops the seven-argument one and restores v84's.
-  - `permission_rule7_check` returns at once for a change of a non-system role, and its cross-club loop runs once per
-    statement batch (a transaction-local flag keyed on the transaction and the statement timestamp), not once per row.
+  - `permission_rule7_check` returns at once for a change of a non-system role (it relies on `owner_scope` being
+    immutable and on roles being archived, never deleted). A per-batch "already checked" flag was tried and removed at the
+    re-review: in immediate mode two writes of one client message share a statement timestamp, so it could skip the
+    second (test 21); the cross-club loop runs on every firing.
   - The rollback locks the v92 tables and the role tables `access exclusive` before its checks; it refuses after a later
     migration and after a basic role changed (test 20).
   - A database refusal "a club's Club admin would lack ..." maps to `409 club_admin_would_lack` in the R2 service
     (`roles-r4-api.test.mjs` test 5).
-  - `roles-r4-checked-gates.test.mjs` B1 enumerates every workspace-type comparison form (`<x>.type ===`,
-    `case "club":`, `workspace?.type`) against a reviewed list of 36 files.
+  - `roles-r4-checked-gates.test.mjs` B1 enumerates the workspace-type comparison forms (`<x>.type ===`, a local
+    `type` / `<name>Type ===`, `case "club":`, `workspace?.type`, a list of type words or a `*WORKSPACE|SCOPE|CONTEXT*TYPES`
+    constant asked `.includes(` / `.has(`; B0 holds a positive and a negative example of each) against a reviewed list of
+    46 files; B3 is a tripwire on the first `club_view` / `team_view` literal in `backend/src`. A form the pattern does
+    not know (for example a type read through a computed key) is still a review matter.
 - **Deferred to R4-3 (with the writers; recorded, not built):**
   - the races of 7.6 between a ceiling close and a guarded write, a version change and a custom, and a ceiling close and
     a club archive: their writers do not exist yet, so the lock order is proven only for the R2 writes and the default /

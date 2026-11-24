@@ -564,7 +564,6 @@ declare
   v_club_admin uuid := (select id from public.permission_roles where basic_key = 'club_admin');
   v_club uuid;
   v_role uuid;
-  v_batch text;
 begin
   -- A club's own role never takes part in rule 7 (it reads system roles only): nothing to check.
   if tg_table_name = 'permission_role_items' then
@@ -591,17 +590,13 @@ begin
                            where ci.role_id = v_club_admin and ci.permission_word = i.permission_word)) then
     raise exception 'permission role item: a system role holds a permission the Club admin role lacks' using errcode = '23514';
   end if;
-  -- The clubs with a live version, once per firing batch: every deferred trigger of one COMMIT (or one SET CONSTRAINTS)
-  -- runs in the same statement and sees the same final state, so the first one checks every club for all of them.
-  v_batch := pg_current_xact_id()::text || ':' || statement_timestamp()::text;
-  if coalesce(current_setting('optimove.rule7_clubs_checked', true), '') is distinct from v_batch then
-    for v_club in select distinct v.club_id from public.permission_club_role_versions v where v.ended_at is null loop
-      if not public.permission_club_rule7_ok(v_club) then
-        raise exception 'permission role item: a club''s Club admin would lack a permission another role holds there' using errcode = '23514';
-      end if;
-    end loop;
-    perform set_config('optimove.rule7_clubs_checked', v_batch, true);
-  end if;
+  -- Every club with a live version, on every firing (no "already checked" cache: in immediate mode two writes of one
+  -- client message share a statement timestamp, so a cache could skip the second). A system role changes rarely.
+  for v_club in select distinct v.club_id from public.permission_club_role_versions v where v.ended_at is null loop
+    if not public.permission_club_rule7_ok(v_club) then
+      raise exception 'permission role item: a club''s Club admin would lack a permission another role holds there' using errcode = '23514';
+    end if;
+  end loop;
   return null;
 end;
 $$ language plpgsql set search_path = pg_catalog, public;

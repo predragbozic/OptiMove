@@ -39,7 +39,7 @@ declare
     ['permission_club_rule7_ok', '0f97c7a6c365e73e19c649bfe1a304b5'],
     ['permission_requests_guard', '92299209ef9b664261566218c0504437'],
     ['permission_role_club_items', '1359f7661c664d6f1f59762ca083d254'],
-    ['permission_rule7_check', '4e54f03c388bab7686dde6a26e12632f'],
+    ['permission_rule7_check', '52321df9f64d8d88315cbad3cccbb65a'],
     ['permission_user_holdings', '7c8511a90c202c5cd94d22fe707de1ce'],
     ['permission_word_honoured', '0c47ce1a6b157c1c9205d4f48438a5ac'],
     ['user_has_permission', '3ee2c276f7caf9fb50066aa753e7c079'],
