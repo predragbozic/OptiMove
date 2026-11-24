@@ -168,6 +168,17 @@ test("3. the stricter half: a closed word the club's admin would NOT hold when t
   await makeCustom(w.admin, w.coach, w.team, w.club, { remove: ["tests.view", "tests.results.view"] });
 });
 
+test("3b. club-scope holdings only: a club admin who also coaches a team of the club, and would hold a closed word only through that team role, cannot put it into a custom", async () => {
+  const w = await world();
+  await setModule(w.pa, w.club, "tests", "close");
+  await makeVersion(w.pa, w.club, ROLE_IDS.club_admin, { remove: ["tests.view", "tests.results.view"] });
+  await F.grantTeam(w.admin, w.team);
+  assert.equal(await one(`select exists (select 1 from public.permission_user_holdings($1) h where h.scope_type = 'team' and h.scope_id = $2 and 'tests.view' = any (h.words)) as x`, [w.admin, w.team]).then((r) => r.x), true,
+    "the admin holds tests.view through the team role");
+  assert.equal(await holdsInClub(w.admin, "tests.view", w.club), false, "a team holding never counts for the club");
+  await refused(makeCustom(w.admin, w.coach, w.team, w.club, { remove: ["athletes.manage"] }), "42501");
+});
+
 test("4. unchanged: an open word the admin does not hold is refused; a platform admin is never limited; another club's admin and an inactive one hold nothing", async () => {
   const w = await world();
   // The club gives up athletes.remove in Team coach and Club admin (a platform admin's versions).
