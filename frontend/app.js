@@ -303,6 +303,7 @@ import {
   emptyBuilderState,
   emptyTemplateFilters,
   emptyTemplatePreview,
+  emptyTaxonomyState,
   state,
 } from "./state.js";
 import {
@@ -4091,7 +4092,7 @@ async function onWorkspaceChanged() {
   resetCalendarSettingsForWorkspaceChange();
   resetSessionTypesForWorkspaceChange();
   // Roles V-1: the tags and presets a view workspace reads are its club's only, so the list is read again for the new one.
-  state.taxonomy = { loaded: false, error: "", nodePresets: [], templateTags: [], libraryRows: { domain: [], category: [], section: [], tag: [], attractor: [] }, addOpenKind: "" };
+  state.taxonomy = emptyTaxonomyState();
   // v87: the positions list and the athletes' positions are the workspace's own.
   resetPositions();
   resetRolesForWorkspaceChange();

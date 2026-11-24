@@ -101,3 +101,12 @@ test("4. Tags & Presets in a view workspace: the rows, no Add, no remove and no 
   assert.ok(box.textContent.includes("Positions"), "and the positions");
   state.taxonomy.addOpenKind = "";
 });
+
+test("5. the tags and presets are read again after a workspace switch: onWorkspaceChanged resets them to the initial shape", async () => {
+  const { emptyTaxonomyState } = await import("../state.js");
+  const src = readFileSync(new URL("../app.js", import.meta.url), "utf8");
+  const body = src.match(/async function onWorkspaceChanged\(\) \{([\s\S]*?)\n\}/)[1];
+  assert.match(body, /state\.taxonomy = emptyTaxonomyState\(\);/);
+  assert.deepEqual(emptyTaxonomyState(), { loaded: false, error: "", nodePresets: [], templateTags: [], libraryRows: { domain: [], category: [], section: [], tag: [], attractor: [] }, addOpenKind: "" });
+  assert.notEqual(emptyTaxonomyState().libraryRows, emptyTaxonomyState().libraryRows, "a fresh object each time");
+});
