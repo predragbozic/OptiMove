@@ -85,10 +85,12 @@ test("1. every club-scope write takes the club's ceiling lock, shared, right aft
   ok(s1.res);
   assert.ok(!s1.seen.some((s) => /lock_club_ceiling/.test(s.t)));
   ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), name: "Team coach" }));
-  // R2's copy keeps only checked words: the seeded view words are dropped and named "not available yet".
-  assert.deepEqual([...copy.items].sort(), ["athletes.manage", "athletes.remove", "org.view"]);
+  // R2's copy keeps only checked words: the seeded view words not checked yet are dropped and named "not available yet"
+  // (roles V-1 checks variables.view and presets.use, so the copy keeps them).
+  const CHECKED_VIEW = ["presets.use", "variables.view"];
+  assert.deepEqual([...copy.items].sort(), ["athletes.manage", "athletes.remove", "org.view", ...CHECKED_VIEW].sort());
   const dropped = ok(c3.res).dropped;
-  assert.deepEqual(dropped.filter((d) => d.reason === "not_available_yet").map((d) => d.word).sort(), VIEW);
+  assert.deepEqual(dropped.filter((d) => d.reason === "not_available_yet").map((d) => d.word).sort(), VIEW.filter((v) => !CHECKED_VIEW.includes(v)));
 });
 
 test("2. O6: an unchecked word is never added or taken away - a club role, a copy, a basic role (by a platform admin), a non-basic system role", async () => {
