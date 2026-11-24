@@ -140,7 +140,9 @@ test("1. the ceiling: a platform admin closes and opens a module; the club's adm
   assert.equal(asPa.modules.find((m) => m.module === "athletes").reason, "Licence");
   assert.equal(asPa.history.length, 1);
   // Everyone else: the identical 404 (a write by the club's own admin, another club's admin, a coach, a random club).
-  notFound(await ceiling(w.adminA, w.A, { open: ["athletes"] }));
+  const byAdmin = await recorded(() => ceiling(w.adminA, w.A, { open: ["athletes"] }));
+  notFound(byAdmin.res);
+  assert.deepEqual(byAdmin.seen, [], "the 404 gate runs before the transaction: no lock taken or waited on (N5)");
   notFound(await srv.api(w.adminB.cookie, `${R}/clubs/${w.A}/ceiling`));
   notFound(await srv.api(w.coach.cookie, `${R}/clubs/${w.A}/ceiling`));
   notFound(await srv.api(w.pa.cookie, `${R}/clubs/${crypto.randomUUID()}/ceiling`));
@@ -177,6 +179,13 @@ test("2. a club version: made by the club's admin's first change, acting for an 
   // The ceiling: a word of a closed module is not added, and a set that carries one is the licence's matter.
   ok(await ceiling(w.pa, w.A, { close: ["athletes"] }));
   code(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 2, remove: ["org.view"] }), 409, "closed_by_club_ceiling");
+  const sysRole = ok(await srv.api(w.pa.cookie, R, { method: "POST", body: { requestKey: key(), name: `Clerk ${hex()}`, scopeTypes: ["club"], items: ["org.view"] } })).role;
+  try {
+    const refused = code(await version(w.pa, sysRole.id, w.A, { expectedRevision: null, add: ["athletes.manage"] }), 409, "closed_by_club_ceiling");
+    assert.deepEqual(refused.words, ["athletes.manage"], "a closed word is added by nobody, a platform admin included");
+  } finally {
+    ok(await srv.api(w.pa.cookie, `${R}/${sysRole.id}/archive`, { method: "POST", body: { requestKey: key(), expectedRevision: 1, reason: "Done" } }));
+  }
   ok(await ceiling(w.pa, w.A, { open: ["athletes"] }));
   // The identical 404: another club's admin, a coach, a club's own role, Platform admin, Independent coach, a random id.
   notFound(await version(w.adminB, ROLE_IDS.team_coach, w.A, { expectedRevision: 2, remove: ["athletes.remove"] }));
@@ -258,6 +267,13 @@ test("4. a custom role of an old-table coach: frozen, live only through its hold
   assert.equal(await holds(w.adminA2.id, "org.club.edit", "club", w.A), false);
   code(await custom(w.pa, w.adminA2.id, w.A, { roleId: ROLE_IDS.club_admin, scopeType: "club", scopeId: w.A, expectedRevision: 1, remove: ["staff.assign"] }), 409, "club_admin_requires");
   code(await endCustom(w.adminA, w.adminA2.id, paMade.custom.id), 409, "admin_not_narrowable");
+  // O5 reaches every role of a club admin, not only Club admin itself: adminA2 also coaches T1 (no database guard
+  // knows this; the service is the only one).
+  await F.grantTeam(w.adminA2.id, w.T1);
+  code(await custom(w.adminA, w.adminA2.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] }), 409, "admin_not_narrowable");
+  const paTc = ok(await custom(w.pa, w.adminA2.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] }));
+  code(await srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/custom-word-removal`, { method: "POST", body: { requestKey: key(), reason: "x", word: "org.view", customIds: [paTc.custom.id] } }), 409, "admin_not_narrowable");
+  code(await endCustom(w.adminA, w.adminA2.id, paTc.custom.id), 409, "admin_not_narrowable");
   // A role the user does not hold there, another club's team, another club's admin, a random user: 404.
   notFound(await custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T2, expectedRevision: null, remove: ["athletes.remove"] }));
   notFound(await custom(w.adminA, w.coachB.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.TB, expectedRevision: null, remove: ["athletes.remove"] }));
@@ -366,7 +382,7 @@ test("8. races of 7.6: ceiling close against a guarded write, a version change a
   const helper = ok(await srv.api(w.adminA.cookie, R, { method: "POST", body: { requestKey: key(), clubId: w.A, name: `Helper ${hex()}`, scopeTypes: ["team"], items: ["org.view"] } })).role;
   // (a) A ceiling close (exclusive) holds; an R2 assignment in the club (shared) waits, then passes.
   let hold = holdFirst(svc.setRolesWriteHoldForTests);
-  let first = ceiling(w.pa, w.A, { close: ["calendar"] });
+  let first = ceiling(w.pa, w.A, { close: ["messages"] });
   await reachedOr(hold, first);
   let second = srv.api(w.adminA.cookie, `${R}/assignments`, { method: "POST", body: { requestKey: key(), reason: "Needed", userId: w.target.id, roleId: helper.id, scopeType: "team", scopeId: w.T1 } });
   assert.ok(await someoneWaits());
@@ -402,7 +418,7 @@ test("8. races of 7.6: ceiling close against a guarded write, a version change a
   // (d) A ceiling close holds the club row FOR SHARE; the club archive waits for it, then archives.
   const C = await F.club("C");
   hold = holdFirst(svc.setRolesWriteHoldForTests);
-  first = ceiling(w.pa, C, { close: ["calendar"] });
+  first = ceiling(w.pa, C, { close: ["messages"] });
   await reachedOr(hold, first);
   second = srv.api(w.pa.cookie, `/api/organization/clubs/${C}`, { method: "DELETE" });
   assert.ok(await someoneWaits(), "the archive waits on the ceiling writer");
@@ -412,7 +428,7 @@ test("8. races of 7.6: ceiling close against a guarded write, a version change a
   // The other order: the archive lands after the gate, before the locks - the ceiling writer answers the identical 404.
   const D = await F.club("D");
   hold = holdFirst(svc.setRolesBeforeLocksHoldForTests);
-  first = ceiling(w.pa, D, { close: ["calendar"] });
+  first = ceiling(w.pa, D, { close: ["messages"] });
   await reachedOr(hold, first);
   ok(await srv.api(w.pa.cookie, `/api/organization/clubs/${D}`, { method: "DELETE" }));
   hold.release();
@@ -434,7 +450,7 @@ test("8. races of 7.6: ceiling close against a guarded write, a version change a
 test("9. recorded lock order: every R4-3 write takes R2's request-key lock, then the club's ceiling lock (exclusive for the ceiling and versions, shared for customs), then rows, and no lock after its first write; a default change with default_follow takes its clubs' exclusive locks first", async () => {
   const w = await world();
   const steps = [];
-  let r = await recorded(() => ceiling(w.pa, w.A, { close: ["calendar"] })); ok(r.res); steps.push(["ceiling", r.seen, w.A, "exclusive"]);
+  let r = await recorded(() => ceiling(w.pa, w.A, { close: ["messages"] })); ok(r.res); steps.push(["ceiling", r.seen, w.A, "exclusive"]);
   r = await recorded(() => version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: null, remove: ["athletes.remove"] })); ok(r.res); steps.push(["version create", r.seen, w.A, "exclusive"]);
   r = await recorded(() => version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 1, add: ["athletes.remove"] })); ok(r.res); steps.push(["version change", r.seen, w.A, "exclusive"]);
   const c = await recorded(() => custom(w.adminA, w.coach.id, w.A, { roleId: ROLE_IDS.team_coach, scopeType: "team", scopeId: w.T1, expectedRevision: null, remove: ["athletes.remove"] }));
@@ -477,7 +493,7 @@ test("10. the uncertain COMMIT: an answer lost after a COMMIT that happened is v
   const lostAfter = { fault: (raw) => raw.query("commit").then(() => { throw new Error("the answer was lost"); }) };
   svc.setRolesCommitForTests(lostAfter);
   let res;
-  try { res = ok(await ceiling(w.pa, w.A, { close: ["calendar"] })); } finally { svc.setRolesCommitForTests(); }
+  try { res = ok(await ceiling(w.pa, w.A, { close: ["messages"] })); } finally { svc.setRolesCommitForTests(); }
   assert.equal(res.verified_after_commit_error, true);
   assert.equal((await one(`select count(*)::int as n from public.club_permission_ceiling where club_id = $1`, [w.A])).n, 1);
   const k1 = key();
