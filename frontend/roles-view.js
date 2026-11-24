@@ -86,6 +86,17 @@ export function renderRolesPanelHtml() {
   const ctx = rolesContext();
   const d = rs();
   if (!ctx) return `<section class="panel data-sources roles-panel"><p class="muted data-sources-empty">Roles are not available in this workspace.</p></section>`;
+  // Roles R4-4 (PR B): a club's roles are the Club roles island (built-in roles with the club's own versions, and the
+  // club's own roles). The R3 form below still opens for one of the club's own roles (create, edit, copy, archive).
+  if (ctx.clubId && !d.form) {
+    const clubName = (state.organization?.data?.clubs || []).find((c) => String(c.id) === String(ctx.clubId))?.name || "";
+    return `
+    <section class="roles-panel roles-panel-layers">
+      ${commandBanner(d)}
+      ${noticeHtml(d)}
+      <div class="club-roles-host" data-club-roles-host data-club-id="${escapeAttr(ctx.clubId)}" data-club-name="${escapeAttr(clubName)}"></div>
+    </section>`;
+  }
   let body;
   if (d.roles && d.ctxKey === (ctx.clubId || "system")) body = d.form ? formHtml(d, ctx) : listHtml(d, ctx);
   else if (d.error) body = `<div class="data-sources-error" role="alert"><p>${escapeHtml(d.error)}</p><div class="data-sources-form-actions"><button class="plain-button" type="button" data-action="roles-retry">Try again</button></div></div>`;

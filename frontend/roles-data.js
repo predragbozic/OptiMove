@@ -7,6 +7,7 @@ import { api } from "./api.js";
 import { CENTRAL_CALENDAR_WRITE_BOUND_MS, centralCalendarErrorInfo, centralCalendarOutcomeUnknown, newCentralCalendarRequestKey } from "./central-calendar-data.js";
 import { heldPermissions } from "./permission-nav.js";
 import { emptyRolesState as emptyRoles, state } from "./state.js";
+import { resetClubRoles, resetPerson } from "./roles-layers-data.js";
 
 export const ROLES_BASE = "/api/organization/roles";
 export const newRolesRequestKey = newCentralCalendarRequestKey;
@@ -41,6 +42,9 @@ export function resetRolesForWorkspaceChange() {
   state.roles = emptyRoles();
   generation += 1;
   whoGeneration += 1;
+  // R4-4: the role-layer islands' state belongs to the old workspace's club too.
+  resetClubRoles();
+  resetPerson();
 }
 
 const query = (params) => {
