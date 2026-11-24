@@ -223,13 +223,14 @@ test("Dashboards no longer renders its own Filter button - the Data & Analysis s
   assert.equal((shellHtml.match(/data-action="training-load-filter-open"/g) || []).length, 1, "exactly one Filter control on the page");
 });
 
-test("the Dashboards top bar groups its controls (dashboard/edit, period, activity context) and keeps the period inputs at their own iOS-safe size", () => {
+test("the compact Dashboards toolbar defers period fields into a hidden panel", () => {
   resetState();
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.dashboards = [dashboard()];
   const html = renderTrainingLoadAnalysisHtml();
-  assert.equal((html.match(/class="tl-analysis-topbar-group"/g) || []).length, 3);
-  assert.match(html, /training-load-analysis-period-from/);
-  assert.match(html, /training-load-analysis-period-to/);
+  assert.match(html, /tl-analysis-topbar-compact/);
+  assert.match(html, /data-dashboard-controls="period"/);
+  assert.match(html, /id="dashboard-period-panel"[^>]*hidden/);
+  assert.match(html, /data-dashboard-controls="fields"/);
   assert.match(html, />Choose activity</);
 });

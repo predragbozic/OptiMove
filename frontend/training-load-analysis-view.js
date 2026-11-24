@@ -3,7 +3,7 @@ import {dashboardDisclosureOpen} from './training-load-dashboard-disclosures.js'
 import {GALLERY_CHOICES} from './training-load-gallery-editor.js';
 import {renderDashboardPages} from './training-load-pages-view.js';
 import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from './training-load-calculation-view.js';
-import { analysisChartInteractionGeneration, ANALYSIS_PERIOD_PRESETS, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisPeriodPresetKey, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { analysisChartInteractionGeneration, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
 import { formatDashboardValue as formatValue, renderDashboardMetricTable } from "./training-load-dashboard-table.js";
@@ -232,7 +232,7 @@ function menuItemHtml({ action, label, dataset = {}, disabled = false, danger = 
 
 function renderDashboardMenuHtml() {
   const a = state.trainingLoad.analysis;
-  if (!a.dashboard || (!canEdit() && !canDeleteDashboard())) return "";
+  if (!a.dashboard) return "";
   const open = a.menu === "dashboard";
   const isActive = a.dashboard.id === a.activeDashboardId;
   return `
@@ -241,6 +241,7 @@ function renderDashboardMenuHtml() {
       ${open ? `
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu" role="menu" aria-label="Dashboard actions">
+          ${menuItemHtml({ action: "training-load-analysis-print", label: "Export page as PDF" })}
           ${canEdit() ? `
             ${menuItemHtml({ action: "training-load-analysis-rename-dashboard", label: "Rename" })}
             ${isActive
@@ -259,45 +260,16 @@ function renderDashboardMenuHtml() {
   `;
 }
 
-function renderPeriodMenuHtml() {
-  const a = state.trainingLoad.analysis;
-  const open = a.menu === "period";
-  const presetKey = analysisPeriodPresetKey();
-  const label = ANALYSIS_PERIOD_PRESETS.find((p) => p.key === presetKey)?.label || "Custom";
-  return `
-    <div class="tl-popover-anchor">
-      <button type="button" class="plain-button tl-menu-trigger tl-period-trigger ${open ? "is-open" : ""}" data-action="training-load-analysis-open-menu" data-menu="period" aria-haspopup="menu" aria-expanded="${open ? "true" : "false"}" aria-label="Period preset">
-        <span class="tl-dash-picker-trigger-text"><small>Period</small><strong>${escapeHtml(label)}</strong></span>
-        ${CHEVRON_ICON}
-      </button>
-      ${open ? `
-        ${popoverBackdropHtml()}
-        <div class="tl-popover tl-menu" role="menu" aria-label="Period presets">
-          ${ANALYSIS_PERIOD_PRESETS.map((p) => menuItemHtml({ action: "training-load-analysis-period-preset", label: escapeHtml(p.label), dataset: { preset: p.key }, checked: p.key === presetKey })).join("")}
-          ${menuItemHtml({ action: "training-load-analysis-close-popovers", label: "Custom dates (From / To)", checked: presetKey === "custom" })}
-        </div>
-      ` : ""}
-    </div>
-  `;
-}
-
 function renderTopBarHtml() {
-  const a = state.trainingLoad.analysis;
   return `
-    <div class="tl-analysis-topbar">
-      <div class="tl-analysis-topbar-group">
-        ${renderDashboardPickerHtml()}
-        ${renderDashboardMenuHtml()}
-      </div>
-      <div class="tl-analysis-topbar-group">
-        ${renderPeriodMenuHtml()}
-        <label class="tl-analysis-control tl-analysis-date-control"><span>From</span><input type="date" data-action="training-load-analysis-period-from" value="${escapeAttr(a.period.dateFrom)}"></label>
-        <label class="tl-analysis-control tl-analysis-date-control"><span>To</span><input type="date" data-action="training-load-analysis-period-to" value="${escapeAttr(a.period.dateTo)}"></label>
-      </div>
-      <div class="tl-analysis-topbar-group">
-        ${renderActivityPickerHtml()}
-      </div>
-      ${a.dashboard?'<button type="button" class="plain-button compact-button" data-action="training-load-analysis-print">Export page as PDF</button>':''}
+    <div class="tl-analysis-topbar tl-analysis-topbar-compact">
+      <div class="tl-compact-dashboard-picker">${renderDashboardPickerHtml()}</div>
+      <div data-dashboard-controls="period" class="tl-compact-period-host"></div>
+      <div class="tl-compact-dashboard-menu">${renderDashboardMenuHtml()}</div>
+      <section id="dashboard-period-panel" class="tl-compact-filter-panel" aria-label="Period and activity" hidden>
+        <div data-dashboard-controls="fields"></div>
+        <div class="tl-compact-activity-filter">${renderActivityPickerHtml()}</div>
+      </section>
       ${renderLayoutBarHtml()}
     </div>
   `;

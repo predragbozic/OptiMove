@@ -3,3 +3,4 @@
 export { mountIsland, unmountIsland, isIslandMounted } from "./mount.jsx";
 export { BottomNav } from "./bottom-nav.jsx";
 export { ClubLicence } from "./club-licence.jsx";
+export { DashboardPeriodButton, DashboardPeriodFields, DashboardPageStrip } from "./dashboard-controls.jsx";
