@@ -43,6 +43,8 @@ async function runCommand(holder, command, render, { onSaved, onRefused, check =
     const answer = await send(command.path, command.body);
     if (!current()) return;
     holder.command = null;
+    // A read begun before this write may land after it: read once more when it does (it must not undo the save).
+    if (holder.loading) holder.stale = true;
     onSaved(answer);
   } catch (error) {
     if (!current()) return;
@@ -299,7 +301,8 @@ export async function removeFromCustoms(render, { check = false } = {}) {
       clubRoles.takenWords = [...clubRoles.takenWords.filter((w) => w !== command.word), command.word];
       const count = command.body.customIds.length;
       // Only the listed people were sent; with a cut list more may still hold it (the full list is in Users).
-      clubRoles.notice = `Taken from ${count} ${count === 1 ? "person" : "people"}: ${wordsText(clubRoles.takenWords)}.`
+      // One word: the people it was taken from; several words reached different people, so no single count.
+      clubRoles.notice = (clubRoles.takenWords.length > 1 ? `Taken from them: ${wordsText(clubRoles.takenWords)}.` : `Taken from ${count} ${count === 1 ? "person" : "people"}: ${wordsText(clubRoles.takenWords)}.`)
         + (sh?.truncated ? " More people may still have it – see Access in Users." : "");
       clubRoles.noticeTone = "ok";
       if (rest.length && sh) clubRoles.stillHolding = { ...sh, words: rest };
@@ -328,7 +331,7 @@ export function emptyPerson() {
   return {
     clubId: "", userId: "", epoch: 0, catalog: null, view: null, loading: false, error: "", editKey: "", draft: null,
     reason: "", command: null, notice: "", noticeTone: "ok", drift: null, driftError: "", endKey: "", endReason: "",
-    stale: false, driftAsk: null,
+    stale: false, driftAsk: null, noRole: false,
   };
 }
 export const person = emptyPerson();
@@ -337,8 +340,15 @@ let driftGeneration = 0;
 
 // Drift and the chosen person are read again on the next draw: on entering Users, after a role is given or taken
 // there (R2), and after a club version or a removal in Roles.
+// A mark from another module (R2's assign / revoke in Users repaint only their own surface) also draws Access again,
+// so its re-read runs in the same flow: the actions module registers that draw.
+let personStaleListener = null;
+export function onPersonStale(listener) {
+  personStaleListener = listener;
+}
 export function markPersonStale() {
   person.stale = true;
+  if (personStaleListener) queueMicrotask(() => personStaleListener?.());
 }
 
 export async function refreshPerson(render) {
@@ -391,6 +401,7 @@ export async function loadPerson(userId, render, { keepNotice = false } = {}) {
   person.userId = userId || "";
   if (!sameView) person.view = null;
   person.error = "";
+  person.noRole = false;
   person.editKey = "";
   person.draft = null;
   if (!keepNotice) person.notice = "";
@@ -406,7 +417,9 @@ export async function loadPerson(userId, render, { keepNotice = false } = {}) {
     person.view = view;
   } catch (error) {
     if (mine !== personGeneration || person.userId !== userId || person.clubId !== clubId) return;
-    person.error = Number(error?.status) === 404 ? "This person has no role in this club you can change." : readErrorText(error, "This person's access");
+    // A 404 is an answer, not a failure: said plainly, without Try again.
+    if (Number(error?.status) === 404) person.noRole = true;
+    else person.error = readErrorText(error, "This person's access");
   } finally {
     if (mine === personGeneration && person.userId === userId && person.clubId === clubId) person.loading = false;
   }

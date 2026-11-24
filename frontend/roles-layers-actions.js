@@ -5,7 +5,7 @@
 // (and Person access to one person); nothing is shown or written for a club that is not the host's.
 import {
   answerClubRole, askDriftRemove, cancelDriftAsk, cancelHoldingEdit, clubRoleChanges, clubRoles, clubRolesNeedLoad, closeClubRole, dismissStillHolding, editHolding,
-  endPersonCustom, loadClubRoles, loadPerson, loadPersonClub, openClubRole, person, personChanges, refreshPerson, removeDriftWord,
+  endPersonCustom, loadClubRoles, loadPerson, loadPersonClub, onPersonStale, openClubRole, person, personChanges, refreshPerson, removeDriftWord,
   removeFromCustoms, saveClubRole, savePersonCustom, toggleClubRoleWord, togglePersonWord, writeOpen,
 } from "./roles-layers-data.js";
 import { handleRolesAction } from "./roles-actions.js";
@@ -97,6 +97,7 @@ function personProps(host) {
     view: person.view,
     loading: person.loading,
     error: person.error,
+    noRole: person.noRole,
     editKey: person.editKey,
     draft: person.draft,
     changes: personChanges(),
@@ -153,6 +154,9 @@ function rerenderPerson() {
   else if (clubId && person.clubId === clubId && person.stale) void refreshPerson(rerenderPerson);
   void mount("person", host, "PersonAccess", personProps, "person_access");
 }
+
+// A stale mark from Users (R2 assign / revoke) or Roles draws Access again; rerenderPerson then re-reads it.
+onPersonStale(() => { if (hosts.person) rerenderPerson(); });
 
 function swap(which, host) {
   if (hosts[which] && hosts[which] !== host && islands) islands.unmountIsland(hosts[which]);

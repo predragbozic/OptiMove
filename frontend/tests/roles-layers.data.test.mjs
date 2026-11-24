@@ -477,7 +477,8 @@ test("19. an O3 answer whose read failed reads the club's roles again", async ()
 test("14. a person of no role here reads one plain sentence; an older read never replaces a newer one", async () => {
   await data.loadPersonClub(CLUB);
   await data.loadPerson(USER2);
-  assert.equal(data.person.error, "This person has no role in this club you can change.");
+  assert.equal(data.person.noRole, true, "a 404 is a plain answer");
+  assert.equal(data.person.error, "", "not a failure with Try again");
   let release;
   server.fail = new Promise((resolve) => { release = resolve; });
   const older = data.loadPerson(USER);
@@ -486,4 +487,37 @@ test("14. a person of no role here reads one plain sentence; an older read never
   await older;
   assert.equal(data.person.userId, USER2);
   assert.equal(data.person.view, null);
+});
+
+test("20. a read begun before a save that lands after it cannot undo the save: the roles are read once more", async () => {
+  await data.loadClubRoles(CLUB);
+  data.openClubRole(COACH_ROLE);
+  data.toggleClubRoleWord("calendar.edit");
+  data.clubRoles.reason = "x";
+  // An entry read starts and is held; the save goes through meanwhile.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const before = JSON.parse(JSON.stringify((await (await fetch(`/api/organization/roles/clubs/${CLUB}/roles`)).json())));
+  server.fail = held;
+  const slow = data.loadClubRoles(CLUB);
+  await data.saveClubRole();
+  assert.equal(data.systemRoleOf(COACH_ROLE).state, "own_version");
+  release({ status: 200, body: before }); // the old view, from before the save
+  await slow;
+  assert.equal(data.clubRoles.stale, true, "the late old answer is read over");
+  assert.equal(data.clubRolesNeedLoad(CLUB), true);
+  await data.loadClubRoles(CLUB);
+  assert.equal(data.systemRoleOf(COACH_ROLE).state, "own_version");
+});
+
+test("21. several words taken: one sentence names them all with no single count", async () => {
+  await data.loadClubRoles(CLUB);
+  server.customs = [{ customId: CUSTOM1, userId: USER, name: "Ana Test", roleId: COACH_ROLE, roleName: "Team coach", scopeType: "team", scopeId: TEAM, words: ["calendar.edit", "org.view"] }, { customId: CUSTOM2, userId: USER2, name: "Bo Test", roleId: COACH_ROLE, roleName: "Team coach", scopeType: "team", scopeId: TEAM, words: ["org.view"] }];
+  data.openClubRole(COACH_ROLE);
+  data.toggleClubRoleWord("calendar.edit");
+  data.toggleClubRoleWord("org.view");
+  data.clubRoles.reason = "x";
+  await data.saveClubRole();
+  await data.removeFromCustoms();
+  assert.equal(data.clubRoles.notice, `Taken from them: ${rules.wordsText(["calendar.edit", "org.view"])}.`);
 });

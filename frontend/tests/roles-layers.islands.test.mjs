@@ -237,3 +237,37 @@ test("12. a read error in Access offers Try again; two holdings never share an i
   assert.match(el.textContent, /Ana Test has no role in this club yet\./);
   islands.unmountIsland(el);
 });
+
+test("13. a role given or taken in Users (who-holds-what is read again) reads Access again in the same flow", async () => {
+  const { installFetchMock } = await import("./support/fetch-mock.mjs");
+  const CLUB = "11111111-0000-4000-8000-0000000000c1";
+  const USER = "33333333-0000-4000-8000-000000000001";
+  const seen = [];
+  installFetchMock(async (call) => {
+    seen.push(`${call.method} ${call.url}`);
+    if (call.url.startsWith("/api/organization/roles/catalog")) return { status: 200, body: CATALOG };
+    if (call.url.endsWith("/custom-drift")) return { status: 200, body: { customs: [] } };
+    if (call.url === `/api/organization/roles/users/${USER}/clubs/${CLUB}`) return { status: 200, body: personProps().view };
+    if (call.url.startsWith("/api/organization/roles/assignments")) return { status: 200, body: { assignments: [] } };
+    return { status: 404, body: { error: "notFound" } };
+  });
+  const { state } = await import("../state.js");
+  state.organization.data = { users: [{ id: USER, name: "Ana Test" }], teams: [] };
+  const actions = await import("../roles-layers-actions.js");
+  const data = await import("../roles-layers-data.js");
+  const rolesData = await import("../roles-data.js");
+  const el = host();
+  el.setAttribute("data-person-access-host", "");
+  el.dataset.clubId = CLUB;
+  actions.syncRolesLayers(document);
+  await data.loadPersonClub(CLUB);
+  await data.loadPerson(USER);
+  const reads = () => seen.filter((s) => s === `GET /api/organization/roles/users/${USER}/clubs/${CLUB}`).length;
+  const before = reads();
+  // settleAssign / settleRevoke (roles-actions.js) end with this read; its render repaints only the R2 surface.
+  await rolesData.loadWho({}, () => {});
+  for (let i = 0; i < 8; i += 1) await tick();
+  assert.equal(reads(), before + 1, "the chosen person is read again");
+  actions.leaveRolesLayers();
+  el.remove();
+});

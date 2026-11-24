@@ -318,7 +318,14 @@ re-review.
   - the outcome of a removal names every word taken and the number of people, says when the list was cut, and a
     `custom_changed` refusal drops the offer with its own sentence; the caller's own custom is never listed;
   - a pending role's row says *Answer*; *All roles* is off while a write is open; the history uses DD.MM.YYYY.
-- **Recorded, not built (LOW):** an *Access* button on each user row; asking before an unsaved draft is dropped (*All
+- **After the narrow re-reviews** (code: one MEDIUM half closed; both READY WITH NON-BLOCKING NOTES): a stale mark of
+  Access now draws it again in the same flow, so a role given or taken in Users reads the chosen person and the drift
+  again (the R2 surface repaints only itself); a read begun before a save that lands after it is read over; several
+  words taken read "Taken from them: …" with no single count; a person of no role here is a plain line without *Try
+  again*; the drift list stays open after a removal.
+- **Recorded, not built (LOW):** leaving out a club admin's custom (made by a platform admin) from *Take it from them*
+  for a non-platform caller – today the whole word is refused with `admin_not_narrowable` and the sentence says so; an
+  *Access* button on each user row; asking before an unsaved draft is dropped (*All
   roles*, *Cancel*, another person); a shorter save bar on small phones; the iOS keyboard over the save bar (a physical
   device).
 - **Tests.** `frontend/tests/roles-layers.data.test.mjs` (14, a fake server keeping the R4-3 rules; mutations of the

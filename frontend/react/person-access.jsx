@@ -3,7 +3,7 @@
 // ("<Role> (custom)", O4); change one person's permissions, or go back to the role. On top, the people whose custom
 // version still has permissions their role no longer gives (Q15), with Take it from them too. A pure view over
 // roles-layers-data.js; every change goes back through a callback.
-import { useId } from "react";
+import { useId, useState } from "react";
 import { RoleWords } from "./role-words.jsx";
 import { wordsText } from "../roles-layers-rules.js";
 
@@ -11,6 +11,7 @@ const ddmmyyyy = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTi
 
 function Drift({ drift, busy, ask, onDriftAsk, onDriftReason, onDriftCancel, onDriftRemove }) {
   const reasonId = useId();
+  const [open, setOpen] = useState(false);
   if (!drift?.length) return null;
   const byRoleWord = [];
   for (const c of drift) for (const w of c.words) {
@@ -20,7 +21,7 @@ function Drift({ drift, busy, ask, onDriftAsk, onDriftReason, onDriftCancel, onD
   }
   const peopleCount = new Set(drift.map((c) => c.userId)).size;
   return (
-    <details className="person-access-drift" data-person-drift open={Boolean(ask) || undefined}>
+    <details className="person-access-drift" data-person-drift open={open || Boolean(ask)} onToggle={(ev) => setOpen(ev.currentTarget.open)}>
       <summary>{`${peopleCount} ${peopleCount === 1 ? "person still has" : "people still have"} permissions their role no longer gives`}</summary>
       <ul>
         {byRoleWord.map((e) => (
@@ -134,7 +135,7 @@ function Holding(props) {
 
 export function PersonAccess(props) {
   const {
-    clubName = "", people = [], userId = "", selfId = "", catalog = null, view = null, loading = false, error = "", editKey = "",
+    clubName = "", people = [], userId = "", selfId = "", catalog = null, view = null, loading = false, error = "", noRole = false, editKey = "",
     endKey = "", command = null, notice = "", noticeTone = "ok", drift = null, driftError = "", platform = false, teams = [],
     driftAsk = null, onPick, onCheck, onDriftAsk, onDriftReason, onDriftCancel, onDriftRemove, onRetry,
   } = props;
@@ -178,6 +179,7 @@ export function PersonAccess(props) {
         </select>
       </label>
       {loading ? <p className="muted" role="status">Loading…</p> : null}
+      {noRole ? <p className="muted" role="status">This person has no role in this club you can change.</p> : null}
       {view && catalog ? (
         <div className="person-access-holdings">
           {!view.holdings.length ? <p className="muted">{`${name} has no role in this club yet.`}</p> : null}
