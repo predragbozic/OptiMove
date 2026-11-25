@@ -501,6 +501,14 @@ test("7. the calendar (calendar.view): club_view and team_view read their club's
     assert.ok(!raw.text.includes(SECRET), `${label}: no notes`);
     for (const e of events) assert.deepEqual([e.canManage, e.notes, e.details, e.eventTypeId], [false, undefined, undefined, undefined], label);
     assert.ok(cal.days.flatMap((d) => d.items).every((i) => !("athletes" in i)), `${label}: include=athletes left out`);
+    // Nor an athlete filter (P-1): filtering by an athlete id, real or not, answers the unfiltered calendar, so the
+    // answer never tells whether that athlete has events.
+    const plain = (await srv.api(who.cookie, `/api/calendar?${q}`)).text;
+    for (const id of [w.athA.id, crypto.randomUUID()]) {
+      const filtered = await srv.api(who.cookie, `/api/calendar?${q}&athleteIds=${id}`);
+      assert.equal(filtered.status, 200, `${label}: athleteIds`);
+      assert.equal(filtered.text, plain, `${label}: athleteIds is ignored without the athletes' names`);
+    }
     assert.ok(cal.teams.some((t) => String(t.teamId) === String(w.TA1)), `${label}: its teams`);
     // The event types: club A's catalog (the admin's), never another club's.
     assert.deepEqual(ok(await srv.api(who.cookie, `${E}/types`)).types.map((t) => String(t.id)).sort(), adminTypes, `${label}: club A's types`);

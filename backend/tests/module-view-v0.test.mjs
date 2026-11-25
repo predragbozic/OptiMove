@@ -202,4 +202,21 @@ test("11. a custom parameter pattern is matched whole: an alternation /^a|b$/ ad
   }
   assert.doesNotThrow(() => viewEntryGate("calendar", [{ method: "GET", path: "/:key", params: { key: /^[a-z]+$/i } }]), "the i flag is harmless");
 });
+
+test("12. roles V-3, the calendar's write guards behind the gate: a view context (readOnly, view) has no event owner and no write basis, even with a platform admin's authz; the same coach context without them keeps both", async () => {
+  const { eventOwnerForWorkspace, eventWriteBasis } = await import("../src/calendarEventAccess.js");
+  const platformAuthz = { ...authzWith(["calendar.view"]), platformRoles: ["platform_admin"] };
+  const coach = { type: "coach", userId: "u1", workspace: { type: "club", scopeId: CLUB }, authz: platformAuthz };
+  const owner = eventOwnerForWorkspace(coach);
+  assert.equal(owner?.scope, "club", "a coach context has an owner");
+  assert.ok(eventWriteBasis(coach, { ...owner, clubActive: true }), "and a write basis");
+  for (const view of [
+    { ...coach, readOnly: true, view: { type: "club_view", id: CLUB, clubId: CLUB }, workspace: clubView },
+    { ...coach, readOnly: true },
+    { ...coach, view: { type: "team_view", id: TEAM, clubId: CLUB } },
+  ]) {
+    assert.equal(eventOwnerForWorkspace(view), null, "no owner from a view context");
+    assert.equal(eventWriteBasis(view, { ...owner, clubActive: true }), null, "no write basis in a view context");
+  }
+});
 }
