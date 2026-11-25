@@ -36,7 +36,7 @@ test("1. the module keys, words and open list are the backend's (moduleView.js)"
   assert.deepEqual(vm.MODULE_VIEW_WORDS, words);
   const open = src.match(/OPEN_VIEW_MODULES = Object\.freeze\(\[([^\]]*)\]\)/)[1].split(",").map((s) => s.trim().replace(/"/g, "")).filter(Boolean);
   assert.deepEqual([...vm.OPEN_VIEW_MODULES], open);
-  assert.deepEqual(open, ["data_configuration", "presets", "calendar"], "V-1 opens Data configuration and Tags & Presets, V-3 the calendar");
+  assert.deepEqual(open, ["data_configuration", "presets", "calendar", "tests", "tests_results"], "V-1 opens Data configuration and Tags & Presets, V-3 the calendar, V-4 Tests");
   for (const place of vm.VIEW_NAV_PLACES) for (const m of place.modules) assert.ok(Object.hasOwn(vm.MODULE_VIEW_WORDS, m), m);
 });
 
@@ -45,14 +45,14 @@ test("2. the places cover exactly the menu R4-4 hides in a view workspace", () =
   assert.deepEqual([...vm.VIEW_BASE_TABS], [...nav.VIEW_WORKSPACE_TABS]);
 });
 
-test("3. V-1, V-3: a view workspace holding every view word sees Home, Settings (Overview, Clubs, Teams, Tags & Presets), the Calendar, Training Load and Account; nothing else", () => {
+test("3. V-1, V-3, V-4: a view workspace holding every view word sees Home, Settings (Overview, Clubs, Teams, Tags & Presets), the Calendar, Tests, Training Load and Account; nothing else", () => {
   as(CLUB_VIEW, ["org.view", ...Object.values(vm.MODULE_VIEW_WORDS)]);
   for (const module of Object.keys(vm.MODULE_VIEW_WORDS)) {
-    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets", "calendar"].includes(module), module);
+    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets", "calendar", "tests", "tests_results"].includes(module), module);
   }
-  const shown = ['[data-library-tab="training-load"]', "#calendarToggle"];
+  const shown = ['[data-library-tab="training-load"]', "#calendarToggle", '[data-library-tab="tests"]'];
   assert.deepEqual(vm.viewHiddenMenuSelectors().sort(), nav.VIEW_WORKSPACE_MENU_HIDDEN.filter((s) => !shown.includes(s)).sort());
-  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "central-calendar", "training-load"]);
+  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "central-calendar", "tests", "training-load"]);
   assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams", "presets"]);
   assert.deepEqual(vm.viewTrainingLoadSections(), ["variables"]);
   nav.renderAccessNav();
@@ -114,4 +114,13 @@ test("6. every notification opener in app.js that a view workspace may follow is
   const body = src.match(/function viewModuleOfOpener\(open\) \{([\s\S]*?)\n\}/)[1];
   for (const name of new Set(wrapped)) assert.ok(new RegExp(`open === ${name}\\b`).test(body), `${name} has a module`);
   for (const m of body.matchAll(/return "(\w+)"/g)) assert.ok(Object.hasOwn(vm.MODULE_VIEW_WORDS, m[1]), m[1]);
+});
+
+test("7. V-4: tests.results.view alone opens no Tests place (every Tests read needs tests.view first)", () => {
+  as(CLUB_VIEW, ["org.view", "tests.results.view"]);
+  assert.equal(vm.viewModuleOpen("tests_results"), true);
+  assert.ok(vm.viewHiddenMenuSelectors().includes('[data-library-tab="tests"]'));
+  assert.ok(!vm.viewWorkspaceTabs().includes("tests"));
+  as(CLUB_VIEW, ["org.view", "tests.view"]);
+  assert.ok(vm.viewWorkspaceTabs().includes("tests"));
 });

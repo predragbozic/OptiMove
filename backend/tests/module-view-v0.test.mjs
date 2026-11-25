@@ -42,8 +42,8 @@ test("1. every module's view word is a known, storable (VIEW package) word, scop
   assert.throws(() => viewEntryGate("nope", []), /Unknown view module/);
 });
 
-test("2. only the open modules (V-1: data_configuration, presets; V-3: calendar): a view workspace holding every view word is refused every other module", () => {
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["calendar", "data_configuration", "presets"]);
+test("2. only the open modules (V-1: data_configuration, presets; V-3: calendar; V-4: tests, tests_results): a view workspace holding every view word is refused every other module", () => {
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["calendar", "data_configuration", "presets", "tests", "tests_results"]);
   const all = authzWith(Object.values(MODULE_VIEW_WORDS));
   for (const module of Object.keys(MODULE_VIEW_WORDS)) {
     const open = OPEN_VIEW_MODULES.includes(module);

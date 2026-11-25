@@ -601,3 +601,79 @@ decided.
   - the licence closing reads and writes for role holders and the club's old roles.
 - Mutations killed: the coach path's `calendar.view` check dropped; the name gate forced open.
 - e2e: `roles-v3-view-calendar.test.mjs` at 1280, 390 and 360 px.
+
+## 11. V-4 as built (Tests)
+
+Branch `feature/roles-v4-tests-view`, stacked on V-3 (`feature/roles-v3-calendar-view`). No migration.
+
+**The gate.** `routes/tests.js` mounts `viewEntryGate("tests", …)` with seven reads:
+- `GET /library`, `/schedules`, `/weekly` and `/schedules/:scheduleId`;
+- `GET /schedules/:scheduleId/group`, `/results` and `/results/:assessmentId`.
+
+Its refusal depends on the route:
+- **The athlete's own routes** (`/athlete/*`, `/assignments/*`) go on as before. They decide by the athlete profile, not
+  the workspace.
+- **Every other route** answers `403 {error:"Forbidden"}`, what `requireCoachWorkspace` answers an account without a
+  coach role. That includes `GET /today` (plan choice 2: it writes the day's occurrences) and every write.
+- **A mixed account** (an old role row elsewhere) in a view workspace is refused too. Before V-4 it passed
+  `requireCoachWorkspace` and read every club it administers.
+
+**The view reads.**
+- **Scope:** `scheduleReadScope` gives a view workspace `viewScheduleScope(req.moduleView)` (`testsAccess.js`): never a
+  person's own schedule (`userId` null), never every schedule. The club must be active (and for a team, the team and
+  its club).
+  - club view: the club's schedules and its active teams'.
+  - team view: the team's own schedules. Like its team's coach, a team view does not read the club's own schedules.
+- **One schedule:** `loadManageableSchedule` checks a GET of a view workspace with `viewScopeReadsSchedule`. A write
+  never takes that branch. Another club's schedule gives the 404 of a missing one.
+- **`GET /schedules/:id`:** never reads the group link. A view answer has no `link` block and so no `publicToken`
+  (plan choice 3); it carries `readOnly: true`.
+- **Results and the group:** also need `tests.results.view` (`canView(tests_results)` in the route), otherwise 403.
+- **Names (P-1):** a view workspace gets no athlete names without `canView(athletes)`, which stays false until V-2:
+  - the schedule's athlete targets are dropped and counted (`hiddenAthleteTargets`);
+  - the group's and the results' `athleteId` and `athleteName` are null;
+  - the result's `athleteName` is null.
+
+**The coach paths (checked words).**
+- `manageableClubIds` / `manageableTeamIds` keep only the clubs and teams where the account holds the word:
+  `tests.view`, or `tests.results.view` for results.
+- `canManageSchedule` asks the same word at the schedule's club or team (`holds`, two literal `can()` calls).
+- A new schedule (`POST /schedules`, `/schedules/bulk`) needs `tests.view` at its owner scope.
+- A platform admin and a person's own schedule are unchanged (R4 Q10).
+- A licence that closes Tests therefore leaves the club out of its admin's lists, makes its schedules and results the
+  404, and refuses a new schedule there. Another club is unaffected.
+
+**Word lists.**
+- `ENFORCED_PERMISSIONS`: `tests.view` and `tests.results.view` → `testsAccess.js`.
+- `VIEW_WORKSPACE_USABLE_WORDS` gets both words.
+- `OPEN_VIEW_MODULES` gets `tests` and `tests_results` on both sides.
+- The frontend Tests place opens with `tests` only: results alone open nothing.
+- `roles-r4-checked-gates` B1: `testsAccess.js` 3.
+
+**Frontend** (`tests-view.js` `testsReadOnly`, `testsCoachSections`).
+- In a view workspace the sections are Schedule, Results (with `tests.results.view`) and Test Library; there is no
+  Today. Loading or a section click never lands on a missing section.
+- Schedule has no New check-in schedule. A schedule's detail is a read-only card: the targets (athletes counted), the
+  time and the state, with no action and no group link.
+- A result says "Athlete" where the name would be, and offers no Schedule again.
+- The Tests Today notification link stays Home in a view workspace (`viewModuleOfOpener`).
+
+**Tests.**
+- `roles-v-sweep` test 8:
+  - club_view and team_view, each against its own schedules;
+  - the token never in any answer, and no athlete name or id;
+  - another club's schedule and a missing id give the same 404;
+  - Today, the athlete's route and seven writes give the same status and body as an account with no role, and land
+    nothing; no read writes anything;
+  - one word without the other;
+  - a forged `club` preference;
+  - a mixed account;
+  - old-vs-new for the club admin (the link and the names);
+  - the licence closing the admin's list, reads and writes.
+- Mutations killed: the view branch that drops the link and the names; the coach path's word check forced true.
+- e2e: `roles-v4-view-tests.test.mjs` at 1280, 390 and 360 px.
+
+**Follow-ups (not built).**
+- The weekly view's "Open in calendar" stays visible for a view holder without `calendar.view`; the calendar tab is
+  then not available to it.
+- The remaining reads of `routes/tests.js` that branch on the athlete (`/athlete/*`) are not part of V.

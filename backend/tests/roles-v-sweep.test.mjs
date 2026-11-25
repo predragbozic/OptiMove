@@ -3,7 +3,7 @@
 // again with a forged `club` preference) gets from that module exactly what an account with no role gets, and no write
 // lands anywhere. Each module's V pull request turns its row to "open" and adds the checks of the plan's section 4 for it
 // (only the listed reads, club A only, the ceiling, old-vs-new, the word taken away). V-1 opens data_configuration (test
-// 5) and presets (test 6); V-3 opens the calendar (test 7).
+// 5) and presets (test 6); V-3 opens the calendar (test 7); V-4 opens Tests (test 8).
 //
 // Also proven here, for the V steps to build on:
 //   - the old-role baseline: a basic Club admin and Team coach hold every view word of the modules at their club / team
@@ -81,10 +81,10 @@ function rows() {
     { module: "calendar", open: true,
       reads: [`/api/calendar?${q}`, "/api/calendar/events/types", `/api/calendar/settings?clubId=${w.A}`],
       writes: [["POST", "/api/calendar/events", { title: "x", clubId: w.A }]] },
-    { module: "tests", open: false,
+    { module: "tests", open: true,
       reads: ["/api/tests/library", "/api/tests/schedules", "/api/tests/weekly"],
       writes: [["POST", "/api/tests/schedules", { name: "x" }]] },
-    { module: "tests_results", open: false,
+    { module: "tests_results", open: true,
       reads: ["/api/tests/results"], writes: [] },
     { module: "load_team", open: false,
       reads: [`/api/training-load/calendar?${q}`, "/api/training-load/external-schedules"],
@@ -134,17 +134,17 @@ after(async () => {
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
 });
 
-test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows are exactly OPEN_VIEW_MODULES (V-1: data configuration, presets; V-3: calendar)", () => {
+test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows are exactly OPEN_VIEW_MODULES (V-1: data configuration, presets; V-3: calendar; V-4: tests)", () => {
   const table = rows();
   assert.deepEqual(table.map((r) => r.module).sort(), Object.keys(MODULE_VIEW_WORDS).sort());
   assert.deepEqual(table.filter((r) => r.open).map((r) => r.module).sort(), [...OPEN_VIEW_MODULES].sort());
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["calendar", "data_configuration", "presets"]);
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["calendar", "data_configuration", "presets", "tests", "tests_results"]);
 });
 
 test("2. closed rows: every view word in club_view (and with a forged club preference) = an account with no role; no write lands; no preference is written", async () => {
   const hm = await me(w.all);
   assert.equal(hm.activeWorkspace.type, "club_view");
-  assert.deepEqual([...hm.permissions].sort(), ["calendar.view", "org.view", "presets.use", "variables.view"], "/me offers only the words of open modules");
+  assert.deepEqual([...hm.permissions].sort(), ["calendar.view", "org.view", "presets.use", "tests.results.view", "tests.view", "variables.view"], "/me offers only the words of open modules");
   const norm = (who, text) => text.split(who.id).join("<me>");
   for (const forged of [false, true]) {
     if (forged) await setPref(w.all, "club", w.A);
@@ -579,4 +579,147 @@ test("7. the calendar (calendar.view): club_view and team_view read their club's
     await ceiling(pa, [], ["calendar"]);
   }
   for (const who of [clubHolder, w.adminA, w.coachA]) assert.equal((await srv.api(who.cookie, `/api/calendar?${q}`)).status, 200, "reopened");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// V-4: Tests (the plan's sections 2.5 and 4).
+// ---------------------------------------------------------------------------------------------------------------------
+const mondayOf = (iso) => { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); };
+
+test("8. Tests (tests.view, tests.results.view): club_view and team_view read their club's or team's schedules, library and week, and with the results word the results and the per-athlete group; never the group link's token, never an athlete's name or id without athletes.view; Today, every write and another club's schedule answer what they answered before; a mixed account sees only the view club; the words and the licence close it", async () => {
+  const pa = await person("paV4", (id) => F.grantPlatform(id));
+  const { WELLNESS_TEST_VERSION_ID } = await import("../src/testsScheduleWriter.js");
+  const today = new Date().toISOString().slice(0, 10);
+  const T = "/api/tests";
+  const body = (targets) => ({ testVersionId: WELLNESS_TEST_VERSION_ID, scheduleKind: "one_time", timezone: "UTC", startDate: today, opensTime: "00:00", closesTime: "23:59", targets });
+  // An athlete of team TA1 with a login, who answers today's check-in.
+  const tessa = ok(await srv.api(w.adminA.cookie, "/api/organization/athletes", { method: "POST", body: { fullName: "Tessa Vsweeptest", clubId: w.A, teamId: w.TA1 } }), 201).athlete;
+  const athUser = await person("athV4");
+  await k.query(`update public.athletes set user_id = $1 where id = $2`, [athUser.id, tessa.id]);
+  const schedA = ok(await srv.api(w.adminA.cookie, `${T}/schedules`, { method: "POST", body: body([{ kind: "team", id: w.TA1 }, { kind: "athlete", id: tessa.id }]) }), 201).schedule;
+  const schedB = ok(await srv.api(w.adminB.cookie, `${T}/schedules`, { method: "POST", body: body([{ kind: "team", id: w.TB1 }]) }), 201).schedule;
+  // The team's own schedule (its coach's, in the team workspace): a team view reads the team's schedules, as its coach.
+  const schedT = ok(await srv.api(w.coachA.cookie, `${T}/schedules`, { method: "POST", body: body([{ kind: "team", id: w.TA1 }, { kind: "athlete", id: tessa.id }]) }), 201).schedule;
+  const link = ok(await srv.api(w.adminA.cookie, `${T}/schedules/${schedA.id}/link`, { method: "POST", body: {} }), 201).link;
+  const todayRows = ok(await srv.api(athUser.cookie, `${T}/athlete/today`)).assignments;
+  assert.equal(todayRows.length, 2, "both check-ins of today");
+  const assessments = [];
+  for (const row of todayRows) {
+    assessments.push(ok(await srv.api(athUser.cookie, `${T}/assignments/${row.assignmentId}/submit`, { method: "POST",
+      body: { values: { fatigue: 2, sleep: 4, soreness: 0, stress: 6, mood: 8, injury: false } } })).assessmentId);
+  }
+  assert.ok(assessments.every(Boolean), "both answered");
+  const assignment = todayRows[0];
+  // Which result belongs to which schedule (the club admin reads both).
+  const resultOf = Object.fromEntries(ok(await srv.api(w.adminA.cookie, `${T}/results`)).results.map((r) => [String(r.scheduleId), String(r.assessmentId)]));
+  assert.ok(resultOf[String(schedA.id)] && resultOf[String(schedT.id)], "a completed result of each schedule");
+
+  const clubHolder = await holderOf("tsClubV4", ["tests.view", "tests.results.view"]);
+  const teamHolder = await holderOf("tsTeamV4", ["tests.view", "tests.results.view"], "team", w.TA1);
+  const schedOnly = await holderOf("tsSchedV4", ["tests.view"]);
+  const resultsOnly = await holderOf("tsResV4", ["tests.results.view"]);
+  const secretFree = (label, r) => {
+    assert.ok(!r.text.includes(link.publicToken), `${label}: never the group link's token`);
+    assert.ok(!r.text.includes("Vsweeptest") && !r.text.includes(String(tessa.id)), `${label}: no athlete name or id (P-1)`);
+    assert.ok(!r.text.includes(String(schedB.id)) && !r.text.includes(String(w.B)), `${label}: nothing of club B`);
+  };
+
+  const before = await snapshot();
+  for (const [who, label, own, hidden] of [[clubHolder, "club_view", schedA, null], [teamHolder, "team_view", schedT, schedA]]) {
+    const assessmentId = resultOf[String(own.id)];
+    for (const p of [`${T}/library`, `${T}/schedules`, `${T}/weekly?weekStart=${mondayOf(today)}`]) {
+      const r = await srv.api(who.cookie, p);
+      ok(r);
+      secretFree(`${label} ${p}`, r);
+    }
+    const listed = idsOf(ok(await srv.api(who.cookie, `${T}/schedules`)).schedules);
+    assert.ok(listed.includes(String(own.id)) && listed.includes(String(schedT.id)), `${label}: its schedules (a club view also its teams')`);
+    // A team view, like its team's coach, does not read the club's own schedules.
+    if (hidden) {
+      assert.ok(!listed.includes(String(hidden.id)), `${label}: not the club's own schedule`);
+      assert.deepEqual((await srv.api(who.cookie, `${T}/schedules/${hidden.id}`)).status, 404);
+    }
+    const week = await srv.api(who.cookie, `${T}/weekly?weekStart=${mondayOf(today)}`);
+    assert.ok(ok(week).days.some((d) => d.sessions.some((x) => String(x.scheduleId) === String(own.id))), `${label}: the week shows it`);
+    const one = await srv.api(who.cookie, `${T}/schedules/${own.id}`);
+    const detail = ok(one);
+    secretFree(`${label} detail`, one);
+    assert.equal(detail.link, undefined, `${label}: no link block`);
+    assert.equal(detail.readOnly, true);
+    assert.equal(detail.hiddenAthleteTargets, 1, `${label}: the athlete target is counted`);
+    assert.ok(detail.targets.every((t) => t.kind !== "athlete"));
+    for (const id of [schedB.id, RANDOM_ID]) {
+      const r = await srv.api(who.cookie, `${T}/schedules/${id}`);
+      assert.deepEqual([r.status, r.body], [404, { error: "Schedule not found." }], `${label}: another club's schedule is the 404 of a missing one`);
+    }
+    const group = await srv.api(who.cookie, `${T}/schedules/${own.id}/group?date=${today}`);
+    secretFree(`${label} group`, group);
+    assert.ok(ok(group).group.athletes.length > 0 && ok(group).group.athletes.every((a) => a.athleteName === null && a.athleteId === null), `${label}: the group without names`);
+    const results = await srv.api(who.cookie, `${T}/results`);
+    secretFree(`${label} results`, results);
+    const rows = ok(results).results;
+    assert.ok(rows.some((r) => String(r.assessmentId) === String(assessmentId)), `${label}: its result`);
+    if (hidden) assert.ok(!rows.some((r) => String(r.assessmentId) === resultOf[String(hidden.id)]), `${label}: not the club's own schedule's result`);
+    assert.ok(rows.every((r) => r.athleteName === null && r.athleteId === null));
+    const res1 = await srv.api(who.cookie, `${T}/results/${assessmentId}`);
+    secretFree(`${label} result`, res1);
+    assert.equal(ok(res1).athleteName, null);
+    await sameAsNobody(who, `${T}/today`, label);
+    await sameAsNobody(who, `${T}/athlete/today`, label);
+  }
+  assert.deepEqual(changed(before, await snapshot()), [], "no read wrote anything (no occurrence, no preference)");
+  // Every write answers what it answers an account with no coach role, and lands nothing.
+  for (const who of [clubHolder, teamHolder]) {
+    for (const [method, p, b] of [
+      ["POST", `${T}/schedules`, body([{ kind: "team", id: w.TA1 }])],
+      ["POST", `${T}/schedules/bulk`, { testVersionId: WELLNESS_TEST_VERSION_ID, timezone: "UTC", opensTime: "06:00", closesTime: "22:00", dates: [today], targets: [{ kind: "team", id: w.TA1 }] }],
+      ["PATCH", `${T}/schedules/${schedA.id}`, { status: "paused" }],
+      ["DELETE", `${T}/schedules/${schedA.id}`, undefined],
+      ["POST", `${T}/schedules/${schedA.id}/link`, {}],
+      ["POST", `${T}/links/${link.id}/revoke`, {}],
+      ["POST", `${T}/schedules/${schedA.id}/remind`, { assignmentIds: [assignment.assignmentId] }],
+    ]) await sameAsNobodyWrite(who, method, p, b);
+  }
+  // One word without the other: the schedule without results; results alone open nothing.
+  ok(await srv.api(schedOnly.cookie, `${T}/schedules`));
+  for (const p of [`${T}/results`, `${T}/results/${resultOf[String(schedA.id)]}`, `${T}/schedules/${schedA.id}/group?date=${today}`]) await sameAsNobody(schedOnly, p, "tests.view only");
+  for (const p of [`${T}/schedules`, `${T}/library`, `${T}/results`]) await sameAsNobody(resultsOnly, p, "tests.results.view only");
+  // A forged club preference resolves to club_view and reads the same.
+  await setPref(clubHolder, "club", w.A);
+  assert.equal((await me(clubHolder)).activeWorkspace.type, "club_view");
+  assert.ok(idsOf(ok(await srv.api(clubHolder.cookie, `${T}/schedules`)).schedules).includes(String(schedA.id)));
+  // A mixed account: club B's admin holding club A's Tests role, in club_view A, reads club A only (before V-4 it passed
+  // requireCoachWorkspace and read every club it administers).
+  const roleA = await roleOf(["tests.view", "tests.results.view"]);
+  await grant(w.adminA, w.adminB.id, roleA.id, "club", w.A);
+  await setPref(w.adminB, "club", w.A);
+  try {
+    assert.equal((await me(w.adminB)).activeWorkspace.type, "club_view");
+    const list = await srv.api(w.adminB.cookie, `${T}/schedules`);
+    assert.ok(idsOf(ok(list).schedules).includes(String(schedA.id)) && !list.text.includes(String(schedB.id)), "club A's, never club B's");
+    assert.equal((await srv.api(w.adminB.cookie, `${T}/schedules/${schedB.id}`)).status, 404, "its own club's schedule is not read through club A's view");
+    await sameAsNobodyWrite(w.adminB, "POST", `${T}/schedules/${schedB.id}/link`, {});
+  } finally {
+    await setPref(w.adminB, "club", w.B);
+  }
+  // Old-vs-new: the club admin still sees the link and the names.
+  const adminDetail = ok(await srv.api(w.adminA.cookie, `${T}/schedules/${schedA.id}`));
+  assert.equal(adminDetail.link.publicToken, link.publicToken);
+  assert.ok(ok(await srv.api(w.adminA.cookie, `${T}/results`)).results.some((r) => r.athleteName === "Tessa Vsweeptest"));
+  // The licence closes Tests for the role holders and for the club's own admin (reads and writes); club B keeps it.
+  await ceiling(pa, ["tests"], []);
+  try {
+    for (const who of [clubHolder, teamHolder]) await sameAsNobody(who, `${T}/schedules`, "closed by the licence");
+    assert.ok(!idsOf(ok(await srv.api(w.adminA.cookie, `${T}/schedules`)).schedules).includes(String(schedA.id)), "the club admin's list leaves club A out");
+    assert.equal((await srv.api(w.adminA.cookie, `${T}/schedules/${schedA.id}`)).status, 404);
+    assert.equal((await srv.api(w.adminA.cookie, `${T}/results/${resultOf[String(schedA.id)]}`)).status, 404);
+    const beforeWrite = await snapshot();
+    assert.equal((await srv.api(w.adminA.cookie, `${T}/schedules`, { method: "POST", body: body([{ kind: "team", id: w.TA1 }]) })).status, 403, "no new schedule in a closed club");
+    assert.equal((await srv.api(w.adminA.cookie, `${T}/schedules/${schedA.id}/link`, { method: "POST", body: {} })).status, 404);
+    assert.deepEqual(changed(beforeWrite, await snapshot()), [], "nothing written");
+    assert.ok(idsOf(ok(await srv.api(w.adminB.cookie, `${T}/schedules`)).schedules).includes(String(schedB.id)), "another club keeps it");
+  } finally {
+    await ceiling(pa, [], ["tests"]);
+  }
+  assert.ok(idsOf(ok(await srv.api(w.adminA.cookie, `${T}/schedules`)).schedules).includes(String(schedA.id)), "reopened");
 });

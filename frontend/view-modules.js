@@ -22,7 +22,8 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 // (Training Load -> Data configuration, the Variables list, read only) and Tags, presets and session types (Settings ->
 // Tags & Presets, read only). V-3: the calendar (the central calendar, read only: no New event, events in their reduced
 // view, no athlete names without athletes.view).
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "calendar"]);
+// V-4: Tests (the Schedule, Results and Test Library sections, read only; no Today, which writes occurrences).
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "calendar", "tests", "tests_results"]);
 
 // The menu places of a view workspace: each opens when ANY of its modules is open and its word is held. A place with
 // no module (Coaches) never opens there.
@@ -32,7 +33,8 @@ export const VIEW_NAV_PLACES = Object.freeze([
   { key: "coaches", selectors: ['[data-library-tab="coaches"]'], tabs: [], modules: [] },
   { key: "programs", selectors: ['[data-library-tab="builder"]', '[data-sidebar-submenu="program-library"]'], tabs: ["builder", "templates"], modules: ["programs"] },
   { key: "exercises", selectors: ['[data-library-tab="exercises"]'], tabs: ["exercises"], modules: ["exercises"] },
-  { key: "tests", selectors: ['[data-library-tab="tests"]'], tabs: ["tests"], modules: ["tests", "tests_results"] },
+  // V-4: results alone open nothing (every Tests read needs tests.view first, routes/tests.js).
+  { key: "tests", selectors: ['[data-library-tab="tests"]'], tabs: ["tests"], modules: ["tests"] },
   { key: "training-load", selectors: ['[data-library-tab="training-load"]'], tabs: ["training-load"], modules: ["load_team", "load_athlete", "dashboards", "data_configuration"] },
 ].map((place) => Object.freeze({ ...place, selectors: Object.freeze(place.selectors), tabs: Object.freeze(place.tabs), modules: Object.freeze(place.modules) })));
 
