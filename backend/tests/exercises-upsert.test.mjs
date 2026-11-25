@@ -24,6 +24,7 @@ import http from "node:http";
 import "dotenv/config";
 import pg from "pg";
 import { createDisposableDatabase } from "./support/disposable-db.mjs";
+import { applyBasicRoleReadStub } from "./support/basic-role-read-stub.mjs";
 import { EXERCISE_COLLECTIONS_FIXTURE_SQL, addMediaSelectionFixture } from "./support/exercise-collections-fixture.mjs";
 
 const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
@@ -259,6 +260,9 @@ before(async () => {
   await addMediaSelectionFixture(adminClient.query.bind(adminClient));
 
   process.env.DATABASE_URL = db.url;
+  // Roles V-7: the exercise library asks can(exercises.use) in a club workspace; this hand-built schema has no role
+  // tables, so the basic roles' read is stubbed (support/basic-role-read-stub.mjs).
+  await applyBasicRoleReadStub(adminClient);
   const dbModule = await import("../src/db.js");
   query = dbModule.query;
   pool = dbModule.pool;

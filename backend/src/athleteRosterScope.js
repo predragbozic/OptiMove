@@ -33,7 +33,14 @@ function viewRosterScope(req, workspace, alias) {
   const view = req?.moduleView;
   const scope = view?.module === "athletes" ? view.scope : null;
   if (!req?.user || !scope || view.workspace !== workspace) return { sql: "and false", params: [] };
-  if (scope.type === "club") {
+  return viewMembershipScope(scope, alias);
+}
+
+// The active memberships of a view workspace's club or team (in an active club / team), as an SQL filter on `alias`
+// with its one parameter at $1. Roles V-7: an athlete's program reads of a view workspace use it AFTER checking
+// athletes.view and programs.view there; it is never a right by itself.
+export function viewMembershipScope(scope, alias = "a") {
+  if (scope?.type === "club") {
     return {
       sql: `and exists (select 1 from public.athlete_memberships am join public.clubs vc on vc.id = am.club_id
               where am.athlete_id = ${alias}.id and am.membership_type = 'club' and am.status = 'active'
@@ -41,7 +48,7 @@ function viewRosterScope(req, workspace, alias) {
       params: [scope.id],
     };
   }
-  if (scope.type === "team") {
+  if (scope?.type === "team") {
     return {
       sql: `and exists (select 1 from public.athlete_memberships am join public.teams vt on vt.id = am.team_id
               join public.clubs vc on vc.id = vt.club_id

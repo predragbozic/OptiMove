@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
-import { athleteAccessPredicate, athleteViewScopes, canAccessAllAthletes, canAccessPlan } from "../access.js";
+import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
 import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSessionsOf, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
@@ -343,7 +343,7 @@ router.get("/weekly-plans", async (req, res, next) => {
     if (parsed.error) return res.status(400).json({ error: parsed.error.code, message: parsed.error.message });
     const scope = await resolveWeeklyPlanOwnerScope(req, res);
     if (!scope) return;
-    const views = athleteViewScopes(req);
+    const views = programViewScopes(req);
     const params = [parsed.athleteIds, parsed.weekStart, req.user.id, canAccessAllAthletes(req), views.clubIds, views.teamIds];
     const inScope = athleteInWeeklyScopeSql(scope, "a", params);
     const result = await query(
@@ -3841,7 +3841,7 @@ async function getEditablePlan(req, planId, runQuery = query) {
 // Who may open a Builder plan: the one source of truth for getEditablePlan
 // and for the batch switcher's members (loadBuilderBatch). `userParam` is the
 // viewer's user id, `allParam` canAccessAllAthletes(req).
-// `clubsParam` / `teamsParam`: athleteViewScopes(req).clubIds / .teamIds (roles V-2).
+// `clubsParam` / `teamsParam`: programViewScopes(req).clubIds / .teamIds (roles V-2, V-7: athletes.view and programs.view).
 function editablePlanAccessSql(alias, userParam, allParam, clubsParam, teamsParam) {
   return `(
          ${alias}.plan_type in ('program', 'weekly')
@@ -3859,7 +3859,7 @@ function editablePlanAccessSql(alias, userParam, allParam, clubsParam, teamsPara
 }
 
 function athleteViewScopeParams(req) {
-  const { clubIds, teamIds } = athleteViewScopes(req);
+  const { clubIds, teamIds } = programViewScopes(req);
   return [clubIds, teamIds];
 }
 

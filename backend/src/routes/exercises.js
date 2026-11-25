@@ -7,12 +7,27 @@ import { exerciseReadScopeSql as exerciseScope, exerciseLibraryScopeSql, exercis
 import { classificationFields, classificationJoinSql, validateClassification, exerciseMediaJoinSql } from "../exercisePersonalization.js";
 import { deleteUnreferencedExercise } from "../exerciseDeletion.js";
 import { loadLockedExercisePreviews } from "../exerciseBlocks.js";
+import { NO_VIEWER_ID, coachModuleGate, viewEntryGate } from "../moduleView.js";
+import { can } from "../permissions.js";
 
 const router = Router();
+
+// Roles V-7 (docs/ai/roles-v-steps-plan.md, "V-7 design"): a view workspace (club_view / team_view) with exercises.use
+// reads the SYSTEM exercise library only - the list, its filter options and one exercise - bound to NO_VIEWER_ID, so no
+// own, favourite, hidden, granted or personal row and no editing state is in the answer. server.js mounts this gate in
+// front of requireCoach; every other request of a view workspace answers requireCoach's 403.
+export const exercisesViewGate = viewEntryGate("exercises", [
+  { method: "GET", path: "/" }, { method: "GET", path: "/options" }, { method: "GET", path: "/:exerciseId" },
+]);
+// The coach path (R4 section 6): in a club or team workspace the library and its collections need exercises.use there.
+export const exercisesCoachGate = coachModuleGate("exercises", { allowed: (authz, scope) => can(authz, "exercises.use", scope) });
+const isExercisesView = (req) => req.moduleView?.module === "exercises";
+const viewerId = (req) => (isExercisesView(req) ? NO_VIEWER_ID : req.user.id);
+
 router.use(async (req, res, next) => {
   res.set("Cache-Control", "no-store");
   try {
-    req.exerciseAdmin = await hasExerciseAdministration(req.user.id, req.authz, query);
+    req.exerciseAdmin = isExercisesView(req) ? false : await hasExerciseAdministration(req.user.id, req.authz, query);
     next();
   } catch (error) { next(error); }
 });
@@ -205,7 +220,7 @@ const optionQueries = {
 
 router.get("/options", async (req, res, next) => {
   try {
-    const params = [req.user.id];
+    const params = [viewerId(req)];
     const entries = await Promise.all(
       Object.entries(optionQueries).map(async ([key, sql]) => {
         const scopedSql = key === "tags" ? sql : sql
@@ -268,12 +283,14 @@ router.get("/", async (req, res, next) => {
     const queryLimit = limit + 1;
     const requestedOffset = Number(req.query.offset || 0);
     const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
-    const params = [req.user.id];
+    const view = isExercisesView(req);
+    const params = [viewerId(req)];
     const admin = req.exerciseAdmin;
-    const visibility = String(req.query.visibility || "active");
-    const hidden = String(req.query.hidden || "visible");
-    const kind = String(req.query.kind || "all");
-    const owner = req.query.owner === "me" ? req.user.id : String(req.query.owner || "");
+    // A view workspace: active system exercises only, whatever the query asks.
+    const visibility = view ? "active" : String(req.query.visibility || "active");
+    const hidden = view ? "visible" : String(req.query.hidden || "visible");
+    const kind = view ? "system" : String(req.query.kind || "all");
+    const owner = view ? "" : req.query.owner === "me" ? req.user.id : String(req.query.owner || "");
     const searchIn = String(req.query.searchIn || "all");
     if (!["active", "archived", "all"].includes(visibility) || !["visible", "hidden", "all"].includes(hidden) || !["all", "system", "private", "accessible", "mine"].includes(kind) || !["name", "all"].includes(searchIn)) {
       return res.status(400).json({ error: "Invalid exercise filters." });
@@ -394,13 +411,13 @@ router.get("/", async (req, res, next) => {
     // asks for them (lockedPreviews=1) and pages by a growing limit, never
     // an offset. The Builder pages by offset and never shows them, so it
     // neither asks nor pays for the second query.
-    const previewEligible = req.query.lockedPreviews === "1" && offset === 0
+    const previewEligible = !view && req.query.lockedPreviews === "1" && offset === 0
       && !admin && !owner && !["private","mine"].includes(kind) && visibility === "active" && hidden === "visible"
       && !Object.values(filters).some(Boolean);
     const previews = previewEligible ? await loadLockedExercisePreviews(req.user.id,search,collection,limit) : { exercises: [], hasMore: false };
     await decorateMediaRows(result.rows,'exercise',query);
     res.json({
-      exercises: result.rows.slice(0, limit),
+      exercises: view ? result.rows.slice(0, limit).map(viewExerciseRow) : result.rows.slice(0, limit),
       lockedPreviews: previews.exercises,
       moreLockedPreviews: previews.hasMore,
       hasMore: result.rows.length > limit,
@@ -410,6 +427,11 @@ router.get("/", async (req, res, next) => {
     next(error);
   }
 });
+
+// A system exercise as a view workspace receives it: nothing to edit, copy, favourite or hide.
+function viewExerciseRow(row) {
+  return { ...row, can_edit: false, can_copy: false, is_hidden: false, is_favorite: false };
+}
 
 async function loadExerciseDetail(userId, exerciseId, runQuery = query, includeArchived = false) {
   const result = await runQuery(
@@ -459,7 +481,8 @@ router.post("/visible-marked", async (req, res, next) => {
 
 router.get("/:exerciseId", async (req, res, next) => {
   try {
-    const row = await loadExerciseDetail(req.user.id, req.params.exerciseId, query, req.query.archived === "true");
+    const view = isExercisesView(req);
+    const row = await loadExerciseDetail(viewerId(req), req.params.exerciseId, query, !view && req.query.archived === "true");
     if (!row) return res.status(404).json({ error: "Exercise not found." });
     res.json({
       id: row.id,
@@ -468,8 +491,8 @@ router.get("/:exerciseId", async (req, res, next) => {
       ownerUserId: row.owner_user_id,
       isActive: row.is_active,
       copyParentId: row.copy_parent_id || null,
-      canEdit: row.is_active && (req.exerciseAdmin || row.owner_scope === "user" && row.owner_user_id === req.user.id),
-      canCopy: row.is_active,
+      canEdit: !view && row.is_active && (req.exerciseAdmin || row.owner_scope === "user" && row.owner_user_id === req.user.id),
+      canCopy: !view && row.is_active,
       sourceExerciseId: row.source_exercise_id || null,
       exerciseCode: row.exercise_code || "",
       name: row.name,

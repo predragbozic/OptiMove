@@ -18,7 +18,8 @@ import athleteProfileRouter from "./routes/athleteProfile.js";
 import authRouter from "./routes/auth.js";
 import plansRouter from "./routes/plans.js";
 import templatesRouter from "./routes/templates.js";
-import exercisesRouter from "./routes/exercises.js";
+import exercisesRouter, { exercisesCoachGate, exercisesViewGate } from "./routes/exercises.js";
+import { canViewProgramsAt } from "./access.js";
 import exerciseCollectionsRouter from "./routes/exerciseCollections.js";
 import builderRouter from "./routes/builder.js";
 import organizationRouter from "./routes/organization.js";
@@ -48,6 +49,7 @@ import { appErrorsRouter } from "./routes/appErrors.js";
 import { collectRouteWords, recordServerError, setRouteWords, startAppErrorRetentionSchedule } from "./appErrorTracking.js";
 import { attachAuthorizationContext, authMiddleware, requireAuth, requireCoach } from "./auth.js";
 import { organizationEntryGate } from "./organizationEntry.js";
+import { coachModuleGate, viewEntryGate } from "./moduleView.js";
 import { isPoolCheckoutTimeout, pool, POOL_CHECKOUT_TIMEOUT, POOL_MAX } from "./db.js";
 import { canUseSimplePlatformPilot } from './dashboardSimple/platformPilot.js';
 import { resolveActiveDataWorkspace } from './trainingLoadDashboardAccess.js';
@@ -139,9 +141,15 @@ app.use("/api/athlete-profile", requireAuth, athleteProfileRouter);
 app.use("/api/admin/athletes", requireAuth, athletesRouter);
 app.use("/api/plans", requireAuth, plansRouter);
 app.use("/api/templates", requireAuth, templatesRouter);
-app.use("/api/exercises", requireAuth, requireCoach, exercisesRouter);
-app.use("/api/exercise-collections", requireAuth, requireCoach, exerciseCollectionsRouter);
-app.use("/api/builder", requireAuth, requireCoach, builderRouter);
+// Roles V-7 (docs/ai/roles-v-steps-plan.md, "V-7 design"): the exercise library's read-only way in for a view workspace
+// (exercises.js exercisesViewGate: the system library's three reads with exercises.use; every other request 403, as
+// requireCoach answers). Exercise collections and the Builder have no read for a view workspace (a gate with no route:
+// 403, so a mixed account never writes from one). On the coach path, a club or team workspace needs the module's word
+// there (coachModuleGate, R4 section 6); every other account goes on exactly as before.
+app.use("/api/exercises", requireAuth, exercisesViewGate, (req, res, next) => (req.moduleView ? next() : requireCoach(req, res, next)),
+  exercisesCoachGate, exercisesRouter);
+app.use("/api/exercise-collections", requireAuth, viewEntryGate("exercises", []), requireCoach, exercisesCoachGate, exerciseCollectionsRouter);
+app.use("/api/builder", requireAuth, viewEntryGate("programs", []), requireCoach, coachModuleGate("programs", { allowed: canViewProgramsAt }), builderRouter);
 // The Roles API (roles R2) before the organization router, behind requireAuth
 // only: its service answers the identical 404 for every caller it does not
 // serve, so it never answers 403 (contract section 5).

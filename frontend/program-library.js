@@ -1,3 +1,4 @@
+import { viewModuleOpen } from "./view-modules.js";
 import { renderImage } from "./media.js";
 import { hasTemplateAccessStatus, templateAccessActionLabel, templateAccessBadge } from "./program-access-ui.js";
 import { clean, escapeAttr, escapeHtml, programInitials, renderOption } from "./utils.js";
@@ -77,7 +78,8 @@ export function ratingLabel(entity) {
 }
 
 function canOpenProgramSettings(currentUser) {
-  return clean(currentUser?.accessScope).toLowerCase() !== "athlete";
+  // Roles V-7: a view workspace opens no library settings.
+  return clean(currentUser?.accessScope).toLowerCase() !== "athlete" && !viewModuleOpen("programs");
 }
 
 function renderEditableProgramChip(label, template, canEdit, modifier = "") {

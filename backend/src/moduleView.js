@@ -25,7 +25,9 @@
 // V-0 opened no module; V-1 opens data_configuration (routes/sourceMetrics.js) and presets (routes/taxonomy.js through
 // server.js, routes/sessionTypes.js); V-2 opens athletes (routes/athletes.js, routes/positions.js, the athletes of
 // routes/organization.js GET /); V-3 opens calendar (routes/calendar.js, routes/calendarEvents.js, and the gate with
-// no read on routes/calendarSettings.js; calendarModuleContext.js). Each module's V pull request adds its
+// no read on routes/calendarSettings.js; calendarModuleContext.js); V-7 opens programs (routes/templates.js,
+// routes/plans.js, routes/athletes.js program-data; the Builder with no read) and exercises (routes/exercises.js through
+// server.js; routes/exerciseCollections.js with no read), with coachModuleGate on their coach path. Each module's V pull request adds its
 // key to OPEN_VIEW_MODULES, mounts the gate with its reads, adds its word to ENFORCED_PERMISSIONS and
 // VIEW_WORKSPACE_USABLE_WORDS (permissions.js), and its row to backend/tests/roles-v-sweep.test.mjs.
 import { isPlatformAdministrator } from "./authz.js";
@@ -48,7 +50,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 });
 
 // The modules a view workspace may read. A module enters here only in its own V pull request, with its entry gate.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar"]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "programs", "exercises"]);
 
 // The base scope of each view workspace type (the club or team it names).
 const VIEW_SCOPE_TYPES = Object.freeze({ club_view: "club", team_view: "team" });
@@ -79,6 +81,35 @@ export function canView(authz, workspace, module, { open = OPEN_VIEW_MODULES } =
   const scope = viewReadScope(workspace);
   if (!scope || !open.includes(module)) return false;
   return can(authz, word, scope);
+}
+
+// Roles V-7 (R4 section 6, decided: every route of a module also asks for its view word): express middleware for a
+// module whose routes do not resolve the workspace themselves (Programs: the Builder, the Program Library, the plan
+// reads; Exercises: the library and its collections). In a `club` / `team` workspace (an old role row) the request goes on
+// only with canView(module) there - so a club role version or a licence that takes the word away closes the whole module,
+// reads and writes - and is otherwise refused with `refuse` (403 Forbidden, requireCoach's answer). Every other workspace
+// (the platform, a private coach, an athlete, none) and a request a view gate already admitted (req.moduleView of this
+// module) go on exactly as today. Only an account with an old club or team role row can be in such a workspace, so no
+// other account pays for the read-only resolve. `allowed(authz, { type, id })` is the module's own can() with its word
+// (the module's gate file, roles-r4-checked-gates A1); it must name the module's view word.
+export function coachModuleGate(module, { allowed, refuse = forbidden, resolve = resolveActiveWorkspaceReadOnly } = {}) {
+  wordOf(module);
+  if (typeof allowed !== "function") throw new Error(`coachModuleGate(${module}) needs the module's can() check`);
+  return async function coachModuleViewGate(req, res, next) {
+    try {
+      if (req.moduleView?.module === module) return next();
+      const a = req.authz;
+      if (!req.user || !((a?.clubRoles?.length || 0) + (a?.teamRoles?.length || 0))) return next();
+      const { workspace, availableWorkspaces } = await resolve(req.user.id, a);
+      const active = workspace || pickFallbackWorkspace(availableWorkspaces);
+      const type = active ? COACH_SCOPE_TYPES[active.type] : undefined;
+      if (!type) return next();
+      if (active.scopeId == null || active.scopeId === "" || !allowed(a, { type, id: String(active.scopeId) })) return refuse(req, res, next);
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  };
 }
 
 // "GET /", "GET /:id", "GET /:id/history": the path of one READ route, matched segment by segment against req.path
@@ -115,6 +146,20 @@ function compileRoute(route) {
 function forbidden(_req, res) {
   res.status(403).json({ error: "Forbidden" });
 }
+
+// A refusal for a router that every signed-in account may read today (roles V-7: /api/templates, /api/plans): an unlisted
+// GET of a view workspace is handed on without req.moduleView, so it answers exactly what it answered before (the
+// account's own access, never the view role's); every other method is refused 403 Forbidden and never runs, so a view
+// workspace never writes, whatever old role the account also holds.
+export function handOnReadsRefuseWrites(req, res, next) {
+  if (req.method === "GET" || req.method === "HEAD") return next();
+  return forbidden(req, res);
+}
+
+// The viewer id a view read binds instead of the account's own (roles V-7): the nil uuid matches no user, so every
+// "own", "favourite", "hidden", "granted" or "personal" branch of a library query reads nothing, and only the rows every
+// account shares (system exercises, public templates) remain.
+export const NO_VIEWER_ID = "00000000-0000-0000-0000-000000000000";
 
 // `refuse(req, res, next)` answers what the module's router answers today to an account without a role (403 Forbidden
 // unless the module says otherwise, e.g. its identical 404). A module whose routes already answer a view workspace

@@ -36,7 +36,7 @@ test("1. the module keys, words and open list are the backend's (moduleView.js)"
   assert.deepEqual(vm.MODULE_VIEW_WORDS, words);
   const open = src.match(/OPEN_VIEW_MODULES = Object\.freeze\(\[([^\]]*)\]\)/)[1].split(",").map((s) => s.trim().replace(/"/g, "")).filter(Boolean);
   assert.deepEqual([...vm.OPEN_VIEW_MODULES], open);
-  assert.deepEqual(open, ["data_configuration", "presets", "athletes", "calendar"], "V-1 opens Data configuration and Tags & Presets, V-2 Athletes, V-3 the calendar");
+  assert.deepEqual(open, ["data_configuration", "presets", "athletes", "calendar", "programs", "exercises"], "V-1 opens Data configuration and Tags & Presets, V-2 Athletes, V-3 the calendar, V-7 Programs and Exercises");
   for (const place of vm.VIEW_NAV_PLACES) for (const m of place.modules) assert.ok(Object.hasOwn(vm.MODULE_VIEW_WORDS, m), m);
 });
 
@@ -45,14 +45,16 @@ test("2. the places cover exactly the menu R4-4 hides in a view workspace", () =
   assert.deepEqual([...vm.VIEW_BASE_TABS], [...nav.VIEW_WORKSPACE_TABS]);
 });
 
-test("3. V-1, V-2, V-3: a view workspace holding every view word sees Home, the athlete list, Settings (Overview, Clubs, Teams, Tags & Presets, Athletes), the Calendar, Training Load and Account; nothing else", () => {
+test("3. V-1, V-2, V-3, V-7: a view workspace holding every view word sees Home, the athlete list (with its plan pages), Settings (Overview, Clubs, Teams, Tags & Presets, Athletes), the Calendar, the Program Library, the Exercise Library, Training Load and Account; never the Builder", () => {
   as(CLUB_VIEW, ["org.view", ...Object.values(vm.MODULE_VIEW_WORDS)]);
   for (const module of Object.keys(vm.MODULE_VIEW_WORDS)) {
-    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets", "athletes", "calendar"].includes(module), module);
+    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets", "athletes", "calendar", "programs", "exercises"].includes(module), module);
   }
-  const shown = ['[data-library-tab="training-load"]', "#athletesToggle", "#athleteSearch", "#athleteList", "#calendarToggle"];
+  const shown = ['[data-library-tab="training-load"]', "#athletesToggle", "#athleteSearch", "#athleteList", "#calendarToggle",
+    '[data-sidebar-submenu="program-library"]', '[data-library-tab="exercises"]'];
   assert.deepEqual(vm.viewHiddenMenuSelectors().sort(), nav.VIEW_WORKSPACE_MENU_HIDDEN.filter((s) => !shown.includes(s)).sort());
-  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "central-calendar", "training-load"]);
+  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "central-calendar", "templates", "weekly", "programs", "exercises", "training-load"]);
+  assert.ok(!vm.viewWorkspaceTabs().includes("builder"), "never the Builder");
   assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams", "presets", "athletes"]);
   assert.deepEqual(vm.viewTrainingLoadSections(), ["variables"]);
   nav.renderAccessNav();

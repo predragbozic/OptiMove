@@ -3,12 +3,14 @@ import { decoratePlanItemEnglish } from '../planItemEnglish.js';
 import { Router } from "express";
 import { query } from "../db.js";
 import { buildPrograms, buildWeeks } from "../utils/grouping.js";
-import { canAccessAthlete } from "../access.js";
-import { currentAthleteRosterScope } from "../athleteRosterScope.js";
+import { canAccessAthletePlans, canViewProgramsAt } from "../access.js";
+import { currentAthleteRosterScope, viewMembershipScope } from "../athleteRosterScope.js";
 import { linkedSessionTimes } from "../linkedSessionTimes.js";
-import { viewEntryGate } from "../moduleView.js";
+import { canView, coachModuleGate, viewEntryGate } from "../moduleView.js";
 
 const router = Router();
+// An athlete's code, source id or uuid in a path (a closed pattern for the programs view gate).
+const ATHLETE_CODE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/;
 
 // Roles V-2 (docs/ai/roles-v-steps-plan.md section 9): a view workspace (club_view / team_view) with athletes.view at its
 // club or team reads the athlete list of its workspace (GET /) and nothing else here. Every other request of a view
@@ -16,6 +18,14 @@ const router = Router();
 // without the word - is handed on unchanged (no req.moduleView), so the router answers it exactly as it did before V-2
 // (the roster scope of a view workspace is `and false`; canAccessAthlete reads the old role rows only).
 router.use(viewEntryGate("athletes", [{ method: "GET", path: "/" }], { refuse: (_req, _res, next) => next() }));
+// Roles V-7 (docs/ai/roles-v-steps-plan.md, "V-7 design"): a view workspace with programs.view also reads ONE athlete's
+// program page (GET /:athleteId/program-data), for an athlete of its club or team and with athletes.view there; any other
+// request is handed on unchanged, as above. On the coach path an athlete's plan reads need programs.view (coachModuleGate
+// in a club or team workspace; canAccessAthletePlans, the programs.view arrays, for the athlete).
+router.use(viewEntryGate("programs", [
+  { method: "GET", path: "/:athleteId/program-data", params: { athleteId: ATHLETE_CODE } },
+], { refuse: (_req, _res, next) => next() }));
+const programsCoachGate = coachModuleGate("programs", { allowed: canViewProgramsAt });
 
 // Kept local, the same small validators trainingLoad.js and tests.js keep in
 // their own route modules.
@@ -186,10 +196,10 @@ router.get("/training-days", async (req, res, next) => {
   }
 });
 
-router.get("/:athleteId/plans", async (req, res, next) => {
+router.get("/:athleteId/plans", programsCoachGate, async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;
-    if (!(await canAccessAthlete(query, req, athleteId))) return res.status(403).json({ error: "Forbidden" });
+    if (!(await canAccessAthletePlans(query, req, athleteId))) return res.status(403).json({ error: "Forbidden" });
     const result = await query(
       `
       select *
@@ -205,10 +215,16 @@ router.get("/:athleteId/plans", async (req, res, next) => {
   }
 });
 
-router.get("/:athleteId/program-data", async (req, res, next) => {
+router.get("/:athleteId/program-data", programsCoachGate, async (req, res, next) => {
   try {
     const athleteId = req.params.athleteId;
-    if (!(await canAccessAthlete(query, req, athleteId))) return res.status(403).json({ error: "Forbidden" });
+    // Roles V-7: a view workspace the programs gate let through reads the plans of an athlete of ITS club or team only,
+    // and only with athletes.view there too (P-1: the page names the athlete); everything else is today's 403.
+    const viewScope = req.moduleView?.module === "programs" ? req.moduleView.scope : null;
+    const allowed = viewScope
+      ? canView(req.authz, req.moduleView.workspace, "athletes") && await viewAthleteInScope(viewScope, athleteId)
+      : await canAccessAthletePlans(query, req, athleteId);
+    if (!allowed) return res.status(403).json({ error: "Forbidden" });
     const requestedProgram = String(req.query.program || "");
 
     // status = 'active' here (unlike GET /:athleteId/plans above, which
@@ -236,12 +252,14 @@ router.get("/:athleteId/program-data", async (req, res, next) => {
       where (athlete_source_external_id = $1 or athlete_id = $1)
         and plan_type = 'program'
         and is_template = false
+        -- Roles V-7: a view workspace never sees a draft or an archived program (P-2).
+        and (not $2::boolean or coalesce(status, 'active') not in ('draft', 'archived'))
       order by program_order nulls last, plan_name
       `,
-      [athleteId],
+      [athleteId, Boolean(viewScope)],
     );
 
-    const adminRows = await getAdminRows(req);
+    const adminRows = viewScope ? await getViewAthleteRows(viewScope) : await getAdminRows(req);
     const hasWeekly = weeklyPlans.rows.length > 0;
 
     if (requestedProgram === "__all_programs__") {
@@ -339,6 +357,36 @@ async function loadPrograms(programPlans) {
     rowsByPlanId.get(row.plan_id).push(row);
   });
   return buildPrograms(programPlans, rowsByPlanId);
+}
+
+// Roles V-7: is this athlete (by code, source id or uuid) an active member of a view workspace's club or team?
+async function viewAthleteInScope(scope, athleteId) {
+  const filter = viewMembershipScope(scope, "a");
+  const result = await query(
+    `select 1 from public.athletes a
+      where (a.athlete_id = $2 or a.source_external_id = $2 or a.id::text = $2) and coalesce(a.is_active, true) ${filter.sql}
+      limit 1`,
+    [...filter.params, String(athleteId)],
+  );
+  return result.rowCount > 0;
+}
+
+// The athlete chooser of a view workspace's program page: its club's or team's athletes (the same rows as V-2's list).
+async function getViewAthleteRows(scope) {
+  const filter = viewMembershipScope(scope, "a");
+  const result = await query(`
+    select a.athlete_id, a.source_external_id as athlete_source_external_id,
+      coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
+      a.image_url as athlete_image_url
+    from public.athletes a
+    where coalesce(a.is_active, true) ${filter.sql}
+    order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::numeric nulls last, athlete_name
+  `, filter.params);
+  return result.rows.map((row) => ({
+    athlete_id: row.athlete_source_external_id || row.athlete_id,
+    athlete: row.athlete_name,
+    athlete_image_url: row.athlete_image_url || "",
+  }));
 }
 
 async function getAdminRows(req = null) {
