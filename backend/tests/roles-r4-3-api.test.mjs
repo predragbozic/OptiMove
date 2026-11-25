@@ -148,7 +148,8 @@ test("1. the ceiling: a platform admin closes and opens a module; the club's adm
   assert.ok(!("reason" in a) && !("history" in asAdmin));
   assert.equal(a.ceilingEffective, true, "athletes.manage acts (Q12)");
   assert.equal(asAdmin.modules.find((m) => m.module === "calendar").ceilingEffective, true, "calendar.view acts (roles V-3)");
-  assert.equal(asAdmin.modules.find((m) => m.module === "dashboards").ceilingEffective, false, "dashboards' words act nowhere yet");
+  assert.equal(asAdmin.modules.find((m) => m.module === "dashboards").ceilingEffective, true, "dashboards.view acts (roles V-6)");
+  assert.equal(asAdmin.modules.find((m) => m.module === "exercises").ceilingEffective, false, "exercises' words act nowhere yet");
   const asPa = ok(await srv.api(w.pa.cookie, `${R}/clubs/${w.A}/ceiling`));
   assert.equal(asPa.modules.find((m) => m.module === "athletes").reason, "Licence");
   assert.equal(asPa.history.length, 1);
@@ -179,7 +180,7 @@ test("2. a club version: made by the club's admin's first change, acting for an 
   code(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: null, add: ["athletes.remove"] }), 409, "version_changed");
   code(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 7, add: ["athletes.remove"] }), 409, "version_changed");
   // O6: an unchecked word is neither added nor taken away; a word not in the set cannot be removed.
-  code(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 1, remove: ["dashboards.view"] }), 409, "permission_not_available_yet");
+  code(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 1, remove: ["load.view.team"] }), 409, "permission_not_available_yet");
   code(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 1, remove: ["athletes.remove"] }), 400, "invalid_request");
   const back = ok(await version(w.adminA, ROLE_IDS.team_coach, w.A, { expectedRevision: 1, add: ["athletes.remove"] }));
   assert.equal(back.role.version.revision, 2);
@@ -360,7 +361,7 @@ test("6. Q15: a word taken from a club version names the customs that still hold
   assert.deepEqual(drift.customs.map((x) => [x.customId, x.words]), [[c.custom.id, ["athletes.remove"]]]);
   notFound(await srv.api(w.adminB.cookie, `${R}/clubs/${w.A}/custom-drift`));
   const removal = (who, body) => srv.api(who.cookie, `${R}/${ROLE_IDS.team_coach}/clubs/${w.A}/custom-word-removal`, { method: "POST", body: { reason: "Not any more", ...body } });
-  code(await removal(w.adminA, { requestKey: key(), word: "dashboards.view", customIds: [c.custom.id] }), 409, "permission_not_available_yet");
+  code(await removal(w.adminA, { requestKey: key(), word: "load.view.team", customIds: [c.custom.id] }), 409, "permission_not_available_yet");
   notFound(await removal(w.adminB, { requestKey: key(), word: "athletes.remove", customIds: [c.custom.id] }));
   notFound(await removal(w.adminA, { requestKey: key(), word: "athletes.remove", customIds: [crypto.randomUUID()] }));
   const k1 = key();

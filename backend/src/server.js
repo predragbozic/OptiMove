@@ -1,3 +1,5 @@
+import { createReferenceBindingRouter } from "./dashboardReferences/bindingRouter.js";
+import { createReferenceRouter } from "./dashboardReferences/router.js";
 import { pagesEnabled } from './dashboardPages/config.js';
 import { createPagesRouter } from './dashboardPages/router.js';
 import { captureSimplePreviewRequestBytes } from './dashboardSimple/previewRouter.js';
@@ -39,7 +41,8 @@ import calendarRouter from "./routes/calendar.js";
 import calendarEventsRouter from "./routes/calendarEvents.js";
 import calendarSettingsRouter from "./routes/calendarSettings.js";
 import calendarQuestionsRouter from "./routes/calendarQuestions.js";
-import trainingLoadDashboardRouter from "./routes/trainingLoadDashboard.js";
+import trainingLoadDashboardRouter, { dashboardsViewGate } from "./routes/trainingLoadDashboard.js";
+import { viewEntryGate } from "./moduleView.js";
 import gpexeImportRouter from "./routes/gpexeImport.js";
 import sourceConnectionsRouter from "./routes/sourceConnections.js";
 import sourceMetricsRouter from "./routes/sourceMetrics.js";
@@ -104,7 +107,9 @@ app.use(express.json({ verify: captureSimplePreviewRequestBytes }));
 app.use(authMiddleware);
 app.use(attachAuthorizationContext);
 if (simpleRuntime.router) {
-  app.use(SIMPLE_RUNTIME_PATH, requireAuth, async (req, res, next) => {
+  // Roles V-6: the dashboards gate with no read - a view workspace answers this runtime's 404 without the writing
+  // workspace resolve below (the Simple runtime is a platform pilot only).
+  app.use(SIMPLE_RUNTIME_PATH, requireAuth, viewEntryGate("dashboards", [], { refuse: (req, res) => missingRoute(req, res) }), async (req, res, next) => {
     const workspace = await resolveActiveDataWorkspace(req);
     if (!canUseSimplePlatformPilot(req, workspace)) return missingRoute(req, res);
     req.simplePlatformPilot = true;
@@ -209,12 +214,16 @@ app.use("/api/calendar", requireAuth, calendarRouter);
 // (self-view); coach-only lifecycle/write routes are gated by
 // canManageDashboardRow inside the router itself, same pattern as every
 // other training_load router above.
+// Roles V-6: the dashboards module's entry gate, once, in front of both routers (routes/trainingLoadDashboard.js).
+app.use("/api/training-load/dashboards", requireAuth, dashboardsViewGate);
 if (app.locals.dashboardPagesEnabled) app.use("/api/training-load/dashboards", requireAuth, createPagesRouter({ pool }));
 app.use("/api/training-load/dashboards", requireAuth, trainingLoadDashboardRouter);
 app.use("/api/training-load/gpexe", requireAuth, gpexeImportRouter);
 // Source metric mapping administration (M2): a platform admin, or a club's
 // own admin in that club's workspace; everyone else the same 404. Mounted
 // before the source connections so this prefix never reaches that router.
+app.use("/api/training-load/dashboard-references", requireAuth, createReferenceBindingRouter());
+app.use("/api/training-load/reference-tables", requireAuth, createReferenceRouter());
 app.use("/api/training-load/sources/metrics", requireAuth, sourceMetricsRouter);
 // Source credential connections (F3c2d): platform admin only inside the
 // router; every other caller gets the same 404 as a missing connection.

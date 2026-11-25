@@ -1546,7 +1546,7 @@ function trainingLoadFilterCount() {
 // Pure, exported so both the render side and tests can assert space
 // membership directly instead of re-deriving it from markup.
 export function trainingLoadTopLevelSpace(section) {
-  if (section === "variables" || section === "source-fields" || section === "mappings" || section === "board") return "dataConfig";
+  if (section === "references" || section === "variables" || section === "source-fields" || section === "mappings" || section === "board") return "dataConfig";
   return section === "schedule" ? "schedule" : "dataAnalysis";
 }
 
@@ -1643,10 +1643,12 @@ const DATA_ANALYSIS_SUBVIEWS = [
   { section: "imports", label: "Imports" },
 ];
 
-function renderDataAnalysisSubNavHtml(section) {
+function renderDataAnalysisSubNavHtml(section, viewSections = null) {
+  // Roles V-6: a view workspace lists only the views its open modules give (today Dashboards).
+  const views = viewSections ? DATA_ANALYSIS_SUBVIEWS.filter((v) => viewSections.includes(v.section)) : DATA_ANALYSIS_SUBVIEWS;
   return `
     <div class="training-load-subnav" role="tablist" aria-label="Data & Analysis views">
-      ${DATA_ANALYSIS_SUBVIEWS.map((v) => `
+      ${views.map((v) => `
         <button type="button" class="training-load-subnav-tab ${section === v.section ? "is-active" : ""}" role="tab" aria-selected="${section === v.section ? "true" : "false"}" data-action="training-load-section" data-section="${v.section}">${v.label}</button>
       `).join("")}
     </div>
@@ -1661,16 +1663,21 @@ export function renderTrainingLoadCoachHtml() {
   // its own sub-nav buttons) restores whichever sub-view was last active -
   // see state.js's own header comment and setTrainingLoadSection() in
   // training-load-actions.js, the only place that value is written.
-  const dataAnalysisTargetSection = state.trainingLoad.lastDataAnalysisSection || "today";
-  // Roles V-1: a view workspace shows only the spaces of its open modules (today Data configuration); Schedule, Data &
-  // Analysis and the filter open with their own V steps.
-  const viewOnly = viewTrainingLoadSections() !== null;
+  // Roles V-1 / V-6: a view workspace shows only the spaces and views of its open modules (Data configuration, and Data
+  // & Analysis with Dashboards only); Schedule, the other views and the filter open with their own V steps.
+  const viewSections = viewTrainingLoadSections();
+  const viewOnly = viewSections !== null;
+  const viewAnalysisSections = viewOnly ? DATA_ANALYSIS_SUBVIEWS.map((v) => v.section).filter((s) => viewSections.includes(s)) : null;
+  const dataAnalysisTargetSection = viewOnly
+    ? (viewAnalysisSections.includes(state.trainingLoad.lastDataAnalysisSection) ? state.trainingLoad.lastDataAnalysisSection : viewAnalysisSections[0])
+    : (state.trainingLoad.lastDataAnalysisSection || "today");
+  const dataAnalysisTab = `<button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>`;
   return `
     <div class="training-load-root">
       <div class="training-load-toolbar">
         <div class="training-load-tabs" role="tablist" aria-label="Training Load spaces">
-          ${viewOnly ? "" : `<button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
-          <button type="button" class="training-load-tab ${space === "dataAnalysis" ? "is-active" : ""}" role="tab" aria-selected="${space === "dataAnalysis" ? "true" : "false"}" data-action="training-load-section" data-section="${dataAnalysisTargetSection}">${renderTrainingLoadTabIcon("analysis")}<span>Data &amp; Analysis</span></button>`}
+          ${viewOnly ? (viewAnalysisSections.length ? dataAnalysisTab : "") : `<button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
+          ${dataAnalysisTab}`}
           ${variablesContext()
             // C80: an administrator's item in the platform or a club workspace;
             // R2 (C99): also a team workspace of a club, for its coach - the
@@ -1684,7 +1691,7 @@ export function renderTrainingLoadCoachHtml() {
           : `<button type="button" class="plain-button compact-button training-load-filter-button ${count ? "is-active" : ""}" data-action="training-load-filter-open">Filter${count ? ` (${count})` : ""}</button>`}
       </div>
 
-      ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section) : ""}
+      ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section, viewAnalysisSections) : ""}
       ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
       ${section === "schedule" ? renderTrainingLoadScheduleHtml() : ""}
@@ -1692,6 +1699,7 @@ export function renderTrainingLoadCoachHtml() {
       ${section === "analysis" ? renderTrainingLoadAnalysisHtml() : ""}
       ${section === "imports" ? renderGpexeImportsHtml() : ""}
       ${section === "variables" ? renderVariablesHtml() : ""}
+      ${section === "references" ? '<div data-reference-island="workspace"></div>' : ""}
       ${section === "source-fields" ? renderSourceFieldsHtml() : ""}
       ${section === "mappings" ? renderMappingsHtml() : ""}
       ${section === "board" ? renderBoardHtml() : ""}

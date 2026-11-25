@@ -58,7 +58,7 @@ function requireWorkspaceType(dataWorkspaceType) {
 // The authorized activity id set for one date range + workspace +
 // (optional) athlete filter — mirrors the real, already-shipped
 // GET /api/training-activity list-query's own workspace scoping.
-async function fetchAuthorizedActivityIds({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds }, queryRunner) {
+export async function fetchAuthorizedActivityIds({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds }, queryRunner) {
   requireWorkspaceType(dataWorkspaceType);
   const params = [dateFrom, dateTo];
   let scopeSql = "true";
@@ -668,7 +668,7 @@ function queryBuiltInSeriesFromContext(ctx, { key, athleteIds }) {
 // athleteIds/activityId/componentId — the date period is a query-level
 // concept, not a per-widget filter.
 // ------------------------------------------------------------
-function mergeFilters(...layers) {
+export function mergeFilters(...layers) {
   const result = {};
   for (const layer of layers) {
     if (!layer || typeof layer !== "object") continue;
@@ -695,7 +695,7 @@ function mergeFilters(...layers) {
 // the number of widgets), while two widgets with genuinely different
 // local_filter_override values never leak each other's rows.
 // ------------------------------------------------------------
-export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs, { queryRunner = query } = {}) {
+export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs, { queryRunner = query, referenceMeasurementsOnly = false } = {}) {
   const rangeCache = new Map();
   const ratioCache = new Map();
 
@@ -731,7 +731,11 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
         dayScopeMetricIds,
         builtinCatalog,
         queryRunner,
-      ));
+      ).then(ctx => {
+        if (!referenceMeasurementsOnly) return ctx;
+        const measured = map => new Map([...map].map(([id,facts]) => [id,facts.filter(f => ["api_import","csv_import"].includes(f.entryMethod) && !f.isDerived && !f.calculated)]));
+        return { ...ctx, metricFactsByDefinition: measured(ctx.metricFactsByDefinition), dayLevelFactsByDefinition: measured(ctx.dayLevelFactsByDefinition) };
+      }));
     }
     return rangeCache.get(cacheKey);
   }
@@ -898,4 +902,39 @@ export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dat
     byWidget.get(item.widgetId).push(item);
   }
   return widgetsWithSeries.map((widget) => ({ widgetId: widget.id, series: byWidget.get(widget.id) || [] }));
+}
+
+// ------------------------------------------------------------
+// Roles V-6 (docs/ai/roles-v-steps-plan.md section 13, choice 7): named athletes. Every groupBy but 'cohort' answers
+// one row per athlete (reduceRows keys its buckets by athleteId), and so does a series aggregated with 'none'; a
+// widget whose effective filter names athletes (or a shell filter that names them) answers about those athletes.
+// Without load.view.athlete such a widget is never queried: each of its series answers a fixed 'restricted' result.
+// A cohort total that is answered loses its conflict candidates (facts that carry athlete ids).
+// ------------------------------------------------------------
+export const NAMED_ATHLETES_REQUIRED = "namedAthletesRequired";
+
+export function athleteLevelWidget(widget, { defaultFilter, requestFilter, shellFilter } = {}) {
+  if (widget.group_by !== "cohort") return true;
+  if ((widget.series || []).some((series) => series.analytical_aggregation === "none")) return true;
+  if (shellFilter?.athleteIds?.length) return true;
+  const effective = mergeFilters(defaultFilter, requestFilter, widget.local_filter_override);
+  return Array.isArray(effective.athleteIds) && effective.athleteIds.length > 0;
+}
+
+function withoutConflictCandidates(rows) {
+  return Array.isArray(rows) ? rows.map(({ conflictCandidates, ...row }) => row) : rows;
+}
+
+export async function queryDashboardForViewer(dataWorkspaceArgs, widgetsWithSeries, period, options = {}, { namedAthletes }) {
+  if (namedAthletes === true) return queryDashboard(dataWorkspaceArgs, widgetsWithSeries, period, options);
+  const restricted = new Set(widgetsWithSeries.filter((widget) => athleteLevelWidget(widget, options)).map((widget) => widget.id));
+  const answered = await queryDashboard(dataWorkspaceArgs, widgetsWithSeries.filter((widget) => !restricted.has(widget.id)), period, options);
+  const byWidget = new Map(answered.map((item) => [item.widgetId, item]));
+  return widgetsWithSeries.map((widget) => {
+    if (restricted.has(widget.id)) {
+      return { widgetId: widget.id, series: (widget.series || []).map((series) => ({ widgetId: widget.id, seriesId: series.id, status: "restricted", error: NAMED_ATHLETES_REQUIRED, data: null })) };
+    }
+    const item = byWidget.get(widget.id) || { widgetId: widget.id, series: [] };
+    return { ...item, series: item.series.map((series) => (series.data ? { ...series, data: { ...series.data, current: withoutConflictCandidates(series.data.current), comparison: withoutConflictCandidates(series.data.comparison) } } : series)) };
+  });
 }

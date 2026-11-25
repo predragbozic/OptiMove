@@ -344,18 +344,16 @@ test("11. section 6: a view workspace with every view word opens no module beyon
   assert.equal(hm.activeWorkspace.type, "club_view");
   // Roles V-1 opened Data configuration (variables.view) and Tags, presets and session types (presets.use): their words
   // reach /me and their reads are proven in roles-v-sweep.test.mjs (tests 5 and 6), so they leave the list below.
-  // Roles V-2 opened Athletes (athletes.view; roles-v-sweep test 8) and roles V-3 the calendar (calendar.view;
-  // roles-v-sweep test 7): their reads leave the list. Roles V-7 opened Programs and Exercises (programs.view,
-  // exercises.use; roles-v-sweep test 9): the Program Library and the exercise library leave the list (the Builder and
-  // exercise collections, which a view workspace never reads, stay).
-  assert.deepEqual(hm.permissions, ["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "programs.view", "exercises.use"], "only checked words of open modules reach /me");
+  // Roles V-2 opened Athletes (athletes.view), roles V-3 the calendar (calendar.view) and roles V-4 the Tests module
+  // (tests.view, tests.results.view): their reads are proven in roles-v-sweep.test.mjs and leave the list.
+  assert.deepEqual(hm.permissions, ["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view", "programs.view", "exercises.use"], "only checked words of open modules reach /me");
   const q = `from=2026-11-01&to=2026-11-30`;
   const reads = ["/api/plans", "/api/exercise-collections", "/api/builder/plans",
     "/api/taxonomy", `/api/training-activity?${q}`, "/api/training-load/weekly",
     "/api/training-load/external-schedules", "/api/training-load/metrics/definitions", `/api/training-load/metrics/occasions?${q}`,
-    "/api/training-load/dashboards", "/api/tests", `/api/training-load/gpexe/teams/${w.TA1}/status`,
+    "/api/tests", `/api/training-load/gpexe/teams/${w.TA1}/status`,
     "/api/coaches", `/api/athletes/${w.athA.id}`];
-  const writes = [["/api/calendar/events", { title: "x", clubId: w.A }], ["/api/training-load/dashboards", { name: "x" }],
+  const writes = [["/api/calendar/events", { title: "x", clubId: w.A }],
     ["/api/training-activity/session-types", { name: "x" }], ["/api/plans", { name: "x" }], ["/api/tests", { name: "x" }]];
   const norm = (who, text) => text.split(who.id).join("<me>");
   for (const forged of [false, true]) {

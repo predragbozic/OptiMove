@@ -1,3 +1,4 @@
+import { rolelessViewHandoff } from './viewWorkspaceHandoff.js';
 // Roles V-0 (docs/ai/roles-v-steps-plan.md section 3): the one question every module asks before it shows its data to a
 // role holder - "may this account VIEW this module in its active workspace?" - and the one entry gate that keeps a view
 // workspace (club_view / team_view, roles R4-2) away from everything but a module's listed reads.
@@ -25,9 +26,8 @@
 // V-0 opened no module; V-1 opens data_configuration (routes/sourceMetrics.js) and presets (routes/taxonomy.js through
 // server.js, routes/sessionTypes.js); V-2 opens athletes (routes/athletes.js, routes/positions.js, the athletes of
 // routes/organization.js GET /); V-3 opens calendar (routes/calendar.js, routes/calendarEvents.js, and the gate with
-// no read on routes/calendarSettings.js; calendarModuleContext.js); V-7 opens programs (routes/templates.js,
-// routes/plans.js, routes/athletes.js program-data; the Builder with no read) and exercises (routes/exercises.js through
-// server.js; routes/exerciseCollections.js with no read), with coachModuleGate on their coach path. Each module's V pull request adds its
+// no read on routes/calendarSettings.js; calendarModuleContext.js); V-4 opens tests and tests_results (routes/tests.js,
+// testsAccess.js). Each module's V pull request adds its
 // key to OPEN_VIEW_MODULES, mounts the gate with its reads, adds its word to ENFORCED_PERMISSIONS and
 // VIEW_WORKSPACE_USABLE_WORDS (permissions.js), and its row to backend/tests/roles-v-sweep.test.mjs.
 import { isPlatformAdministrator } from "./authz.js";
@@ -50,7 +50,8 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 });
 
 // The modules a view workspace may read. A module enters here only in its own V pull request, with its entry gate.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "programs", "exercises"]);
+// V-6 opens Dashboards read-only.
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises"]);
 
 // The base scope of each view workspace type (the club or team it names).
 const VIEW_SCOPE_TYPES = Object.freeze({ club_view: "club", team_view: "team" });
@@ -113,15 +114,19 @@ export function coachModuleGate(module, { allowed, refuse = forbidden, resolve =
 }
 
 // "GET /", "GET /:id", "GET /:id/history": the path of one READ route, matched segment by segment against req.path
-// (relative to the router's mount). Only GET can be listed (a view workspace never writes). A ":name" segment matches a
+// (relative to the router's mount). Only GET can be listed (a view workspace never writes), and a POST read marked
+// `postRead` whose path ends in "/query" (V-6, below). A ":name" segment matches a
 // canonical UUID unless the route gives that parameter its own CLOSED pattern (`params: { name: /^…$/ }`), so a listed
 // "GET /:id" can never also admit a literal sibling route of the router ("GET /active", "GET /export"); nothing else is
 // a wildcard. Each module's V step still proves its list against its router's GET routes (the plan's section 4).
 const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// V-6: a POST that only reads (a dashboard's batch query, which takes its period and filters in the body) may be
+// listed with `postRead: true`, and only when its last segment is the literal "query": no other POST can be listed.
 function compileRoute(route) {
   const method = String(route?.method || "").toUpperCase();
   const path = String(route?.path || "");
-  if (method !== "GET" || !path.startsWith("/")) throw new Error(`Bad view route: ${JSON.stringify(route)}`);
+  const postRead = method === "POST" && route?.postRead === true && path.split("/").filter(Boolean).at(-1) === "query";
+  if ((method !== "GET" && !postRead) || !path.startsWith("/")) throw new Error(`Bad view route: ${JSON.stringify(route)}`);
   const params = route.params || {};
   const parts = path.split("/").filter(Boolean).map((p) => {
     if (!p.startsWith(":")) return (segment) => segment === p;
@@ -180,8 +185,10 @@ export function viewEntryGate(module, readRoutes, {
       const { workspace, availableWorkspaces } = await resolve(req.user.id, req.authz);
       const active = workspace || pickFallbackWorkspace(availableWorkspaces);
       if (!active || !VIEW_WORKSPACE_TYPES.has(active.type)) return next();
-      if (!routes.some((matches) => matches(req))) return refuse(req, res, next);
-      if (!canView(req.authz, active, module, { open })) return refuse(req, res, next);
+      if (!routes.some((matches) => matches(req)) || !canView(req.authz, active, module, { open })) {
+        rolelessViewHandoff(req, { workspace: active, availableWorkspaces });
+        return refuse(req, res, next);
+      }
       req.moduleView = Object.freeze({ module, workspace: active, scope: viewReadScope(active) });
       return next();
     } catch (error) {

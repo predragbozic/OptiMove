@@ -6,6 +6,7 @@ import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from
 import { analysisChartInteractionGeneration, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
+import { viewModuleOpen } from "./view-modules.js";
 import { formatDashboardValue as formatValue, renderDashboardMetricTable } from "./training-load-dashboard-table.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { dashboardGroupLabels } from "./training-load-analysis-group-labels.js";
@@ -90,9 +91,15 @@ function pageBusy() {
   return Boolean(a.pagesAvailable && (a.pageLoading || a.pageSaving || a.pagePending));
 }
 
+// Roles V-6: a view workspace (club_view / team_view with dashboards.view) reads dashboards only: no New dashboard, no
+// template copy, no edit, no Set as active, no delete. The server refuses every one of them there anyway.
+function readOnlyView() {
+  return viewModuleOpen("dashboards");
+}
+
 function canEdit() {
   const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.status !== "archived" && !d.is_template;
+  return Boolean(d) && d.status !== "archived" && !d.is_template && !readOnlyView();
 }
 
 // Permanent delete is offered for any open dashboard except a system
@@ -102,7 +109,7 @@ function canEdit() {
 // Rename and Archive.
 function canDeleteDashboard() {
   const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.owner_scope !== "system";
+  return Boolean(d) && d.owner_scope !== "system" && !readOnlyView();
 }
 
 // 3B3 UX slice: the "Choose activity" chip replaces the old raw Activity/
@@ -200,7 +207,7 @@ function renderDashboardPickerHtml() {
           <label class="search-field tl-dash-picker-search"><span>Search dashboards</span><input type="search" data-action="training-load-analysis-picker-search" data-tl-analysis-search="picker" value="${escapeAttr(a.picker.search)}" placeholder="Search dashboards" autocomplete="off"></label>
           <div class="tl-dash-picker-list" role="listbox" aria-label="Dashboards">
             ${a.listLoading ? `<p class="muted tl-analysis-loading" aria-live="polite">Loading dashboards...</p>` : ""}
-            ${!a.listLoading && !groups.length ? `<p class="muted tl-dash-picker-empty">${a.picker.search.trim() ? "No dashboards match your search." : "No dashboards yet - create your first one below."}</p>` : ""}
+            ${!a.listLoading && !groups.length ? `<p class="muted tl-dash-picker-empty">${a.picker.search.trim() ? "No dashboards match your search." : readOnlyView() ? "No dashboards are shared here yet." : "No dashboards yet - create your first one below."}</p>` : ""}
             ${groups.map((group) => `
               <div class="tl-dash-picker-group" role="group" aria-label="${escapeAttr(group.label)}">
                 <p class="eyebrow">${escapeHtml(group.label)}</p>
@@ -216,9 +223,9 @@ function renderDashboardPickerHtml() {
               </div>
             `).join("")}
           </div>
-          <div class="tl-popover-footer">
+          ${readOnlyView() ? "" : `<div class="tl-popover-footer">
             <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-new-dashboard"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>New dashboard</span></button>
-          </div>
+          </div>`}
         </div>
       ` : ""}
     </div>
@@ -306,6 +313,18 @@ function renderLayoutBarHtml() {
 }
 
 function renderEmptyHtml() {
+  if (readOnlyView()) {
+    return `
+    <section class="panel tl-analysis-empty">
+      <p class="eyebrow">Dashboards</p>
+      <h3>No dashboard selected</h3>
+      <p class="muted">Choose one of the dashboards shared here. You can look at them; changes are made by the people who manage this club or team.</p>
+      <div class="tl-analysis-empty-actions">
+        <button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-open-picker">Choose dashboard</button>
+      </div>
+    </section>
+  `;
+  }
   return `
     <section class="panel tl-analysis-empty">
       <p class="eyebrow">Dashboards</p>
@@ -379,6 +398,7 @@ function renderWidgetMenuHtml(widget) {
           ${blocked ? `<p class="tl-menu-note" role="note">${pageBusy() ? (a.pagePending ? "Check the pending page update before editing widgets." : "Wait until this page finishes updating.") : "Save or cancel the layout changes first."}</p>` : ""}
           ${menuItemHtml({ action: "training-load-analysis-edit-widget", label: "Settings", dataset, disabled: blocked || a.saving })}
           ${menuItemHtml({ action: "training-load-analysis-open-advanced", label: "Advanced settings", dataset, disabled: blocked || a.saving })}
+          ${a.referencesAvailable && ["line_chart","bar_chart"].includes(widget.widget_type) ? menuItemHtml({ action: "training-load-reference-open", label: "References and Radar", dataset, disabled: blocked || a.saving }) : ""}
           ${a.pagesAvailable ? menuItemHtml({ action: "training-load-pages-open-copy", label: "Copy to page", dataset, disabled: blocked || a.saving }) : ""}
           ${a.editMode ? "" : menuItemHtml({ action: "training-load-analysis-toggle-edit", label: "Edit layout", disabled: pageBusy() })}
           <div class="tl-menu-separator" role="separator"></div>
@@ -415,6 +435,8 @@ function displayStatusLabel(status, reasons = []) {
     const names = { conflict: "Conflict", unitConflict: "Unit conflict", typeConflict: "Type conflict", semanticConflict: "Semantic conflict" };
     return reasons.filter(reason => names[reason]).map(reason => names[reason]).join(" / ") || "Conflict";
   }
+  // Roles V-6: a per-athlete widget in a workspace without load.view.athlete (the server never queried it).
+  if (reasons.includes("namedAthletesRequired")) return "This widget shows each athlete's values, which you can't see here.";
   if (reasons.includes("seriesQueryFailed")) return "This series could not be loaded. Try refreshing the dashboard.";
   if (reasons.includes("duplicateBucket")) return "Multiple values for this group. Use a table.";
   return "Invalid or unavailable result";
@@ -494,6 +516,7 @@ function renderChartHtml(model) {
 }
 
 function renderWidgetBodyHtml(widget, results) {
+  if(widget.presentation_config?.schemaVersion===1&&widget.presentation_config.referenceConfig) return `<div data-reference-island="chart" data-widget-id="${escapeAttr(widget.id)}"></div>`;
   const analysis = state.trainingLoad.analysis;
   const querySkipped = analysis.queryResult === null && (analysis.dashboard?.is_template || analysis.dashboard?.status === "archived");
   const catalog = state.trainingLoad.analysis.metricPicker.definitions ?? [];
@@ -504,6 +527,7 @@ function renderWidgetBodyHtml(widget, results) {
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
   if (model.status === "loading") return `<p class="muted tl-analysis-loading" aria-live="polite">Loading...</p>`;
   if (model.status === "error") return renderDisplayStatusHtml("error", model.reasons);
+  if (model.status === "restricted") return renderDisplayStatusHtml("restricted", model.reasons);
   const definitions = state.trainingLoad.analysis.metricPicker.definitions ?? [];
   const unavailable = widget.series.some(series => definitions.find(d => d.id === series.metric_definition_id)?.calculation?.inputs?.some(input => input.definitionId === null));
   if (unavailable) return '<p role="status">An input you cannot see is needed. Choose another metric.</p>';
@@ -540,7 +564,7 @@ function renderWidgetHtml(widget, position) {
       ${renderWidgetMenuHtml(widget)}
       <header class="tl-analysis-widget-head ${layoutMode ? "is-draggable" : ""} ${canEdit() ? "has-menu" : ""}" data-analysis-drag-handle="${layoutMode ? "true" : "false"}">
         <div>
-          <p class="eyebrow">${escapeHtml(widget.widget_type.replace("_", " "))}</p>
+          <p class="eyebrow">${escapeHtml(widget.presentation_config?.referenceConfig?.mode === "radar" ? "Radar" : widget.widget_type.replace("_", " "))}</p>
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
       </header>
@@ -572,8 +596,10 @@ function renderGridHtml() {
     </section>
     ${a.dashboard.is_template ? `
       <div class="tl-analysis-template-banner">
-        <p class="tl-analysis-status is-unresolved">This is a template. Clone it before querying or editing it.</p>
-        <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-clone-template" data-template-id="${escapeAttr(a.dashboard.id)}">Use template</button>
+        ${readOnlyView()
+          ? `<p class="tl-analysis-status is-unresolved">This is a template. It shows data only once someone with editing rights uses it.</p>`
+          : `<p class="tl-analysis-status is-unresolved">This is a template. Clone it before querying or editing it.</p>
+        <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-clone-template" data-template-id="${escapeAttr(a.dashboard.id)}">Use template</button>`}
       </div>
     ` : ""}
     ${a.dashboard.status === "archived" ? `<p class="tl-analysis-status is-unresolved">Archived dashboards are read-only.</p>` : ""}
@@ -909,7 +935,7 @@ export function renderTrainingLoadAnalysisHtml() {
   const a = state.trainingLoad.analysis;
   return `
     <div class="tl-analysis">
-      <div${a.simpleEditor?.open ? ' inert' : ''}>
+      <div${a.simpleEditor?.open || a.referenceEditorOpen ? ' inert' : ''}>
       ${renderTopBarHtml()}
       ${renderDashboardPages()}
       ${a.simpleWorkspaceRequired ? '<p role="status">This club dashboard is outside your active workspace, so open a platform dashboard to use Simple.</p>' : ""}
@@ -921,6 +947,7 @@ export function renderTrainingLoadAnalysisHtml() {
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}
       </div>
+      <div data-reference-island="binding"></div>
       ${renderSimpleEditorHtml(a.simpleEditor, state.currentUser?.activeWorkspace?.type === "platform")}
     </div>
   `;

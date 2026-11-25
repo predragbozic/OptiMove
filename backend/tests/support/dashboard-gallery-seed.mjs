@@ -1,7 +1,7 @@
 // Synthetic, measured values only. Shared by backend HTTP and browser tests;
 // this helper never imports browser tooling and accepts only the test-owned client.
 import crypto from 'node:crypto';
-export async function seedGalleryMeasurements(q,{actorId,clubId,athleteIds,teamId=null,dates=['2026-11-05','2026-11-06'],existingDefinitions=null}){
+export async function seedGalleryMeasurements(q,{actorId,clubId,athleteIds,teamId=null,dates=['2026-11-05','2026-11-06'],existingDefinitions=null,entryMethod='manual'}){
  const definitions=existingDefinitions??[];
  for(const name of (existingDefinitions?[]:['Distance part A','Distance part B'])){
   const id=(await q.query("insert into training_load.metric_definitions(key,label,owner_scope,state,created_by_user_id) values($1,$2,'system','active',$3) returning id",['gallery_'+crypto.randomUUID(),name,actorId])).rows[0].id;
@@ -17,7 +17,7 @@ export async function seedGalleryMeasurements(q,{actorId,clubId,athleteIds,teamI
   const ep=(await q.query("insert into training_load.metric_event_participants(event_id,athlete_id,athlete_timezone_snapshot) values($1,$2,'UTC') returning id",[event,athlete])).rows[0].id;
   await q.query("insert into training.activity_metric_event_links(activity_id,metric_event_id,link_method,link_status) values($1,$2,'manual','confirmed')",[activity,event]);
   await q.query("insert into training.activity_participant_metric_participant_links(activity_participant_id,metric_event_participant_id,link_method,link_status) values($1,$2,'manual','confirmed')",[participant,ep]);
-  const occasion=(await q.query("insert into training_load.metric_measurement_occasions(event_participant_id,entry_method) values($1,'manual') returning id",[ep])).rows[0].id;
+  const occasion=(await q.query("insert into training_load.metric_measurement_occasions(event_participant_id,entry_method) values($1,$2) returning id",[ep,entryMethod])).rows[0].id;
   for(const [component,definition]of definitions.entries())await q.query("insert into training_load.metric_values(occasion_id,metric_definition_id,metric_definition_version_id,value_numeric,unit_at_capture,aggregation_role,coverage) values($1,$2,$3,$4,'m','standalone','not_applicable')",[occasion,definition.id,definition.versionId,(index+1)*(component+1)*10]);
  }
  return definitions;

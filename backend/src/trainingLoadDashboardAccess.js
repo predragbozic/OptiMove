@@ -36,18 +36,65 @@ import { resolveActiveWorkspace } from "./workspace.js";
 import { isAthleteInWorkspaceScope } from "./trainingLoadAccess.js";
 import { query } from "./db.js";
 import { calculatedDefinitionSql } from "./calculatedValues.js";
+import { can } from "./permissions.js";
+import { canView, viewReadScope } from "./moduleView.js";
 
 export { isAthleteInWorkspaceScope };
+
+// ------------------------------------------------------------
+// Roles V-6 (docs/ai/roles-v-steps-plan.md sections 2.7 and 13): dashboards in a view workspace, and dashboards.view.
+//
+//   - The module's entry gate (server.js) admits a view workspace (club_view / team_view) only to the listed reads; it
+//     sets req.moduleView there. Every other request of a view workspace is marked req.dashboardsViewRefused and passed
+//     on, so the route answers what it answers an account with no workspace, without resolving the workspace again.
+//   - An admitted read's data workspace is the club or team the view names (ADR-002: the workspace stays the data
+//     context); it carries `view: true` and sees only the system templates and the shared dashboards of that data
+//     workspace, never through manage rights.
+//   - A view workspace never manages a dashboard (canManageDashboardRow, dashboardManageBasis, the create context),
+//     admitted or refused: dashboard writes do not otherwise look at the workspace.
+//   - A club or team workspace (an old role row) keeps its data workspace only with can(dashboards.view) there (the
+//     club's licence is inside can()); without it every route answers as for no workspace (R4 section 6).
+// ------------------------------------------------------------
+const VIEW_MODULE = "dashboards";
+
+// Is this request's active workspace a view one (admitted to a listed read, or refused by the gate)?
+export function isDashboardsViewRequest(req) {
+  return req?.moduleView?.module === VIEW_MODULE || req?.dashboardsViewRefused === true;
+}
+
+// The resolved workspace behind each data-workspace descriptor (the descriptor's own shape is unchanged: it is stored
+// with a page request and compared on its replay).
+const RESOLVED_WORKSPACE = new WeakMap();
+
+function coachMayViewDashboards(authz, workspace) {
+  if (workspace.scopeId == null || workspace.scopeId === "") return false;
+  return can(authz, "dashboards.view", { type: workspace.type, id: String(workspace.scopeId) });
+}
+
+// The data context of an admitted view read: only when the gate admitted THIS view workspace and the word still holds.
+function admittedViewScope(workspace, req) {
+  const scope = viewReadScope(workspace);
+  const admitted = req?.moduleView;
+  if (!scope || admitted?.module !== VIEW_MODULE || !admitted.scope) return null;
+  if (admitted.scope.type !== scope.type || String(admitted.scope.id) !== scope.id) return null;
+  return canView(req.authz, workspace, VIEW_MODULE) ? scope : null;
+}
 
 // ------------------------------------------------------------
 // Data workspace (5-value, query/read context).
 // ------------------------------------------------------------
 
 function dataWorkspaceFromActiveWorkspace(workspace, req) {
+  const described = describeDataWorkspace(workspace, req);
+  if (described.type !== null) RESOLVED_WORKSPACE.set(described, workspace);
+  return described;
+}
+
+function describeDataWorkspace(workspace, req) {
   if (!workspace) return { type: null };
   if (workspace.type === "platform") return { type: "platform", dataWorkspaceType: "platform", dataWorkspaceScopeId: null };
-  if (workspace.type === "club") return { type: "club", dataWorkspaceType: "club", dataWorkspaceScopeId: workspace.scopeId };
-  if (workspace.type === "team") return { type: "team", dataWorkspaceType: "team", dataWorkspaceScopeId: workspace.scopeId };
+  if (workspace.type === "club") return coachMayViewDashboards(req.authz, workspace) ? { type: "club", dataWorkspaceType: "club", dataWorkspaceScopeId: workspace.scopeId } : { type: null };
+  if (workspace.type === "team") return coachMayViewDashboards(req.authz, workspace) ? { type: "team", dataWorkspaceType: "team", dataWorkspaceScopeId: workspace.scopeId } : { type: null };
   if (workspace.type === "private_coach") return { type: "private_coach", dataWorkspaceType: "private_coach", dataWorkspaceScopeId: null, dataWorkspaceUserId: req.user.id };
   if (workspace.type === "athlete") {
     if (!req.authz.athleteId) return { type: null };
@@ -60,7 +107,36 @@ function dataWorkspaceFromActiveWorkspace(workspace, req) {
     // was.
     return { type: "athlete", dataWorkspaceType: "athlete", dataWorkspaceScopeId: null, dataWorkspaceUserId: req.user.id, athleteWorkspaceAthleteId: req.authz.athleteId };
   }
+  const view = admittedViewScope(workspace, req);
+  if (view) return { type: view.type, dataWorkspaceType: view.type, dataWorkspaceScopeId: view.id, view: true };
   return { type: null };
+}
+
+// May this request's dashboard answers carry rows per athlete (load.view.athlete)? Not limited in the platform, a
+// private coach's or an athlete's own workspace; in a club or team workspace, and a view one, canView(load_athlete) at
+// its scope (a view workspace: only once Training Load's V step opens load_athlete).
+// The athletes a filter names are athlete-level data too (V-6 security review, HIGH): without load.view.athlete a
+// dashboard's default_filter, a page's default_filter and a widget's local_filter_override are returned with
+// athleteIds set to null (the rest of the filter unchanged). Pure; returns a copy.
+export function withoutFilterAthletes(filter) {
+  if (!filter || typeof filter !== "object" || Array.isArray(filter) || !Object.hasOwn(filter, "athleteIds")) return filter;
+  return { ...filter, athleteIds: null };
+}
+
+export function redactDashboardAthleteFilters({ dashboard, page, pages, widgets } = {}) {
+  const out = {};
+  if (dashboard !== undefined) out.dashboard = dashboard && { ...dashboard, default_filter: withoutFilterAthletes(dashboard.default_filter) };
+  if (page !== undefined) out.page = page && { ...page, default_filter: withoutFilterAthletes(page.default_filter) };
+  if (pages !== undefined) out.pages = (pages || []).map((p) => ({ ...p, default_filter: withoutFilterAthletes(p.default_filter) }));
+  if (widgets !== undefined) out.widgets = (widgets || []).map((w) => ({ ...w, local_filter_override: withoutFilterAthletes(w.local_filter_override) }));
+  return out;
+}
+
+export function dashboardNamedAthletesAllowed(req, dataWorkspace) {
+  if (!dataWorkspace || dataWorkspace.type === null) return false;
+  if (dataWorkspace.dataWorkspaceType !== "club" && dataWorkspace.dataWorkspaceType !== "team") return true;
+  const workspace = RESOLVED_WORKSPACE.get(dataWorkspace);
+  return Boolean(workspace) && canView(req.authz, workspace, "load_athlete");
 }
 
 // Resolves the CALLER's own currently active workspace as a data-
@@ -89,6 +165,10 @@ function dataWorkspaceFromActiveWorkspace(workspace, req) {
 export function resolveActiveDataWorkspace(req) {
   if (!req._resolvedDataWorkspacePromise) {
     req._resolvedDataWorkspacePromise = (async () => {
+      // V-6: a view workspace is never resolved again here (the gate resolved it read-only): an admitted read takes
+      // the gate's workspace, a refused request answers as for no workspace.
+      if (req.dashboardsViewRefused === true) return { type: null };
+      if (req.moduleView?.module === VIEW_MODULE) return dataWorkspaceFromActiveWorkspace(req.moduleView.workspace, req);
       const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
       return dataWorkspaceFromActiveWorkspace(workspace, req);
     })();
@@ -165,8 +245,10 @@ export async function resolveDashboardCreateContext(req, body, dataWorkspace) {
   // only 'system' has a fixed, non-optional value (always true).
   const requestedIsTemplate = body?.isTemplate === true;
 
+  // V-6: a view workspace creates nothing; each owner answers what an account without that right gets.
+  const viewRequest = isDashboardsViewRequest(req);
   if (requested === "system") {
-    if (!isPlatformAdministrator(req.authz)) {
+    if (viewRequest || !isPlatformAdministrator(req.authz)) {
       return { error: "Only a platform administrator can create a shared system template.", status: 403 };
     }
     if (body?.isTemplate === false) {
@@ -180,7 +262,9 @@ export async function resolveDashboardCreateContext(req, body, dataWorkspace) {
   if (requested === "club") {
     const clubId = body?.ownerClubId;
     if (!clubId) return { error: "ownerClubId is required for club-owned dashboards.", status: 400 };
-    if (!canManageClub(req.authz, clubId)) return { error: "That club is outside your access.", status: 403 };
+    // V-6 (code review HIGH): a create does not resolve the workspace, so it asks dashboards.view at the owner itself;
+    // without it (the word taken from the role, or the licence closed) the answer of an account without that club.
+    if (viewRequest || !canManageClub(req.authz, clubId) || !can(req.authz, "dashboards.view", { type: "club", id: String(clubId) })) return { error: "That club is outside your access.", status: 403 };
     return {
       ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null,
       dataWorkspaceType: "club", dataWorkspaceScopeId: clubId, isTemplate: requestedIsTemplate,
@@ -189,7 +273,7 @@ export async function resolveDashboardCreateContext(req, body, dataWorkspace) {
   if (requested === "team") {
     const teamId = body?.ownerTeamId;
     if (!teamId) return { error: "ownerTeamId is required for team-owned dashboards.", status: 400 };
-    if (!canManageTeamById(req.authz, teamId)) return { error: "That team is outside your access.", status: 403 };
+    if (viewRequest || !canManageTeamById(req.authz, teamId) || !can(req.authz, "dashboards.view", { type: "team", id: String(teamId) })) return { error: "That team is outside your access.", status: 403 };
     return {
       ownerScope: "team", ownerUserId: null, ownerClubId: null, ownerTeamId: teamId,
       dataWorkspaceType: "team", dataWorkspaceScopeId: teamId, isTemplate: requestedIsTemplate,
@@ -214,6 +298,7 @@ export async function resolveDashboardCreateContext(req, body, dataWorkspace) {
 // Per-row "may this account see/edit/archive this already-owned dashboard
 // row" — same shape as canManageCatalogRow.
 export function canManageDashboardRow(req, row) {
+  if (isDashboardsViewRequest(req)) return false; // V-6: a view workspace never manages a dashboard
   if (isPlatformAdministrator(req.authz)) return true;
   if (row.owner_scope === "user") return String(row.owner_user_id) === String(req.user.id);
   if (row.owner_scope === "club") return canManageClub(req.authz, row.owner_club_id);
@@ -232,6 +317,7 @@ export function canManageDashboardRow(req, row) {
 // by a matrix test.
 export function dashboardManageBasis(req, row) {
   const authz = req.authz;
+  if (isDashboardsViewRequest(req)) return null; // V-6: as canManageDashboardRow
   if (row.owner_scope === "user" && String(row.owner_user_id) === String(req.user.id)) return "owner";
   if (row.owner_scope === "club" && holdsClubAdminRole(authz, row.owner_club_id)) return "club_admin";
   if (row.owner_scope === "team") {
@@ -251,6 +337,8 @@ export function dashboardManageBasis(req, row) {
 // app's own catalog/results visibility split.
 export function canViewDashboardRow(req, row, dataWorkspace) {
   if (row.owner_scope === "system") return true;
+  // V-6: an admitted view read sees a shared dashboard of its own data workspace, and nothing through manage rights.
+  if (dataWorkspace?.view === true) return row.owner_scope !== "user" && dataWorkspaceMatches(dataWorkspace, row);
   if (canManageDashboardRow(req, row)) return true;
   if (row.owner_scope === "user") return false; // a private dashboard is visible ONLY to its own owner (or a platform admin, above)
   return dataWorkspaceMatches(dataWorkspace, row);
@@ -318,6 +406,13 @@ export async function isSourceConnectionVisibleToDashboard(dashboardRow, sourceC
 // via canViewDashboardRow against the ACTUAL fetched row instead).
 export function dashboardVisibilitySql(req, dataWorkspace, alias, params) {
   const clauses = [`${alias}.owner_scope = 'system'`];
+  // V-6: an admitted view read lists the system templates and the shared dashboards of its data workspace only (no
+  // owner clause, no platform admin's shortcut), the twin of canViewDashboardRow's view branch.
+  if (dataWorkspace?.view === true) {
+    params.push(dataWorkspace.dataWorkspaceType, dataWorkspace.dataWorkspaceScopeId);
+    clauses.push(`(${alias}.owner_scope <> 'user' and ${alias}.data_workspace_type = $${params.length - 1} and ${alias}.data_workspace_scope_id = $${params.length}::uuid)`);
+    return `(${clauses.join(" or ")})`;
+  }
   if (isPlatformAdministrator(req.authz)) {
     return "true";
   }

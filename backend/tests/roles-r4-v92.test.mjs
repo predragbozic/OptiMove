@@ -15,7 +15,9 @@ import { asActor, buildDatabase, fixtures, MIGRATIONS, migrationsWithout, RUNBOO
 
 // Migrations that build on v92 and refuse to run without it (v95): left out of the worlds in which this suite applies
 // v92 last (both orders, old-vs-new, the rollback), so they keep testing v92 itself; the main world has them all.
-const V92_DEPENDENTS = ["202611271000_roles_v95_closed_module_dominance.sql"];
+// The migrations that replace v92's bodies (and so need v92's to be in force): a database built without v92 leaves them
+// out too. v96 (the licence hierarchy) replaces user_has_permission and permission_club_rule7_ok.
+const V92_DEPENDENTS = ["202611271000_roles_v95_closed_module_dominance.sql", "202611281000_roles_v96_licence_hierarchy.sql"];
 const UP_TO_V92 = migrationsWithout(V92_DEPENDENTS, "all");
 
 const V93_FILE = "202611251000_calendar_v93_event_delete.sql";
@@ -271,7 +273,7 @@ test("4. the truth table of contract 3.6 in can() and in the twin (rows 1-13)", 
   assert.equal(await canOf(w4.coach, W, perms.teamScope(w4.team)), true, "row 10");
   // 11. a word stored but unchecked acts nowhere: it is in no ENFORCED gate.
   // (athletes.view is checked since roles V-2; a view word no V step checked yet stands for the row.)
-  assert.ok(!Object.hasOwn(perms.ENFORCED_PERMISSIONS, "programs.view"), "row 11");
+  assert.ok(!Object.hasOwn(perms.ENFORCED_PERMISSIONS, "load.view.team"), "row 11");
 });
 
 test("5. can() and the twin agree over a random matrix of layers", async () => {

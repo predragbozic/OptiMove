@@ -19,6 +19,7 @@
 // once, which a single role_hint string could never represent.
 import { query } from "./db.js";
 import { normalizeRole } from "./access.js";
+import { effectiveClosedModules } from "./permissionModules.js";
 
 export async function loadAuthorizationContext(user, queryRunner = query) {
   if (!user) {
@@ -111,7 +112,8 @@ export async function loadAuthorizationContext(user, queryRunner = query) {
 //                      teamIds (a club's teams, archived ones included, as
 //                      managedTeamIds; empty for other scopes), words,
 //                      clubId (the holding's club, null for private),
-//                      closedModules (that club's ceiling) }]
+//                      closedModules (that club's EFFECTIVE ceiling: its stored rows plus
+//                      the children of a closed parent, v96 / permissionModules.js) }]
 //   roleAssignments: [{ assignmentId, roleId, scopeType, scopeId, expiresAt }]
 // A role that is archived gives nothing. If the statement fails (a missing
 // table, a permission error, a timeout), rolePermissions is marked unavailable
@@ -161,7 +163,8 @@ async function loadRolePermissions(userId, queryRunner) {
     teamIds: Object.freeze([...(row.teamIds || [])]),
     words: Object.freeze([...(row.words || [])]),
     clubId: row.clubId ?? null,
-    closedModules: Object.freeze([...(row.closedModules || [])]),
+    // The effective ceiling (v96, the licence hierarchy): the stored rows plus the children of a closed parent.
+    closedModules: Object.freeze(effectiveClosedModules(row.closedModules)),
   }));
   const roleAssignments = rows.filter((row) => row.assignmentId).map((row) => Object.freeze({
     assignmentId: row.assignmentId,

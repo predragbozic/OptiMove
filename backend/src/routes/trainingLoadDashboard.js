@@ -1,3 +1,6 @@
+import {validReferencePreview,referencePreviewWidgets,referencePreviewFingerprint,assertReferenceSource} from '../dashboardReferences/preview.js';
+import { attachReferenceResults } from "../dashboardReferences/query.js";
+import { resolveReferenceContext } from "../dashboardReferences/access.js";
 import {attachGalleryResult,galleryAvailable,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { pageDatabaseEnabled } from '../dashboardPages/config.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
@@ -17,8 +20,9 @@ import { normalizeShellFilter } from '../dashboardShellFilter.js';
 // AC/CH, no ML — this router is the backend surface only, per this
 // delivery's own explicit scope boundary.
 import { Router } from "express";
+import { viewEntryGate } from "../moduleView.js";
 import { canUseSimplePlatformPilot } from "../dashboardSimple/platformPilot.js";
-import { resolveActiveDataWorkspace, canManageDashboardRow, dataWorkspaceMatches } from "../trainingLoadDashboardAccess.js";
+import { resolveActiveDataWorkspace, canManageDashboardRow, dashboardNamedAthletesAllowed, dataWorkspaceMatches, redactDashboardAthleteFilters } from "../trainingLoadDashboardAccess.js";
 import {
   listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, deleteDashboard, cloneDashboard,
   getActiveDashboard, setActiveDashboard, clearActiveDashboard, httpError, validFilterShape,
@@ -27,11 +31,31 @@ import {
   replaceLayout, updateWidgetLayout, createWidget, updateWidgetContent, deleteWidget,
   addSeries, updateSeries, deleteSeries, reorderSeries, resolveSeriesBinding,
 } from "../trainingLoadDashboardWidgets.js";
-import { queryDashboard } from "../trainingLoadDashboardQuery.js";
+import { queryDashboardForViewer } from "../trainingLoadDashboardQuery.js";
 import { query } from "../db.js";
 import { validateContract } from "../dashboardSimple/schema.js";
 
 const router = Router();
+
+// Roles V-6 (docs/ai/roles-v-steps-plan.md sections 2.7 and 13): the dashboards module's entry gate, mounted in
+// server.js in front of this router and the pages router. A view workspace (club_view / team_view) reaches only these
+// reads, with dashboards.view at its club or team; POST /active and DELETE /active (a personal selection) stay closed.
+// Every other request of a view workspace is marked and passed on: it answers what it answers an account with no
+// workspace (trainingLoadDashboardAccess.js resolves nothing again for it), and it never manages a dashboard.
+export const DASHBOARDS_VIEW_READS = Object.freeze([
+  { method: "GET", path: "/" },
+  { method: "GET", path: "/active" },
+  { method: "GET", path: "/:dashboardId" },
+  { method: "POST", path: "/:dashboardId/query", postRead: true },
+  { method: "GET", path: "/:dashboardId/pages" },
+  { method: "GET", path: "/:dashboardId/pages/:pageId" },
+  { method: "POST", path: "/:dashboardId/pages/:pageId/query", postRead: true },
+]);
+function passOnRefused(req, _res, next) {
+  req.dashboardsViewRefused = true;
+  return next();
+}
+export const dashboardsViewGate = viewEntryGate("dashboards", DASHBOARDS_VIEW_READS, { refuse: passOnRefused });
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -317,7 +341,9 @@ router.get("/:dashboardId", async (req, res, next) => {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
-    const detail = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
+    const found = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
+    // Roles V-6: without load.view.athlete the filters' athletes are not returned either.
+    const detail = dashboardNamedAthletesAllowed(req, dataWorkspace) ? found : { ...found, ...redactDashboardAthleteFilters({ dashboard: found.dashboard, widgets: found.widgets }) };
     if (req.app?.locals?.dashboardPagesEnabled && await pageDatabaseEnabled(query)) detail.pagesAvailable = true;
     const simplePreview = ['preview', 'enabled'].includes(req.app?.locals?.dashboardSimpleMode)
       && canUseSimplePlatformPilot(req, dataWorkspace);
@@ -761,7 +787,7 @@ router.post("/:dashboardId/widgets/:widgetId/series/:seriesId/resolve", async (r
 // filter, using the current active data workspace.
 // ------------------------------------------------------------
 
-const QUERY_DASHBOARD_KEYS = ["dateFrom", "dateTo", "athleteIds", "activityId", "componentId", "widgetIds", "shellFilter"];
+const QUERY_DASHBOARD_KEYS = ["dateFrom", "dateTo", "athleteIds", "activityId", "componentId", "widgetIds", "shellFilter", "referencePreview"];
 router.post("/:dashboardId/query", async (req, res, next) => {
   try {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
@@ -813,7 +839,8 @@ router.post("/:dashboardId/query", async (req, res, next) => {
       return res.status(404).json({ error: "notFound" });
     }
 
-    const targetWidgets = b.widgetIds ? widgets.filter((w) => b.widgetIds.includes(w.id)) : widgets;
+    if(b.referencePreview!==undefined&&!validReferencePreview(b.referencePreview))return res.status(400).json({error:"invalidRequest"});
+    let targetWidgets = b.widgetIds ? widgets.filter((w) => b.widgetIds.includes(w.id)) : widgets;
     if (targetWidgets.length > MAX_WIDGETS_PER_QUERY) return res.status(400).json({ error: "invalidRequest", message: `Cannot query more than ${MAX_WIDGETS_PER_QUERY} widgets at once.` });
 
     // The runtime filter carries ONLY the keys the request body actually
@@ -829,10 +856,17 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     let shellFilter;
     try { shellFilter = normalizeShellFilter(b.shellFilter); }
     catch { return res.status(400).json({ error: "invalidRequest" }); }
-    const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter });
+    if(b.referencePreview!==undefined){
+      if(process.env.DASHBOARD_REFERENCES_ENABLED!=='true'||!canManageDashboardRow(req,dashboard))return res.status(404).json({error:'notFound'});
+      const ctx=await resolveReferenceContext(req);targetWidgets=referencePreviewWidgets(targetWidgets,b.referencePreview,ctx?.owner.clubId);await assertReferenceSource(query,b.referencePreview.referenceConfig,ctx.owner.clubId,ctx.workspace,widgets.find(w=>w.id===b.referencePreview.widgetId)?.presentation_config?.referenceConfig);
+    }
+    const result = await queryDashboardForViewer(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter }, { namedAthletes: dashboardNamedAthletesAllowed(req, dataWorkspace) });
     const galleryWidgets=await hydrateGalleryWidgets(query,targetWidgets);
     const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
-    res.json({ dashboardRevision: dashboard.revision, widgets: result.map((widget) => attachGalleryResult(galleryWidgets.find(w=>w.id===widget.widgetId),{ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
+    const referenceEnabled=process.env.DASHBOARD_REFERENCES_ENABLED==='true';
+    const referenceContext=referenceEnabled&&targetWidgets.some(w=>w.presentation_config?.referenceConfig)?await resolveReferenceContext(req):null;
+    const referenced=await attachReferenceResults({query,widgets:targetWidgets,results:result,workspace:dataWorkspaceQueryArgs(dataWorkspace),period:{dateFrom:b.dateFrom,dateTo:b.dateTo},defaultFilter:dashboard.default_filter,requestFilter,shellFilter,referenceClubId:referenceContext?.owner.clubId,enabled:referenceEnabled});
+    res.json({ ...(b.referencePreview?{referencePreviewFingerprint:referencePreviewFingerprint({binding:b.referencePreview,period:[b.dateFrom,b.dateTo],filter:requestFilter,shellFilter,results:referenced})}:{}), dashboardRevision: dashboard.revision, widgets: referenced.map((widget) => attachGalleryResult(galleryWidgets.find(w=>w.id===widget.widgetId),{ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
   } catch (error) {
     respondToServiceError(res, next, error);
   }

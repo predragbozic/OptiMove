@@ -152,8 +152,13 @@ export async function rehearse(args, password) {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-v95-rehearsal-"));
     const before = path.join(tmp, "migrations_v2");
     fs.mkdirSync(before);
-    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V95_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
+    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f < V95_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
     await runMigrations({ databaseUrl: url, migrationsRoot: before });
+    // Every migration up to and including v95, never a later one (v96 replaces v95's helper; its own rehearsal covers it).
+    // The runner records a migration by its folder's name, so this folder is called migrations_v2 too.
+    const upToV95 = path.join(tmp, "up-to-v95", "migrations_v2");
+    fs.mkdirSync(upToV95, { recursive: true });
+    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f <= V95_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(upToV95, f));
     const c = new pg.Client({ connectionString: url });
     await c.connect();
     try {
@@ -206,7 +211,7 @@ export async function rehearse(args, password) {
       report("2. preflight: every ok column true; before v95 the club admin's version is refused (the gap)", preFalse.length === 0 && beforeWrite === "42501", `${preFalse.join(", ")} write: ${beforeWrite}`);
 
       // 3. Apply.
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upToV95 });
       const recorded = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V95_NAME])).rows;
       const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V95_FILE))).digest("hex");
       report("3. v95 applied by the runner, recorded once with the file's sha256", recorded.length === 1 && recorded[0].checksum === sha);
@@ -226,7 +231,7 @@ export async function rehearse(args, password) {
 
       // 5. The runner again.
       const count = Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count);
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upToV95 });
       report("5. the runner again: v95 skipped by its checksum", Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count) === count);
 
       // 6. Rollback.
@@ -239,7 +244,7 @@ export async function rehearse(args, password) {
         `${sameCatalog ? "" : "catalog differs; "}write: ${afterRollback}`);
 
       // 7. Apply again.
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upToV95 });
       const bad2 = await postCheck();
       const again = await versionWrite(clubAdmin);
       report("7. v95 applied again; the post-check again; the write passes again", bad2.length === 0 && again === "none", `${bad2.join(", ")} write: ${again}`);

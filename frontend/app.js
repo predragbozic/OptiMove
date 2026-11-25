@@ -1,3 +1,4 @@
+import { mountReferenceIslands, disposeReferenceIslands } from "./dashboard-references.js";
 import { mountDashboardControls, disposeDashboardControls, closeDashboardControlPanel } from "./dashboard-controls.js";
 import { captureChangedFields, restoreChangedFields } from "./form-keep.js";
 import { api } from "./api.js";
@@ -2537,7 +2538,9 @@ async function loadAthletes() {
 // workspace (the calendar question opener is an athlete's).
 function viewModuleOfOpener(open) {
   if (open === openProgramRequests || open === openWeeklyPlanOnDate || open === openSpecificProgramFromNotification) return "programs";
-  if (open === openTestAssignment || open === openTestsToday) return "tests";
+  // V-4: Tests Today is not opened in V (GET /today writes the day's occurrences): its link stays Home.
+  if (open === openTestsToday) return "";
+  if (open === openTestAssignment) return "tests";
   if (open === openTestsResults) return "tests_results";
   if (open === openTrainingLoadAssignment || open === openTrainingLoadResults) return "load_athlete";
   return "";
@@ -3088,9 +3091,11 @@ function renderTrainingLoad() {
   // IMP1: a search repaints Imports every 2 s; the tab row keeps where the person scrolled it, and the active tab is
   // brought into view only when it is not.
   const importsRowLeft = state.trainingLoad.section === "imports" ? els.content.querySelector(".imports-tabs")?.scrollLeft || 0 : 0;
+  disposeReferenceIslands();
   disposeDashboardControls();
   els.content.innerHTML = renderTrainingLoadCoachHtml();
   void mountDashboardControls(els.content, renderTrainingLoad);
+  void mountReferenceIslands(els.content, renderTrainingLoad);
   renderImportsBackBand();
   if (state.trainingLoad.section === "imports") keepImportsTabRow(importsRowLeft);
   if (state.trainingLoad.section === "analysis") {

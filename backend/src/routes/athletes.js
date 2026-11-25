@@ -15,7 +15,7 @@ const ATHLETE_CODE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/;
 // Roles V-2 (docs/ai/roles-v-steps-plan.md section 9): a view workspace (club_view / team_view) with athletes.view at its
 // club or team reads the athlete list of its workspace (GET /) and nothing else here. Every other request of a view
 // workspace - /today and /training-days (plan data), /:id/plans and /:id/program-data (programs.view), or any read
-// without the word - is handed on unchanged (no req.moduleView), so the router answers it exactly as it did before V-2
+// without the word - is handed on with no old-role authority (no req.moduleView), so the router gives its no-role answer
 // (the roster scope of a view workspace is `and false`; canAccessAthlete reads the old role rows only).
 router.use(viewEntryGate("athletes", [{ method: "GET", path: "/" }], { refuse: (_req, _res, next) => next() }));
 // Roles V-7 (docs/ai/roles-v-steps-plan.md, "V-7 design"): a view workspace with programs.view also reads ONE athlete's

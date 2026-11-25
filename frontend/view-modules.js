@@ -22,10 +22,10 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 // (Training Load -> Data configuration, the Variables list, read only) and Tags, presets and session types (Settings ->
 // Tags & Presets, read only).
 // V-2: Athletes (the sidebar's athlete list and Settings -> Athletes, read only). V-3: the calendar (the central
-// calendar, read only: no New event, events in their reduced view, no athlete names without athletes.view). V-7: Programs
-// (the public Program Library, and with athletes.view an athlete's Weekly plans and Specific programs, read only; never the
-// Builder) and Exercises (the system exercise library, read only).
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "programs", "exercises"]);
+// calendar, read only: no New event, events in their reduced view, no athlete names without athletes.view).
+// V-4: Tests (the Schedule, Results and Test Library sections, read only; no Today, which writes occurrences).
+// V-6 opens Dashboards read-only.
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises"]);
 
 // The menu places of a view workspace: each opens when ANY of its modules is open and its word is held. A place with
 // no module (Coaches) never opens there.
@@ -38,7 +38,8 @@ export const VIEW_NAV_PLACES = Object.freeze([
   { key: "builder", selectors: ['[data-library-tab="builder"]'], tabs: [], modules: [] },
   { key: "programs", selectors: ['[data-sidebar-submenu="program-library"]'], tabs: ["templates", "weekly", "programs"], modules: ["programs"] },
   { key: "exercises", selectors: ['[data-library-tab="exercises"]'], tabs: ["exercises"], modules: ["exercises"] },
-  { key: "tests", selectors: ['[data-library-tab="tests"]'], tabs: ["tests"], modules: ["tests", "tests_results"] },
+  // V-4: results alone open nothing (every Tests read needs tests.view first, routes/tests.js).
+  { key: "tests", selectors: ['[data-library-tab="tests"]'], tabs: ["tests"], modules: ["tests"] },
   { key: "training-load", selectors: ['[data-library-tab="training-load"]'], tabs: ["training-load"], modules: ["load_team", "load_athlete", "dashboards", "data_configuration"] },
 ].map((place) => Object.freeze({ ...place, selectors: Object.freeze(place.selectors), tabs: Object.freeze(place.tabs), modules: Object.freeze(place.modules) })));
 
@@ -79,8 +80,12 @@ export function viewWorkspaceTabs(user = state.currentUser, open = OPEN_VIEW_MOD
 }
 
 // The Training Load sections a module opens in a view workspace (V-1: Data configuration's start screen and Variables,
-// which is one section, "variables"). Schedule and Data & Analysis open with their own modules in later V steps.
-export const VIEW_TRAINING_LOAD_SECTIONS = Object.freeze({ data_configuration: Object.freeze(["variables"]) });
+// which is one section, "variables"; V-6: Dashboards, the "analysis" view of Data & Analysis). Schedule and the other
+// Data & Analysis views open with their own modules in later V steps.
+export const VIEW_TRAINING_LOAD_SECTIONS = Object.freeze({
+  dashboards: Object.freeze(["analysis"]),
+  data_configuration: Object.freeze(["variables"]),
+});
 
 // The Training Load sections this view workspace may be on; null outside a view workspace (other workspaces keep their
 // own rules).

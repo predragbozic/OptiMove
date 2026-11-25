@@ -3,6 +3,7 @@ import { isAthleteMode } from "./access.js";
 import { invalidateAthleteHomeCache } from "./athlete-home-data.js";
 import { emptyScheduleForm, emptyWellnessForm, state } from "./state.js";
 import { addDaysIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, weekMondayIso } from "./utils.js";
+import { testsCoachSections } from "./tests-view.js";
 import { assignmentSetFingerprint, checkInUrl, patchRecipientPickerPanelDom, patchTestsAthletePickerDom, patchTestsCalendarDom, remindableAthletesFor, reminderSelectedSet, renderTestsBadge, testsSkipDaysOffShown, testsAthleteMultiSelectVisibleAthletes, testsCalendarMode } from "./tests-view.js";
 import { athleteQuestionsAnswered } from "./athlete-questions-data.js";
 import { fetchTestsQuestionsEnabled, loadOrgPickerData, loadPendingCount, loadScheduleDetail, loadTestsSection, loadTestsWeekly, loadWellnessForm } from "./tests-data.js";
@@ -109,6 +110,8 @@ export async function handleTestsAction(action, { renderTests }) {
   if (!type?.startsWith("tests-")) return false;
 
   if (type === "tests-section") {
+    // Roles V-4: never a section this workspace does not have (a view workspace: no Today, Results only with its word).
+    if (!isAthleteMode() && !testsCoachSections().some(([value]) => value === action.dataset.section)) return true;
     state.tests.section = action.dataset.section;
     state.tests.scheduleDetail = null;
     state.tests.form = null;
@@ -588,7 +591,8 @@ async function openResult(assessmentId, renderTests) {
     const data = await api(`/api/tests/results/${encodeURIComponent(assessmentId)}`);
     state.tests.form = emptyWellnessForm({
       testName: "WELLNESS",
-      athleteName: data.athleteName,
+      // Roles V-4 (P-1): a view workspace's answer may name no athlete.
+      athleteName: data.athleteName || "Athlete",
       canSubmit: false,
       result: { wellnessScore: data.wellnessScore },
       injuryReported: data.values?.injury === true,
