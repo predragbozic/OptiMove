@@ -529,8 +529,7 @@ Branch `feature/roles-v1-config-presets` from `1e83d9c6`. No migration.
 
 ## 9. V-2 design notes (Athletes; the executor's discovery, before code)
 
-Branch `feature/roles-v2-athletes` from `f45ee0f9`. Nothing is built yet. This section is what the code will follow, and
-what another executor can pick up from.
+Branch `feature/roles-v2-athletes` from `f45ee0f9`. Built as section 10 records; this section is the design it followed.
 
 ### Where the gates are (checked at `f45ee0f9`)
 
@@ -600,3 +599,66 @@ what another executor can pick up from.
   admin.
 - **The rule's own tests:** checked-gates A1/A2 with the new gate files, and `enforced_word_covers_all_gates`.
 - **Frontend:** the menu place `athletes`; Settings → Athletes, read only; e2e at 1280, 390 and 360 px.
+
+## 10. V-2 as built (Athletes)
+
+Branch `feature/roles-v2-athletes` from `f45ee0f9`. No migration. The manager's decisions on section 9 (2026-11-25): the
+id-array mechanism; plan counts `null` in a view workspace; a view workspace opens only the athlete list, the
+organization's athletes and the two positions reads; the R4 section 6 consequence accepted; P-1.
+
+**Gate A, the access predicate (`access.js`).**
+- `athleteViewScopes(req)`: the clubs of `req.authz.clubRoles` and the teams of `req.authz.teamRoles` where
+  `can(athletes.view)` holds there. Pure, from the request's snapshot; `can()` throws `503 permissions_unavailable` for
+  an account with an old row when the role tables could not be read.
+- `athleteAccessPredicate(alias, user, clubs, teams)`: the two parameters are required (a caller not moved fails
+  loudly). **One deviation from section 9, stricter:** the role branches keep the LIVE `user_club_roles` /
+  `user_team_roles` join and add `club_id = any($clubs)` / `team_id = any($teams)`. The word narrows, the live row still
+  decides, so a role revoked during a request closes access as before (the weekly-plans read relies on that, PR #681
+  test 10).
+- Moved: `athleteListAccessFilter`, `canAccessAthlete`, `canAccessPlan`, and Builder's two raw calls (the weekly-plans
+  read and `editablePlanAccessSql`, three callers).
+
+**Gate B, the roster scope (`athleteRosterScope.js`).** A `club_view` / `team_view` workspace reads its active
+memberships (in an active club, and an active team for `team_view`) only when the athletes gate let THIS request through
+(`req.moduleView.module === "athletes"`, the same workspace object); any other view-workspace read stays `and false`.
+`currentAthleteRosterScope` uses the gate's workspace and never resolves again.
+
+**Gate D, the organization read (`routes/organization.js`).**
+- Coach path: every club / team branch of `loadManagedAthletes` (active access, the list and the archived rows) also
+  requires the club / team in `athleteViewScopes`.
+- View path: `viewWorkspaceOrganization` lists the workspace's athletes when `canViewAthletesAt` (`access.js`, the one
+  scope-level check) holds, from `loadViewAthletes`: a fixed key list (`VIEW_ATHLETE_KEYS`): ids, name, picture, this
+  club's or team's active memberships only, `has_active_access: true`. Never a login, invite, library setting, account
+  fact or the legacy club / team pointer. `club_view` lists athletes with an active club membership (as the athlete list
+  and a club admin's own list); `team_view` those with the team's.
+- The check lives in `access.js` so `permissions-r1`'s oracle of organization.js's `can()` calls (the R1 world) is
+  unchanged.
+
+**The routes.**
+- `routes/athletes.js`: `viewEntryGate("athletes", [GET /])`. Every other request of a view workspace is handed on with
+  `next()` and no `req.moduleView` (`refuse(req, res, next)`, a one-line extension of `moduleView.js`), so it answers
+  exactly what it answered before V-2 (`/today`, `/training-days` empty; `/:id/plans`, `/:id/program-data` 403). In a
+  view workspace `weekly_plan_count` and `program_count` are `null`.
+- `routes/positions.js`: the gate with `GET /` and `GET /athletes`; everything else of a view workspace is the router's
+  identical 404. `positionService.js`: the view context reads its club's list and its athletes' positions with
+  `canSet: false`; the coach path of `GET /athletes` also asks `can(athletes.view)` at its club or team.
+
+**Word lists.** `ENFORCED_PERMISSIONS["athletes.view"]` = `access.js`, `positionService.js`; `VIEW_WORKSPACE_USABLE_WORDS`
+and `OPEN_VIEW_MODULES` (both sides) add it. `roles-r4-checked-gates`: B3 adds `athleteRosterScope.js`; B1
+`athleteRosterScope.js` 4 → 7, `positionService.js` 8 → 11.
+
+**Frontend.** The sidebar's athlete list in a view workspace is plain rows (no button, no counts); Settings → Athletes (and
+a chosen club or team) is `renderViewAthleteListHtml`: name, ID, team and club, the position badge; no control. Positions
+are read for it. Home's buttons add Athletes (V-0's plumbing).
+
+**Tests.** `roles-v-sweep` test 7 (club_view and team_view; another club and an archived membership never; the plain
+counts; the hidden reads equal to an account with no role; no preference write; writes land nothing; a mixed account;
+the word taken away; the licence closes it for role holders, the club admin and the team coach, and a platform admin is
+never limited; reopened). `athlete-roster-scope` (the view branch fails closed without the gate's pass). Frontend
+`roles-v2-view.test.mjs`; e2e `roles-v2-view-athletes.test.mjs` at 1280, 390 and 360 px.
+
+**Recorded, not built.**
+- A mixed account (club B's admin, a view role in club A) in `club_view` A can still write to club B's athletes through
+  the organization routes: those writes check the old roles, not the active workspace, as before V-2.
+- A view-workspace read the gate hands on unchanged (`/today`, `/training-days`) still resolves the workspace with the
+  preference-writing resolver, as before V-2.
