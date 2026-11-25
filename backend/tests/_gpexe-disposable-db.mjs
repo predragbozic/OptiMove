@@ -312,6 +312,22 @@ export const ROLE_READ_MIGRATIONS = Object.freeze([
   "202611241000_roles_v92_layers_foundation.sql",
 ]);
 
+// Roles V-2: the same role read for a suite that builds its own database outside this helper (the Tests module's
+// suites: a legacy scaffold and their own migration list). Applies v84 and v92 to that (already migrated) disposable
+// database from a folder named migrations_v2, so their records carry the names v92's guard expects. Their records stay:
+// those suites assert nothing about the last migration.
+export async function applyRoleReadMigrations(databaseUrl) {
+  const { tempRoot, migrationsDir } = await migrationsFolder();
+  try {
+    for (const file of ROLE_READ_MIGRATIONS) {
+      await fsp.copyFile(path.resolve(__dirname, "../../migrations_v2", file), path.join(migrationsDir, file));
+    }
+    await runner.runMigrations({ databaseUrl, migrationsRoot: migrationsDir });
+  } finally {
+    await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 export async function createGpexeDisposableDb({ baseDatabaseUrl, label, migrations = GPEXE_TEST_MIGRATIONS, roleRead = false }) {
   if (!baseDatabaseUrl) throw new Error("baseDatabaseUrl (DATABASE_URL) is required to reach the local Postgres server.");
   const roleExtra = roleRead ? ROLE_READ_MIGRATIONS.filter((m) => !migrations.includes(m)) : [];

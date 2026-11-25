@@ -18,6 +18,7 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
+import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.resolve(__dirname, "../../migrations_v2/202608220900_tests_v42_schema.sql");
@@ -215,6 +216,9 @@ before(async () => {
     [ASSIGNMENT_TIMEZONE_WINDOW_NAME]: assignmentTimezoneWindowSql,
   });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  // Roles V-2: the server's role read (v84, v92). A coach's Tests routes reach canAccessAthlete, which asks
+  // athletes.view through can() and fails closed (503 permissions_unavailable) without it.
+  await applyRoleReadMigrations(db.url);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");
