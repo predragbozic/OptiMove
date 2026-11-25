@@ -42,7 +42,6 @@ import calendarEventsRouter from "./routes/calendarEvents.js";
 import calendarSettingsRouter from "./routes/calendarSettings.js";
 import calendarQuestionsRouter from "./routes/calendarQuestions.js";
 import trainingLoadDashboardRouter, { dashboardsViewGate } from "./routes/trainingLoadDashboard.js";
-import { viewEntryGate } from "./moduleView.js";
 import gpexeImportRouter from "./routes/gpexeImport.js";
 import sourceConnectionsRouter from "./routes/sourceConnections.js";
 import sourceMetricsRouter from "./routes/sourceMetrics.js";
