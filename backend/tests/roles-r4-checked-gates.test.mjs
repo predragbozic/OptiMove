@@ -105,6 +105,7 @@ const REVIEWED = Object.freeze({
   "canonicalVariableAdminService.js": 2,
   "clubCeilingLock.js": 2,
   // P3 owner contract: both helpers explicitly close every workspace except club/team.
+  "dashboardPages/service.js": 1, // refuse when the admitted workspace changes before the Page read
   "dashboardReferences/access.js": 1,
   "dashboardReferences/bindingRouter.js": 1, // athlete/cohort groupBy validation, not a workspace authority
   "dashboardReferences/query.js": 1,
