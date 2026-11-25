@@ -75,11 +75,10 @@ in force is not v96's. It restores v92's two bodies and v95's helper verbatim (c
 two new functions. It changes no row: a club that closed Training Load but not a child gets that child back for its
 role holders in the database.
 
-**A latent state after a rollback.** A club version written under v96 while only Training Load was closed may drop a
-child word (rule 7 left that child out). After the rollback v92's rule 7 counts that child again, and the club's next
-write of a version or of its licence is refused (`409 club_admin_would_lack`) until the version is fixed. Before rolling
-back, list the clubs where `public.permission_club_rule7_ok(club)` would fail under the restored body; the rollback
-is advisable only when there are none.
+**A club that needs the hierarchy.** A club version written under v96 while only Training Load was closed may drop a
+child word (rule 7 left that child out). The rollback checks rule 7 for every club with the restored bodies, and
+refuses, changing nothing, when one would break it; that club's version is fixed first. (A club version or custom role
+admitted by v96's looser dominance stays as it is: dominance is checked only when a role is written.)
 
 The same refusal can happen under v96, and is intended: putting Training Load back while the club's Club admin version
 lacks a child word another role holds is refused as `409 club_admin_would_lack`, nothing changed (test 5b).

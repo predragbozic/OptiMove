@@ -37,7 +37,11 @@ const STALE_END_REASON = "The holding this custom role was made on has ended.";
 const MAX_WORD_REMOVAL = 200;
 
 // Is a module effective for the ceiling yet (Q12): does any word of it act anywhere (ENFORCED_PERMISSIONS)?
-const moduleEffective = (module) => Object.keys(ENFORCED_PERMISSIONS).some((w) => PERMISSIONS[w].module === module);
+// v96, the licence hierarchy: a parent is effective when a word of any of its children acts, since closing the parent
+// closes them (code review of V-5a).
+const moduleWordsAct = (module) => Object.keys(ENFORCED_PERMISSIONS).some((w) => PERMISSIONS[w].module === module);
+const moduleEffective = (module) => moduleWordsAct(module)
+  || Object.entries(MODULE_PARENTS).some(([child, parent]) => parent === module && moduleWordsAct(child));
 
 // ---------------------------------------------------------------------------
 // The 404 gate before the transaction (contract 7.6, N5)

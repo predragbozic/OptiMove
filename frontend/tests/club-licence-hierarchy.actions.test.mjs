@@ -96,6 +96,7 @@ test("1. Training Load saved as closed: its three children read Not included, th
   assert.equal(box(root, "calendar").disabled, false);
   assert.equal(note(root, "calendar"), null);
   assert.equal(box(root, "training_load").disabled, false, "the parent's own switch stays usable");
+  assert.doesNotMatch(row(root, "training_load").textContent, /does not follow the licence yet/, "the parent follows the licence through its children");
 });
 
 test("2. the owner's production shape: the children also taken out on their own say they stay out when Training Load is put back", async () => {

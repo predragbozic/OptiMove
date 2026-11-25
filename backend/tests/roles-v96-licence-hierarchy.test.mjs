@@ -229,6 +229,12 @@ test("4. rule 7 and R2's dominance read the effective ceiling: with Training Loa
   // it, Calendar is open) is refused, with only the parent's row stored.
   await refused(makeVersion(w.pa, w.club, ROLE_IDS.club_admin, { remove: ["calendar.view"] }), "23514");
   await makeVersion(w.pa, w.club, ROLE_IDS.club_admin, { remove: ["variables.view"] });
+  // That Club admin version is allowed only by v96's rule 7 (Team coach, by default, still carries variables.view). The
+  // rollback refuses (the bodies come back) rather than leave this club breaking v92's rule 7.
+  const rollback = fs.readFileSync(path.join(RUNBOOKS, "roles-licence-hierarchy-v96-rollback.sql"), "utf8");
+  await assert.rejects(k.query(rollback), (e) => e.code === "23514" && /a club breaks rule 7 without the hierarchy/.test(e.message));
+  await k.query("rollback").catch(() => {});
+  assert.deepEqual(await md5s(), V96_MD5, "nothing rolled back");
   assert.equal(await holdsInClub(w.admin, "variables.view", w.club), false, "the admin would not hold it when the parent opens");
   // The stricter half: the club's admin cannot give a closed child word it would not hold.
   await refused(makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] }), "42501");
@@ -279,8 +285,9 @@ test("5. the API: the licence view names each child's parent and whether it is c
   const view = (await app.api(pa, base)).body;
   const row = (m) => view.modules.find((x) => x.module === m);
   assert.deepEqual({ ...row("training_load"), closedAt: undefined, reason: undefined, closedBy: undefined, label: undefined },
-    // ceilingEffective: no load.* word is checked by a route until V-5b, so Training Load's own words act nowhere yet.
-    { module: "training_load", closed: true, closedAt: undefined, ceilingEffective: false, parent: null, closedByParent: false, effectivelyClosed: true, reason: undefined, closedBy: undefined, label: undefined });
+    // ceilingEffective: no load.* word is checked until V-5b, but closing Training Load closes Data configuration
+    // (variables.view is checked since V-1), so the parent's row follows the licence.
+    { module: "training_load", closed: true, closedAt: undefined, ceilingEffective: true, parent: null, closedByParent: false, effectivelyClosed: true, reason: undefined, closedBy: undefined, label: undefined });
   for (const child of ["dashboards", "imports", "data_configuration"]) {
     assert.equal(row(child).parent, "training_load");
     assert.equal(row(child).closed, false, `${child}: no row of its own`);

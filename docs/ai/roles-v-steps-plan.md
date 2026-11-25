@@ -939,3 +939,12 @@ runbook `docs/runbooks/roles-licence-hierarchy-v96.md`.
   `club-licence-hierarchy.actions` (3), e2e `roles-v5a-licence-hierarchy` (3, at 1280, 390 and 360 px). Mutations
   killed: `authz.js` without the effective set (tests 2 and 5); `closedModulesOf` reading the stored rows (test 5).
   The rehearsal passed every step on PostgreSQL 16; PostgreSQL 17 is the owner's run.
+- **Review fixes (one round):**
+  - mobile-qa MEDIUM: a child closed with its parent gets `is-closed-by-parent`, a default cursor and a muted name;
+  - security MEDIUMs: the catalog check of the hierarchy in test 0; the runbook's rollback order (code first);
+  - db MEDIUMs: test 5b (reopening Training Load refused as `409 club_admin_would_lack`, nothing changed); the
+    post-check's derived, attribute and API-role checks;
+  - code MEDIUMs: a parent's `ceilingEffective` counts its children's checked words (Training Load reads "follows the
+    licence" since closing it closes Data configuration); the rollback refuses when a club would break v92's rule 7
+    (test 4);
+  - code LOW: the v92 rehearsal leaves out v95 and v96 (it had been broken since v95); it passes again.

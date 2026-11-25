@@ -138,6 +138,12 @@ begin
       raise exception 'v96 rollback: a restored body of public.% is not the one before v96', expected[i][1] using errcode = '23514';
     end if;
   end loop;
+  -- v96 loosened rule 7 (a child of a closed parent is left out); the restored body may refuse a club version written
+  -- under v96. Refuse the whole rollback (the bodies come back) rather than leave a club that breaks rule 7 without
+  -- the hierarchy: its next licence or version write would fail until fixed by hand.
+  if exists (select 1 from public.clubs c where not public.permission_club_rule7_ok(c.id)) then
+    raise exception 'v96 rollback refused: a club breaks rule 7 without the hierarchy' using errcode = '23514';
+  end if;
 end;
 $$;
 
