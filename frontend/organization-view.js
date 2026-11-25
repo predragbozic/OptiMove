@@ -202,7 +202,7 @@ export function renderOrganizationAddToggle(data) {
 export function renderOrganizationAddForm(data) {
   const section = state.organization.section || "overview";
   const config = organizationAddFormConfig[section]?.(data);
-  if (!config || !state.organization.addFormOpen) return "";
+  if (!config || !state.organization.addFormOpen || state.organizationUserManage.roleAssignmentOpen) return "";
   return `<section class="organization-actions organization-add-panel" aria-label="${escapeAttr(config.label)}">${config.render()}</section>`;
 }
 
@@ -1629,6 +1629,10 @@ function renderManageAccountTeamRolesSection(row, data) {
   `;
 }
 
+export function canGiveRoleFromAccount(data) {
+  return Boolean(organizationAddFormConfig.users(data) && rolesUsersAvailable(data));
+}
+
 export function renderManageAccountModal(data) {
   const row = (data.users || []).find((user) => String(user.id) === String(state.organizationUserManage.userId));
   if (!row) return "";
@@ -1647,6 +1651,9 @@ export function renderManageAccountModal(data) {
       <section class="panel exercise-tag-modal organization-manage-account-modal" role="dialog" aria-modal="true" aria-label="Manage account">
 ${renderDialogHead({ eyebrow: "Account", title: row.name || row.email || "User", subtitle: row.email || "", badge: loginActive ? "" : `<span class="user-status-badge is-disabled organization-dialog-badge">Login disabled</span>`, closeAction: "organization-manage-account-close" })}
         ${error ? `<p class="builder-error">${escapeHtml(error)}</p>` : ""}
+        ${state.organizationUserManage.roleAssignmentOpen
+          ? renderRolesAssignHtml(data, { userId: row.id })
+          : canGiveRoleFromAccount(data) ? `<button class="plain-button data-sources-primary organization-account-give-role" type="button" data-action="organization-manage-account-give-role"${pending || state.roles.assign.command ? " disabled" : ""}>Give a role</button>` : ""}
         ${renderManageAccountRoleSection({
           eyebrow: "Platform access",
           label: "Platform administrator",

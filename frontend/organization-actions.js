@@ -9,7 +9,7 @@ import { closeIconPicker, iconPickerOpenFor } from "./icon-picker.js";
 import { enterIconGallery } from "./icon-gallery.js";
 import { openExerciseBlockGrants, USER_SELECTION_LIMIT } from "./exercise-block-grants.js";
 import { emptyAccountStorage, enterStorageAdminSection, loadManageAccountStorage, storageAdminContext } from "./media-storage-admin-data.js";
-import { userCanReceiveBlocks, viewerManagesBlocks, visibleOrganizationUsers } from "./organization-view.js";
+import { canGiveRoleFromAccount, userCanReceiveBlocks, viewerManagesBlocks, visibleOrganizationUsers } from "./organization-view.js";
 import { confirmLeaveSourceConnections } from "./source-connections-actions.js";
 import { enterSourceConnectionsSection } from "./source-connections-data.js";
 import { filterOrganizationSelect, syncOrganizationTeamSelect, validateFilterableSelects } from "./organization-select.js";
@@ -431,6 +431,23 @@ export async function handleOrganizationAction(action, { loadAthletes, renderOrg
     void renderOrganizationPanel({ refresh: false });
     if (blocks) void loadManageAccountBlocks(userId, renderOrganizationPanel);
     if (storage) void loadManageAccountStorage(userId, () => renderOrganizationPanel({ refresh: false }));
+    return true;
+  }
+  if (type === "organization-manage-account-give-role") {
+    const { open, pending, userId } = state.organizationUserManage;
+    const data = state.organization.data;
+    const assign = state.roles.assign;
+    if (state.organization.section !== "users" || !open || pending || !userId || assign.command
+      || !data || !canGiveRoleFromAccount(data) || !data.users?.some((user) => String(user.id) === String(userId))) return true;
+    state.organizationUserManage.roleAssignmentPrevious = {
+      draft: assign.draft, error: assign.error, notice: assign.notice,
+    };
+    assign.draft = { userId, scope: "", roleId: "", displayTitle: "", expiresAt: "", reason: "" };
+    assign.error = "";
+    assign.notice = "";
+    state.organizationUserManage.roleAssignmentOpen = true;
+    await renderOrganizationPanel({ refresh: false });
+    document.querySelector(".organization-manage-account-modal [data-roles-assign-field='scope']")?.focus();
     return true;
   }
   if (type === "organization-block-grants-reload") {
@@ -1210,6 +1227,11 @@ async function handleOrganizationUserSelectionAction(action, { renderOrganizatio
 }
 
 export function closeManageAccountModal(renderOrganizationPanel) {
+  const previous = state.organizationUserManage.roleAssignmentPrevious;
+  if (previous) {
+    if (state.roles.assign.command) return;
+    Object.assign(state.roles.assign, previous);
+  }
   state.organizationUserManage = { open: false, userId: "", pending: false, error: "" };
   void renderOrganizationPanel({ refresh: false });
 }

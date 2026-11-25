@@ -4,8 +4,9 @@
 // still saves.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { startWorld } from "../lib/world.mjs";
-import { launch, openAs, openSettings } from "../lib/browser.mjs";
+import { launch, openAs, openSettings, request } from "../lib/browser.mjs";
 
 let world;
 let browser;
@@ -89,4 +90,66 @@ test("(club_admin, 390 px) a team saves through the new form and appears in the 
     assert.equal(await page.locator("main.workspace .organization-add-panel").count(), 0, "the form closes after a save");
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
+});
+test("Manage account opens role assignment for that person at phone and desktop widths", async () => {
+  for (const width of [360, 375, 390, 1280]) {
+    const { context, page, pageErrors } = await openAs(browser, world, "club_admin", width);
+    try {
+      if (width === 1280) {
+        const created = await request(context, world, "/api/organization/roles", {
+          method: "POST",
+          body: { requestKey: randomUUID(), clubId: world.ids.clubA, name: "Match analyst", scopeTypes: ["club"], items: ["dashboards.view"] },
+        });
+        assert.ok([200, 201].includes(created.status), created.text);
+      }
+      await openSection(page, "users");
+      await page.locator(".organization-user-row").filter({ hasText: "Coach Example" })
+        .getByRole("button", { name: "Manage account", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Manage account" });
+      const frame = await dialog.boundingBox();
+      assert.ok(frame.x >= 0 && frame.x + frame.width <= width + 0.5, `${width}: account dialog fits in the viewport`);
+      const entry = dialog.getByRole("button", { name: "Give a role", exact: true });
+      assert.ok((await entry.boundingBox()).height >= 43.5, `${width}: role action is a full-size touch target`);
+      await entry.click();
+
+      const form = dialog.locator('form[data-roles-form="assign"]');
+      const where = form.locator('select[name="scope"]');
+      await where.waitFor();
+      assert.match(await dialog.getByRole("heading", { name: "Coach Example", exact: true }).textContent(), /Coach Example/);
+      assert.equal(await page.locator('main.workspace form[data-roles-form="assign"]').count(), 1);
+      const recipient = form.locator('input[name="userId"]');
+      const userId = world.accounts.find((account) => account.role === "team_coach").id;
+      assert.equal(await recipient.inputValue(), userId);
+      assert.equal(await where.evaluate((node) => node === document.activeElement), true);
+      assert.equal(await where.inputValue(), "", "a previous assignment location cannot carry over");
+      await where.selectOption({ label: "Club: Example Club" });
+      const roles = form.locator('select[name="roleId"]');
+      await roles.locator("option").filter({ hasText: "Club admin" }).waitFor({ state: "attached" });
+      assert.equal(await recipient.inputValue(), userId, "the selected person stays fixed after the roles load");
+      assert.equal(await dialog.locator('input[type="password"]').count(), 0);
+      assert.equal(await where.evaluate((node) => node === document.activeElement), true, "role loading keeps the keyboard focus");
+      assert.equal((await measure(page, width)).overflow, 0);
+      if (width === 1280) {
+        await roles.selectOption({ label: "Match analyst" });
+        await form.locator('textarea[name="reason"]').fill("Review team dashboards");
+        await form.getByRole("button", { name: "Give role", exact: true }).click();
+        await dialog.getByText("Coach Example now has Match analyst in Example Club.").waitFor();
+        assert.equal(await recipient.inputValue(), userId);
+        const stored = await request(context, world, `/api/organization/roles/assignments?clubId=${world.ids.clubA}&userId=${userId}`);
+        assert.equal(stored.status, 200, stored.text);
+        assert.ok(JSON.parse(stored.text).assignments.some((assignment) => assignment.roleName === "Match analyst"
+          && assignment.userId === userId && assignment.scopeType === "club"
+          && assignment.scopeId === world.ids.clubA && assignment.state === "active"));
+      }
+
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await dialog.waitFor({ state: "detached" });
+      await page.locator(".organization-browser-head").getByRole("button", { name: "Add user", exact: true }).click();
+      await page.getByRole("tab", { name: "Give access", exact: true }).click();
+      const generalForm = page.locator('.organization-add-panel form[data-roles-form="assign"]');
+      assert.equal(await generalForm.getByLabel("User").inputValue(), "", "the profile recipient does not leak into the general form");
+      assert.equal(await generalForm.locator('select[name="scope"]').inputValue(), "", "the profile scope does not leak into the general form");
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  }
 });

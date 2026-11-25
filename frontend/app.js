@@ -3948,7 +3948,14 @@ function renderRolesUsersSurface() {
     void renderOrganizationPanel({ refresh: false });
     return;
   }
-  if (assign) assign.outerHTML = renderRolesAssignHtml(data);
+  if (assign) {
+    const userId = assign.dataset.rolesAssignUserId;
+    const field = userId && assign.contains(document.activeElement) ? document.activeElement.dataset.rolesAssignField : "";
+    assign.outerHTML = renderRolesAssignHtml(data, { userId });
+    if (field === "scope" || field === "roleId") {
+      els.content.querySelector(`[data-roles-assign-user-id] [data-roles-assign-field="${field}"]`)?.focus({ preventScroll: true });
+    }
+  }
   const who = els.content.querySelector("[data-roles-who]");
   if (who) who.outerHTML = renderRolesWhoHtml(data);
 }

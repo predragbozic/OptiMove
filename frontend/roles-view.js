@@ -278,7 +278,7 @@ export function assignableRoles(roles, scopeType) {
     && (r.actions?.assign || BASIC_ASSIGNABLE[r.basicKey] === scopeType));
 }
 
-export function renderRolesAssignHtml(data) {
+export function renderRolesAssignHtml(data, { userId = "" } = {}) {
   const d = rs();
   const a = d.assign;
   const users = data.users || [];
@@ -292,10 +292,11 @@ export function renderRolesAssignHtml(data) {
   const userOptions = users.map((u) => ({ value: u.id, label: `${u.name || u.email}${u.email ? ` - ${u.email}` : ""}` }));
   const cmd = a.command;
   return `
-    <div data-roles-assign>
+    <div data-roles-assign${userId ? ` data-roles-assign-user-id="${escapeAttr(userId)}"` : ""}>
       <form class="panel organization-form roles-assign-form" data-roles-form="assign" novalidate>
         <div><p class="eyebrow">Access</p><h3>Give a role</h3></div>
-        ${renderFilterableSelect({ name: "userId", label: "User", options: userOptions, value: a.draft.userId, required: true, placeholder: "Type user name or email" })}
+        ${userId ? `<input type="hidden" name="userId" value="${escapeAttr(userId)}">`
+          : renderFilterableSelect({ name: "userId", label: "User", options: userOptions, value: a.draft.userId, required: true, placeholder: "Type user name or email" })}
         <label class="search-field"><span>Where</span>
           <select name="scope" data-roles-assign-field="scope" required>
             <option value="">Choose a club or a team</option>
