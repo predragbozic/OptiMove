@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 import {loadAuthorizationContext} from '../authz.js';
 import {pickFallbackWorkspace,resolveActiveWorkspaceReadOnly} from '../workspace.js';
 import {viewReadScope} from '../moduleView.js';
-import {canViewDashboardRow,canManageDashboardRow,dashboardNamedAthletesAllowed,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches} from '../trainingLoadDashboardAccess.js';
+import {canViewDashboardRow,canManageDashboardRow,dashboardNamedAthletesAllowed,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches,redactDashboardAthleteFilters} from '../trainingLoadDashboardAccess.js';
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
@@ -64,7 +64,8 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
   return transaction(async q=>{const target=await pageTarget(q,req,dashboardId);if(!(await pageDatabaseEnabled(q)))throw pageError();
    const pages=(await q('select * from training_load.dashboard_pages where dashboard_id=$1 order by position,id',[dashboardId])).rows;
    if(pageId&&!pages.some(p=>p.id.toLowerCase()===pageId.toLowerCase()))throw pageError();
-   return {requestIssuedAt:new Date(now()).toISOString(),pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard)};
+   const shown=dashboardNamedAthletesAllowed(target.req,target.workspace)?{pages}:redactDashboardAthleteFilters({pages});
+   return {requestIssuedAt:new Date(now()).toISOString(),pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard)};
   });
  }
  async function mutate({req,dashboardId,pageId=null,operation,body}){
@@ -93,7 +94,10 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
    const pages=(await q('select * from training_load.dashboard_pages where dashboard_id=$1 order by position,id',[dashboardId])).rows;
-   return {requestIssuedAt:new Date(now()).toISOString(),dashboard:target.dashboard,page,resolvedPeriod:page.period_config?resolvePeriod(page.period_config,new Date(now()).toISOString()):null,pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard),widgets:widgets.map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}))};
+   const full={dashboard:target.dashboard,page,pages,widgets:widgets.map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}))};
+   // Roles V-6: without load.view.athlete the filters' athletes are not returned (dashboard, pages, widgets).
+   const shown=dashboardNamedAthletesAllowed(target.req,target.workspace)?full:redactDashboardAthleteFilters(full);
+   return {requestIssuedAt:new Date(now()).toISOString(),dashboard:shown.dashboard,page:shown.page,resolvedPeriod:page.period_config?resolvePeriod(page.period_config,new Date(now()).toISOString()):null,pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard),widgets:shown.widgets};
   });
  }
  async function queryPage({req,dashboardId,pageId,body}){

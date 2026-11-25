@@ -19,7 +19,7 @@ import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { Router } from "express";
 import { viewEntryGate } from "../moduleView.js";
 import { canUseSimplePlatformPilot } from "../dashboardSimple/platformPilot.js";
-import { resolveActiveDataWorkspace, canManageDashboardRow, dashboardNamedAthletesAllowed, dataWorkspaceMatches } from "../trainingLoadDashboardAccess.js";
+import { resolveActiveDataWorkspace, canManageDashboardRow, dashboardNamedAthletesAllowed, dataWorkspaceMatches, redactDashboardAthleteFilters } from "../trainingLoadDashboardAccess.js";
 import {
   listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, deleteDashboard, cloneDashboard,
   getActiveDashboard, setActiveDashboard, clearActiveDashboard, httpError, validFilterShape,
@@ -338,7 +338,9 @@ router.get("/:dashboardId", async (req, res, next) => {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
-    const detail = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
+    const found = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
+    // Roles V-6: without load.view.athlete the filters' athletes are not returned either.
+    const detail = dashboardNamedAthletesAllowed(req, dataWorkspace) ? found : { ...found, ...redactDashboardAthleteFilters({ dashboard: found.dashboard, widgets: found.widgets }) };
     if (req.app?.locals?.dashboardPagesEnabled && await pageDatabaseEnabled(query)) detail.pagesAvailable = true;
     const simplePreview = ['preview', 'enabled'].includes(req.app?.locals?.dashboardSimpleMode)
       && canUseSimplePlatformPilot(req, dataWorkspace);

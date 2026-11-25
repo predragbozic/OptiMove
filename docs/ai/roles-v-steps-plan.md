@@ -730,3 +730,25 @@ Numbered 13 so it does not collide with the parallel V-2, V-4 and V-5 sections. 
   - Frontend: `roles-v6-view.test.mjs` and `view-modules.test.mjs` (1, 3, 3c).
   - e2e: `roles-v6-view-dashboards.test.mjs` at 1280, 390 and 360 px.
   - `dashboard-simple-presentation-writers` mocks the two new exports.
+
+**Review round (code, security, mobile-qa) and what changed.**
+- **Security HIGH, fixed.** A filter's athletes are athlete-level data too. Without `load.view.athlete`,
+  `redactDashboardAthleteFilters` sets `athleteIds` to null in these config reads (the rest of each filter stays):
+  - the dashboard's `default_filter` and the widgets' `local_filter_override` in `GET /:dashboardId`;
+  - every page's `default_filter` in the pages list;
+  - the dashboard, page, pages and widgets of the page detail.
+  Sweep test 8 checks the redaction for the view holders, and that the coach keeps the filter.
+- **Security MEDIUM, accepted limit (recorded, not built).** A cohort total stays a single athlete's value when only
+  one athlete is in it. That happens with a one-athlete activity or component filter, a shell team or club of one
+  athlete, or `min`/`max` (the value is one athlete's). It carries no id or name. A size threshold (as 7e's OD3: min /
+  max only from 3 athletes) is a possible follow-up. Sweep test 8 scans each answer for athlete ids, so a series type
+  that starts emitting `athleteId` under `cohort` fails it.
+- **Security LOW, route table.** Every route a view workspace is refused at either answers as for no workspace or
+  never manages:
+  - Legacy router: every route but `POST /` calls `requireDataWorkspace`, which gives `{type:null}` for a refused view
+    request, so 403. Its layout, widget and series writes also need `requireManageableDashboard`, which is false for a
+    view request. `POST /` goes through the create context, which refuses every owner for a view request.
+  - Pages router: every route goes through `pageTarget`, which answers the 404 for a refused view request.
+  - Simple runtime: the gate with no read answers its 404.
+- **Mobile-qa LOWs, applied.** The restricted sentence is now "This widget shows each athlete's values, which you
+  can't see here." The empty state names "the people who manage this club or team".

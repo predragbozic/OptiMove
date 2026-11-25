@@ -115,6 +115,23 @@ function describeDataWorkspace(workspace, req) {
 // May this request's dashboard answers carry rows per athlete (load.view.athlete)? Not limited in the platform, a
 // private coach's or an athlete's own workspace; in a club or team workspace, and a view one, canView(load_athlete) at
 // its scope (a view workspace: only once Training Load's V step opens load_athlete).
+// The athletes a filter names are athlete-level data too (V-6 security review, HIGH): without load.view.athlete a
+// dashboard's default_filter, a page's default_filter and a widget's local_filter_override are returned with
+// athleteIds set to null (the rest of the filter unchanged). Pure; returns a copy.
+export function withoutFilterAthletes(filter) {
+  if (!filter || typeof filter !== "object" || Array.isArray(filter) || !Object.hasOwn(filter, "athleteIds")) return filter;
+  return { ...filter, athleteIds: null };
+}
+
+export function redactDashboardAthleteFilters({ dashboard, page, pages, widgets } = {}) {
+  const out = {};
+  if (dashboard !== undefined) out.dashboard = dashboard && { ...dashboard, default_filter: withoutFilterAthletes(dashboard.default_filter) };
+  if (page !== undefined) out.page = page && { ...page, default_filter: withoutFilterAthletes(page.default_filter) };
+  if (pages !== undefined) out.pages = (pages || []).map((p) => ({ ...p, default_filter: withoutFilterAthletes(p.default_filter) }));
+  if (widgets !== undefined) out.widgets = (widgets || []).map((w) => ({ ...w, local_filter_override: withoutFilterAthletes(w.local_filter_override) }));
+  return out;
+}
+
 export function dashboardNamedAthletesAllowed(req, dataWorkspace) {
   if (!dataWorkspace || dataWorkspace.type === null) return false;
   if (dataWorkspace.dataWorkspaceType !== "club" && dataWorkspace.dataWorkspaceType !== "team") return true;

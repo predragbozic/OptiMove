@@ -688,6 +688,27 @@ test("8. dashboards (dashboards.view): club_view and team_view list, open and qu
   }
   assert.deepEqual(changed(before, await snapshot()), [], "no read wrote anything (no preference, no row)");
 
+  // The athletes a filter names are athlete-level data too (the security review's HIGH): a dashboard default filter
+  // and a widget override that name athA are returned without them by every config read, to the coach with them.
+  const dF = await board(w.adminA, "Alpha filtered board", { ownerScope: "club", ownerClubId: w.A, defaultFilter: { athleteIds: [w.athA.id] } });
+  const fresh = ok(await srv.api(w.adminA.cookie, `${D}/${dF.id}`)).dashboard;
+  ok(await srv.api(w.adminA.cookie, `${D}/${dF.id}/widgets`, { method: "POST", body: {
+    expectedDashboardRevision: fresh.revision, widgetType: "table", title: "Filtered", widgetOrder: 1, x: 0, y: 0, width: 6, height: 4, mobileOrder: 1,
+    groupBy: "cohort", localFilterOverride: { athleteIds: [w.athA.id] } } }), 201);
+  const pageF = await pageOf(dF);
+  const configReads = [`${D}/${dF.id}`, `${D}/${dF.id}/pages`, `${D}/${dF.id}/pages/${pageF}`];
+  for (const who of [clubHolder, athleteWordHolder]) {
+    for (const p of configReads) {
+      const r = await srv.api(who.cookie, p);
+      assert.equal(r.status, 200, `${p}: ${r.text.slice(0, 160)}`);
+      assert.ok(!r.text.includes(String(w.athA.id)), `${p}: no athlete id in a filter`);
+    }
+    const one = ok(await srv.api(who.cookie, `${D}/${dF.id}`));
+    assert.deepEqual(one.dashboard.default_filter, { athleteIds: null }, "the filter's other keys stay, its athletes do not");
+    assert.equal(one.widgets[0].local_filter_override.athleteIds, null);
+  }
+  for (const p of configReads) assert.ok((await srv.api(w.adminA.cookie, p)).text.includes(String(w.athA.id)), `${p}: the coach keeps its filter (old-vs-new)`);
+
   // Every write answers what it answered an account with no role, and lands nothing.
   for (const who of [clubHolder, teamHolder]) {
     for (const [method, p, wbody] of [

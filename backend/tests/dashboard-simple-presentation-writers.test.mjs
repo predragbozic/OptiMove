@@ -31,6 +31,7 @@ if (needsModuleMocksRelaunch()) {
     dashboardVisibilitySql: () => "true",
     dataWorkspaceMatches: () => true,
     dashboardNamedAthletesAllowed: () => true,
+    redactDashboardAthleteFilters: (parts) => parts,
     resolveDashboardCreateContext: async (request, body, suppliedWorkspace) => {
       assert.equal(suppliedWorkspace, workspace);
       return { ownerScope: "user", ownerUserId: ownerId, ownerClubId: null, ownerTeamId: null, dataWorkspaceType: "private_coach", dataWorkspaceScopeId: null, isTemplate: body.isTemplate === true };
