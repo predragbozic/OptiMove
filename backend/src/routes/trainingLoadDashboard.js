@@ -22,7 +22,7 @@ import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { Router } from "express";
 import { viewEntryGate } from "../moduleView.js";
 import { canUseSimplePlatformPilot } from "../dashboardSimple/platformPilot.js";
-import { resolveActiveDataWorkspace, canManageDashboardRow, dashboardNamedAthletesAllowed, dataWorkspaceMatches, redactDashboardAthleteFilters } from "../trainingLoadDashboardAccess.js";
+import { resolveActiveDataWorkspace, canManageDashboardRow, dashboardWidgetsForViewer, dashboardNamedAthletesAllowed, dataWorkspaceMatches, redactDashboardAthleteFilters } from "../trainingLoadDashboardAccess.js";
 import {
   listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, deleteDashboard, cloneDashboard,
   getActiveDashboard, setActiveDashboard, clearActiveDashboard, httpError, validFilterShape,
@@ -343,6 +343,7 @@ router.get("/:dashboardId", async (req, res, next) => {
     if (!dataWorkspace) return;
     const found = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
     // Roles V-6: without load.view.athlete the filters' athletes are not returned either.
+    found.widgets = dashboardWidgetsForViewer(req, found.widgets);
     const detail = dashboardNamedAthletesAllowed(req, dataWorkspace) ? found : { ...found, ...redactDashboardAthleteFilters({ dashboard: found.dashboard, widgets: found.widgets }) };
     if (req.app?.locals?.dashboardPagesEnabled && await pageDatabaseEnabled(query)) detail.pagesAvailable = true;
     const simplePreview = ['preview', 'enabled'].includes(req.app?.locals?.dashboardSimpleMode)
@@ -860,6 +861,7 @@ router.post("/:dashboardId/query", async (req, res, next) => {
       if(process.env.DASHBOARD_REFERENCES_ENABLED!=='true'||!canManageDashboardRow(req,dashboard))return res.status(404).json({error:'notFound'});
       const ctx=await resolveReferenceContext(req);targetWidgets=referencePreviewWidgets(targetWidgets,b.referencePreview,ctx?.owner.clubId);await assertReferenceSource(query,b.referencePreview.referenceConfig,ctx.owner.clubId,ctx.workspace,widgets.find(w=>w.id===b.referencePreview.widgetId)?.presentation_config?.referenceConfig);
     }
+    targetWidgets = dashboardWidgetsForViewer(req, targetWidgets);
     const result = await queryDashboardForViewer(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter }, { namedAthletes: dashboardNamedAthletesAllowed(req, dataWorkspace) });
     const galleryWidgets=await hydrateGalleryWidgets(query,targetWidgets);
     const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
