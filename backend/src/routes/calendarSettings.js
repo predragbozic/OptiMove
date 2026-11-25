@@ -12,8 +12,14 @@ import {
   restoreLocation, restoreType, setQuestionsSwitch, updateField, updateLocation, updateTeam, updateType,
 } from "../calendarSettingsService.js";
 import { calendarCommand, calendarContextOf, respondCalendarError } from "./calendarRouteErrors.js";
+import { calendarViewRefused } from "../calendarModuleContext.js";
+import { viewEntryGate } from "../moduleView.js";
 
 const router = Router();
+
+// Roles V-3 (docs/ai/roles-v-steps-plan.md section 2.4): Settings -> Calendar is MANAGE and stays closed to a view
+// workspace: every route keeps the answer it had (no context, calendarModuleContext.js), without resolving the workspace again.
+router.use(viewEntryGate("calendar", [], { refuse: calendarViewRefused }));
 const ERRORS = { log: "calendar-settings" };
 
 router.get("/", async (req, res) => {

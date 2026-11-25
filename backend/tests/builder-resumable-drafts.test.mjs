@@ -12,7 +12,7 @@ if (needsModuleMocksRelaunch()) {
     captured = { sql, params };
     return { rows: [{ group_key: "edit-1", plan_ids: ["edit-1"], plan_type: "weekly", athlete_names: ["Athlete"], week_start: "2026-10-05", name: "Week" }] };
   } } });
-  mock.module("../src/access.js", { namedExports: { athleteAccessPredicate() {}, canAccessAllAthletes() {}, canAccessPlan() {} } });
+  mock.module("../src/access.js", { namedExports: { athleteAccessPredicate() {}, athleteViewScopes: () => ({ clubIds: [], teamIds: [] }), canAccessAllAthletes() {}, canAccessPlan() {} } });
   mock.module("../src/realtime.js", { namedExports: { emitRealtimeEvent() {} } });
   mock.module("../src/trainingLoadAccess.js", { namedExports: { isAthleteInWorkspaceScope() {}, resolveExternalScheduleWorkspaceScope() {} } });
   const { default: router } = await import("../src/routes/builder.js");

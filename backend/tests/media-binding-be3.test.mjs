@@ -9,10 +9,12 @@ import { EXERCISE_COLLECTIONS_FIXTURE_SQL } from "./support/exercise-collections
 
 import {readFile} from 'node:fs/promises';
 import {mediaRetentionDatabaseError} from '../src/mediaReferences.js';
-import {createMediaAccessService,decorateMediaRows} from '../src/exerciseMedia.js';
 import {createR2UploadStore} from '../src/r2UploadStore.js';
 import {createMediaStorageService,MediaStorageError} from '../src/mediaStorage.js';
-import {createOracleMediaAccessService} from './support/media-access-oracle.mjs';
+// Roles V-2: exerciseMedia.js reaches access.js, which (through permissions.js and authz.js) loads db.js, whose pool
+// reads DATABASE_URL once when it is first loaded. Both are loaded in before(), after DATABASE_URL names this suite's
+// database, like the routers.
+let createMediaAccessService, decorateMediaRows, createOracleMediaAccessService;
 let accessService;
 const coachId = crypto.randomUUID();
 const otherCoachId = crypto.randomUUID();
@@ -253,6 +255,8 @@ before(async () => {
   foreignSectionId = await makeSection(otherCoachId);
   process.env.DATABASE_URL = database.url;
   ({ pool } = await import("../src/db.js"));
+  ({ createMediaAccessService, decorateMediaRows } = await import("../src/exerciseMedia.js"));
+  ({ createOracleMediaAccessService } = await import("./support/media-access-oracle.mjs"));
   const { default: builderRouter } = await import("../src/routes/builder.js");
   const { default: collectionsRouter } = await import("../src/routes/exerciseCollections.js");
   const { default: exercisesRouter } = await import("../src/routes/exercises.js");

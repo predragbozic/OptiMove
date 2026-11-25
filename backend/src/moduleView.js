@@ -23,7 +23,9 @@
 //   - A gated route reads req.moduleView.workspace / .scope and does not resolve the workspace again.
 //
 // V-0 opened no module; V-1 opens data_configuration (routes/sourceMetrics.js) and presets (routes/taxonomy.js through
-// server.js, routes/sessionTypes.js). Each module's V pull request adds its
+// server.js, routes/sessionTypes.js); V-2 opens athletes (routes/athletes.js, routes/positions.js, the athletes of
+// routes/organization.js GET /); V-3 opens calendar (routes/calendar.js, routes/calendarEvents.js, and the gate with
+// no read on routes/calendarSettings.js; calendarModuleContext.js). Each module's V pull request adds its
 // key to OPEN_VIEW_MODULES, mounts the gate with its reads, adds its word to ENFORCED_PERMISSIONS and
 // VIEW_WORKSPACE_USABLE_WORDS (permissions.js), and its row to backend/tests/roles-v-sweep.test.mjs.
 import { isPlatformAdministrator } from "./authz.js";
@@ -46,7 +48,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 });
 
 // The modules a view workspace may read. A module enters here only in its own V pull request, with its entry gate.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets"]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar"]);
 
 // The base scope of each view workspace type (the club or team it names).
 const VIEW_SCOPE_TYPES = Object.freeze({ club_view: "club", team_view: "team" });
@@ -114,8 +116,11 @@ function forbidden(_req, res) {
   res.status(403).json({ error: "Forbidden" });
 }
 
-// `refuse(req, res)` answers what the module's router answers today to an account without a role (403 Forbidden unless
-// the module says otherwise, e.g. its identical 404). `resolve` and `open` are injectable for the unit tests only.
+// `refuse(req, res, next)` answers what the module's router answers today to an account without a role (403 Forbidden
+// unless the module says otherwise, e.g. its identical 404). A module whose routes already answer a view workspace
+// read-only and fail-closed (V-2, athletes; V-3, the calendar: no context) may instead call `next()` without
+// req.moduleView (V-3 also marks the request), so each route gives its own pre-V answer. `resolve` and `open` are
+// injectable for the unit tests only.
 export function viewEntryGate(module, readRoutes, {
   refuse = forbidden, resolve = resolveActiveWorkspaceReadOnly, open = OPEN_VIEW_MODULES,
 } = {}) {
@@ -130,8 +135,8 @@ export function viewEntryGate(module, readRoutes, {
       const { workspace, availableWorkspaces } = await resolve(req.user.id, req.authz);
       const active = workspace || pickFallbackWorkspace(availableWorkspaces);
       if (!active || !VIEW_WORKSPACE_TYPES.has(active.type)) return next();
-      if (!routes.some((matches) => matches(req))) return refuse(req, res);
-      if (!canView(req.authz, active, module, { open })) return refuse(req, res);
+      if (!routes.some((matches) => matches(req))) return refuse(req, res, next);
+      if (!canView(req.authz, active, module, { open })) return refuse(req, res, next);
       req.moduleView = Object.freeze({ module, workspace: active, scope: viewReadScope(active) });
       return next();
     } catch (error) {

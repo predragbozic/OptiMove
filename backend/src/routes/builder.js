@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
-import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan } from "../access.js";
+import { athleteAccessPredicate, athleteViewScopes, canAccessAllAthletes, canAccessPlan } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
 import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSessionsOf, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
@@ -343,14 +343,15 @@ router.get("/weekly-plans", async (req, res, next) => {
     if (parsed.error) return res.status(400).json({ error: parsed.error.code, message: parsed.error.message });
     const scope = await resolveWeeklyPlanOwnerScope(req, res);
     if (!scope) return;
-    const params = [parsed.athleteIds, parsed.weekStart, req.user.id, canAccessAllAthletes(req)];
+    const views = athleteViewScopes(req);
+    const params = [parsed.athleteIds, parsed.weekStart, req.user.id, canAccessAllAthletes(req), views.clubIds, views.teamIds];
     const inScope = athleteInWeeklyScopeSql(scope, "a", params);
     const result = await query(
       `select k.athlete_id::text as athlete_id,
               (a.id is not null and coalesce(a.is_active, true) and ${inScope}) as plannable,
               p.id as plan_id, p.status, p.builder_batch_id,
               (p.created_by_user_id = $3) as mine,
-              (p.id is not null and (p.created_by_user_id = $3 or $4::boolean or ${athleteAccessPredicate("a", "$3")})) as editable,
+              (p.id is not null and (p.created_by_user_id = $3 or $4::boolean or ${athleteAccessPredicate("a", "$3", "$5", "$6")})) as editable,
               (select d.id from plans.plans d
                 where d.edit_source_plan_id = p.id and d.is_edit_draft = true and d.created_by_user_id = $3
                 order by d.updated_at desc limit 1) as open_draft_id
@@ -3005,10 +3006,10 @@ async function prepareBatchEdit(req, client, source, freshDraft, siblingRows) {
   // filtered by the same predicate (editablePlanAccessSql, #664).
   const switcher = await client.query(
     `select p.id, coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name,
-            ${editablePlanAccessSql("p", "$2", "$3")} as visible
+            ${editablePlanAccessSql("p", "$2", "$3", "$4", "$5")} as visible
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
      where p.builder_batch_id = $1 and coalesce(p.is_active, true) and not coalesce(p.is_edit_draft, false)`,
-    [source.builder_batch_id, req.user.id, canAccessAllAthletes(req)],
+    [source.builder_batch_id, req.user.id, canAccessAllAthletes(req), ...athleteViewScopeParams(req)],
   );
   const names = new Map(switcher.rows.map((row) => [String(row.id), row.athlete_name || null]));
   const visible = batchEditTestHooks.visibleMemberIds
@@ -3832,7 +3833,7 @@ async function getEditablePlan(req, planId, runQuery = query) {
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name)) as athlete_name
      from plans.plans p left join public.athletes a on a.id = p.athlete_id
      where p.id = $1
-       and ${editablePlanAccessSql("p", "$2", "$3")}`, [planId, req.user.id, canAccessAllAthletes(req)],
+       and ${editablePlanAccessSql("p", "$2", "$3", "$4", "$5")}`, [planId, req.user.id, canAccessAllAthletes(req), ...athleteViewScopeParams(req)],
   );
   return result.rows[0] || null;
 }
@@ -3840,7 +3841,8 @@ async function getEditablePlan(req, planId, runQuery = query) {
 // Who may open a Builder plan: the one source of truth for getEditablePlan
 // and for the batch switcher's members (loadBuilderBatch). `userParam` is the
 // viewer's user id, `allParam` canAccessAllAthletes(req).
-function editablePlanAccessSql(alias, userParam, allParam) {
+// `clubsParam` / `teamsParam`: athleteViewScopes(req).clubIds / .teamIds (roles V-2).
+function editablePlanAccessSql(alias, userParam, allParam, clubsParam, teamsParam) {
   return `(
          ${alias}.plan_type in ('program', 'weekly')
          and (
@@ -3850,10 +3852,15 @@ function editablePlanAccessSql(alias, userParam, allParam) {
              select 1
              from public.athletes managed_athlete
              where managed_athlete.id = ${alias}.athlete_id
-               and ${athleteAccessPredicate("managed_athlete", userParam)}
+               and ${athleteAccessPredicate("managed_athlete", userParam, clubsParam, teamsParam)}
            )
          )
        )`;
+}
+
+function athleteViewScopeParams(req) {
+  const { clubIds, teamIds } = athleteViewScopes(req);
+  return [clubIds, teamIds];
 }
 
 // Copy paths must lock the target plan before child FK/row locks (same order as DELETE).
@@ -4225,14 +4232,14 @@ async function loadBuilderBatch(plan, req) {
     `select p.id, p.name, p.plan_type, p.week_start, p.status,
             a.athlete_id, a.source_external_id as athlete_source_external_id,
             coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.source_external_id, a.athlete_id::text) as athlete_name,
-            ${editablePlanAccessSql("p", "$2", "$3")} as visible
+            ${editablePlanAccessSql("p", "$2", "$3", "$4", "$5")} as visible
      from plans.plans p
      left join public.athletes a on a.id = p.athlete_id
      where p.builder_batch_id = $1
        and coalesce(p.is_active, true)
        and not coalesce(p.is_edit_draft, false)
      order by coalesce(a.athlete_id::text, a.source_external_id, p.name), p.created_at`,
-    [plan.builder_batch_id, req.user.id, canAccessAllAthletes(req)],
+    [plan.builder_batch_id, req.user.id, canAccessAllAthletes(req), ...athleteViewScopeParams(req)],
   );
   const visible = result.rows.filter((row) => row.visible === true);
   return {

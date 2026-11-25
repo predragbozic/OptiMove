@@ -7,6 +7,7 @@ import {
   loadAuthorizationContext,
 } from "../authz.js";
 import { can, clubScope, GLOBAL_SCOPE, teamScope } from "../permissions.js";
+import { athleteViewScopes, canViewAthletesAt } from "../access.js";
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
 import { resolveActiveWorkspace, VIEW_WORKSPACE_TYPES } from "../workspace.js";
@@ -424,7 +425,9 @@ router.get("/", async (req, res, next) => {
 // GET /api/organization for a view workspace (roles R4-2, contract 5.1). Built from the view workspace alone:
 //   - club_view C: club C and its active teams, while the account holds org.view in C (can()); team_view T: team T,
 //     while it holds org.view on T. Nothing else of any club, whatever other roles the account holds;
-//   - athletes: none (they open in the Athletes VIEW pull request, which moves every gate of athletes.view at once);
+//   - athletes: with athletes.view in C or T (roles V-2, P-1), the workspace's athletes by their active membership, in
+//     the reduced shape of loadViewAthletes (no login, invite, library or account fact; only this club's or team's
+//     memberships); without it, none;
 //   - users: the club's members only while the account holds staff.assign in C (the members rule of #717, with its
 //     live assignments); otherwise the account itself only. Every row narrowed to this club;
 //   - access requests, invite statuses, archived teams, join links and applications: none;
@@ -441,7 +444,9 @@ async function viewWorkspaceOrganization(req, workspace, workspacePromise) {
   const scopeId = String(workspace.scopeId);
   const clubId = isClubView ? scopeId : (workspace.clubId ? String(workspace.clubId) : null);
   const mayView = isClubView ? can(req.authz, "org.view", clubScope(scopeId)) : can(req.authz, "org.view", teamScope(scopeId));
-  const [clubsResult, teamsResult, users] = await Promise.all([
+  // Roles V-2: the athletes of the workspace, only with athletes.view there (P-1), in the reduced shape of loadViewAthletes.
+  const mayViewAthletes = canViewAthletesAt(req.authz, isClubView ? clubScope(scopeId) : teamScope(scopeId));
+  const [clubsResult, teamsResult, users, athletes] = await Promise.all([
     mayView && isClubView
       ? query(`select id, name, short_name, logo_url, city, country from public.clubs where id = $1 and coalesce(is_active, true)`, [scopeId])
       : { rows: [] },
@@ -455,9 +460,10 @@ async function viewWorkspaceOrganization(req, workspace, workspacePromise) {
       )
       : { rows: [] },
     loadUsers(req, workspacePromise),
+    mayViewAthletes ? loadViewAthletes(isClubView ? "club" : "team", scopeId) : [],
   ]);
   const scoped = filterOrganizationDataForWorkspace(
-    workspace, { clubs: clubsResult.rows, teams: teamsResult.rows, athletes: [], users, accessRequests: [] }, req.user.id,
+    workspace, { clubs: clubsResult.rows, teams: teamsResult.rows, athletes, users, accessRequests: [] }, req.user.id,
   );
   const memberClubId = clubMembersViewClubId(req, workspace);
   const visibleUsers = memberClubId
@@ -475,7 +481,7 @@ async function viewWorkspaceOrganization(req, workspace, workspacePromise) {
     clubs: scoped.clubs,
     teams: scoped.teams,
     archivedTeams: [],
-    athletes: [],
+    athletes: scoped.athletes,
     users: visibleUsers.map((row) => narrowUserRowToClub(row, clubId)),
     accessRequests: [],
     joinLinks: [],
@@ -483,6 +489,65 @@ async function viewWorkspaceOrganization(req, workspace, workspacePromise) {
     activeWorkspace: workspace,
   };
   return Object.fromEntries(VIEW_ORGANIZATION_KEYS.map((k) => [k, body[k]]));
+}
+
+// The athletes of a view workspace (roles V-2): active profiles with an active membership of the club (club_view: the
+// club membership, the one the athlete list and a club admin's own list read; its team memberships in the club's active
+// teams are shown with it) or of the team (team_view), in an active club (and team). The shape is a fixed list of keys (VIEW_ATHLETE_KEYS): names and ids, the picture and THIS club's or team's
+// active memberships only - never a legacy club / team pointer (it can name another club), a login, an invite, the
+// library settings or any account fact. Every row has has_active_access true (the screen's active list).
+export const VIEW_ATHLETE_KEYS = Object.freeze([
+  "id", "athlete_id", "source_external_id", "name", "image_url", "is_active", "club_id", "club_name", "team_id", "team_name",
+  "memberships", "has_active_access",
+]);
+
+async function loadViewAthletes(kind, scopeId) {
+  const scopeSql = kind === "club"
+    ? `m.club_id = $1::uuid and (m.membership_type = 'club' or (m.membership_type = 'team' and coalesce(mt.is_active, false)))`
+    : `m.team_id = $1::uuid and m.membership_type = 'team' and coalesce(mt.is_active, false)`;
+  const result = await query(
+    `with scope_memberships as (
+       select m.id, m.athlete_id, m.membership_type, m.club_id, mc.name as club_name, m.team_id, mt.name as team_name
+         from public.athlete_memberships m
+         join public.clubs mc on mc.id = m.club_id and coalesce(mc.is_active, true)
+         left join public.teams mt on mt.id = m.team_id
+        where m.status = 'active' and ${scopeSql}
+     )
+     select a.id, a.athlete_id, a.source_external_id,
+            coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as name,
+            a.image_url,
+            json_agg(json_build_object(
+              'id', sm.id, 'membershipType', sm.membership_type, 'status', 'active', 'clubId', sm.club_id,
+              'clubName', sm.club_name, 'teamId', sm.team_id, 'teamName', sm.team_name
+            ) order by sm.membership_type, sm.club_name, sm.team_name) as memberships
+       from public.athletes a
+       join scope_memberships sm on sm.athlete_id = a.id
+      where coalesce(a.is_active, true)
+      group by a.id
+      ${kind === "club" ? "having bool_or(sm.membership_type = 'club')" : ""}
+      order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::numeric nulls last, name`,
+    [scopeId],
+  );
+  return result.rows.map((row) => {
+    const memberships = row.memberships || [];
+    const club = memberships.find((m) => m.clubId) || null;
+    const team = memberships.find((m) => m.membershipType === "team") || null;
+    const out = {
+      id: row.id,
+      athlete_id: row.athlete_id,
+      source_external_id: row.source_external_id,
+      name: row.name,
+      image_url: row.image_url,
+      is_active: true,
+      club_id: club ? club.clubId : null,
+      club_name: club ? club.clubName : null,
+      team_id: team ? team.teamId : null,
+      team_name: team ? team.teamName : null,
+      memberships,
+      has_active_access: true,
+    };
+    return Object.fromEntries(VIEW_ATHLETE_KEYS.map((k) => [k, out[k]]));
+  });
 }
 
 // Mirrors PLATFORM_ROLES / INDEPENDENT_COACH_ROLE_HINTS (access.js/authz.js)
@@ -3804,14 +3869,14 @@ async function loadManagedAthletes(req) {
            from public.user_team_roles utr_access
            join public.athlete_memberships tm_access
              on tm_access.team_id = utr_access.team_id and tm_access.membership_type = 'team' and tm_access.status = 'active'
-           where utr_access.user_id = $1 and utr_access.is_active = true and tm_access.athlete_id = a.id
+           where utr_access.user_id = $1 and utr_access.is_active = true and utr_access.team_id = any($4::uuid[]) and tm_access.athlete_id = a.id
          )
          or exists (
            select 1
            from public.user_club_roles ucr_access
            join public.athlete_memberships cm_access
              on cm_access.club_id = ucr_access.club_id and cm_access.membership_type = 'club' and cm_access.status = 'active'
-           where ucr_access.user_id = $1 and ucr_access.is_active = true and cm_access.athlete_id = a.id
+           where ucr_access.user_id = $1 and ucr_access.is_active = true and ucr_access.club_id = any($3::uuid[]) and cm_access.athlete_id = a.id
          ),
          false
        ) as has_active_access,
@@ -3884,14 +3949,14 @@ async function loadManagedAthletes(req) {
            from public.user_team_roles utr
            join public.athlete_memberships tm
              on tm.team_id = utr.team_id and tm.membership_type = 'team' and tm.status = 'active'
-           where utr.user_id = $1 and utr.is_active = true and tm.athlete_id = a.id
+           where utr.user_id = $1 and utr.is_active = true and utr.team_id = any($4::uuid[]) and tm.athlete_id = a.id
          )
          or exists (
            select 1
            from public.user_club_roles ucr
            join public.athlete_memberships cm
              on cm.club_id = ucr.club_id and cm.membership_type = 'club' and cm.status = 'active'
-           where ucr.user_id = $1 and ucr.is_active = true and cm.athlete_id = a.id
+           where ucr.user_id = $1 and ucr.is_active = true and ucr.club_id = any($3::uuid[]) and cm.athlete_id = a.id
          )
          -- Also surface a row whose only remaining tie to this viewer is an
          -- ARCHIVED relationship they still own/manage, so "Show archived"
@@ -3908,21 +3973,28 @@ async function loadManagedAthletes(req) {
            from public.user_team_roles utr_archived
            join public.athlete_memberships tm_archived
              on tm_archived.team_id = utr_archived.team_id and tm_archived.membership_type = 'team' and tm_archived.status = 'archived'
-           where utr_archived.user_id = $1 and utr_archived.is_active = true and tm_archived.athlete_id = a.id
+           where utr_archived.user_id = $1 and utr_archived.is_active = true and utr_archived.team_id = any($4::uuid[]) and tm_archived.athlete_id = a.id
          )
          or exists (
            select 1
            from public.user_club_roles ucr_archived
            join public.athlete_memberships cm_archived
              on cm_archived.club_id = ucr_archived.club_id and cm_archived.membership_type = 'club' and cm_archived.status = 'archived'
-           where ucr_archived.user_id = $1 and ucr_archived.is_active = true and cm_archived.athlete_id = a.id
+           where ucr_archived.user_id = $1 and ucr_archived.is_active = true and ucr_archived.club_id = any($3::uuid[]) and cm_archived.athlete_id = a.id
          )
        )
      order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::numeric nulls last,
               name`,
-    [req.user.id, isPlatformAdministrator(req.authz)],
+    // Roles V-2: every club / team branch also needs athletes.view there ($3 clubs, $4 teams; athleteViewScopes).
+    [req.user.id, isPlatformAdministrator(req.authz), ...athleteViewScopeArrays(req)],
   );
   return result.rows;
+}
+
+function athleteViewScopeArrays(req) {
+  if (isPlatformAdministrator(req.authz)) return [[], []];
+  const { clubIds, teamIds } = athleteViewScopes(req);
+  return [clubIds, teamIds];
 }
 
 async function saveAthleteLibraryAccess(athleteId, managedByUserId, body, { partial = false } = {}) {

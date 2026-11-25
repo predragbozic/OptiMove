@@ -31,7 +31,7 @@ export const EVENT_WRITE_BASES = Object.freeze(["platform_admin", "club_admin", 
 // coach). The platform workspace creates no event (no system-owned events,
 // plan choice 9.11); the athlete workspace never writes.
 export function eventOwnerForWorkspace(ctx) {
-  if (ctx.type !== "coach") return null;
+  if (ctx.type !== "coach" || ctx.readOnly === true || ctx.view) return null;
   const ws = ctx.workspace;
   if (ws.type === "club") return { scope: "club", clubId: String(ws.scopeId), teamId: null, userId: null, teamClubId: null, teamActive: true };
   if (ws.type === "team") return { scope: "team", clubId: null, teamId: String(ws.scopeId), userId: null, teamClubId: null, teamActive: true };
@@ -74,7 +74,8 @@ export function eventOwnerOfRow(row) {
 // function refuses the same bases, so `canManage` and the write verdict
 // agree.
 export function eventWriteBasis(ctx, owner) {
-  if (ctx.type !== "coach" || !owner) return null;
+  // Roles V-3: a view workspace's read context (calendarAccess.js resolveCalendarModuleContext) never manages.
+  if (ctx.type !== "coach" || !owner || ctx.readOnly === true || ctx.view) return null;
   const teamArchived = owner.scope === "team" && owner.teamActive === false;
   const clubArchived = (owner.scope === "club" && owner.clubActive === false) || (owner.scope === "team" && owner.teamClubActive === false);
   const { workspace: ws, authz } = ctx;

@@ -86,8 +86,8 @@ test("1. every club-scope write takes the club's ceiling lock, shared, right aft
   assert.ok(!s1.seen.some((s) => /lock_club_ceiling/.test(s.t)));
   ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), name: "Team coach" }));
   // R2's copy keeps only checked words: the seeded view words not checked yet are dropped and named "not available yet"
-  // (roles V-1 checks variables.view and presets.use, so the copy keeps them).
-  const CHECKED_VIEW = ["presets.use", "variables.view"];
+  // (roles V-1 checks variables.view and presets.use, roles V-2 athletes.view, roles V-3 calendar.view, so the copy keeps them).
+  const CHECKED_VIEW = ["athletes.view", "calendar.view", "presets.use", "variables.view"];
   assert.deepEqual([...copy.items].sort(), ["athletes.manage", "athletes.remove", "org.view", ...CHECKED_VIEW].sort());
   const dropped = ok(c3.res).dropped;
   assert.deepEqual(dropped.filter((d) => d.reason === "not_available_yet").map((d) => d.word).sort(), VIEW.filter((v) => !CHECKED_VIEW.includes(v)));
@@ -96,8 +96,8 @@ test("1. every club-scope write takes the club's ceiling lock, shared, right aft
 test("2. O6: an unchecked word is never added or taken away - a club role, a copy, a basic role (by a platform admin), a non-basic system role", async () => {
   const w = await world();
   const role = ok(await createRole(w.adminA, { clubId: w.A })).role;
-  code(await createRole(w.adminA, { clubId: w.A, items: ["org.view", "athletes.view"] }), 409, "permission_not_available_yet");
-  code(await change(w.adminA, role.id, { expectedRevision: 1, items: ["org.view", "calendar.view"] }), 409, "permission_not_available_yet");
+  code(await createRole(w.adminA, { clubId: w.A, items: ["org.view", "exercises.use"] }), 409, "permission_not_available_yet");
+  code(await change(w.adminA, role.id, { expectedRevision: 1, items: ["org.view", "load.view.team"] }), 409, "permission_not_available_yet");
   const copy = ok(await srv.api(w.adminA.cookie, `${R}/${ROLE_IDS.team_coach}/copy`, { method: "POST", body: { requestKey: key(), clubId: w.A, name: `Copy ${hex()}` } })).role;
   const refused = code(await change(w.adminA, copy.id, { expectedRevision: copy.revision, items: [...copy.items, "programs.view"] }), 409, "permission_not_available_yet");
   assert.deepEqual(refused.words, ["programs.view"]);
@@ -110,8 +110,10 @@ test("2. O6: an unchecked word is never added or taken away - a club role, a cop
   // The catalog read tells the screen which words are checked.
   const cat = ok(await srv.api(w.adminA.cookie, `${R}/catalog?clubId=${w.A}`));
   const byWord = Object.fromEntries(cat.permissions.map((p) => [p.word, p]));
-  assert.equal(byWord["athletes.view"].storable, true);
-  assert.equal(byWord["athletes.view"].checked, false);
+  // (roles V-2 checks athletes.view; programs.view stands for a storable word not checked yet.)
+  assert.equal(byWord["programs.view"].storable, true);
+  assert.equal(byWord["programs.view"].checked, false);
+  assert.equal(byWord["athletes.view"].checked, true);
   assert.equal(byWord["athletes.manage"].checked, true);
 });
 
