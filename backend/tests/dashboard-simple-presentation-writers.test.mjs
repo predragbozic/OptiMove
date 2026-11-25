@@ -43,6 +43,11 @@ if (needsModuleMocksRelaunch()) {
     queryDashboard: async (...args) => batchQueryHandler(...args),
     // Roles V-6: the route asks the viewer-aware entry point; with named athletes allowed it is queryDashboard.
     queryDashboardForViewer: async (args, widgets, period, options) => batchQueryHandler(args, widgets, period, options),
+
+    // Reference queries are closed in this legacy-writer fixture; never use the real DB.
+    fetchAuthorizedActivityIds: async () => { throw new Error('Unexpected reference activity query'); },
+    runDashboardBatchQuery: async () => { throw new Error('Unexpected reference batch query'); },
+    mergeFilters: () => { throw new Error('Unexpected reference filter resolution'); },
   } });
   const widgets = await import("../src/trainingLoadDashboardWidgets.js");
   const catalog = await import("../src/trainingLoadDashboardCatalog.js");

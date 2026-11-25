@@ -116,3 +116,16 @@ docs/runbooks/roles-closed-module-dominance-v95.md text eol=lf
 backend/scripts/roles-closed-module-dominance-v95-rehearsal.sh text eol=lf
 backend/scripts/roles-closed-module-dominance-v95-rehearsal.ps1 text eol=lf
 backend/scripts/roles-closed-module-dominance-v95-rehearsal.mjs text eol=lf
+# Roles v96 (the licence hierarchy): the rollback restores v92's and v95's three bodies verbatim and checks them by md5;
+# the preflight and the post-check compare bodies by md5; the rehearsal runs them as written. New files only.
+migrations_v2/202611281000_roles_v96_licence_hierarchy.sql text eol=lf
+docs/runbooks/roles-licence-hierarchy-v96*.sql text eol=lf
+docs/runbooks/roles-licence-hierarchy-v96.md text eol=lf
+backend/scripts/roles-licence-hierarchy-v96-rehearsal.sh text eol=lf
+backend/scripts/roles-licence-hierarchy-v96-rehearsal.ps1 text eol=lf
+backend/scripts/roles-licence-hierarchy-v96-rehearsal.mjs text eol=lf
+
+# P3 references: byte-stable migration and owner rehearsal artifacts
+migrations_v2/202611291000_training_load_v97_references.sql text eol=lf
+docs/runbooks/dashboard-references-v97* text eol=lf
+backend/scripts/dashboard-references-* text eol=lf

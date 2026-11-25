@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { isAthleteMode } from "./access.js";
+import { testsCoachSections } from "./tests-view.js";
 import { emptyWellnessForm, state } from "./state.js";
 import { localDateIsoInTimeZone, weekMondayIso } from "./utils.js";
 
@@ -75,8 +76,9 @@ export async function loadTests({ setLoading, renderTests } = {}) {
   if (isAthleteMode()) {
     if (!["today", "upcoming", "history"].includes(state.tests.section)) state.tests.section = "today";
     await reportDeviceTimezone();
-  } else if (!["today", "schedule", "results", "library"].includes(state.tests.section)) {
-    state.tests.section = "today";
+  } else if (!testsCoachSections().some(([value]) => value === state.tests.section)) {
+    // Roles V-4: a view workspace has no Today; it opens on its first section (Schedule).
+    state.tests.section = testsCoachSections()[0][0];
   }
   setLoading?.("Loading Tests...");
   try {

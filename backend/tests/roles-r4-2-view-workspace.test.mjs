@@ -344,10 +344,9 @@ test("11. section 6: a view workspace with every view word opens no module beyon
   assert.equal(hm.activeWorkspace.type, "club_view");
   // Roles V-1 opened Data configuration (variables.view) and Tags, presets and session types (presets.use): their words
   // reach /me and their reads are proven in roles-v-sweep.test.mjs (tests 5 and 6), so they leave the list below.
-  // Roles V-2 opened Athletes (athletes.view; roles-v-sweep test 8), roles V-3 the calendar (calendar.view;
-  // roles-v-sweep test 7) and roles V-6 dashboards (dashboards.view; roles-v-sweep, the dashboards test): their reads
-  // leave the list.
-  assert.deepEqual(hm.permissions, ["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "dashboards.view"], "only checked words of open modules reach /me");
+  // Roles V-2 opened Athletes (athletes.view), roles V-3 the calendar (calendar.view) and roles V-4 the Tests module
+  // (tests.view, tests.results.view): their reads are proven in roles-v-sweep.test.mjs and leave the list.
+  assert.deepEqual(hm.permissions, ["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view"], "only checked words of open modules reach /me");
   const q = `from=2026-11-01&to=2026-11-30`;
   const reads = ["/api/plans", "/api/templates", "/api/exercises", "/api/exercise-collections", "/api/builder/plans",
     "/api/taxonomy", `/api/training-activity?${q}`, "/api/training-load/weekly",

@@ -98,7 +98,9 @@ router.get("/", async (req, res, next) => {
     // Roles V-3, P-1: the athletes' names only where the answer may name them (a view workspace needs athletes.view);
     // otherwise the cards keep their counts and the asked list is left out.
     const includeAthletes = askedAthletes && ctx.athleteNames === true;
-    const filters = ctx.type === "athlete" ? {} : { clubIds: clubFilter.ids, teamIds: teamFilter.ids, athleteIds: athleteFilter.ids };
+    // Nor an athlete filter there: an answer filtered by an athlete id would tell whether that athlete has events.
+    const athleteIds = ctx.athleteNames === false ? null : athleteFilter.ids;
+    const filters = ctx.type === "athlete" ? {} : { clubIds: clubFilter.ids, teamIds: teamFilter.ids, athleteIds };
 
     const result = await readCalendar(ctx, { from, to, today, kinds, filters, includeAthletes });
     res.json(result);

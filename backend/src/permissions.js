@@ -227,6 +227,9 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "athletes.view": Object.freeze(["access.js", "positionService.js"]),
   // Roles V-3 (docs/ai/roles-v-steps-plan.md section 2.4): the calendar (reads, events, Settings -> Calendar).
   "calendar.view": Object.freeze(["calendarModuleContext.js"]),
+  // Roles V-4 (docs/ai/roles-v-steps-plan.md section 2.5): the Tests module (schedules; results and the per-athlete group).
+  "tests.view": Object.freeze(["testsAccess.js"]),
+  "tests.results.view": Object.freeze(["testsAccess.js"]),
   // Roles V-6 (docs/ai/roles-v-steps-plan.md sections 2.7 and 13): dashboards (both routers and the pages service read
   // their data workspace there).
   "dashboards.view": Object.freeze(["trainingLoadDashboardAccess.js"]),
@@ -241,11 +244,14 @@ export const HONOURED_PERMISSIONS = Object.freeze(Object.keys(ENFORCED_PERMISSIO
 // is not checked acts nowhere: no route asks for it.
 export const STORABLE_PERMISSIONS = Object.freeze([
   ...HONOURED_PERMISSIONS,
-  // The rest of the VIEW package (variables.view, presets.use (V-1), athletes.view (V-2), calendar.view (V-3) and
-  // dashboards.view (V-6) are checked: listed above).
+  // The rest of the VIEW package (variables.view, presets.use (V-1), athletes.view (V-2), calendar.view (V-3), tests.view
+  // and tests.results.view (V-4) are checked, along with dashboards.view).
   "programs.view", "exercises.use", "load.view.team",
-  "load.view.athlete", "tests.view", "tests.results.view",
+  "load.view.athlete",
 ]);
+
+// The licence hierarchy (v96) lives in permissionModules.js, which authz.js reads without importing this file.
+export { MODULE_PARENTS, effectiveClosedModules } from "./permissionModules.js";
 
 // Resource scopes. A scope names the club or team the row belongs to, the
 // independent coach's own workspace ("private", the coach's user id), or
@@ -355,8 +361,8 @@ const WORKSPACE_SCOPE_TYPES = Object.freeze({
 // through on GET / only, which is org.view; a module's VIEW pull request (or R4-3/R4-4 for Settings) adds its words here
 // together with the route that lets them through.
 export const VIEW_WORKSPACE_USABLE_WORDS = Object.freeze({
-  club_view: Object.freeze(["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "dashboards.view"]),
-  team_view: Object.freeze(["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "dashboards.view"]),
+  club_view: Object.freeze(["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view"]),
+  team_view: Object.freeze(["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view"]),
 });
 
 // The closed modules (the club's ceiling, contract 7.1) of the ACTIVE workspace's club, for /me's navigation (5.1):

@@ -1,3 +1,6 @@
+import {validReferencePreview,referencePreviewWidgets,referencePreviewFingerprint,assertReferenceSource} from '../dashboardReferences/preview.js';
+import { attachReferenceResults } from "../dashboardReferences/query.js";
+import { resolveReferenceContext } from "../dashboardReferences/access.js";
 import {attachGalleryResult,galleryAvailable,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { pageDatabaseEnabled } from '../dashboardPages/config.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
@@ -784,7 +787,7 @@ router.post("/:dashboardId/widgets/:widgetId/series/:seriesId/resolve", async (r
 // filter, using the current active data workspace.
 // ------------------------------------------------------------
 
-const QUERY_DASHBOARD_KEYS = ["dateFrom", "dateTo", "athleteIds", "activityId", "componentId", "widgetIds", "shellFilter"];
+const QUERY_DASHBOARD_KEYS = ["dateFrom", "dateTo", "athleteIds", "activityId", "componentId", "widgetIds", "shellFilter", "referencePreview"];
 router.post("/:dashboardId/query", async (req, res, next) => {
   try {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
@@ -836,7 +839,8 @@ router.post("/:dashboardId/query", async (req, res, next) => {
       return res.status(404).json({ error: "notFound" });
     }
 
-    const targetWidgets = b.widgetIds ? widgets.filter((w) => b.widgetIds.includes(w.id)) : widgets;
+    if(b.referencePreview!==undefined&&!validReferencePreview(b.referencePreview))return res.status(400).json({error:"invalidRequest"});
+    let targetWidgets = b.widgetIds ? widgets.filter((w) => b.widgetIds.includes(w.id)) : widgets;
     if (targetWidgets.length > MAX_WIDGETS_PER_QUERY) return res.status(400).json({ error: "invalidRequest", message: `Cannot query more than ${MAX_WIDGETS_PER_QUERY} widgets at once.` });
 
     // The runtime filter carries ONLY the keys the request body actually
@@ -852,10 +856,17 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     let shellFilter;
     try { shellFilter = normalizeShellFilter(b.shellFilter); }
     catch { return res.status(400).json({ error: "invalidRequest" }); }
+    if(b.referencePreview!==undefined){
+      if(process.env.DASHBOARD_REFERENCES_ENABLED!=='true'||!canManageDashboardRow(req,dashboard))return res.status(404).json({error:'notFound'});
+      const ctx=await resolveReferenceContext(req);targetWidgets=referencePreviewWidgets(targetWidgets,b.referencePreview,ctx?.owner.clubId);await assertReferenceSource(query,b.referencePreview.referenceConfig,ctx.owner.clubId,ctx.workspace,widgets.find(w=>w.id===b.referencePreview.widgetId)?.presentation_config?.referenceConfig);
+    }
     const result = await queryDashboardForViewer(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter }, { namedAthletes: dashboardNamedAthletesAllowed(req, dataWorkspace) });
     const galleryWidgets=await hydrateGalleryWidgets(query,targetWidgets);
     const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
-    res.json({ dashboardRevision: dashboard.revision, widgets: result.map((widget) => attachGalleryResult(galleryWidgets.find(w=>w.id===widget.widgetId),{ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
+    const referenceEnabled=process.env.DASHBOARD_REFERENCES_ENABLED==='true';
+    const referenceContext=referenceEnabled&&targetWidgets.some(w=>w.presentation_config?.referenceConfig)?await resolveReferenceContext(req):null;
+    const referenced=await attachReferenceResults({query,widgets:targetWidgets,results:result,workspace:dataWorkspaceQueryArgs(dataWorkspace),period:{dateFrom:b.dateFrom,dateTo:b.dateTo},defaultFilter:dashboard.default_filter,requestFilter,shellFilter,referenceClubId:referenceContext?.owner.clubId,enabled:referenceEnabled});
+    res.json({ ...(b.referencePreview?{referencePreviewFingerprint:referencePreviewFingerprint({binding:b.referencePreview,period:[b.dateFrom,b.dateTo],filter:requestFilter,shellFilter,results:referenced})}:{}), dashboardRevision: dashboard.revision, widgets: referenced.map((widget) => attachGalleryResult(galleryWidgets.find(w=>w.id===widget.widgetId),{ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
   } catch (error) {
     respondToServiceError(res, next, error);
   }

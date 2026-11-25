@@ -13,6 +13,7 @@ if (needsModuleMocksRelaunch()) {
   mock.module("../src/workspace.js", { namedExports: {
     resolveActiveWorkspace: async () => ({ workspace }),
     // moduleView.js (the athletes gate, roles V-2) reads these; an account without a role assignment never calls them.
+    rememberReadOnlyWorkspace: () => { throw new Error('No gate handoff in this isolated route-handler test'); },
     VIEW_WORKSPACE_TYPES: new Set(["club_view", "team_view"]),
     pickFallbackWorkspace: () => null,
     resolveActiveWorkspaceReadOnly: async () => ({ workspace, availableWorkspaces: [] }),
