@@ -677,13 +677,10 @@ test("8. athletes (athletes.view): a view workspace reads its club's or team's a
     const org = await orgOf(w.adminB);
     assert.deepEqual(org.athletes.map((a) => String(a.id)).sort(), clubIds, "mixed: club A's organization athletes");
     assert.deepEqual(has(JSON.stringify(org), foreign), [], "mixed: nothing of club B");
-    // Pinned, not changed by V-2 (recorded in the plan's section 10): a read the athletes gate hands on unchanged still
-    // answers from the account's OLD roles, whatever the active workspace - club B's admin reads its club B athlete's
-    // plans while in club_view A, as before V-2. The view role itself gives nothing there.
-    assert.equal((await srv.api(w.adminB.cookie, `/api/athletes/${athB.id}/plans`)).status, 200, "mixed hand-on read: club B, its old role, as before");
+    // Central handoff supersedes V-2's recorded legacy fallback: old roles elsewhere give no authority here.
+    assert.equal((await srv.api(w.adminB.cookie, `/api/athletes/${athB.id}/plans`)).status, 403, "central handoff: old club B role gives no authority in club_view A");
     assert.equal((await srv.api(w.adminB.cookie, `/api/athletes/${w.athA.id}/plans`)).status, 403, "mixed hand-on read: nothing of club A through the view role");
-    // The view role gives no write in club A (organization writes check the old roles, as before V-2; a write for
-    // club B, which it administers, is unchanged by the active workspace and is not a V-2 question).
+    // Neither club A's view role nor club B's old role can write from club_view A.
     await writesLandNothing(w.adminB, [["POST", "/api/organization/athletes", { fullName: "Nope Vtwo", clubId: w.A }],
       ["PUT", `/api/organization/athletes/${w.athA.id}`, { fullName: "Nope Vtwo" }]], 403);
   } finally {
@@ -893,4 +890,44 @@ test("9. Tests (tests.view, tests.results.view): club_view and team_view read th
     await ceiling(pa, [], ["tests"]);
   }
   assert.ok(idsOf(ok(await srv.api(w.adminA.cookie, `${T}/schedules`)).schedules).includes(String(schedA.id)), "reopened");
+});
+
+async function handoffRowState(){
+ const names=Object.keys(await snapshot());const state={};for(const name of names){const [schema,table]=name.split('.');if(!/^[a-z_0-9]+$/.test(schema)||!/^[a-z_0-9]+$/.test(table))throw Error('Unexpected test table');state[name]=(await k.query("select md5(coalesce(string_agg(to_jsonb(t)::text,chr(10) order by to_jsonb(t)::text),'')) digest from "+schema+'.'+table+' t')).rows[0].digest;}return state;
+}
+
+// One real-route sweep over every currently mounted module entry gate, including organization.
+test('10. mixed-account central handoff: both view workspaces answer like the SAME actor without old roles across modules, with no writes',async()=>{
+ const role=await roleOf(Object.values(MODULE_VIEW_WORDS));
+ const who=await person('mixedBoundary',async id=>{await F.grantClub(id,w.B);await F.grantTeam(id,w.TB1);await F.grantIndependent(id);await F.grantPlatform(id);});
+ await grant(w.adminA,who.id,role.id,'club',w.A);await grant(w.adminA,who.id,role.id,'team',w.TA1);
+ const athlete=ok(await srv.api(w.adminB.cookie,'/api/organization/athletes',{method:'POST',body:{fullName:'Boundary Beta',clubId:w.B,teamId:w.TB1}}),201).athlete;
+ const personal=ok(await srv.api(w.adminB.cookie,'/api/organization/athletes',{method:'POST',body:{fullName:'Boundary Personal',clubId:w.B}}),201).athlete;
+ await k.query("insert into public.user_athletes(user_id,athlete_id,relationship_type,is_active) values($1,$2,'coach',true)",[who.id,personal.id]);
+ const routes=[
+  ['GET','/api/athletes/'+personal.id+'/plans'],
+  ['GET','/api/athletes/'+athlete.id+'/plans'],['GET','/api/admin/athletes/'+athlete.id+'/program-data'],
+  ['GET','/api/athletes/today'],['GET','/api/athletes/training-days?from=2026-11-01&to=2026-11-30'],
+  ['POST','/api/organization/athletes',{fullName:'Must not exist',clubId:w.B}],
+  ['PUT','/api/organization/athletes/'+athlete.id,{fullName:'Must not change'}],
+  ['POST','/api/training-load/sources/metrics/variables',{name:'Never',valueType:'numeric'}],
+  ['POST','/api/taxonomy/node-presets',{name:'Never'}],['POST','/api/training-activity/session-types',{name:'Never'}],
+  ['POST','/api/positions',{requestKey:key(),name:'Never'}],
+  ['GET','/api/calendar/settings?clubId='+w.B],['POST','/api/calendar/events',{title:'Never',clubId:w.B}],
+  ['GET','/api/tests/today'],['POST','/api/tests/schedules',{name:'Never'}],
+  ...['/api/athletes','/api/training-load/sources/metrics','/api/taxonomy','/api/positions','/api/calendar','/api/tests'].map(p=>['GET',p+'/not-a-real-route'])
+ ];
+ const replies=async()=>{const out=[];for(const [method,path,body] of routes){const r=await srv.api(who.cookie,path,{method,...(body?{body}:{})});out.push({method,path,status:r.status,text:r.text});}return out;};
+ for(const [type,scope]of [['club',w.A],['team',w.TA1]]){
+  await setPref(who,type,scope);assert.equal((await me(who)).activeWorkspace.type,type+'_view');
+  const before=await snapshot(),beforeRows=await handoffRowState(),pref=(await k.query('select * from public.user_workspace_preferences where user_id=$1',[who.id])).rows;
+  const mixed=await replies();assert.equal(mixed[0].status,200,'actor-owned relationship remains as for the same actor without old roles');assert.ok(mixed.every(r=>r.status!==500),'no exception masquerades as refusal');assert.deepEqual(changed(before,await snapshot()),[],'no inserted/deleted row across schemas');assert.deepEqual(await handoffRowState(),beforeRows,'no existing row changed across application schemas');
+  assert.equal((await k.query('select full_name from public.athletes where id=$1',[athlete.id])).rows[0].full_name,'Boundary Beta','no existing athlete update');
+  assert.deepEqual((await k.query('select * from public.user_workspace_preferences where user_id=$1',[who.id])).rows,pref,'no workspace preference write');
+  try{
+   for(const table of ['user_global_roles','user_club_roles','user_team_roles'])await k.query('update public.'+table+' set is_active=false where user_id=$1',[who.id]);
+   const roleless=await replies();assert.deepEqual(mixed,roleless,type+'_view uses no old authority but preserves route-specific response');
+  }finally{for(const table of ['user_global_roles','user_club_roles','user_team_roles'])await k.query('update public.'+table+' set is_active=true where user_id=$1',[who.id]);}
+  assert.ok((await srv.api(who.cookie,'/api/auth/me')).body.user.availableWorkspaces.some(v=>v.type==='platform'),'auth still has the actual role roster');
+ }
 });

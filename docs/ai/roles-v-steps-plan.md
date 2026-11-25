@@ -1088,3 +1088,18 @@ runbook `docs/runbooks/roles-licence-hierarchy-v96.md`.
 - **After `main` took v97 (P3 references, `202611291000`):** production applies v96 after v97. The v96 suite and the
   rehearsal now build in that order; test 1c covers the fresh order (v96 first, the same bodies, and the v96 rollback
   refusing after the later v97). v97 touches none of v96's functions.
+
+
+## 14. Mixed-account central fix (before the last V step)
+
+Owner-approved order, 2026-11-25: this fix first, then V-6 (#772), V-7 (#773), V-5b (section 13), then close the V package. M steps and PL-1..PL-5 remain later.
+
+The central rule is **roleless handoff**. When a resolved club_view/team_view request is not an authorized listed read, viewEntryGate replaces only that request's authorization context with a fresh no-old-role context before invoking the router's refusal/handoff callback. All legacy role arrays, permissions, managed teams, athlete/coach flags and cached capabilities are empty/false; stale moduleView is removed. The authenticated user/session identity and stored role rows are never changed. This supersedes section 10's recorded behavior where a handed-on athlete plan read could still use club B's old role while club_view A was active.
+
+organizationEntryGate applies the same rule **before** its coach-capability shortcut. Its allowed GET / retains the existing R4 reduced, workspace-scoped read; other view requests cannot reach an organization write through roles elsewhere.
+
+The resolved read-only workspace snapshot is associated with the fresh authorization object and actor id in a WeakMap. Both workspace resolvers reuse it: a legacy handler cannot re-resolve a different coach workspace, write a fallback preference, or borrow another actor/request's snapshot. The cache is not keyed by a user id globally and no shared user object is modified.
+
+**Boundary:** this does not open any V-6/V-7/V-5b read, add a permission word, change MANAGE rights or add a migration. Currently mounted module entry gates inherit it; future V steps inherit it when their gates are mounted. Ungated legacy routers are not claimed to have been converted by this slice. Router-specific refusal statuses/bodies and unknown-route behavior remain their existing no-old-role answers, not a new blanket 403. Personal/self relationships that the same authenticated actor can read without old roles remain unchanged; there is no invented actor id or claim that roleless always means an empty answer.
+
+**Evidence contract:** the unit sweep applies the shared gate to every MODULE_VIEW_WORDS entry and both view types, including listed GET refusal for a missing word/closed licence, cleared cached capabilities, stale context and actor/request isolation. One real HTTP sweep covers every currently mounted gate (data configuration, presets, athletes, calendar, tests/results, plus organization), both view types, and a mixed actor with platform/independent/club/team roles elsewhere. It compares the SAME actor with those old rows temporarily disabled in the disposable fixture, checks a legitimate personal relationship, snapshots all application row counts/digests and preferences, and leaves auth/workspace selection intact. Temporary source/body mutations are run separately from the clean full gate.
