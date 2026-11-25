@@ -1360,7 +1360,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   const days = [];
   for (const [date, items] of byDate) {
     items.sort(compareCards);
-    days.push({ date, items: items.map((card) => publicCard(card, includeAthletes, { athleteViewer: ctx.type === "athlete" })) });
+    days.push({ date, items: items.map((card) => publicCard(card, includeAthletes, { athleteViewer: ctx.type === "athlete", hideAthleteIds: ctx.athleteNames === false })) });
   }
   return { from, to, today, workspace: { type: ctx.workspace.type, scopeId: ctx.workspace.scopeId ?? null }, teams, days };
 }
@@ -1389,7 +1389,8 @@ async function readQuestionTestFolds(cards) {
 
 // `athleteViewer`: the athlete workspace's answer. Its event cards return early below, but its planned and RPE cards
 // share the generic branch with a coach's, so `holdsImport` is gated on the viewer, never on the card (K5-2, Q11).
-function publicCard(card, includeAthletes, { athleteViewer = false } = {}) {
+// `hideAthleteIds` (roles V-3, P-1): a view workspace without athletes.view gets the counts, never which athletes.
+function publicCard(card, includeAthletes, { athleteViewer = false, hideAthleteIds = false } = {}) {
   // The athlete's own view of an event (D21): name, kind, date, time, place,
   // status (planned / cancelled) and teams — never a count, a teammate, a
   // note or a link beyond the event's id. K2b-1d2: the type's icon and colour
@@ -1412,7 +1413,7 @@ function publicCard(card, includeAthletes, { athleteViewer = false } = {}) {
   const out = {
     key: card.key, kind: card.kind, date: card.date, title: card.title,
     slot: card.slot, startTime: card.startTime, startsAt: card.startsAt,
-    teamIds: [...card.teamIds].sort(), athleteIds, athleteCount: athleteIds.length,
+    teamIds: [...card.teamIds].sort(), athleteIds: hideAthleteIds ? [] : athleteIds, athleteCount: athleteIds.length,
     expects: card.expects, status: card.status,
     rpe: card.rpe, attendance: card.attendance, results: card.results,
     cancelled: card.cancelled, projected: card.projected,

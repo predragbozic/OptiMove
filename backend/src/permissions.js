@@ -220,6 +220,8 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   // Roles V-1 (docs/ai/roles-v-steps-plan.md sections 2.1 and 2.2): Data configuration and Tags, presets and session types.
   "variables.view": Object.freeze(["sourceMetricAccess.js", "canonicalVariableAdminService.js"]),
   "presets.use": Object.freeze(["routes/taxonomy.js", "sessionTypeService.js"]),
+  // Roles V-3 (docs/ai/roles-v-steps-plan.md section 2.4): the calendar (reads, events, Settings -> Calendar).
+  "calendar.view": Object.freeze(["calendarModuleContext.js"]),
 });
 
 // The checked words as a list (R2's name, kept for its callers): the words /me may offer and the only words a role
@@ -231,8 +233,8 @@ export const HONOURED_PERMISSIONS = Object.freeze(Object.keys(ENFORCED_PERMISSIO
 // is not checked acts nowhere: no route asks for it.
 export const STORABLE_PERMISSIONS = Object.freeze([
   ...HONOURED_PERMISSIONS,
-  // The rest of the VIEW package (variables.view and presets.use are checked since roles V-1, so listed above).
-  "athletes.view", "programs.view", "exercises.use", "calendar.view", "load.view.team",
+  // The rest of the VIEW package (variables.view, presets.use (V-1) and calendar.view (V-3) are checked: listed above).
+  "athletes.view", "programs.view", "exercises.use", "load.view.team",
   "load.view.athlete", "dashboards.view", "tests.view", "tests.results.view",
 ]);
 
@@ -344,8 +346,8 @@ const WORKSPACE_SCOPE_TYPES = Object.freeze({
 // through on GET / only, which is org.view; a module's VIEW pull request (or R4-3/R4-4 for Settings) adds its words here
 // together with the route that lets them through.
 export const VIEW_WORKSPACE_USABLE_WORDS = Object.freeze({
-  club_view: Object.freeze(["org.view", "variables.view", "presets.use"]),
-  team_view: Object.freeze(["org.view", "variables.view", "presets.use"]),
+  club_view: Object.freeze(["org.view", "variables.view", "presets.use", "calendar.view"]),
+  team_view: Object.freeze(["org.view", "variables.view", "presets.use", "calendar.view"]),
 });
 
 // The closed modules (the club's ceiling, contract 7.1) of the ACTIVE workspace's club, for /me's navigation (5.1):

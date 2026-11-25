@@ -6,19 +6,36 @@
 //                              question is not hers or the switch is off
 import { Router } from "express";
 import { myOpenQuestions, postponeQuestion } from "../calendarQuestionService.js";
-import { calendarCommand, calendarContextOf, respondCalendarError } from "./calendarRouteErrors.js";
+import { respondCalendarError } from "./calendarRouteErrors.js";
+import { resolveCalendarContext } from "../calendarAccess.js";
+
+// Roles V-3: the athlete's own questions have no coach side, so they keep the plain calendar context (no calendar.view
+// check, no entry gate): a coach still gets [] and a refusal as before.
+async function questionsContextOf(req) {
+  const ctx = await resolveCalendarContext(req);
+  ctx.authz = req.authz;
+  return ctx;
+}
 
 const router = Router();
 
 router.get("/mine", async (req, res) => {
   try {
-    const ctx = await calendarContextOf(req);
+    const ctx = await questionsContextOf(req);
     res.set("Cache-Control", "no-store").json(await myOpenQuestions(ctx));
   } catch (error) {
     respondCalendarError(req, res, error, { read: true, readMessage: "The questions could not be read." });
   }
 });
 
-router.post("/:questionId/later", calendarCommand((ctx, req) => postponeQuestion(ctx, req.params.questionId, req.body)));
+router.post("/:questionId/later", async (req, res) => {
+  try {
+    const ctx = await questionsContextOf(req);
+    const outcome = await postponeQuestion(ctx, req.params.questionId, req.body);
+    res.status(outcome.status).json(outcome.body);
+  } catch (error) {
+    respondCalendarError(req, res, error);
+  }
+});
 
 export default router;

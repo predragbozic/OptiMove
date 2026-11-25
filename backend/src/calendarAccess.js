@@ -50,6 +50,20 @@ export async function resolveCalendarContext(req) {
   return { type: "coach", workspace, activityScope, userId: req.user.id };
 }
 
+// Roles V-3: the workspace whose DATA a calendar read shows: the active one, or for a view workspace's read the club or
+// team it names (`view`, set only by calendarModuleContext.js from the entry gate, never from a request's input). The
+// read scopes below use it; a write never does (it keeps ctx.workspace, which no write rule recognizes for a view).
+export function calendarReadWorkspace(ctx) {
+  if (!ctx.view) return ctx.workspace;
+  return { scopeType: ctx.view.type, scopeId: ctx.view.id, clubId: ctx.view.clubId, view: true };
+}
+// The base kind ("platform", "club", "team", "private_coach") of the workspace a read shows, or null.
+function readWorkspaceType(ctx) {
+  const ws = calendarReadWorkspace(ctx);
+  if (!ws) return null;
+  return ws.view ? ws.scopeType : ws.type;
+}
+
 // The active teams of the club bound as $<paramIndex>.
 function clubTeamsSql(paramIndex) {
   return `(select t_c.id from public.teams t_c where t_c.club_id = $${paramIndex} and coalesce(t_c.is_active, true))`;
@@ -131,19 +145,20 @@ export function calendarAthleteScopeSql(ctx, alias, params, fromExpr, toExpr = f
     params.push(ctx.athleteId);
     return `${alias}.id = $${params.length}`;
   }
-  const workspace = ctx.workspace;
-  if (workspace.type === "platform") return "true";
-  if (workspace.type === "club") {
+  const workspace = calendarReadWorkspace(ctx);
+  const readType = readWorkspaceType(ctx);
+  if (readType === "platform") return "true";
+  if (readType === "club") {
     params.push(workspace.scopeId);
     const n = params.length;
     return membershipOnDaySql(`${alias}.id`, (m) => `((${m}.membership_type = 'club' and ${m}.club_id = $${n}) or (${m}.membership_type = 'team' and ${m}.team_id in ${clubTeamsSql(n)}))`, fromExpr, toExpr);
   }
-  if (workspace.type === "team") {
+  if (readType === "team") {
     params.push(workspace.scopeId);
     const n = params.length;
     return membershipOnDaySql(`${alias}.id`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = $${n})`, fromExpr, toExpr);
   }
-  if (workspace.type === "private_coach") {
+  if (readType === "private_coach") {
     params.push(ctx.userId);
     return `exists (select 1 from public.user_athletes ua_s where ua_s.athlete_id = ${alias}.id and ua_s.user_id = $${params.length} and ua_s.is_active = true)`;
   }
@@ -173,23 +188,24 @@ export function calendarActivityScopeSql(ctx, alias, params) {
 // external and test schedules, `event_id` for calendar.event_targets (K2a).
 export function calendarScheduleStructuralSql(ctx, alias, targetsTable, params, idColumn = "schedule_id") {
   if (ctx.type === "athlete") return "false";
-  const workspace = ctx.workspace;
-  if (workspace.type === "platform") return "true";
-  if (workspace.type === "club") {
+  const workspace = calendarReadWorkspace(ctx);
+  const readType = readWorkspaceType(ctx);
+  if (readType === "platform") return "true";
+  if (readType === "club") {
     params.push(workspace.scopeId);
     const n = params.length;
     return `((${alias}.owner_scope = 'club' and ${alias}.owner_club_id = $${n}) or (${alias}.owner_scope = 'team' and ${alias}.owner_team_id in ${clubTeamsSql(n)})
              or exists (select 1 from ${targetsTable} tg where tg.${idColumn} = ${alias}.id
                           and ((tg.target_kind = 'club' and tg.target_club_id = $${n}) or (tg.target_kind = 'team' and tg.target_team_id in ${clubTeamsSql(n)}))))`;
   }
-  if (workspace.type === "team") {
+  if (readType === "team") {
     params.push(workspace.scopeId);
     const n = params.length;
     return `((${alias}.owner_scope = 'team' and ${alias}.owner_team_id = $${n})
              or exists (select 1 from ${targetsTable} tg where tg.${idColumn} = ${alias}.id
                           and ((tg.target_kind = 'team' and tg.target_team_id = $${n}) or (tg.target_kind = 'club' and tg.target_club_id = (select t_t.club_id from public.teams t_t where t_t.id = $${n})))))`;
   }
-  if (workspace.type === "private_coach") {
+  if (readType === "private_coach") {
     params.push(ctx.userId);
     return `(${alias}.owner_scope = 'user' and ${alias}.owner_user_id = $${params.length})`;
   }
@@ -224,7 +240,8 @@ export function calendarScheduleCandidateSql(ctx, alias, targetsTable, params, f
            or (tg.target_kind = 'team' and ${membershipOnDaySql(`$${n}`, (m) => `(${m}.membership_type = 'team' and ${m}.team_id = tg.target_team_id)`, fromExpr, toExpr)})
            or (tg.target_kind = 'club' and ${membershipOnDaySql(`$${n}`, (m) => `(${m}.membership_type = 'club' and ${m}.club_id = tg.target_club_id)`, fromExpr, toExpr)})))`;
   }
-  if (ctx.workspace.type === "platform") return "true";
+  const readType = readWorkspaceType(ctx);
+  if (readType === "platform") return "true";
   const structural = calendarScheduleStructuralSql(ctx, alias, targetsTable, params, idColumn);
   // A target the scope reaches only through athletes: a direct athlete
   // target, or a team / club target with an athlete who was both in the
@@ -284,8 +301,9 @@ export function calendarActivityFilterSql(alias, filters, params) {
 // the colour its own club chose.
 export async function loadWorkspaceTeams(ctx) {
   if (ctx.type !== "coach") return [];
-  const workspace = ctx.workspace;
-  if (workspace.type === "platform") {
+  const workspace = calendarReadWorkspace(ctx);
+  const readType = readWorkspaceType(ctx);
+  if (readType === "platform") {
     const result = await query(
       `select t.id, t.name, ts.color_key, c.id as club_id, c.name as club_name,
               (select count(*)::int from public.athlete_memberships am where am.team_id = t.id and am.membership_type = 'team' and am.status = 'active') as athlete_count
@@ -300,8 +318,8 @@ export async function loadWorkspaceTeams(ctx) {
       clubId: row.club_id, clubName: row.club_name,
     }));
   }
-  if (workspace.type !== "club" && workspace.type !== "team") return [];
-  const where = workspace.type === "club" ? "t.club_id = $1 and coalesce(t.is_active, true)" : "t.id = $1";
+  if (readType !== "club" && readType !== "team") return [];
+  const where = readType === "club" ? "t.club_id = $1 and coalesce(t.is_active, true)" : "t.id = $1";
   const result = await query(
     `select t.id, t.name, ts.color_key,
             (select count(*)::int from public.athlete_memberships am where am.team_id = t.id and am.membership_type = 'team' and am.status = 'active') as athlete_count

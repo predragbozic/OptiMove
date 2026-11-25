@@ -512,12 +512,20 @@ async function reducedViewOf(row, ctx, queryable) {
   // readScheduleTargetAthletes expands team and club targets to their
   // members; the reduced view lists only the athletes who are targets
   // themselves, plus the structural team / club targets.
+  // Roles V-3: a view workspace reads the club or team it names (ctx.view); its athlete targets are
+  // listed only with athletes.view (P-1), otherwise they are counted (`hiddenAthleteTargets`).
+  const readClub = ctx.view ? (ctx.view.type === "club" ? ctx.view.id : null) : (ctx.workspace.type === "club" ? String(ctx.workspace.scopeId) : null);
+  const readTeamClub = ctx.view ? (ctx.view.type === "team" ? String(ctx.view.clubId || "") : null) : (ctx.workspace.type === "team" ? String(ctx.workspace.clubId || "") : null);
   const targets = [];
+  let hiddenAthleteTargets = 0;
   for (const t of row.targets || []) {
-    if (t.kind === "athlete" && athletes.has(String(t.id))) targets.push({ kind: "athlete", id: t.id, name: athletes.get(String(t.id)) });
+    if (t.kind === "athlete" && athletes.has(String(t.id))) {
+      if (ctx.athleteNames === false) hiddenAthleteTargets += 1;
+      else targets.push({ kind: "athlete", id: t.id, name: athletes.get(String(t.id)) });
+    }
     if (t.kind === "team" && teamIds.includes(String(t.id))) targets.push(t);
-    if (t.kind === "club" && ctx.workspace.type === "club" && String(ctx.workspace.scopeId) === String(t.id)) targets.push(t);
-    if (t.kind === "club" && ctx.workspace.type === "team" && String(ctx.workspace.clubId || "") === String(t.id)) targets.push(t);
+    if (t.kind === "club" && readClub !== null && readClub === String(t.id)) targets.push(t);
+    if (t.kind === "club" && readTeamClub !== null && readTeamClub === String(t.id)) targets.push(t);
   }
   return {
     id: row.id, ownerScope: row.owner_scope,
@@ -529,6 +537,7 @@ async function reducedViewOf(row, ctx, queryable) {
     status: row.status, cancelledAt: row.cancelled_at ? new Date(row.cancelled_at).toISOString() : null,
     expects: row.expects || [], revision: row.revision,
     targets, canManage: false,
+    ...(hiddenAthleteTargets > 0 ? { hiddenAthleteTargets } : {}),
   };
 }
 function addDay(iso, days = 1) {
@@ -597,6 +606,11 @@ async function teamClubId(queryable, teamId) {
   return row && row.active ? String(row.club_id) : null;
 }
 
+function viewCatalogOwner(view) {
+  if (view.type === "club") return { scope: "club", clubId: String(view.id), teamId: null, userId: null, teamClubId: null, teamActive: true };
+  return { scope: "team", clubId: null, teamId: String(view.id), userId: null, teamClubId: null, teamActive: true };
+}
+
 // GET /types — the types the active workspace may use, non-archived. An
 // archived team's workspace, or a team workspace of an archived club (nothing
 // can be created there), gets the router's one 404, as every write there.
@@ -604,7 +618,9 @@ async function teamClubId(queryable, teamId) {
 // for GET /types and the form's lists that come with it).
 export async function eventCatalogOwner(ctx) {
   if (ctx.type !== "coach") throw forbidden();
-  const owner = eventOwnerForWorkspace(ctx);
+  // Roles V-3: a view workspace's read (GET /types only) reads the catalog of the club or team it names; never an
+  // owner a write could use (eventOwnerForWorkspace answers none for it).
+  const owner = ctx.view ? viewCatalogOwner(ctx.view) : eventOwnerForWorkspace(ctx);
   if (owner?.scope === "team") {
     owner.teamClubId = await teamClubId(pool, owner.teamId);
     if (!owner.teamClubId) throw notFound();

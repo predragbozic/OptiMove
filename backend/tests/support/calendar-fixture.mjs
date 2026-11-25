@@ -67,7 +67,9 @@ export function addDays(iso, days) {
 export async function startCalendarApp({ label, migrations = calendarMigrations() }) {
   const baseDatabaseUrl = process.env.DATABASE_URL;
   if (!baseDatabaseUrl) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
-  const db = await createGpexeDisposableDb({ baseDatabaseUrl, label, migrations });
+  // Roles V-3: every calendar route asks can(calendar.view) for a coach workspace, so the server needs the role read
+  // (v84, v92) even on a database a suite builds only up to an earlier migration (a no-op when its list has them).
+  const db = await createGpexeDisposableDb({ baseDatabaseUrl, label, migrations, roleRead: true });
   const admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
