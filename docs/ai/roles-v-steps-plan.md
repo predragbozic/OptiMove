@@ -369,6 +369,39 @@ show names if P-1 is answered "names need `athletes.view`".
   athletes, the public program library and the system exercise library, all read-only.
 - **P-3:** the order of section 5 (the manager).
 
+**Decided (the owner, 2026-11-25, relayed by the manager): P-4, a licence hierarchy. Not built yet; it is built in
+V-5.**
+- Training Load is a parent module. Closing `training_load` in a club's licence closes every module under it. Each child
+  can still be closed on its own, as today.
+- The rule is server-side: the ceiling check of `can()` and of `public.user_has_permission` treats a closed parent as
+  closing its children. It is not only a UI rule.
+- The Club licence screen shows the children of a closed parent as closed, with the note "closed because Training Load
+  is closed".
+- Production already holds one club with `training_load`, `dashboards`, `data_configuration` and `imports` closed (the
+  owner's own test). Nothing there needs to change.
+
+For V-5 to settle (from the code at this branch, not yet a contract):
+- **The children.** The R4 modules of `permissions.js` are flat: `training_load` holds only the `load.*` words (team and
+  athlete load views, schedule, roster decisions, estimates, activities). The owner names `dashboards`, `imports` and
+  `data_configuration` as children. V-5 lists the final set and asks the owner about the edge cases. `data_configuration`
+  also serves the variables of other modules. `calendar` and `tests` are separate modules today and are not named.
+- **Where the ceiling lives.** In two places:
+  - SQL: `public.permission_club_closed_modules(club)` (v92), read by `public.user_has_permission` and by
+    `loadAuthorizationContext` (`authz.js`, `closedModules` per held entry);
+  - code: `can()`'s `closedModules.includes(entry.module)` (`permissions.js`), `closedModulesForWorkspace` and the
+    frontend.
+
+  The simplest single place is `permission_club_closed_modules` returning the children of a closed parent too. Every
+  reader would then follow, and the screen still needs to tell "closed by itself" from "closed because Training Load is
+  closed". That is a migration (v96 is reserved for roles), with md5 preconditions on the bodies it replaces.
+- **v95's closed-module dominance** (`permission_club_role_version_items_guard`, `permission_custom_role_items_guard`
+  and their completeness checks) decides which words a club version or custom role may hold or drop while a module is
+  closed. With the hierarchy, a word of a child module counts as closed whenever `training_load` is closed. V-5
+  re-states and re-tests those guards with the derived set.
+- **The view steps.** `canView` and the module gate read the same `closedModules` through `can()`, so they follow
+  without their own change once the derived set is in place. `roles-v95-closed-module-dominance` and the sweep's licence
+  checks gain a "closed by the parent" case.
+
 The questions as they were asked:
 
 **P-1. Imena sportista u modulima.** Kada osoba ima pravo da gleda neki modul (npr. kalendar, testove ili trenažno
@@ -750,6 +783,11 @@ decided.
   - the licence closing reads and writes for role holders and the club's old roles.
 - Mutations killed: the coach path's `calendar.view` check dropped; the name gate forced open.
 - e2e: `roles-v3-view-calendar.test.mjs` at 1280, 390 and 360 px.
+- After the independent review of #768 (LOW, carried into V-4): without the athletes' names the calendar read also
+  ignores `athleteIds` (`routes/calendar.js`), so filtering by an athlete id cannot tell whether that athlete has events.
+  `roles-v-sweep` test 7 compares the filtered answer, for a real and a random id, with the unfiltered one (mutation
+  killed). `module-view-v0` test 12 calls `eventOwnerForWorkspace` and `eventWriteBasis` directly with a view context and
+  a platform admin's authz (mutation killed).
 - The suites that list the checked words take `calendar.view`, as V-1 did for its words: `me-permissions-r3` (both
   basic roles), `roles-r4-2-view-workspace` test 11 (/me; the calendar reads leave its list), `roles-r4-api` tests 1
   and 2, `roles-r4-3-api` tests 1, 2 and 6 (`dashboards.view` is now their unchecked word), `permission-roles-v84` 2b
@@ -763,3 +801,103 @@ decided.
   them. They are not usable: the target routes refuse a view workspace.
 - LOW (security): on the non-view path the workspace is resolved twice (the gate read-only, then the route), as in
   V-1. It can only fail closed.
+
+## 12. V-4 as built (Tests)
+
+Branch `feature/roles-v4-tests-view`, on `main` with V-2 and V-3 merged in. No migration.
+
+**The gate.** `routes/tests.js` mounts `viewEntryGate("tests", …)` with seven reads:
+- `GET /library`, `/schedules`, `/weekly` and `/schedules/:scheduleId`;
+- `GET /schedules/:scheduleId/group`, `/results` and `/results/:assessmentId`.
+
+Its refusal depends on the route:
+- **The athlete's own routes** (`/athlete/*`, `/assignments/*`) go on as before. They decide by the athlete profile, not
+  the workspace.
+- **Every other route** answers `403 {error:"Forbidden"}`, what `requireCoachWorkspace` answers an account without a
+  coach role. That includes `GET /today` (plan choice 2: it writes the day's occurrences) and every write. The gate
+  marks the request (`req.testsViewRefused`) and `requireCoachWorkspace` answers, so a path the router does not have
+  still gets the app's 404, as for an account with no role (`roles-r4-2-view-workspace` test 11 reads `/api/tests`).
+- **A mixed account** (an old role row elsewhere) in a view workspace is refused too. Before V-4 it passed
+  `requireCoachWorkspace` and read every club it administers.
+
+**The view reads.**
+- **Scope:** `scheduleReadScope` gives a view workspace `viewScheduleScope(req.moduleView)` (`testsAccess.js`): never a
+  person's own schedule (`userId` null), never every schedule. The club must be active (and for a team, the team and
+  its club).
+  - club view: the club's schedules and its active teams'.
+  - team view: the team's own schedules. Like its team's coach, a team view does not read the club's own schedules.
+- **One schedule:** `loadManageableSchedule` checks a GET of a view workspace with `viewScopeReadsSchedule`. A write
+  never takes that branch. Another club's schedule gives the 404 of a missing one.
+- **`GET /schedules/:id`:** never reads the group link. A view answer has no `link` block and so no `publicToken`
+  (plan choice 3); it carries `readOnly: true`.
+- **Results and the group:** a view workspace also needs `tests.results.view` (`canView(tests_results)` in the route),
+  otherwise 403.
+- **The week:** `GET /weekly` counts a schedule's results (`resultsCount`) only with `tests.results.view`; without it,
+  0. The day's completion counts (`counts`: completed, open, missed) are deliberately visible with `tests.view`, and
+  `counts.completed` is in practice the same number as `resultsCount`. So `tests.results.view` hides the scores, the
+  injuries and the per-athlete rows, not how many athletes answered.
+- **Names (P-1):** a view workspace gets no athlete names without `canView(athletes)` (open since V-2; with
+  `athletes.view` it gets the coach's shape: names, ids and targets). Without it:
+  - the schedule's athlete targets are dropped and counted (`hiddenAthleteTargets`);
+  - the group's and the results' `athleteId` and `athleteName` are null;
+  - the group's rows carry no `assignmentId`;
+  - the rows are no longer sorted by name (the group by state, window, then a hash of the assignment id; the results
+    newest first);
+  - the result's `athleteName` is null.
+
+**The coach paths (checked words).**
+- `manageableClubIds` / `manageableTeamIds` keep only the clubs and teams where the account holds the word:
+  `tests.view`, or `tests.results.view` for results.
+- `canManageSchedule` asks the same word at the schedule's club or team (`holds`, two literal `can()` calls).
+- **The group and Today keep their reach for a coach.** A coach opens a schedule's group (`GET /schedules/:id/group`,
+  the Today detail and its reminder) and its Today with `tests.view`. The scores and injuries need
+  `tests.results.view` at the schedule's club or team: without it they are null, and the group says `resultsHidden`.
+- A new schedule (`POST /schedules`, `/schedules/bulk`) needs `tests.view` at its owner scope.
+- A platform admin and a person's own schedule are unchanged (R4 Q10).
+- A licence that closes Tests therefore leaves the club out of its admin's lists, makes its schedules and results the
+  404, and refuses a new schedule there. Another club is unaffected.
+
+**Word lists.**
+- `ENFORCED_PERMISSIONS`: `tests.view` and `tests.results.view` → `testsAccess.js`.
+- `VIEW_WORKSPACE_USABLE_WORDS` gets both words.
+- `OPEN_VIEW_MODULES` gets `tests` and `tests_results` on both sides.
+- The frontend Tests place opens with `tests` only: results alone open nothing.
+- `roles-r4-checked-gates` B1: `testsAccess.js` 3.
+
+**Frontend** (`tests-view.js` `testsReadOnly`, `testsCoachSections`).
+- In a view workspace the sections are Schedule, Results (with `tests.results.view`) and Test Library; there is no
+  Today. Loading or a section click never lands on a missing section.
+- Schedule has no New check-in schedule. A schedule's detail is a read-only card: the targets (athletes counted), the
+  time and the state, with no action and no group link.
+- A result says "Athlete" where the name would be, and offers no Schedule again.
+- The Tests Today notification link stays Home in a view workspace (`viewModuleOfOpener`).
+
+**Tests.**
+- `roles-v-sweep` test 9:
+  - club_view and team_view, each against its own schedules;
+  - the token never in any answer, and no athlete name or id;
+  - another club's schedule and a missing id give the same 404;
+  - Today, the athlete's route and seven writes give the same status and body as an account with no role, and land
+    nothing; no read writes anything;
+  - one word without the other;
+  - a forged `club` preference;
+  - a mixed account;
+  - old-vs-new for the club admin (the link and the names);
+  - the licence closing the admin's list, reads and writes.
+- Mutations killed: the view branch that drops the link and the names; the coach path's word check forced true.
+- **Old-vs-new for the coaches:** the coach paths' regression is the Tests suites (`tests-module-*`,
+  `tests-weekly-calendar`, `tests-manual-reminder`, `tests-notification-worker`, `tests-athlete-device-timezone`),
+  which pass unchanged. They build their databases from the Tests migrations only, so they now also apply v84 and v92
+  (`applyRoleReadMigrations` of `_gpexe-disposable-db.mjs`, from V-2, a second runner call over a folder named `migrations_v2`). Test 9
+  also checks the club admin's link, names and scores, and the team coach's list, results and Today. No full-body
+  comparison against `main` is made.
+- e2e: `roles-v4-view-tests.test.mjs` at 1280, 390 and 360 px.
+- The suites that list the checked words take `tests.view` and `tests.results.view` (as for V-3 in section 11);
+  `roles-r4-2-view-workspace` test 11's /me list gets both.
+
+**Follow-ups (not built).**
+- A coach whose club version keeps `tests.view` but drops `tests.results.view` is not set up in a test (no fixture
+  for club role versions here); the rule is covered by the view holders and the mutation of `holds()`.
+- The weekly view's "Open in calendar" stays visible for a view holder without `calendar.view`; the calendar tab is
+  then not available to it.
+- The remaining reads of `routes/tests.js` that branch on the athlete (`/athlete/*`) are not part of V.

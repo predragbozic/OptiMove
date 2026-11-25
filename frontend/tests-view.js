@@ -1,4 +1,5 @@
-import { isAthleteMode } from "./access.js";
+import { isAthleteMode, isViewWorkspace } from "./access.js";
+import { viewModuleOpen } from "./view-modules.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
 import { els } from "./dom.js";
 import { revealActiveTab } from "./om-tabs.js";
@@ -6,6 +7,20 @@ import { renderImage } from "./media.js";
 import { renderOpenInCalendarHtml } from "./open-in-calendar.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, formatDayMonth, formatWeekday, initialsFor, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthMatrixIso } from "./utils.js";
+
+// Roles V-4 (docs/ai/roles-v-steps-plan.md section 2.5): in a view workspace the Tests area reads only: Schedule, Results
+// (with tests.results.view) and the Test Library; no Today (it writes the day's occurrences), no write control, and no
+// athlete's name (P-1: names need athletes.view, which a view workspace cannot use yet).
+export function testsReadOnly() {
+  return !isAthleteMode() && isViewWorkspace();
+}
+const COACH_SECTIONS = Object.freeze([["today", "Today"], ["schedule", "Schedule"], ["results", "Results"], ["library", "Test Library"]]);
+export function testsCoachSections() {
+  if (!testsReadOnly()) return COACH_SECTIONS;
+  return COACH_SECTIONS.filter(([value]) => value === "schedule" || value === "library" || (value === "results" && viewModuleOpen("tests_results")));
+}
+// The name a coach's screen shows for an athlete the answer did not name.
+const athleteLabel = (name) => (name ? name : "Athlete");
 
 function renderWellnessAvatar(form) {
   if (form.athleteImageUrl) return renderImage(form.athleteImageUrl, "wellness-avatar wellness-avatar-photo", form.athleteName);
@@ -69,7 +84,7 @@ export function renderTestsTabsHtml() {
   `;
   }
   // The coach's sections use the shared tab row (.om-tabs), the same as Settings.
-  const sections = [["today", "Today"], ["schedule", "Schedule"], ["results", "Results"], ["library", "Test Library"]];
+  const sections = testsCoachSections();
   return `
     <nav class="tests-section-tabs om-tabs" aria-label="Tests sections">
       ${sections.map(([value, label]) => {
@@ -265,7 +280,7 @@ function renderWellnessResultHtml(form, { backAction, backLabel = "" }) {
       <p class="muted">Lower is better</p>
       ${form.injuryReported ? `<p class="tests-injury-flag">You reported pain or injury today.</p>` : ""}
       ${form.canSubmit ? `<button type="button" class="plain-button compact-button" data-action="tests-correct-answer">Correct my answer</button>` : ""}
-      ${form.scheduleId ? `<button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(form.scheduleId)}">Schedule again</button>` : ""}
+      ${form.scheduleId && !testsReadOnly() ? `<button type="button" class="plain-button compact-button" data-action="tests-schedule-again" data-schedule-id="${escapeAttr(form.scheduleId)}">Schedule again</button>` : ""}
     </section>
   `;
 }
@@ -648,8 +663,9 @@ function renderCoachTodayGroupHtml(group, { date } = {}) {
         <span class="tests-count-chip tests-count-completed">${counts.completed} completed</span>
         <span class="tests-count-chip">${counts.pending} pending</span>
         <span class="tests-count-chip tests-count-missed">${counts.missed} missed</span>
-        <span class="tests-count-chip tests-count-injury">${counts.injuries} injuries</span>
+        ${group.resultsHidden ? "" : `<span class="tests-count-chip tests-count-injury">${counts.injuries} injuries</span>`}
       </div>
+      ${group.resultsHidden ? `<p class="muted">Scores and injuries are not shown for your role.</p>` : ""}
       <div class="tests-athlete-table">
         ${athletes.map((row) => `
           <div class="tests-athlete-row">
@@ -672,7 +688,7 @@ function renderCoachTodayGroupHtml(group, { date } = {}) {
 function renderCoachScheduleHtml() {
   return `
     <div class="tests-schedule-toolbar">
-      <button type="button" class="plain-button" data-action="tests-open-schedule-form">New check-in schedule</button>
+      ${testsReadOnly() ? "" : `<button type="button" class="plain-button" data-action="tests-open-schedule-form">New check-in schedule</button>`}
       <label class="tests-show-cancelled-toggle">
         <input type="checkbox" role="switch" data-action="tests-toggle-show-cancelled" ${state.tests.showCancelledSchedules ? "checked" : ""}>
         <span>Show cancelled schedules</span>
@@ -726,7 +742,21 @@ export function renderScheduleWeeklyHtml() {
 }
 
 function renderScheduleDetailHtml() {
-  const { schedule, targets, link } = state.tests.scheduleDetail;
+  const { schedule, targets, link, hiddenAthleteTargets } = state.tests.scheduleDetail;
+  if (testsReadOnly()) {
+    // Roles V-4: read only - who it is for (athletes counted, P-1) and when; no action, no group link.
+    const who = [...targets.map((t) => escapeHtml(t.name || "")).filter(Boolean),
+      ...(hiddenAthleteTargets ? [`${hiddenAthleteTargets} athlete${hiddenAthleteTargets === 1 ? "" : "s"}`] : [])];
+    return `
+    <section class="panel tests-schedule-detail is-read-only">
+      <button type="button" class="plain-button compact-button" data-action="tests-close-schedule">&larr; Back to schedules</button>
+      <h3>${escapeHtml(schedule.testName)} &middot; ${schedule.scheduleKind === "recurring" ? "Daily" : "One-time"}</h3>
+      <p class="muted">${escapeHtml(clockTime(schedule.opensTime))}&ndash;${escapeHtml(clockTime(schedule.closesTime))} ${escapeHtml(schedule.timezone)}</p>
+      <p>Targets: ${who.join(", ") || "none"}</p>
+      <p class="muted">${escapeHtml(({ active: "Active", paused: "Paused", cancelled: "Cancelled" })[schedule.status] || statusLabel(schedule.status))}. You can look at this schedule here; changes are made by the club's coaches.</p>
+    </section>
+  `;
+  }
   return `
     <section class="panel tests-schedule-detail">
       <button type="button" class="plain-button compact-button" data-action="tests-close-schedule">&larr; Back to schedules</button>
@@ -1452,7 +1482,8 @@ function renderResultsWeeklyHtml() {
     weekEnd: nav.data.weekEnd,
     selectedDate: nav.selectedDate,
     emptyAgendaText: "No results for this day. Results appear here once athletes complete a check-in.",
-    emptyAgendaAction: `<button class="om-btn" type="button" data-action="tests-section" data-section="today">See today's check-ins</button>`,
+    // A view workspace has no Today (roles V-4), so no way there.
+    emptyAgendaAction: testsReadOnly() ? "" : `<button class="om-btn" type="button" data-action="tests-section" data-section="today">See today's check-ins</button>`,
     renderSessionRow: (session, date) => renderWeeklySessionRowShell({
       dataAction: "tests-weekly-open-results",
       dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}" data-date="${escapeAttr(date)}"`,
@@ -1482,7 +1513,7 @@ function renderCoachResultsListHtml() {
       ${rows.map((row) => `
         <button class="panel tests-assignment-card" type="button" data-action="tests-open-result" data-assessment-id="${escapeAttr(row.assessmentId)}">
           <div class="tests-assignment-card-head">
-            <span class="tests-assignment-card-title">${escapeHtml(row.athleteName)}</span>
+            <span class="tests-assignment-card-title">${escapeHtml(athleteLabel(row.athleteName))}</span>
             <span class="muted">${escapeHtml(formatDateTime(row.completedAt))}</span>
           </div>
           <p class="tests-score-inline">Wellness score: ${row.wellnessScore != null ? row.wellnessScore.toFixed(1) : "-"}/10</p>
