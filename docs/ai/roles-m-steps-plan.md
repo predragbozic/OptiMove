@@ -50,6 +50,36 @@ replace a shared writer guard with a check that admits a caller-controlled word 
 Pin replaced function bodies, keep the runbook preflight/postcheck and rollback with catalogue
 comparison, and document when rollback must refuse. Production migration requires its own order.
 
+### Database cutover and rollback
+
+The migration creates a database-owned activation row, initially false. New application writes
+always call the new checked entry points and fail closed if the expected schema is unavailable.
+During the rolling deploy the old server still calls the old signatures. They may apply the old
+rules only while the activation row is false. The activation state is read under a transaction lock
+shared by Calendar writers. The activation transaction takes the conflicting lock and waits for
+admitted old transactions to finish. It takes no event or Settings row lock. Verify the ordering of
+this lock with the ceiling and writer locks using recorded SQL and a two-connection test.
+
+After the new build is healthy and the operator has verified that the old instances are drained,
+the authorized operator activates the database gate as a separate step. Confirm that every old
+signature now refuses, including a direct SQL call to the legacy v93 delete function. The v93
+delete and receipt guards must recognize the new checked path and independently refuse a legacy
+path after activation. Preserve old receipt hashes and payloads, with the current permission check
+before serving a replay. Prove Settings team defaults use the active club's Settings permission
+under lock, and a club admin acting on a team event uses the active club's event permission and
+the event's current club relationship. Preserve existing per-route 403 and 404 behavior including
+the platform create refusal when no writable workspace is selected.
+
+Before activation, reverting the application build is possible while the old path remains available.
+SQL rollback must refuse after a later migration, a changed function body, a grant or removal of the
+new words, a change to a seeded version or custom, or use of the new path that makes the restored
+state unsafe. Record the seed and first protected real use so the gates can prove those conditions.
+Take an exclusive cutover lock and require old/new writers to be quiescent before attempting rollback.
+After activation, treat rollback to the legacy binary as forward-fix only. Do not turn the switch
+off to make an old binary accept operations that the new policy refuses. Rehearse apply, pre-activation
+rollback, identical catalogue and reapply, and the refusal cases. Production activation requires
+its own recorded authorization and postcheck.
+
 ## Gate
 
 - Disposable HTTP tests cover existing native club/team, private coach and platform flows, a mixed
