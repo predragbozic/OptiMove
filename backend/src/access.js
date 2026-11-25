@@ -1,3 +1,5 @@
+import { can, clubScope, teamScope } from "./permissions.js";
+
 const PLATFORM_ROLES = new Set(["admin", "platform_admin", "general_admin"]);
 const CLUB_ROLES = new Set(["club_admin", "club_manager"]);
 const TEAM_ROLES = new Set(["team_admin", "team_coach", "team_trainer"]);
@@ -75,27 +77,51 @@ export function canAccessAllAthletes(req) {
   return Boolean(req?.authz?.platformRoles?.length);
 }
 
+// Roles V-2 (docs/ai/roles-v-steps-plan.md section 9): the clubs and teams of the account's OLD role rows
+// (req.authz.clubRoles / teamRoles, the same active rows the predicate below used to read in SQL) where the account may
+// view athletes - can(authz, "athletes.view", that club or team), so a club's own role version or its licence that
+// takes the word away removes those athletes from every reader of the predicate (R4 section 6). Computed once per call
+// from the request's authz snapshot; pure, no query. can() throws PermissionsUnavailableError (503) when the role tables
+// could not be read, for an account that has an old role row (fail closed). A platform admin never needs it (every
+// wrapper below short-circuits first).
+export function athleteViewScopes(req) {
+  const authz = req?.authz;
+  const clubIds = new Set();
+  const teamIds = new Set();
+  for (const r of authz?.clubRoles || []) {
+    const id = String(r.clubId);
+    if (!clubIds.has(id) && can(authz, "athletes.view", clubScope(id))) clubIds.add(id);
+  }
+  for (const r of authz?.teamRoles || []) {
+    const id = String(r.teamId);
+    if (!teamIds.has(id) && can(authz, "athletes.view", teamScope(id))) teamIds.add(id);
+  }
+  return { clubIds: [...clubIds], teamIds: [...teamIds] };
+}
+
 export function athleteListAccessFilter(req, athleteAlias = "a", startParam = 1) {
   if (!req?.user) return { sql: "and false", params: [] };
   if (canAccessAllAthletes(req)) return { sql: "", params: [] };
+  const { clubIds, teamIds } = athleteViewScopes(req);
   return {
-    sql: `and ${athleteAccessPredicate(athleteAlias, `$${startParam}`)}`,
-    params: [req.user.id],
+    sql: `and ${athleteAccessPredicate(athleteAlias, `$${startParam}`, `$${startParam + 1}`, `$${startParam + 2}`)}`,
+    params: [req.user.id, clubIds, teamIds],
   };
 }
 
 export async function canAccessAthlete(query, req, athleteId) {
   if (!req?.user) return false;
   if (canAccessAllAthletes(req)) return true;
+  const { clubIds, teamIds } = athleteViewScopes(req);
   const result = await query(
     `
     select 1
     from public.athletes a
     where (a.athlete_id = $1 or a.source_external_id = $1 or a.id::text = $1)
-      and ${athleteAccessPredicate("a", "$2")}
+      and ${athleteAccessPredicate("a", "$2", "$3", "$4")}
     limit 1
     `,
-    [athleteId, req.user.id],
+    [athleteId, req.user.id, clubIds, teamIds],
   );
   return result.rowCount > 0;
 }
@@ -103,6 +129,7 @@ export async function canAccessAthlete(query, req, athleteId) {
 export async function canAccessPlan(query, req, planId, { editable = false } = {}) {
   if (!req?.user) return false;
   if (canAccessAllAthletes(req)) return true;
+  const { clubIds, teamIds } = athleteViewScopes(req);
   const ownPlanStatus = editable
     ? "or p.created_by_user_id = $2"
     : "or (p.created_by_user_id = $2 and (p.visibility = 'private' or p.is_template = true))";
@@ -115,7 +142,7 @@ export async function canAccessPlan(query, req, planId, { editable = false } = {
       and (
         (p.visibility = 'public' and (not $3::boolean or not (p.plan_type = 'program' and p.is_template = true)))
         ${ownPlanStatus}
-        or (a.id is not null and ${athleteAccessPredicate("a", "$2")})
+        or (a.id is not null and ${athleteAccessPredicate("a", "$2", "$4", "$5")})
         or (
           p.plan_type = 'program'
           and p.is_template = true
@@ -196,7 +223,7 @@ export async function canAccessPlan(query, req, planId, { editable = false } = {
       )
     limit 1
     `,
-    [planId, req.user.id, Boolean(req.authz?.isAthlete)],
+    [planId, req.user.id, Boolean(req.authz?.isAthlete), clubIds, teamIds],
   );
   return result.rowCount > 0;
 }
@@ -207,10 +234,19 @@ export async function canAccessPlan(query, req, planId, { editable = false } = {
 // single FK column can never represent. Active access always comes from a
 // real, currently-active row: a direct login (athletes.user_id), an active
 // private-coach relationship (user_athletes), or an active club/team
-// membership (athlete_memberships) matching one of the viewer's own
-// club/team roles. Archived memberships never grant access - the EXISTS
-// checks below are always scoped to status = 'active'.
-export function athleteAccessPredicate(athleteAlias = "a", userParam = "$1") {
+// membership (athlete_memberships) matching one of the viewer's own LIVE
+// club/team role rows, and only in the clubs / teams of athleteViewScopes(req),
+// where the request's authz holds athletes.view (roles V-2: the word narrows,
+// the live row still decides, so a role revoked during a request closes access
+// as before). `clubsParam` / `teamsParam` are the
+// positions of those two uuid arrays; they are required, so a caller that was
+// not moved to the word fails loudly instead of reading the role tables.
+// Archived memberships never grant access - the EXISTS checks below are
+// always scoped to status = 'active'.
+export function athleteAccessPredicate(athleteAlias, userParam, clubsParam, teamsParam) {
+  if (!athleteAlias || !userParam || !clubsParam || !teamsParam) {
+    throw new Error("athleteAccessPredicate needs the athlete alias, the user parameter and the athletes.view club and team id arrays.");
+  }
   return `(
     ${athleteAlias}.user_id = ${userParam}
     or exists (
@@ -229,6 +265,7 @@ export function athleteAccessPredicate(athleteAlias = "a", userParam = "$1") {
         and tm.status = 'active'
       where utr.user_id = ${userParam}
         and utr.is_active = true
+        and utr.team_id = any(${teamsParam}::uuid[])
         and tm.athlete_id = ${athleteAlias}.id
     )
     or exists (
@@ -240,6 +277,7 @@ export function athleteAccessPredicate(athleteAlias = "a", userParam = "$1") {
         and cm.status = 'active'
       where ucr.user_id = ${userParam}
         and ucr.is_active = true
+        and ucr.club_id = any(${clubsParam}::uuid[])
         and cm.athlete_id = ${athleteAlias}.id
     )
   )`;
