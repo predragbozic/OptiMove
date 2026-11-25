@@ -83,8 +83,8 @@ before(async () => {
   assert.equal(`migrations_v2/${BEFORE_V66.at(-1)}`, V69_NAME, "and nothing later than v69");
   assert.ok(!BEFORE_V66.includes(V66));
   [rdb, db] = await Promise.all([
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66rb", migrations: BEFORE_V66 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66", migrations: [...BEFORE_V66, V66] }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66rb", migrations: BEFORE_V66, roleRead: true }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v66", migrations: [...BEFORE_V66, V66], roleRead: true }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });

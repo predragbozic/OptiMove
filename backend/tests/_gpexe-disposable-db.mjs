@@ -303,7 +303,9 @@ export const GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE = GPEXE_TEST_MIGRATI
 // `roleRead: true`: the runner applies v84 and v92 after the suite's own list (their seed guards need the runner's own
 // record in the same transaction), and their two records are then deleted, so every assertion about the database's
 // migration record (the last migration, "later migrations are applied", the list of names) sees the suite's own list
-// only. A state production never has (role objects without their record); for the server's role read only.
+// only. A state production never has (role objects without their record); for the server's role read only. When such a
+// suite later brings its database up to date (applyGpexeTestMigrations), the migrations between its own list and v84
+// apply after v84 and v92, the reverse of production's order.
 const FORGOTTEN_TABLE = "public.optimove_disposable_forgotten_migrations";
 export const ROLE_READ_MIGRATIONS = Object.freeze([
   "202611201300_roles_v84_permission_roles.sql",
