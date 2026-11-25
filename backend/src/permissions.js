@@ -220,10 +220,11 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   // Roles V-1 (docs/ai/roles-v-steps-plan.md sections 2.1 and 2.2): Data configuration and Tags, presets and session types.
   "variables.view": Object.freeze(["sourceMetricAccess.js", "canonicalVariableAdminService.js"]),
   "presets.use": Object.freeze(["routes/taxonomy.js", "sessionTypeService.js"]),
-  // Roles V-2 (the plan's sections 2.3 and 9): Athletes. access.js athleteViewScopes is the one gate of the access
-  // predicate's readers (Builder, templates, plans, tests, exercise media, the athlete list); the organization read and
-  // the athletes' positions check it at their workspace too.
-  "athletes.view": Object.freeze(["access.js", "routes/organization.js", "positionService.js"]),
+  // Roles V-2 (the plan's sections 2.3 and 9): Athletes. access.js holds its gates: athleteViewScopes, the arrays of the
+  // access predicate's readers (Builder, templates, plans, tests, exercise media, the athlete list, the organization
+  // read of a coach), and canViewAthletesAt (the organization read of a view workspace); the athletes' positions check
+  // it at their workspace.
+  "athletes.view": Object.freeze(["access.js", "positionService.js"]),
 });
 
 // The checked words as a list (R2's name, kept for its callers): the words /me may offer and the only words a role

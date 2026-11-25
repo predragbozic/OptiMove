@@ -7,7 +7,7 @@ import {
   loadAuthorizationContext,
 } from "../authz.js";
 import { can, clubScope, GLOBAL_SCOPE, teamScope } from "../permissions.js";
-import { athleteViewScopes } from "../access.js";
+import { athleteViewScopes, canViewAthletesAt } from "../access.js";
 import { destroySessionsForUser, hashPassword } from "../auth.js";
 import { createNotification } from "../notifications.js";
 import { resolveActiveWorkspace, VIEW_WORKSPACE_TYPES } from "../workspace.js";
@@ -445,9 +445,7 @@ async function viewWorkspaceOrganization(req, workspace, workspacePromise) {
   const clubId = isClubView ? scopeId : (workspace.clubId ? String(workspace.clubId) : null);
   const mayView = isClubView ? can(req.authz, "org.view", clubScope(scopeId)) : can(req.authz, "org.view", teamScope(scopeId));
   // Roles V-2: the athletes of the workspace, only with athletes.view there (P-1), in the reduced shape of loadViewAthletes.
-  const mayViewAthletes = isClubView
-    ? can(req.authz, "athletes.view", clubScope(scopeId))
-    : can(req.authz, "athletes.view", teamScope(scopeId));
+  const mayViewAthletes = canViewAthletesAt(req.authz, isClubView ? clubScope(scopeId) : teamScope(scopeId));
   const [clubsResult, teamsResult, users, athletes] = await Promise.all([
     mayView && isClubView
       ? query(`select id, name, short_name, logo_url, city, country from public.clubs where id = $1 and coalesce(is_active, true)`, [scopeId])

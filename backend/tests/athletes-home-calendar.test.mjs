@@ -16,7 +16,13 @@ if (needsModuleMocksRelaunch()) {
   let calls = [];
   let answer = [];
   mock.module("../src/db.js", { namedExports: { query: async (sql, params) => { calls.push({ sql, params }); return { rows: answer }; } } });
-  mock.module("../src/workspace.js", { namedExports: { resolveActiveWorkspace: async () => ({ workspace }) } });
+  mock.module("../src/workspace.js", { namedExports: {
+    resolveActiveWorkspace: async () => ({ workspace }),
+    // moduleView.js (the athletes gate, roles V-2) reads these; an account without a role assignment never calls them.
+    VIEW_WORKSPACE_TYPES: new Set(["club_view", "team_view"]),
+    pickFallbackWorkspace: () => null,
+    resolveActiveWorkspaceReadOnly: async () => ({ workspace, availableWorkspaces: [] }),
+  } });
   const { default: router } = await import("../src/routes/athletes.js");
   const request = (query = {}) => ({ user: { id: "coach-1" }, authz: { platformRoles: ["platform_admin"], athleteId: null }, query });
 

@@ -99,6 +99,13 @@ export function athleteViewScopes(req) {
   return { clubIds: [...clubIds], teamIds: [...teamIds] };
 }
 
+// May this account view the athletes of one club or team (a view workspace's own scope, roles V-2)? The one place a
+// scope-level athletes.view question is asked outside the predicate's arrays (routes/organization.js GET / for a view
+// workspace).
+export function canViewAthletesAt(authz, scope) {
+  return can(authz, "athletes.view", scope);
+}
+
 export function athleteListAccessFilter(req, athleteAlias = "a", startParam = 1) {
   if (!req?.user) return { sql: "and false", params: [] };
   if (canAccessAllAthletes(req)) return { sql: "", params: [] };
