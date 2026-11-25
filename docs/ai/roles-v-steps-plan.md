@@ -565,11 +565,15 @@ decided.
 - A view workspace names athletes only with `canView(athletes)`, which stays false until V-2 opens the Athletes
   module.
 - Without it:
-  - `?include=athletes` is left out of the answer (no `athletes` key, the counts stay);
+  - `?include=athletes` is left out of the answer (no `athletes` key);
+  - every card's `athleteIds` is empty and its `athleteCount` stays (counts only; the security review's MEDIUM);
   - the reduced event view lists no athlete target and counts them in `hiddenAthleteTargets`.
 - With it, the reduced view is the non-manager view a team coach gets today.
 - **For V-2:** when `athletes.view` is enforced, the calendar's name gate is `canView(athletes)` in
   `calendarModuleContext.js`, a call through `canView`, not a literal `can()`.
+
+- **The athlete's own questions** (`routes/calendarQuestions.js`, `/questions/mine` and *Later*) keep the plain
+  calendar context, with no gate and no word: they have no coach side (the code review's LOW).
 
 **Word lists.**
 - `ENFORCED_PERMISSIONS` gets `"calendar.view": ["calendarModuleContext.js"]`.
@@ -601,6 +605,15 @@ decided.
   - the licence closing reads and writes for role holders and the club's old roles.
 - Mutations killed: the coach path's `calendar.view` check dropped; the name gate forced open.
 - e2e: `roles-v3-view-calendar.test.mjs` at 1280, 390 and 360 px.
+- **Older suites:** `startCalendarApp` (`backend/tests/support/calendar-fixture.mjs`) builds its database with
+  `roleRead: true`. `central-calendar-k2b-settings` builds only up to v51, so a coach's `can(calendar.view)` failed
+  closed there (`503 permissions_unavailable`). It is a no-op for the suites whose list has v84 and v92.
+
+**Review notes, recorded (not built).**
+- LOW (security): non-event cards keep their `links` (session, activity and schedule ids), as a coach's reader sees
+  them. They are not usable: the target routes refuse a view workspace.
+- LOW (security): on the non-view path the workspace is resolved twice (the gate read-only, then the route), as in
+  V-1. It can only fail closed.
 
 ## 11. V-4 as built (Tests)
 
