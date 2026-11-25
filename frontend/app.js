@@ -4211,7 +4211,7 @@ function renderAthleteList() {
 
   renderAthleteListState();
 
-  els.athleteList.querySelectorAll("button.athlete-button").forEach((button) => {
+  els.athleteList.querySelectorAll(".athlete-button").forEach((button) => {
     button.addEventListener("click", () => {
       if (!confirmLeaveTrainingLoad("weekly")) return;
       state.selectedAthleteId = button.dataset.athleteId;

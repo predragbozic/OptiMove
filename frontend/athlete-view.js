@@ -29,7 +29,7 @@ export function renderAthleteListHtml(athletes, selectedAthleteId, { searching =
   };
   if (readOnly) {
     return sortAthletes(athletes).map((athlete) => `
-    <div class="athlete-button athlete-button-readonly">
+    <div class="athlete-button-readonly">
       ${avatarMarkup(athlete)}
       <span>
         <span class="athlete-name">${escapeHtml(athlete.athlete)}</span>
