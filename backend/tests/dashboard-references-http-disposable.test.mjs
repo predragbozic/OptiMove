@@ -38,6 +38,22 @@ test('foreign and missing reference identities return byte-identical 404s',async
  const foreign=await srv.api(other.cookie,R+'/'+table.id),missing=await srv.api(other.cookie,R+'/'+crypto.randomUUID());
  assert.deepEqual([foreign.status,foreign.text],[missing.status,missing.text]);assert.equal(foreign.status,404);
 });
+// Snapshot every reference row/receipt/use record and dashboard content, not only the target row.
+async function storedReferenceState(){
+ const tables=(await q.query("select tablename from pg_tables where schemaname='training_load' and (tablename like 'dashboard_reference_%' or tablename in ('dashboards','dashboard_pages','dashboard_widgets','dashboard_widget_series')) order by tablename")).rows;
+ const state={};for(const {tablename} of tables)state[tablename]=(await q.query("select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text),'[]'::jsonb)::text value from training_load."+tablename+' t')).rows[0].value;return state;
+}
+
+test('club A admin cannot draft, publish or archive club B tables; missing is identical and nothing is written',async()=>{
+ const other=await person('foreignTableWriter',id=>F.grantClub(id,B));const made=await post(other,R,{requestId:crypto.randomUUID(),name:'Protected Beta targets'});assert.equal(made.status,201,made.text);
+ const before=await storedReferenceState();
+ for(const [action,method]of [['draft','PATCH'],['publish','POST'],['archive','POST']]){
+  const body={requestId:crypto.randomUUID(),expectedRevision:made.body.revision,...(action==='draft'?{draft:{columns:[],rows:[],valueKinds:[],cells:[]}}:{})};
+  const denied=await srv.api(admin.cookie,R+'/'+made.body.id+'/'+action,{method,body});const missing=await srv.api(admin.cookie,R+'/'+crypto.randomUUID()+'/'+action,{method,body:{...body,requestId:crypto.randomUUID()}});
+  assert.deepEqual([denied.status,denied.text],[404,'{"error":"notFound"}'],action);assert.deepEqual([denied.status,denied.text],[missing.status,missing.text],action);assert.deepEqual(await storedReferenceState(),before,action+' writes no row or receipt');
+ }
+});
+
 test('bad shape and stale writes refuse without changing the table',async()=>{
  const bad=await post(admin,R,{requestId:crypto.randomUUID(),name:'Wrong',clubId:B});assert.equal(bad.status,400,bad.text);
  const stale=await post(admin,R+'/'+table.id+'/archive',{requestId:crypto.randomUUID(),expectedRevision:999});assert.equal(stale.status,409,stale.text);
@@ -79,6 +95,24 @@ test('published targets bind through the real widget route, replay once, and sta
  assert.deepEqual(before.presentation_config.referenceConfig,referenceConfig);
 });
 
+test('binding rejects foreign, unmanageable and wrong-data-workspace dashboards without any write',async()=>{
+ const other=await person('protectedDashboardOwner',id=>F.grantClub(id,B));
+ const foreignDashboard=(await q.query("select * from training_load.create_dashboard('Foreign binding target',null,'club',null,$1,null,'club',$1,false,$2,null)",[B,other.id])).rows[0];
+ const privateDashboard=(await q.query("select * from training_load.create_dashboard('Unmanageable binding target',null,'user',$1,null,null,'club',$2,false,$1,null)",[other.id,A])).rows[0];
+ // Manageable by the caller, but bound to another club: only dataWorkspaceMatches refuses this one.
+ const mismatchedDashboard=(await q.query("select * from training_load.create_dashboard('Wrong data workspace',null,'user',$1,null,null,'club',$2,false,$1,null)",[admin.id,B])).rows[0];
+ for(const [label,target] of [['foreign',foreignDashboard],['unmanageable',privateDashboard],['wrong data workspace',mismatchedDashboard]]){
+  const row=(await q.query("insert into training_load.dashboard_widgets(dashboard_id,widget_type,title,widget_order,x,y,width,height,mobile_order,group_by) values($1,'bar_chart','Protected',0,0,0,6,4,0,'athlete') returning *",[target.id])).rows[0];
+  const protectedPath='/api/training-load/dashboard-references/'+target.id+'/widgets/'+row.id;const stored=await storedReferenceState();
+  for(const method of ['GET','PUT']){
+   const payload={requestId:crypto.randomUUID(),expectedWidgetRevision:row.revision,groupBy:'athlete',referenceConfig:null};
+   const denied=await srv.api(admin.cookie,protectedPath,{method,...(method==='PUT'?{body:payload}:{})});const missing=await srv.api(admin.cookie,'/api/training-load/dashboard-references/'+crypto.randomUUID()+'/widgets/'+crypto.randomUUID(),{method,...(method==='PUT'?{body:payload}:{})});
+   assert.deepEqual([denied.status,denied.text],[404,'{"error":"notFound"}'],label+' '+method);assert.deepEqual([denied.status,denied.text],[missing.status,missing.text]);assert.deepEqual(await storedReferenceState(),stored,'refused binding writes nothing');
+  }
+ }
+
+});
+
 test('team reference averages imported athlete period values only and shell selection never widens it',async()=>{
  const {seedGalleryMeasurements}=await import('./support/dashboard-gallery-seed.mjs');
  const athletes=[];for(const name of ['Alex','Bo','Cam']){const id=(await q.query("insert into public.athletes(athlete_id,first_name,last_name,full_name,display_name) values(nextval('public.athlete_generated_id_seq')::text,$1,'Test',$1,$1) returning id",[name])).rows[0].id;await q.query("insert into public.athlete_memberships(athlete_id,club_id,team_id,membership_type,status,starts_at) values($1,$2,null,'club','active','2026-01-01'),($1,$2,$3,'team','active','2026-01-01')",[id,A,team]);athletes.push(id);}
@@ -92,6 +126,10 @@ test('team reference averages imported athlete period values only and shell sele
  const path='/api/training-load/dashboard-references/'+widget.dashboard_id+'/widgets/'+widget.id;
  const config={schemaVersion:1,source:'teamAverage',mode:'overlay',clubId:A,teamId:team,axes:[{seriesId:series.id,valueKeys:['teamAverage']}]};
  const saved=await srv.api(coach.cookie,path,{method:'PUT',body:{requestId:crypto.randomUUID(),expectedWidgetRevision:widget.revision,groupBy:'cohort',referenceConfig:config}});assert.equal(saved.status,200,saved.text);
+ const sibling=await F.team(A);const stored=await storedReferenceState();const current=(await q.query('select revision from training_load.dashboard_widgets where id=$1',[widget.id])).rows[0].revision;
+ const deniedTeam=await srv.api(coach.cookie,path,{method:'PUT',body:{requestId:crypto.randomUUID(),expectedWidgetRevision:current,groupBy:'cohort',referenceConfig:{...config,teamId:sibling}}});
+ assert.equal(deniedTeam.status,404,deniedTeam.text);assert.deepEqual(await storedReferenceState(),stored,'another team in the same club cannot change the binding');
+
  const queryPath='/api/training-load/dashboards/'+widget.dashboard_id+'/query',period={dateFrom:'2026-11-01',dateTo:'2026-11-10'};
  const manual=await post(coach,queryPath,period);assert.equal(manual.status,200,manual.text);assert.equal(manual.body.widgets[0].references.axes[0].reason,'tooFewAthletes');
  await seedGalleryMeasurements(q,{actorId:admin.id,clubId:A,teamId:team,athleteIds:athletes,dates:['2026-11-08','2026-11-09'],existingDefinitions:[{id:definition.id,versionId:definition.current_version_id,name:'Distance'}],entryMethod:'csv_import'});
