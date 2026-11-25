@@ -1,10 +1,11 @@
+import {pageApiPath} from './training-load-pages-data.js';
 import {api} from './api.js';
 import {state} from './state.js';
 import {currentUserWorkspaceContextParts} from './access.js';
 import {reportHandlerError} from './app-errors-capture.js';
-import {loadDashboardDetail,queryAnalysisDashboard} from './training-load-analysis-data.js';
+import {loadDashboardDetail,queryAnalysisDashboard,analysisRuntimeFilterPayload} from './training-load-analysis-data.js';
 const R='/api/training-load/reference-tables';
-let islandsPromise,islands,root,renderApp,generation=0,hosts=[],observer,tableGeneration=0,bindingGeneration=0;
+let islandsPromise,islands,root,renderApp,generation=0,hosts=[],observer,tableGeneration=0,bindingGeneration=0,bindingPreviewGeneration=0;
 export function referenceState(){return state.trainingLoad.references??=( {context:null,initialized:false,available:false,loading:false,busy:false,pending:null,error:'',notice:'',tables:[],options:{positions:[],teams:[]},definitions:[],detail:null,draft:null,dirty:false,binding:null} );}
 const context=()=>JSON.stringify(currentUserWorkspaceContextParts());
 function payloadFromDetail(detail){return {columns:detail.columns.map(c=>({definitionId:c.definition_id,unit:c.unit,aggregation:c.aggregation,dataLevel:c.data_level,order:c.sort_order})),rows:detail.rows.map(r=>({positionId:r.position_id,order:r.sort_order})),valueKinds:detail.valueKinds.map(k=>({key:k.key,name:k.name,order:k.sort_order})),cells:detail.cells.map(c=>({positionId:c.position_id,definitionId:c.definition_id,valueKey:c.value_key,value:Number(c.value)}))};}
@@ -41,10 +42,13 @@ async function perform(request){
  finally{if(context()===key){s.busy=false;paint();renderApp?.();}}
 }
 function fieldDirty(){const s=referenceState();s.dirty=true;s.error='';paint();}
+function referenceBindingConfig(b,s){return {schemaVersion:1,source:b.source,mode:b.mode,clubId:s.options.clubId,...(b.source==='preset'?{tableId:b.tableId,versionId:b.version.version.id}:{teamId:b.teamId}),axes:b.selected.map(id=>({seriesId:id,...(b.source==='teamAverage'?{valueKeys:['teamAverage']}:{anchorKey:b.axes[id]?.anchorKey??'target',valueKeys:b.axes[id]?.valueKeys??[],...(b.mode==='overlay'&&b.axes[id]?.lowerKey&&b.axes[id]?.upperKey?{band:{lowerKey:b.axes[id].lowerKey,upperKey:b.axes[id].upperKey}}:{})})}))};}
+function referencePreviewBody(b,s){const a=state.trainingLoad.analysis;return {dateFrom:a.period.dateFrom,dateTo:a.period.dateTo,...analysisRuntimeFilterPayload(),widgetIds:[b.widget.id],referencePreview:{widgetId:b.widget.id,expectedWidgetRevision:b.widget.revision,groupBy:b.groupBy,referenceConfig:referenceBindingConfig(b,s)}};}
 export async function referenceAction(action,value){const s=referenceState();if(s.busy)return;
  try{
   if(action==='retry'){if(s.pending)await perform(s.pending);return;}
   if(s.pending)return;
+  if(s.binding&&['bindingField','bindingTable','bindingSeries','bindingAxis','bindingValue'].includes(action)){s.binding.preview=null;s.binding.previewFingerprint=null;bindingPreviewGeneration++;}
   if(action==='new'){if(!s.dirty||referencesMayBeLeft()){s.creating=true;s.newName='';s.detail=null;s.draft=null;paint();}return;}
   if(action==='name'){s.newName=value;paint();return;}
   if(action==='cancelNew'){s.creating=false;paint();return;}
@@ -78,12 +82,19 @@ export async function referenceAction(action,value){const s=referenceState();if(
   if(action==='bindingSeries'){s.binding.dirty=true;s.binding.selected=s.binding.selected.includes(value)?s.binding.selected.filter(id=>id!==value):[...s.binding.selected,value];paint();return;}
   if(action==='bindingAxis'){s.binding.dirty=true;(s.binding.axes[value.id]??={anchorKey:'target',valueKeys:[]})[value.key]=value.value;paint();return;}
   if(action==='bindingValue'){s.binding.dirty=true;const axis=s.binding.axes[value.id]??={anchorKey:'target',valueKeys:[]};axis.valueKeys=axis.valueKeys.includes(value.key)?axis.valueKeys.filter(k=>k!==value.key):[...axis.valueKeys,value.key];paint();return;}
-  if(action==='saveBinding'||action==='clearBinding'){
+  if(action==='previewBinding'||action==='saveBinding'||action==='clearBinding'){
    const b=s.binding,a=state.trainingLoad.analysis;
-   if(action==='saveBinding'&&(b.mode==='radar'?b.selected.length<3:b.selected.length!==1)){s.error=b.mode==='radar'?'Choose at least three variables for Radar.':'Choose one variable for reference lines, or choose Radar.';paint();return;}
-   if(action==='saveBinding'&&b.groupBy==='cohort'&&b.source!=='teamAverage'){s.error='Choose Team average to compare a group.';paint();return;}
-   if(action==='saveBinding'&&(b.source==='preset'&&!b.version||b.source==='teamAverage'&&!b.teamId)){s.error='Choose a reference table or team before saving.';paint();return;}
-   const config={schemaVersion:1,source:b.source,mode:b.mode,clubId:s.options.clubId,...(b.source==='preset'?{tableId:b.tableId,versionId:b.version.version.id}:{teamId:b.teamId}),axes:b.selected.map(id=>({seriesId:id,...(b.source==='teamAverage'?{valueKeys:['teamAverage']}:{anchorKey:b.axes[id]?.anchorKey??'target',valueKeys:b.axes[id]?.valueKeys??[],...(b.mode==='overlay'&&b.axes[id]?.lowerKey&&b.axes[id]?.upperKey?{band:{lowerKey:b.axes[id].lowerKey,upperKey:b.axes[id].upperKey}}:{})})}))};
+   if(action!=='clearBinding'&&(b.mode==='radar'?b.selected.length<3:b.selected.length!==1)){s.error=b.mode==='radar'?'Choose at least three variables for Radar.':'Choose one variable for reference lines, or choose Radar.';paint();return;}
+   if(action!=='clearBinding'&&b.groupBy==='cohort'&&b.source!=='teamAverage'){s.error='Choose Team average to compare a group.';paint();return;}
+   if(action!=='clearBinding'&&(b.source==='preset'&&!b.version||b.source==='teamAverage'&&!b.teamId)){s.error='Choose a reference table or team before saving.';paint();return;}
+   const config=action==='clearBinding'?null:referenceBindingConfig(b,s);
+   if(action==='previewBinding'){
+    const body=referencePreviewBody(b,s),key=context(),ticket=++bindingPreviewGeneration;b.preview=null;b.previewFingerprint=null;b.previewRequestKey=null;b.previewLoading=true;s.error='';paint();
+    try{const path=a.pagesAvailable&&a.selectedPageId?pageApiPath(a.selectedDashboardId,a.selectedPageId):'/api/training-load/dashboards/'+encodeURIComponent(a.selectedDashboardId);const response=await api(path+'/query',{method:'POST',body:JSON.stringify(body)});
+     if(context()===key&&s.binding===b&&ticket===bindingPreviewGeneration){b.preview=response.widgets.find(w=>w.widgetId===b.widget.id)?.references;b.previewFingerprint=response.referencePreviewFingerprint;b.previewRequestKey=JSON.stringify(body);}
+    }finally{b.previewLoading=false;paint();}return;
+   }
+   if(action==='saveBinding'&&(!b.previewFingerprint||b.previewRequestKey!==JSON.stringify(referencePreviewBody(b,s)))){s.error='Preview this comparison before saving.';paint();return;}
    await perform({kind:'binding',path:`/api/training-load/dashboard-references/${a.selectedDashboardId}/widgets/${b.widget.id}`,method:'PUT',body:{requestId:crypto.randomUUID(),expectedWidgetRevision:b.widget.revision,groupBy:b.groupBy,referenceConfig:action==='clearBinding'?null:config}});return;
   }
  }catch(error){s.error=message(error);paint();}

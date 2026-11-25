@@ -1,3 +1,4 @@
+import {validReferencePreview,referencePreviewWidgets,referencePreviewFingerprint,assertReferenceSource} from '../dashboardReferences/preview.js';
 import { attachReferenceResults } from "../dashboardReferences/query.js";
 import { resolveReferenceContext } from "../dashboardReferences/access.js";
 import {attachGalleryResult,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
@@ -102,13 +103,20 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    let shellFilter;try{shellFilter=normalizeShellFilter(body.shellFilter)}catch{throw pageError('invalidRequest',400)}
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
-   const selected=widgets.filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
+   let selected=widgets.filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
+   const referenceRequest={...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)};
+   if(body.referencePreview!==undefined){
+    if(!validReferencePreview(body.referencePreview))throw pageError('invalidRequest',400);
+    if(process.env.DASHBOARD_REFERENCES_ENABLED!=='true'||!canManageDashboardRow(target.req,target.dashboard))throw pageError();
+    const ctx=await resolveReferenceContext(referenceRequest);
+    selected=referencePreviewWidgets(selected,body.referencePreview,ctx?.owner.clubId);await assertReferenceSource(q,body.referencePreview.referenceConfig,ctx.owner.clubId,ctx.workspace,widgets.find(w=>w.id===body.referencePreview.widgetId)?.presentation_config?.referenceConfig);
+   }
    const result=await queryDashboard(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q});
    const galleryWidgets=await hydrateGalleryWidgets(q,selected);
    const referenceEnabled=process.env.DASHBOARD_REFERENCES_ENABLED==='true';
-   const referenceContext=referenceEnabled&&selected.some(w=>w.presentation_config?.referenceConfig)?await resolveReferenceContext({...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)}):null;
+   const referenceContext=referenceEnabled&&selected.some(w=>w.presentation_config?.referenceConfig)?await resolveReferenceContext(referenceRequest):null;
    const referenced=await attachReferenceResults({query:q,widgets:selected,results:result,workspace:target.workspace,period,defaultFilter:page.default_filter,requestFilter:filter,shellFilter,referenceClubId:referenceContext?.owner.clubId,enabled:referenceEnabled});
-   return {dashboardRevision:target.dashboard.revision,pageId:page.id,pageRevision:page.revision,defaultsRevision:page.defaults_revision,resolvedPeriod:period,widgets:referenced.map(w=>attachGalleryResult(galleryWidgets.find(x=>x.id===w.widgetId),{...w,presentation_config:selected.find(x=>x.id===w.widgetId)?.presentation_config}))};
+   return {...(body.referencePreview?{referencePreviewFingerprint:referencePreviewFingerprint({binding:body.referencePreview,period,filter,shellFilter,results:referenced})}:{}),dashboardRevision:target.dashboard.revision,pageId:page.id,pageRevision:page.revision,defaultsRevision:page.defaults_revision,resolvedPeriod:period,widgets:referenced.map(w=>attachGalleryResult(galleryWidgets.find(x=>x.id===w.widgetId),{...w,presentation_config:selected.find(x=>x.id===w.widgetId)?.presentation_config}))};
   });
  }
  async function status({req,dashboardId,requestId}){

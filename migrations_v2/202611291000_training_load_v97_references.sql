@@ -311,7 +311,7 @@ create constraint trigger dashboard_reference_widget_check after insert or updat
 create constraint trigger dashboard_reference_series_check after insert or update or delete on training_load.dashboard_widget_series deferrable initially deferred for each row execute function training_load.dashboard_reference_deferred();
 
 create function training_load.save_dashboard_reference_binding(p_actor uuid,p_club uuid,p_team uuid,p_request uuid,p_hash text,p_dashboard uuid,p_widget uuid,p_revision integer,p_group text,p_config jsonb) returns jsonb language plpgsql as $$
-declare w training_load.dashboard_widgets; prior training_load.dashboard_reference_requests; presentation jsonb; result jsonb; basis text;
+declare w training_load.dashboard_widgets; page_row training_load.dashboard_pages; prior training_load.dashboard_reference_requests; presentation jsonb; result jsonb; basis text;
 begin
  if p_request is null or p_hash is null or p_hash !~ '^[a-f0-9]{64}$' or p_revision is null or p_revision<1 or p_group is null or p_group not in ('athlete','cohort') then raise exception 'invalidRequest' using errcode='23514';end if;
  perform pg_advisory_xact_lock(hashtextextended('dashboard-reference:'||p_actor::text||':'||p_request::text,0));
@@ -326,7 +326,12 @@ begin
  perform 1 from training_load.dashboards where id=p_dashboard for update;
  if not found then raise exception 'notFound' using errcode='42501'; end if;
  perform training_load.assert_dashboard_writable(p_dashboard);
- perform 1 from training_load.dashboard_pages p join training_load.dashboard_widgets wi on wi.page_id=p.id where wi.id=p_widget and wi.dashboard_id=p_dashboard for update of p;
+ select p.* into page_row from training_load.dashboard_pages p join training_load.dashboard_widgets wi on wi.page_id=p.id where wi.id=p_widget and wi.dashboard_id=p_dashboard for update of p;
+ if not found then raise exception 'notFound' using errcode='42501';end if;
+ if not page_row.is_home then
+  if not coalesce((select enabled from training_load.dashboard_pages_activation where singleton),false) then raise exception 'notFound' using errcode='42501';end if;
+  perform set_config('optimove.dashboard_page',pg_current_xact_id()::text||':'||page_row.id::text,true);
+ end if;
  select * into w from training_load.dashboard_widgets where id=p_widget and dashboard_id=p_dashboard for update;
  if not found then raise exception 'notFound' using errcode='42501'; end if;
  perform 1 from training_load.dashboard_widget_series where widget_id=w.id order by id for update;

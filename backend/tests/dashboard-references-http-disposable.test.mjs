@@ -10,7 +10,7 @@ const post=(who,path,body)=>srv.api(who.cookie,path,{method:'POST',body});
 const person=async(label,setup=async()=>{})=>{const id=await F.user(label);await setup(id);return{id,cookie:await srv.cookieFor(id)}};
 before(async()=>{
  db=await createPagesDatabase({through:'202611291000',label:'references_http'});q=db.client;F=fixtures(q);
- process.env.DASHBOARD_REFERENCES_ENABLED='true';srv=await startServer(db.url);
+ process.env.DASHBOARD_REFERENCES_ENABLED='true';process.env.DASHBOARD_PAGES_ENABLED='true';srv=await startServer(db.url);
  A=await F.club('Ref Alpha');B=await F.club('Ref Beta');team=await F.team(A);
  admin=await person('refAdmin',id=>F.grantClub(id,A));coach=await person('refCoach',id=>F.grantTeam(id,team));
  const adminB=await person('refAdminB',id=>F.grantClub(id,B));
@@ -20,7 +20,7 @@ before(async()=>{
  for(const who of [viewer,mixed])await q.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'club',$2) on conflict(user_id) do update set workspace_type='club',scope_id=excluded.scope_id",[who.id,A]);
  const created=await post(admin,R,{requestId:crypto.randomUUID(),name:'Game targets'});assert.equal(created.status,201,created.text);table=created.body;
 });
-after(async()=>{await srv?.stop();await db?.drop();delete process.env.DASHBOARD_REFERENCES_ENABLED;});
+after(async()=>{await srv?.stop();await db?.drop();delete process.env.DASHBOARD_REFERENCES_ENABLED;delete process.env.DASHBOARD_PAGES_ENABLED;});
 test('club admin creates and reads; a coach reads the published catalog but cannot edit',async()=>{
  const list=await srv.api(admin.cookie,R);assert.equal(list.status,200,list.text);assert.equal(list.body.canCreate,true);assert.equal(list.body.tables.length,1);
  const read=await srv.api(coach.cookie,R);assert.equal(read.status,200,read.text);assert.equal(read.body.canCreate,false);assert.equal(read.body.tables.length,0,'unpublished tables are not offered to coaches');
@@ -61,6 +61,15 @@ test('published targets bind through the real widget route, replay once, and sta
  const read=await srv.api(admin.cookie,path);assert.equal(read.status,200,read.text);assert.equal(read.body.series[0].label,'Distance');
  const referenceConfig={schemaVersion:1,source:'preset',mode:'overlay',clubId:A,tableId:made.body.id,versionId:published.body.publishedVersionId,axes:[{seriesId:added.series_id,anchorKey:'target',valueKeys:['target']}]};
  const body={requestId:crypto.randomUUID(),expectedWidgetRevision:read.body.widget.revision,groupBy:'athlete',referenceConfig};
+ const beforePreview=(await q.query('select to_jsonb(w) value from training_load.dashboard_widgets w where id=$1',[widget.id])).rows[0].value;
+ const previewBody={dateFrom:'2026-11-01',dateTo:'2026-11-07',widgetIds:[widget.id],referencePreview:{widgetId:widget.id,expectedWidgetRevision:body.expectedWidgetRevision,groupBy:'athlete',referenceConfig}};
+ const previewed=await post(admin,'/api/training-load/dashboards/'+dashboard.id+'/query',previewBody);assert.equal(previewed.status,200,previewed.text);assert.match(previewed.body.referencePreviewFingerprint,/^[a-f0-9]{64}$/);assert.equal(previewed.body.widgets[0].references.tableName,'Widget targets');
+ assert.deepEqual((await q.query('select to_jsonb(w) value from training_load.dashboard_widgets w where id=$1',[widget.id])).rows[0].value,beforePreview,'preview writes no widget row');
+ const secondDraft=await srv.api(admin.cookie,R+'/'+made.body.id+'/draft',{method:'PATCH',body:{requestId:crypto.randomUUID(),expectedRevision:published.body.revision,draft}});assert.equal(secondDraft.status,200,secondDraft.text);const secondVersion=await post(admin,R+'/'+made.body.id+'/publish',{requestId:crypto.randomUUID(),expectedRevision:secondDraft.body.revision});assert.equal(secondVersion.status,200,secondVersion.text);
+ const otherPreview=await post(admin,'/api/training-load/dashboards/'+dashboard.id+'/query',{...previewBody,referencePreview:{...previewBody.referencePreview,referenceConfig:{...referenceConfig,versionId:secondVersion.body.publishedVersionId}}});assert.equal(otherPreview.status,200,otherPreview.text);assert.notEqual(otherPreview.body.referencePreviewFingerprint,previewed.body.referencePreviewFingerprint,'version change invalidates preview');
+ const foreignAdmin=await person('foreignTargets',id=>F.grantClub(id,B));const foreignTable=await post(foreignAdmin,R,{requestId:crypto.randomUUID(),name:'Foreign published targets'});const foreignDraft=await srv.api(foreignAdmin.cookie,R+'/'+foreignTable.body.id+'/draft',{method:'PATCH',body:{requestId:crypto.randomUUID(),expectedRevision:1,draft}});assert.equal(foreignDraft.status,200,foreignDraft.text);const foreignVersion=await post(foreignAdmin,R+'/'+foreignTable.body.id+'/publish',{requestId:crypto.randomUUID(),expectedRevision:foreignDraft.body.revision});assert.equal(foreignVersion.status,200,foreignVersion.text);
+ let refusals=[];for(const [tableId,versionId]of [[foreignTable.body.id,foreignVersion.body.publishedVersionId],[crypto.randomUUID(),crypto.randomUUID()]]){const config={...referenceConfig,tableId,versionId};const refusedPreview=await post(admin,'/api/training-load/dashboards/'+dashboard.id+'/query',{...previewBody,referencePreview:{...previewBody.referencePreview,referenceConfig:config}});const refusedSave=await srv.api(admin.cookie,path,{method:'PUT',body:{...body,requestId:crypto.randomUUID(),referenceConfig:config}});refusals.push([refusedPreview.status,refusedPreview.text,refusedSave.status,refusedSave.text]);}assert.deepEqual(refusals[0],refusals[1]);assert.equal(refusals[0][0],404);assert.equal(refusals[0][2],404);
+
  const saved=await srv.api(admin.cookie,path,{method:'PUT',body});assert.equal(saved.status,200,saved.text);
  const replay=await srv.api(admin.cookie,path,{method:'PUT',body});assert.equal(replay.status,200,replay.text);assert.deepEqual(replay.body,saved.body);
  const before=(await q.query('select to_jsonb(w) value from training_load.dashboard_widgets w where id=$1',[widget.id])).rows[0].value;
@@ -107,4 +116,20 @@ test('binding request advisory lock precedes the dashboard row lock',async()=>{
   let waiting=false;for(let attempt=0;attempt<100;attempt++){waiting=(await q.query("select wait_event_type='Lock' and wait_event='advisory' waiting from pg_stat_activity where pid=$1",[pid])).rows[0]?.waiting;if(waiting)break;await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(waiting,true,'writer is waiting for the same request advisory lock');
   await q.query('select id from training_load.dashboards where id=$1 for update nowait',[widget.dashboard_id]);await q.query('commit');const outcome=await pending;if(outcome.error)throw outcome.error;
  }finally{await q.query('rollback');if(pending)await pending;await writer.end();}
+});
+
+test('non-Home bindings follow both Pages gates and save through the sanctioned Page context',async()=>{
+ const {app}=await import('../src/server.js');const widget=(await q.query("select * from training_load.dashboard_widgets where title='Distance'")).rows[0];const prefix='/api/training-load/dashboards/'+widget.dashboard_id+'/pages';
+ await q.query('update training_load.dashboard_pages_activation set enabled=true');
+ const listed=await srv.api(admin.cookie,prefix);assert.equal(listed.status,200,listed.text);
+ const created=await post(admin,prefix,{requestId:crypto.randomUUID(),requestIssuedAt:listed.body.requestIssuedAt,expectedPagesRevision:listed.body.pagesRevision,input:{name:'Reference copy'}});assert.equal(created.status,200,created.text);
+ const pageId=created.body.receipt.pageId,home=listed.body.pages.find(p=>p.is_home);const page=(await q.query('select * from training_load.dashboard_pages where id=$1',[pageId])).rows[0];
+ const copied=await post(admin,prefix+'/'+home.id+'/widgets/'+widget.id+'/copy',{requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),destinationPageId:pageId,expectedWidgetRevision:widget.revision,expectedPageRevision:page.revision});assert.equal(copied.status,200,copied.text);
+ const copyId=copied.body.receipt.widgetId,path='/api/training-load/dashboard-references/'+widget.dashboard_id+'/widgets/'+copyId;
+ try{
+  app.locals.dashboardPagesEnabled=false;assert.equal((await srv.api(admin.cookie,path)).status,404);
+  app.locals.dashboardPagesEnabled=true;await q.query('update training_load.dashboard_pages_activation set enabled=false');assert.equal((await srv.api(admin.cookie,path)).status,404);
+  await q.query('update training_load.dashboard_pages_activation set enabled=true');const current=await srv.api(admin.cookie,path);assert.equal(current.status,200,current.text);
+  const saved=await srv.api(admin.cookie,path,{method:'PUT',body:{requestId:crypto.randomUUID(),expectedWidgetRevision:current.body.widget.revision,groupBy:'athlete',referenceConfig:null}});assert.equal(saved.status,200,saved.text);assert.equal((await srv.api(admin.cookie,path)).body.widget.referenceConfig,null);
+ }finally{app.locals.dashboardPagesEnabled=true;await q.query('update training_load.dashboard_pages_activation set enabled=true');}
 });

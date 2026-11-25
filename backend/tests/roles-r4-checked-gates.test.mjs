@@ -102,6 +102,8 @@ const REVIEWED = Object.freeze({
   "dashboardReferences/access.js": 1,
   "dashboardReferences/bindingRouter.js": 1, // athlete/cohort groupBy validation, not a workspace authority
   "dashboardReferences/query.js": 1,
+  "dashboardReferences/router.js": 1, // team picker narrows to the active team
+  "dashboardReferences/preview.js": 2, // athlete/cohort grouping only; authorization stays in the existing query route
   "dashboardShellFilter.js": 5,
   "dashboardSimple/platformPilot.js": 1,
   "gpexeAthleteIdentityService.js": 3,

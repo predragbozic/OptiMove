@@ -37,7 +37,7 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
     const club=req.referenceContext.owner.clubId;
     const result=await boundedRead(async client=>{
       const positions=(await client.query("select p.id,coalesce(o.name,p.name) name from public.sport_positions p left join public.club_position_overrides o on o.position_id=p.id and o.club_id=$1 where p.archived_at is null and (p.owner_scope='system' or p.owner_club_id=$1) and not coalesce(o.hidden,false) order by p.sort_order,coalesce(o.name,p.name),p.id",[club])).rows;
-      const teams=(await client.query("select id,name from public.teams where club_id=$1 and coalesce(is_active,true) order by name,id",[club])).rows;
+      const teams=(await client.query("select id,name from public.teams where club_id=$1 and coalesce(is_active,true) and ($2::uuid is null or id=$2) order by name,id",[club,req.referenceContext.workspace.type==='team'?req.referenceContext.workspace.scopeId:null])).rows;
       return {clubId:club,positions,teams,canEdit:referenceCanWrite(req.referenceContext)};
     });return res.json(result);
   }));
