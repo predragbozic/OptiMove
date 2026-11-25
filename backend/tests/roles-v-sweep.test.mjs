@@ -708,6 +708,33 @@ test("8. dashboards (dashboards.view): club_view and team_view list, open and qu
     assert.equal(one.widgets[0].local_filter_override.athleteIds, null);
   }
   for (const p of configReads) assert.ok((await srv.api(w.adminA.cookie, p)).text.includes(String(w.athA.id)), `${p}: the coach keeps its filter (old-vs-new)`);
+  // A dashboard default filter that names athletes makes its cohort total one athlete's data: restricted (the code
+  // review's MEDIUM: only the request and shell filters were proven).
+  const filtered = ok(await srv.api(clubHolder.cookie, `${D}/${dF.id}/query`, { method: "POST", body }));
+  assert.ok(filtered.widgets.every((x) => x.series.every((sr) => sr.status === "restricted")), "a default filter naming athletes");
+  // A cohort widget whose series aggregates with "none" answers one row per athlete: restricted too.
+  const fresh2 = ok(await srv.api(w.adminA.cookie, `${D}/${dA.id}`)).dashboard;
+  const noneW = ok(await srv.api(w.adminA.cookie, `${D}/${dA.id}/widgets`, { method: "POST", body: {
+    expectedDashboardRevision: fresh2.revision, widgetType: "table", title: "None", widgetOrder: 50, x: 0, y: 40, width: 6, height: 4, mobileOrder: 50, groupBy: "cohort" } }), 201).widgetId;
+  ok(await srv.api(w.adminA.cookie, `${D}/${dA.id}/widgets/${noneW}/series`, { method: "POST", body: {
+    expectedWidgetRevision: 1, seriesOrder: 1, builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "none" } }), 201);
+  const withNone = ok(await srv.api(clubHolder.cookie, `${D}/${dA.id}/query`, { method: "POST", body }));
+  assert.deepEqual(seriesOf(withNone, noneW).map((sr) => sr.status), ["restricted"], "aggregation none under cohort");
+  assert.equal(seriesOf(withNone, cohortW)[0].status, "ok");
+  assert.equal(seriesOf(ok(await srv.api(w.adminA.cookie, `${D}/${dA.id}/query`, { method: "POST", body })), noneW)[0].status, "ok", "the coach keeps it");
+  // GET /active: a selection made earlier (under an old role) is answered only when the view may see that dashboard.
+  for (const [d, expected] of [[dPriv, null], [dA, String(dA.id)]]) {
+    await k.query(`delete from training_load.dashboard_active_selection where user_id = $1`, [clubHolder.id]);
+    await k.query(`set session_replication_role = replica`);
+    try {
+      await k.query(`insert into training_load.dashboard_active_selection (user_id, workspace_type, scope_id, dashboard_id) values ($1, 'club', $2, $3)`, [clubHolder.id, w.A, d.id]);
+    } finally {
+      await k.query(`set session_replication_role = origin`);
+    }
+    const active = ok(await srv.api(clubHolder.cookie, `${D}/active`)).activeDashboard;
+    assert.equal(active ? String(active.dashboard_id) : null, expected, `GET /active for ${d.name}`);
+  }
+  await k.query(`delete from training_load.dashboard_active_selection where user_id = $1`, [clubHolder.id]);
 
   // Every write answers what it answered an account with no role, and lands nothing.
   for (const who of [clubHolder, teamHolder]) {
@@ -765,7 +792,11 @@ test("8. dashboards (dashboards.view): club_view and team_view list, open and qu
     }
     await sameAsNobodyWrite(w.adminA, "PATCH", `${D}/${dA.id}`, { expectedRevision: dA.revision, name: "Nope" });
     await sameAsNobodyWrite(w.adminA, "POST", `${D}/${dA.id}/pages`, { requestId: key(), requestIssuedAt: new Date().toISOString(), expectedPagesRevision: 1, input: { name: "Nope" } });
+    // A create resolves no workspace: it asks the word at its owner (the code review's HIGH).
+    await sameAsNobodyWrite(w.adminA, "POST", D, { name: "Nope", ownerScope: "club", ownerClubId: w.A });
+    await sameAsNobodyWrite(w.coachA, "POST", D, { name: "Nope", ownerScope: "team", ownerTeamId: w.TA1 });
     assert.equal((await srv.api(w.adminB.cookie, D)).status, 200, "another club keeps it");
+    assert.equal((await srv.api(w.adminB.cookie, D, { method: "POST", body: { name: "Beta again", ownerScope: "club", ownerClubId: w.B } })).status, 201, "another club still creates");
   } finally {
     await ceiling(pa, [], ["dashboards"]);
   }

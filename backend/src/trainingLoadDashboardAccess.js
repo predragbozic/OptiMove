@@ -262,7 +262,9 @@ export async function resolveDashboardCreateContext(req, body, dataWorkspace) {
   if (requested === "club") {
     const clubId = body?.ownerClubId;
     if (!clubId) return { error: "ownerClubId is required for club-owned dashboards.", status: 400 };
-    if (viewRequest || !canManageClub(req.authz, clubId)) return { error: "That club is outside your access.", status: 403 };
+    // V-6 (code review HIGH): a create does not resolve the workspace, so it asks dashboards.view at the owner itself;
+    // without it (the word taken from the role, or the licence closed) the answer of an account without that club.
+    if (viewRequest || !canManageClub(req.authz, clubId) || !can(req.authz, "dashboards.view", { type: "club", id: String(clubId) })) return { error: "That club is outside your access.", status: 403 };
     return {
       ownerScope: "club", ownerUserId: null, ownerClubId: clubId, ownerTeamId: null,
       dataWorkspaceType: "club", dataWorkspaceScopeId: clubId, isTemplate: requestedIsTemplate,
@@ -271,7 +273,7 @@ export async function resolveDashboardCreateContext(req, body, dataWorkspace) {
   if (requested === "team") {
     const teamId = body?.ownerTeamId;
     if (!teamId) return { error: "ownerTeamId is required for team-owned dashboards.", status: 400 };
-    if (viewRequest || !canManageTeamById(req.authz, teamId)) return { error: "That team is outside your access.", status: 403 };
+    if (viewRequest || !canManageTeamById(req.authz, teamId) || !can(req.authz, "dashboards.view", { type: "team", id: String(teamId) })) return { error: "That team is outside your access.", status: 403 };
     return {
       ownerScope: "team", ownerUserId: null, ownerClubId: null, ownerTeamId: teamId,
       dataWorkspaceType: "team", dataWorkspaceScopeId: teamId, isTemplate: requestedIsTemplate,
