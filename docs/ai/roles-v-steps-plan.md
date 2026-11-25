@@ -618,3 +618,139 @@ decided.
   them. They are not usable: the target routes refuse a view workspace.
 - LOW (security): on the non-view path the workspace is resolved twice (the gate read-only, then the route), as in
   V-1. It can only fail closed.
+
+## 12. V-5 design (Training Load, and the licence hierarchy P-4)
+
+Status: **Proposed** (the executor, 2026-11-25, base `cf48c11e`). Numbered 12 so it does not collide with the parallel
+V-2 and V-4 sections. Nothing below is built before the manager's GO.
+
+### 12.1 P-4, the licence hierarchy (the owner's decision of 2026-11-25, as relayed by the manager)
+
+- **The children.** `training_load` is a parent module. Its children are `dashboards`, `imports` and
+  `data_configuration`. The `load.*` words (RPE, activities, schedules, roster) are `training_load`'s own module, so they
+  close with it already. Nothing else is a child (`presets`, including session types, is not).
+- **One level only.** A child has no children; a parent has no parent. A closed parent closes every child; each child
+  can still be closed on its own; opening the parent brings back exactly the children that were not closed on their own.
+- **The rule.** The *effective* closed set of a club = the rows of `club_permission_ceiling` ∪ every child of a parent
+  that has a row there. Every reader that applies the ceiling uses the effective set; the ceiling **writer** and its
+  table stay as they are (the stored rows are the decisions, the effective set is derived).
+
+**SQL (migration v96, `202611281000_roles_v96_licence_hierarchy.sql`).** Needed: the ceiling's database twin reads the
+table itself, not a function.
+1. Step 0: v95 recorded; md5 gate on the three bodies replaced below (v92's `user_has_permission` and
+   `permission_club_rule7_ok`, v95's `permission_actor_holds_in_club`); the two new functions absent; the four module
+   words exist.
+2. New `public.permission_module_parent(p_module text) returns text` (immutable SQL, a fixed `case`: the three children →
+   `training_load`, everything else null). A closed list in code rather than a column, because `permission_modules`
+   is fixed by v84's trigger.
+3. New `public.permission_club_effective_closed_modules(p_club uuid) returns text[]`: the explicit rows plus the
+   children of a closed parent, distinct, sorted.
+4. `CREATE OR REPLACE` of the three bodies, each changing only its ceiling test to the effective set:
+   - `user_has_permission` step 6 (a child word in a club whose `training_load` is closed answers no);
+   - `permission_club_rule7_ok` ("minus the closed modules" becomes minus the effective ones);
+   - `permission_actor_holds_in_club` (v95's dominance: a child word passes for an admin who would hold it once the
+     parent opens).
+5. `permission_club_closed_modules` is **unchanged** (the explicit rows; the licence writer and screen read it).
+6. Revokes as v92 / v95 for the two new functions. Rollback (md5 of the new bodies, restore v92 / v95's, drop the two
+   functions), read-only preflight and post-check SQL, the rehearsal script (.mjs, .sh, .ps1), `eol=lf`, `db-reviewer`.
+
+Every change only **adds** closed modules to a club that has `training_load` closed: `user_has_permission` gets
+stricter there, rule 7 and dominance only get looser. No row is written or rewritten.
+
+**Existing rows (the owner's test club in production).** It has explicit rows for `training_load`, `dashboards`,
+`data_configuration` and `imports`. The effective set is the same four, so nothing changes for it. If the parent is
+opened later, the three children stay closed, because they were also closed on their own; the screen shows that, and
+the owner opens them one by one. No backfill and no rewrite (rewriting the owner's decisions would lose their
+history).
+
+**JavaScript.**
+- `permissions.js`: `MODULE_PARENTS = { dashboards, imports, data_configuration → training_load }` and
+  `effectiveClosedModules(explicit)`. A test pins it equal to `permission_module_parent` for every module word.
+- `authz.js` `ROLE_PERMISSIONS_SQL` reads `permission_club_effective_closed_modules` into `closedModules`, so `can()` and
+  `/me`'s `closedModulesForWorkspace` follow the effective set with no change of their own.
+- `permissionLayersService.js`: the role-change paths (`checkedItemChange`, the word locks, `stillHeldThrough`) take the
+  effective set (they mirror the SQL dominance and rule 7); `setCeiling` keeps the explicit set (what can be closed or
+  opened); `ceilingView` adds per module `parent`, `closedByParent` (the parent is closed) and `effectivelyClosed`.
+
+**The Club licence screen.** A child of a closed parent shows "Not included", its switch disabled, and the note
+"Closed because Training Load is closed". If it is also closed on its own, the note says so ("also taken out on its
+own"), so reopening the parent is not mistaken for reopening it. The draft follows the same rule (closing Training Load
+in the draft greys the children at once). The parent's switch stays usable. The server is the rule; the screen only
+shows it.
+
+**What it changes today.** Closing Training Load now closes Data configuration too (checked since V-1) and,
+from this step, the Training Load reads below. Dashboards and Imports follow once their own words are checked
+(their row keeps "This part does not follow the licence yet" until then).
+
+### 12.2 Training Load view reads (plan 2.6)
+
+**Words and P-1.**
+- *Team totals* = `canView(load_team)` (`load.view.team`).
+- *Named athletes* = `canView(load_athlete)` **and** `canView(athletes)` (P-1: a name needs `athletes.view`). Until V-2
+  opens Athletes, a view workspace never has named access, so V-5 opens team totals only for a view workspace; the named
+  branch is built and tested with V-2 merged in (V-2 merges before this freezes).
+
+**The gates** (`viewEntryGate`, refuse = each router's own pre-V answer through the V-3 "mark and next()" pattern, so a
+view workspace gets byte-identical refusals on everything not listed):
+
+| Router | Listed reads | Team totals | Named athletes |
+|---|---|---|---|
+| `/api/training-load` | `GET /calendar` | activity items with counts; planned and external items **left out** | all items, with `athleteName` |
+| | `GET /weekly` | refusal (403, as today) | the whole answer, **without** the occurrence write |
+| | `GET /external-schedules`, `GET /external-schedules/:scheduleId` | list and detail with `target_count` / counts, no target names or athlete ids | with targets |
+| `/api/training-activity` | `GET /`, `GET /:activityId` | refusal | the whole answer (club variable names per V-1: `variables.view` and the club) |
+| | `GET /:activityId/roster` | `counts` only, `rows: []` | the rows (read only, no `actions`) |
+| `/api/training-load/metrics` | `GET /results`, `GET /occasions/:id` | refusal | the whole answer |
+| | `GET /definitions`, `GET /definitions/:id`, `GET /domains`, `GET /categories`, `GET /structure-links` | system + the club's and its teams' rows (`team_view`: the team's and its club's), never a person's own rows | same |
+
+Not opened (refusal as today): `/athlete/today`, `/planned-rpe-setting`, `/training-activity/self`, the estimate
+proposal and manual-value form (both run through the write context), `/occasions/:id/history`, definition versions,
+every write. Session types are V-1's.
+
+**Hazards.**
+- *Reads that write:* the view branch of `/weekly` and `/calendar` never calls
+  `ensureCurrentExternalOccurrencesForCoach`; the sweep counts the occurrence rows before and after.
+- *Owner fallbacks and the two workspace-trusting write helpers:* a view workspace never reaches them, because the gate
+  admits only the listed GETs and each read builds its scope from `req.moduleView.scope` through new read-only helpers
+  (`viewActivityReadScope`, `viewMetricsReadScope`, `viewCoachAthleteScopeSql`) that carry **no** `ownerContext`. The
+  existing `scopeFromWorkspace` / `ownerContextFromWorkspace` copies stay untouched. Mutations: map `club_view` to
+  `club` in each fallback and in `canManageActivityInScope` / `canManageMetricEventInScope`, and a sweep test fails.
+- *The roster* (`activityRoster.js`, old rows): a view read gets its own branch keyed on the activity's owner being
+  the view's club or team (and, for a club, a team of the club), counts unless named.
+- *The catalog* (`catalogVisibilitySql`, the role SQL across all clubs): the view branch takes the scope argument; the
+  coach branch keeps its SQL plus `can(load.view.team)` per club or team.
+
+**The coach paths (checked words, R4 section 6).** A club or team workspace keeps today's answers only with
+`can(load.view.team)` at its scope on every Training Load route (reads and writes), and additionally
+`can(load.view.athlete)` on the athlete-row reads (`/weekly`, the activity list and detail, the roster rows, results,
+occasions). The platform and a private coach are unchanged (R4 Q10). A basic Club admin and Team coach hold both
+words (v92 seed), so nobody loses anything until a club version takes a word away or the licence closes Training Load.
+The **athlete workspace** (an athlete's own RPE, weekly and results) is not a role and is not licence-gated in V-5.
+
+**Registration.** `ENFORCED_PERMISSIONS` gets `load.view.team` and `load.view.athlete` with their gate files;
+`VIEW_WORKSPACE_USABLE_WORDS` both; `OPEN_VIEW_MODULES` gets `load_team`, `load_athlete` (both sides); B1 / B3 counts.
+
+**Frontend.** A view workspace's Training Load shows, besides Data configuration (V-1), the Calendar tab and the
+external-schedules list read only (no write control; the sections that need named access stay hidden until it is
+held). The licence screen as in 12.1. `ux-design-reviewer` and `mobile-qa` for both.
+
+### 12.3 Tests
+- `roles-v-sweep` test 8 (Training Load), the plan's section 4 rows 1–9 for both words, the occurrence count, the
+  roster counts, the catalog scope, the mixed account, the forged preference, the word taken from a coach, the licence.
+- `roles-v5-licence-hierarchy` (disposable, with v96): SQL and JS give the same answers for every module × explicit
+  ceiling combination; rule 7 and v95's dominance with a closed parent; the owner's production shape (four explicit
+  rows) before and after reopening the parent; the migration, its rollback and re-apply; md5 gates; a mutation per
+  replaced body.
+- Old-vs-new for the basic roles on every Training Load route; the full disposable kind; frontend tests for the
+  licence screen and the view sections; e2e at 1280, 390 and 360 px.
+
+### 12.4 Small choices made by the executor (for the manager)
+1. The hierarchy is a fixed function in SQL and a constant in JS (pinned equal), not a table column.
+2. The stored ceiling rows are not rewritten; the effective set is derived on read.
+3. A child closed on its own stays closed when its parent reopens.
+4. "Named athletes" needs `athletes.view` too (P-1), so a view workspace gets team totals only until V-2.
+5. `/weekly` (every row an athlete) is not opened for team totals; no totals endpoint is built (plan section 6, 4).
+6. The coach paths check `load.view.team` on every route and `load.view.athlete` on the athlete-row reads.
+7. The athlete workspace is not licence-gated in V-5.
+8. **Split recommended:** V-5a = the hierarchy (v96, JS, licence screen; small, reviewable with `db-reviewer`, one
+   production rehearsal); V-5b = the Training Load view reads (no migration). One PR if the manager prefers.
