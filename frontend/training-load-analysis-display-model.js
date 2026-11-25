@@ -112,6 +112,12 @@ function buildSeries(definition, results, groupBy, loading, querySkipped) {
     return series;
   }
   const result = results[0];
+  // Roles V-6: the server answers a per-athlete widget it may not show with a fixed 'restricted' result, never rows.
+  if (result.status === "restricted") {
+    series.status = "restricted";
+    series.reasons.push("namedAthletesRequired");
+    return series;
+  }
   if (result.status === "error") {
     series.status = "error";
     series.reasons.push(result.error === "aggregation_not_allowed" && definition.calculation === null && definition.analytical_aggregation === "ratio" ? "ratioOnAmount" : ["calculation_changed_in_period", "aggregation_not_allowed"].includes(result.error) ? result.error : "seriesQueryFailed");
@@ -222,6 +228,12 @@ export function buildDashboardWidgetDisplayModel(widget, queryResult, { loading 
   }
   const resultSeries = Array.isArray(queryResult?.series) ? queryResult.series.filter(object) : [];
   model.series = widget.series.map(definition => buildSeries(definition, resultSeries.filter(result => result.seriesId === definition.id), groupBy, loading, querySkipped));
+  // Roles V-6: the server restricts a whole per-athlete widget; it shows one sentence, never an empty table or chart.
+  if (model.series.length && model.series.every(series => series.status === "restricted")) {
+    model.status = "restricted";
+    model.reasons = ["namedAthletesRequired"];
+    return model;
+  }
   if (widget.widget_type === "kpi") model.kpi = kpiModel(model.series, period);
   return model;
 }

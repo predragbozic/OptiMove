@@ -30,6 +30,7 @@ if (needsModuleMocksRelaunch()) {
     dashboardManageBasis: () => "owner",
     dashboardVisibilitySql: () => "true",
     dataWorkspaceMatches: () => true,
+    dashboardNamedAthletesAllowed: () => true,
     resolveDashboardCreateContext: async (request, body, suppliedWorkspace) => {
       assert.equal(suppliedWorkspace, workspace);
       return { ownerScope: "user", ownerUserId: ownerId, ownerClubId: null, ownerTeamId: null, dataWorkspaceType: "private_coach", dataWorkspaceScopeId: null, isTemplate: body.isTemplate === true };
@@ -39,6 +40,8 @@ if (needsModuleMocksRelaunch()) {
   } });
   mock.module("../src/trainingLoadDashboardQuery.js", { namedExports: {
     queryDashboard: async (...args) => batchQueryHandler(...args),
+    // Roles V-6: the route asks the viewer-aware entry point; with named athletes allowed it is queryDashboard.
+    queryDashboardForViewer: async (args, widgets, period, options) => batchQueryHandler(args, widgets, period, options),
   } });
   const widgets = await import("../src/trainingLoadDashboardWidgets.js");
   const catalog = await import("../src/trainingLoadDashboardCatalog.js");

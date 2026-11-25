@@ -92,7 +92,7 @@ function rows() {
     { module: "load_athlete", open: false,
       reads: ["/api/training-load/weekly", `/api/training-activity?${q}`, `/api/training-load/metrics/results?${q}`],
       writes: [["POST", "/api/training-load/metrics/events", {}]] },
-    { module: "dashboards", open: false,
+    { module: "dashboards", open: true,
       reads: ["/api/training-load/dashboards", "/api/training-load/dashboards/active"],
       writes: [["POST", "/api/training-load/dashboards", { name: "x" }]] },
     { module: "programs", open: false,
@@ -111,6 +111,9 @@ before(async () => {
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);
+  // V-6: dashboard pages on (the server reads the setting once, at import), so test 8 covers the pages router too.
+  process.env.DASHBOARD_PAGES_ENABLED = "true";
+  await k.query(`update training_load.dashboard_pages_activation set enabled = true`);
   srv = await startServer(db.url);
   mv = await import("../src/moduleView.js");
   ({ MODULE_VIEW_WORDS, OPEN_VIEW_MODULES } = mv);
@@ -132,19 +135,20 @@ after(async () => {
   await k?.end().catch(() => {});
   await db?.drop();
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
+  delete process.env.DASHBOARD_PAGES_ENABLED;
 });
 
-test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows are exactly OPEN_VIEW_MODULES (V-1: data configuration, presets; V-3: calendar)", () => {
+test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows are exactly OPEN_VIEW_MODULES (V-1: data configuration, presets; V-3: calendar; V-6: dashboards)", () => {
   const table = rows();
   assert.deepEqual(table.map((r) => r.module).sort(), Object.keys(MODULE_VIEW_WORDS).sort());
   assert.deepEqual(table.filter((r) => r.open).map((r) => r.module).sort(), [...OPEN_VIEW_MODULES].sort());
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["calendar", "data_configuration", "presets"]);
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["calendar", "dashboards", "data_configuration", "presets"]);
 });
 
 test("2. closed rows: every view word in club_view (and with a forged club preference) = an account with no role; no write lands; no preference is written", async () => {
   const hm = await me(w.all);
   assert.equal(hm.activeWorkspace.type, "club_view");
-  assert.deepEqual([...hm.permissions].sort(), ["calendar.view", "org.view", "presets.use", "variables.view"], "/me offers only the words of open modules");
+  assert.deepEqual([...hm.permissions].sort(), ["calendar.view", "dashboards.view", "org.view", "presets.use", "variables.view"], "/me offers only the words of open modules");
   const norm = (who, text) => text.split(who.id).join("<me>");
   for (const forged of [false, true]) {
     if (forged) await setPref(w.all, "club", w.A);
@@ -583,4 +587,166 @@ test("7. the calendar (calendar.view): club_view and team_view read their club's
     await ceiling(pa, [], ["calendar"]);
   }
   for (const who of [clubHolder, w.adminA, w.coachA]) assert.equal((await srv.api(who.cookie, `/api/calendar?${q}`)).status, 200, "reopened");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// V-6: dashboards (the plan's sections 2.7, 4 and 13).
+// ---------------------------------------------------------------------------------------------------------------------
+const D = "/api/training-load/dashboards";
+const seriesOf = (answer, widgetId) => answer.widgets.find((x) => String(x.widgetId) === String(widgetId)).series;
+
+test("8. dashboards (dashboards.view): club_view and team_view list, open and query the system templates and their own shared dashboards, read only, over their own data; an athlete-level widget answers 'restricted' without load.view.athlete; another club's, a private or a missing dashboard is the identical 404; every write (POST/DELETE /active included) answers what it answered before and lands nothing, also for a mixed account; the word and the licence close it for role holders and coaches alike", async () => {
+  const pa = await person("paV6", (id) => F.grantPlatform(id));
+  const today = new Date().toISOString().slice(0, 10);
+  const body = { dateFrom: today, dateTo: today };
+  const board = async (who, name, extra = {}) => ok(await srv.api(who.cookie, D, { method: "POST", body: { name, ...extra } }), 201).dashboard;
+  let order = 0;
+  const widget = async (who, d, groupBy) => {
+    order += 1;
+    const fresh = ok(await srv.api(who.cookie, `${D}/${d.id}`)).dashboard;
+    const wd = ok(await srv.api(who.cookie, `${D}/${d.id}/widgets`, { method: "POST", body: {
+      expectedDashboardRevision: fresh.revision, widgetType: "table", title: `W ${groupBy}`, widgetOrder: order, x: 0, y: (order - 1) * 4, width: 6, height: 4, mobileOrder: order, groupBy } }), 201);
+    ok(await srv.api(who.cookie, `${D}/${d.id}/widgets/${wd.widgetId}/series`, { method: "POST", body: {
+      expectedWidgetRevision: 1, seriesOrder: 1, ...(groupBy === "cohort"
+        ? { builtInSeriesKey: "session_count", dataScopeLevel: "day", analyticalAggregation: "sum" }
+        : { builtInSeriesKey: "rpe", dataScopeLevel: "session", analyticalAggregation: "avg" }) } }), 201);
+    return wd.widgetId;
+  };
+  const dA = await board(w.adminA, "Alpha board", { ownerScope: "club", ownerClubId: w.A });
+  const cohortW = await widget(w.adminA, dA, "cohort");
+  const athleteW = await widget(w.adminA, dA, "athlete");
+  const dayW = await widget(w.adminA, dA, "day");
+  const dPriv = await board(w.adminA, "Alpha private");
+  const dT = await board(w.coachA, "Alpha team board", { ownerScope: "team", ownerTeamId: w.TA1 });
+  const dB = await board(w.adminB, "Beta board", { ownerScope: "club", ownerClubId: w.B });
+  const tSys = (await k.query(`select * from training_load.create_dashboard('Shared template', null, 'system', null, null, null, null, null, true, $1, null)`, [pa.id])).rows[0];
+  const pageOf = async (d) => (await k.query(`select id from training_load.dashboard_pages where dashboard_id = $1 order by position limit 1`, [d.id])).rows[0].id;
+  const pageA = await pageOf(dA);
+  const pageB = await pageOf(dB);
+  // One session in each club today (club A: one athlete of club A; club B: one athlete of club B).
+  const athB = ok(await srv.api(w.adminB.cookie, "/api/organization/athletes", { method: "POST", body: { fullName: "Lena Vsweepbeta", clubId: w.B, teamId: w.TB1 } }), 201).athlete;
+  for (const [club, athleteId, by] of [[w.A, w.athA.id, w.adminA.id], [w.B, athB.id, w.adminB.id]]) {
+    const act = (await k.query(`insert into training.activities (activity_type_key, name, occurred_local_date, started_at, timezone_snapshot, owner_scope, owner_club_id, origin, lifecycle_state, created_by_user_id)
+      values ('training_session', 'Vsweep session', $1, $2, 'UTC', 'club', $3, 'manual', 'confirmed', $4) returning id`, [today, `${today}T09:00:00Z`, club, by])).rows[0].id;
+    await k.query(`insert into training.activity_participants (activity_id, athlete_id, local_date, timezone_snapshot, participation_status) values ($1, $2, $3, 'UTC', 'participated')`, [act, athleteId, today]);
+  }
+  const adminAnswer = ok(await srv.api(w.adminA.cookie, `${D}/${dA.id}/query`, { method: "POST", body }));
+  assert.equal(seriesOf(adminAnswer, cohortW)[0].status, "ok", "the coach's cohort total");
+  const cohortValue = seriesOf(adminAnswer, cohortW)[0].data.current;
+  assert.equal(seriesOf(adminAnswer, athleteW)[0].status, "ok", "old-vs-new: the coach keeps its per-athlete widget");
+
+  const clubHolder = await holderOf("dbClubV6", ["dashboards.view"]);
+  const teamHolder = await holderOf("dbTeamV6", ["dashboards.view"], "team", w.TA1);
+  // load.view.athlete is not open in a view workspace until Training Load's V step: still restricted here.
+  const athleteWordHolder = await holderOf("dbNamesV6", ["dashboards.view", "load.view.athlete", "athletes.view"]);
+  const before = await snapshot();
+  for (const [who, label, own, others] of [
+    [clubHolder, "club_view", [dA], [dB, dPriv, dT]],
+    [teamHolder, "team_view", [dT], [dA, dB, dPriv]],
+    [athleteWordHolder, "club_view + load.view.athlete", [dA], [dB, dPriv, dT]],
+  ]) {
+    const raw = await srv.api(who.cookie, `${D}?includeTemplates=true&includeArchived=true`);
+    const listed = idsOf(ok(raw).dashboards);
+    for (const d of [...own, tSys]) assert.ok(listed.includes(String(d.id)), `${label}: lists ${d.name}`);
+    for (const d of others) assert.ok(!listed.includes(String(d.id)), `${label}: never ${d.name}`);
+    assert.ok(!raw.text.includes(String(w.B)) && !raw.text.includes(String(w.TB1)), `${label}: nothing of club B`);
+    assert.deepEqual(ok(await srv.api(who.cookie, `${D}/active`)), { activeDashboard: null }, `${label}: no selection`);
+    for (const d of own) {
+      assert.equal(ok(await srv.api(who.cookie, `${D}/${d.id}`)).dashboard.id, d.id, `${label}: opens its dashboard`);
+      const pages = ok(await srv.api(who.cookie, `${D}/${d.id}/pages`));
+      assert.equal(pages.canManage, false, `${label}: pages read only`);
+    }
+    for (const id of [...others.map((d) => d.id), RANDOM_ID]) {
+      const r = await srv.api(who.cookie, `${D}/${id}`);
+      const m = await srv.api(who.cookie, `${D}/${RANDOM_ID}`);
+      assert.deepEqual([r.status, r.body], [m.status, m.body], `${label}: ${id} is the identical 404`);
+      assert.equal(r.status, 404);
+    }
+    const pageMissing = await srv.api(who.cookie, `${D}/${RANDOM_ID}/pages/${RANDOM_ID}`);
+    const pageForeign = await srv.api(who.cookie, `${D}/${dB.id}/pages/${pageB}`);
+    assert.deepEqual([pageForeign.status, pageForeign.text], [pageMissing.status, pageMissing.text], `${label}: another club's page is the identical 404`);
+    assert.equal((await srv.api(who.cookie, `${D}/${tSys.id}/query`, { method: "POST", body })).status, 409, `${label}: a template answers templateRequiresClone`);
+  }
+  for (const who of [clubHolder, athleteWordHolder]) {
+    const raw = await srv.api(who.cookie, `${D}/${dA.id}/query`, { method: "POST", body });
+    const answer = ok(raw);
+    assert.equal(seriesOf(answer, cohortW)[0].status, "ok", "the cohort total is answered");
+    assert.deepEqual(seriesOf(answer, cohortW)[0].data.current, cohortValue, "club A's data only, as the coach's total (ADR-002)");
+    for (const wid of [athleteW, dayW]) {
+      assert.deepEqual(seriesOf(answer, wid).map((s) => [s.status, s.error, s.data]), [["restricted", "namedAthletesRequired", null]], "a per-athlete widget is never queried");
+    }
+    assert.ok(!raw.text.includes(String(w.athA.id)) && !raw.text.includes(String(athB.id)), "no athlete id anywhere");
+    // An athlete filter turns a cohort total into one athlete's data: restricted too.
+    const filtered = ok(await srv.api(who.cookie, `${D}/${dA.id}/query`, { method: "POST", body: { ...body, athleteIds: [w.athA.id] } }));
+    assert.equal(seriesOf(filtered, cohortW)[0].status, "restricted");
+    const shell = ok(await srv.api(who.cookie, `${D}/${dA.id}/query`, { method: "POST", body: { ...body, shellFilter: { clubIds: [], teamIds: [], athleteIds: [w.athA.id] } } }));
+    assert.equal(seriesOf(shell, cohortW)[0].status, "restricted");
+    // The page query: the same rule.
+    const page = ok(await srv.api(who.cookie, `${D}/${dA.id}/pages/${pageA}/query`, { method: "POST", body }));
+    assert.equal(seriesOf(page, cohortW)[0].status, "ok");
+    assert.equal(seriesOf(page, athleteW)[0].status, "restricted");
+  }
+  assert.deepEqual(changed(before, await snapshot()), [], "no read wrote anything (no preference, no row)");
+
+  // Every write answers what it answered an account with no role, and lands nothing.
+  for (const who of [clubHolder, teamHolder]) {
+    for (const [method, p, wbody] of [
+      ["POST", D, { name: "Nope" }],
+      ["POST", D, { name: "Nope", ownerScope: "club", ownerClubId: w.A }],
+      ["POST", `${D}/${tSys.id}/clone`, { name: "Nope" }],
+      ["PATCH", `${D}/${dA.id}`, { expectedRevision: dA.revision, name: "Nope" }],
+      ["POST", `${D}/${dA.id}/archive`, { expectedRevision: dA.revision }],
+      ["DELETE", `${D}/${dA.id}`, { expectedRevision: dA.revision }],
+      ["POST", `${D}/active`, { dashboardId: dA.id }],
+      ["DELETE", `${D}/active`, undefined],
+      ["POST", `${D}/${dA.id}/widgets`, { expectedDashboardRevision: 1, widgetType: "table", title: "Nope", widgetOrder: 99, x: 0, y: 0, width: 6, height: 4, mobileOrder: 99 }],
+      ["POST", `${D}/${dA.id}/pages`, { requestId: key(), requestIssuedAt: new Date().toISOString(), expectedPagesRevision: 1, input: { name: "Nope" } }],
+      ["GET", `${D}/${dA.id}/pages/requests/${RANDOM_ID}`, undefined],
+    ]) await sameAsNobodyWrite(who, method, p, wbody);
+  }
+  // A forged `club` preference resolves to club_view and reads the same.
+  await setPref(clubHolder, "club", w.A);
+  assert.equal((await me(clubHolder)).activeWorkspace.type, "club_view");
+  assert.ok(idsOf(ok(await srv.api(clubHolder.cookie, D)).dashboards).includes(String(dA.id)));
+  // A mixed account: club B's admin holding club A's dashboards role, in club_view A, reads club A only and writes nothing,
+  // not even its own club B's dashboard.
+  const roleA = await roleOf(["dashboards.view"]);
+  await grant(w.adminA, w.adminB.id, roleA.id, "club", w.A);
+  await setPref(w.adminB, "club", w.A);
+  try {
+    assert.equal((await me(w.adminB)).activeWorkspace.type, "club_view");
+    const listed = idsOf(ok(await srv.api(w.adminB.cookie, D)).dashboards);
+    assert.ok(listed.includes(String(dA.id)) && !listed.includes(String(dB.id)), "club A's dashboards, never club B's");
+    assert.equal((await srv.api(w.adminB.cookie, `${D}/${dB.id}`)).status, 404, "its own club's dashboard is not read through club A's view");
+    await sameAsNobodyWrite(w.adminB, "PATCH", `${D}/${dB.id}`, { expectedRevision: dB.revision, name: "Nope" });
+    await sameAsNobodyWrite(w.adminB, "POST", D, { name: "Nope", ownerScope: "club", ownerClubId: w.B });
+    await sameAsNobodyWrite(w.adminB, "POST", `${D}/${dB.id}/pages`, { requestId: key(), requestIssuedAt: new Date().toISOString(), expectedPagesRevision: 1, input: { name: "Nope" } });
+  } finally {
+    await setPref(w.adminB, "club", w.B);
+  }
+  // Old-vs-new: the coaches keep their dashboards, managing as before.
+  const adminList = idsOf(ok(await srv.api(w.adminA.cookie, D)).dashboards);
+  for (const d of [dA, dPriv, tSys]) assert.ok(adminList.includes(String(d.id)), `club admin lists ${d.name}`);
+  assert.equal(ok(await srv.api(w.adminA.cookie, `${D}/${dA.id}/pages`)).canManage, true);
+  assert.ok(idsOf(ok(await srv.api(w.coachA.cookie, D)).dashboards).includes(String(dT.id)));
+  // The word taken away.
+  const other = await holderOf("dbOtherV6", ["presets.use"]);
+  await sameAsNobody(other, D, "no word");
+  await sameAsNobody(other, `${D}/${dA.id}`, "no word");
+  await sameAsNobody(other, `${D}/${dA.id}/pages`, "no word");
+  // The licence closes the module for the role holders and for the club's old roles (reads and writes) alike.
+  await ceiling(pa, ["dashboards"], []);
+  try {
+    for (const who of [clubHolder, teamHolder, w.adminA, w.coachA]) {
+      await sameAsNobody(who, D, "closed by the licence");
+      await sameAsNobody(who, `${D}/${dA.id}`, "closed by the licence");
+      await sameAsNobody(who, `${D}/${dA.id}/pages`, "closed by the licence");
+    }
+    await sameAsNobodyWrite(w.adminA, "PATCH", `${D}/${dA.id}`, { expectedRevision: dA.revision, name: "Nope" });
+    await sameAsNobodyWrite(w.adminA, "POST", `${D}/${dA.id}/pages`, { requestId: key(), requestIssuedAt: new Date().toISOString(), expectedPagesRevision: 1, input: { name: "Nope" } });
+    assert.equal((await srv.api(w.adminB.cookie, D)).status, 200, "another club keeps it");
+  } finally {
+    await ceiling(pa, [], ["dashboards"]);
+  }
+  for (const who of [clubHolder, w.adminA, w.coachA]) assert.equal((await srv.api(who.cookie, D)).status, 200, "reopened");
 });

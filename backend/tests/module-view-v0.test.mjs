@@ -42,8 +42,8 @@ test("1. every module's view word is a known, storable (VIEW package) word, scop
   assert.throws(() => viewEntryGate("nope", []), /Unknown view module/);
 });
 
-test("2. only the open modules (V-1: data_configuration, presets; V-3: calendar): a view workspace holding every view word is refused every other module", () => {
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["calendar", "data_configuration", "presets"]);
+test("2. only the open modules (V-1: data_configuration, presets; V-3: calendar; V-6: dashboards): a view workspace holding every view word is refused every other module", () => {
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["calendar", "dashboards", "data_configuration", "presets"]);
   const all = authzWith(Object.values(MODULE_VIEW_WORDS));
   for (const module of Object.keys(MODULE_VIEW_WORDS)) {
     const open = OPEN_VIEW_MODULES.includes(module);
@@ -201,5 +201,20 @@ test("11. a custom parameter pattern is matched whole: an alternation /^a|b$/ ad
     assert.throws(() => viewEntryGate("calendar", [{ method: "GET", path: "/:key", params: { key: new RegExp("^[a-z]+$", flags) } }]), /without g, y or m/, flags);
   }
   assert.doesNotThrow(() => viewEntryGate("calendar", [{ method: "GET", path: "/:key", params: { key: /^[a-z]+$/i } }]), "the i flag is harmless");
+});
+test("12. V-6: a POST read is listed only with postRead and a last segment \"query\"; it then admits that POST and nothing else", async () => {
+  assert.throws(() => viewEntryGate("dashboards", [{ method: "POST", path: "/:id/query" }]), /Bad view route/, "postRead is required");
+  for (const path of ["/:id", "/:id/query/x", "/:id/queries", "/query-all"]) assert.throws(() => viewEntryGate("dashboards", [{ method: "POST", path, postRead: true }]), /Bad view route/, path);
+  for (const method of ["PUT", "PATCH", "DELETE"]) assert.throws(() => viewEntryGate("dashboards", [{ method, path: "/:id/query", postRead: true }]), /Bad view route/, method);
+  const ID = "33333333-0000-4000-8000-000000000001";
+  const holder = authzWith(["dashboards.view"]);
+  const gate = viewEntryGate("dashboards", [{ method: "POST", path: "/:id/query", postRead: true }], { resolve: resolver(clubView), open: ["dashboards"] });
+  const yes = await runGate(gate, { user: { id: "u1" }, authz: holder, method: "POST", path: `/${ID}/query` });
+  assert.equal(yes.next, true);
+  assert.equal(yes.status, null);
+  for (const [method, path] of [["GET", `/${ID}/query`], ["POST", `/${ID}`], ["POST", `/${ID}/clone`], ["DELETE", `/${ID}/query`]]) {
+    const no = await runGate(gate, { user: { id: "u1" }, authz: holder, method, path });
+    assert.equal(no.status, 403, `${method} ${path}`);
+  }
 });
 }

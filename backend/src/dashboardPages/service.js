@@ -1,14 +1,15 @@
 import {attachGalleryResult,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { isMetricVisibleToDashboard, isSourceConnectionVisibleToDashboard } from '../trainingLoadDashboardAccess.js';
 import { assertDashboardAggregation } from '../dashboardRatios.js';
-import { queryDashboard } from '../trainingLoadDashboardQuery.js';
+import { queryDashboardForViewer } from '../trainingLoadDashboardQuery.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { resolvePeriod } from '../dashboardSimple/compiler.js';
 import { validateContract } from '../dashboardSimple/schema.js';
 import {createHash} from 'node:crypto';
 import {loadAuthorizationContext} from '../authz.js';
-import {resolveActiveWorkspaceReadOnly} from '../workspace.js';
-import {canViewDashboardRow,canManageDashboardRow,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches} from '../trainingLoadDashboardAccess.js';
+import {pickFallbackWorkspace,resolveActiveWorkspaceReadOnly} from '../workspace.js';
+import {viewReadScope} from '../moduleView.js';
+import {canViewDashboardRow,canManageDashboardRow,dashboardNamedAthletesAllowed,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches} from '../trainingLoadDashboardAccess.js';
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
@@ -36,8 +37,17 @@ export async function pageTarget(q,req,dashboardId,{write=false,manage=false}={}
  if(!user)throw pageError();
  const authz=await loadAuthorizationContext(user,q);
  const resolved=await resolveActiveWorkspaceReadOnly(user.id,authz,q);
- if(!resolved.workspace)throw pageError();
- const actor={user,authz};const workspace=dataWorkspaceForActiveWorkspace(resolved.workspace,actor);
+ // Roles V-6: a view workspace reads a page only on a read the dashboards gate admitted (req.moduleView), in the workspace
+ // the gate resolved (its fallback included); anything else of a view workspace, and any workspace without a data
+ // workspace (no dashboards.view there, as the legacy routes' requireDataWorkspace), answers the 404. A view actor never
+ // manages (canManageDashboardRow).
+ const admitted=req.moduleView?.module==='dashboards'&&!write&&!manage;
+ const active=resolved.workspace||(admitted?pickFallbackWorkspace(resolved.availableWorkspaces):null);
+ if(!active)throw pageError();
+ const actor={user,authz};
+ if(viewReadScope(active)){if(admitted)actor.moduleView=req.moduleView;else actor.dashboardsViewRefused=true;}
+ const workspace=dataWorkspaceForActiveWorkspace(active,actor);
+ if(actor.dashboardsViewRefused||!workspace.dataWorkspaceType)throw pageError();
  const dashboard=(await q('select * from training_load.dashboards where id=$1',[dashboardId])).rows[0];
  if(!dashboard||!((write||manage)?canManageDashboardRow(actor,dashboard):canViewDashboardRow(actor,dashboard,workspace)))throw pageError();
  if(write&&dashboard.status!=='active')throw pageError('dashboardArchived',409);
@@ -101,7 +111,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
    const selected=widgets.filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
-   const result=await queryDashboard(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q});
+   const result=await queryDashboardForViewer(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
    const galleryWidgets=await hydrateGalleryWidgets(q,selected);
    return {dashboardRevision:target.dashboard.revision,pageId:page.id,pageRevision:page.revision,defaultsRevision:page.defaults_revision,resolvedPeriod:period,widgets:result.map(w=>attachGalleryResult(galleryWidgets.find(x=>x.id===w.widgetId),{...w,presentation_config:selected.find(x=>x.id===w.widgetId)?.presentation_config}))};
   });
