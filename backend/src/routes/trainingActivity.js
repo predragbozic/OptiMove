@@ -44,18 +44,24 @@ const activityNamedViewGate = viewEntryGate("load_athlete", [
   { method: "GET", path: "/" },
   { method: "GET", path: "/:activityId" },
 ], { refuse: (_req, _res, next) => next() });
-const activityCoachGate = coachModuleGate("load_team", { allowed: (authz, scope) => can(authz, "load.view.team", scope) });
+const activityCoachGate = coachModuleGate("load_team", {
+  allowed: (authz, scope) => can(authz, "load.view.team", scope),
+  refuse(req, res) {
+    if (req.path.split("/").filter(Boolean)[1] === "roster") return res.status(404).json({ error: "notFound" });
+    return res.status(403).json({ error: "Forbidden" });
+  },
+});
 
 function activityNamesAllowed(req, scope) {
   return can(req.authz, "load.view.athlete", scope) && can(req.authz, "athletes.view", scope);
 }
 
 router.use((req, res, next) => {
-  const gate = req.method === "GET" && req.path.split("/").filter(Boolean)[1] === "roster"
-    ? activityTeamViewGate : activityNamedViewGate;
+  const segments = req.path.split("/").filter(Boolean);
+  const rosterRead = req.method === "GET" && segments.length === 2 && segments[1] === "roster";
+  const gate = rosterRead ? activityTeamViewGate : activityNamedViewGate;
   return gate(req, res, error => {
-    if (error) return next(error);
-    if (req.moduleView || req.path.split("/").filter(Boolean)[1] === "roster") return next();
+    if (error || req.moduleView || rosterRead) return next(error);
     return activityCoachGate(req, res, next);
   });
 });

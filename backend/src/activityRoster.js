@@ -548,7 +548,7 @@ export async function getActivityRoster(ctx, activityId) {
     const { canonicalId, activity, basis } = await resolveRosterTarget(client, ctx, activityId, { viewScope: ctx.viewScope });
     const snap = await loadRosterSnapshot(client, canonicalId);
     if (ctx.viewScope) {
-      const athletes = ctx.named ? snap.athletes.map(({ athleteId, name, state, stateLabel }) => ({ athleteId, name, state, stateLabel })) : [];
+      const athletes = ctx.named ? snap.athletes.map(({ athleteId, name, state, stateLabel, group }) => ({ athleteId, name, state, stateLabel, group })) : [];
       return {
         activity: {
           id: String(activityId),
@@ -560,7 +560,7 @@ export async function getActivityRoster(ctx, activityId) {
           ownerTeamId: String(activity.owner_team_id),
         },
         canonicalActivityId: canonicalId,
-        viewer: { basis },
+        viewer: { readOnly: true },
         counts: snap.counts,
         athletes,
         canComplete: false,

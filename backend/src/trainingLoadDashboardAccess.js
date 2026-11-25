@@ -37,6 +37,7 @@ import { isAthleteInWorkspaceScope } from "./trainingLoadAccess.js";
 import { query } from "./db.js";
 import { calculatedDefinitionSql } from "./calculatedValues.js";
 import { can } from "./permissions.js";
+import { athleteTrainingLoadAllowed } from "./athleteTrainingLoadLicence.js";
 import { canView, viewReadScope } from "./moduleView.js";
 
 export { isAthleteInWorkspaceScope };
@@ -181,6 +182,7 @@ export function resolveActiveDataWorkspace(req) {
       if (req.dashboardsViewRefused === true) return { type: null };
       if (req.moduleView?.module === VIEW_MODULE) return dataWorkspaceFromActiveWorkspace(req.moduleView.workspace, req);
       const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+      if (workspace?.type === "athlete" && !(await athleteTrainingLoadAllowed(req.authz?.athleteId))) return { type: null };
       return dataWorkspaceFromActiveWorkspace(workspace, req);
     })();
     req._resolvedDataWorkspacePromise.catch(() => {

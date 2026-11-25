@@ -9,6 +9,7 @@
 // source-identity/import-side flows, which have no public route in this
 // phase) direct calls into the real service functions against the same
 // disposable database.
+import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
@@ -248,6 +249,7 @@ before(async () => {
   await adminClient.query(LEGACY_FIXTURE_SQL);
   migrationsDir = await writeMigrationsDir("primary", Object.fromEntries(MIGRATIONS.map((name, i) => [name, migrationSqls[i]])));
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  await applyRoleReadMigrations(db.url);
   // v53's club hides table, empty (the definitions list reads it): see the helper.
   await createClubHidesStandIn(adminClient);
 

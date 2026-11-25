@@ -32,7 +32,8 @@ import {
 } from "../trainingLoadMetricsMeasurements.js";
 
 const router = Router();
-const refuseView = (_req, res) => res.status(403).json({ error: "Forbidden" });
+const refuseView = (req, res, next) => req.path.replace(/\/$/, "") === "/occasions"
+  ? next() : res.status(403).json({ error: "Forbidden" });
 const catalogViewGate = viewEntryGate("load_team", [
   { method: "GET", path: "/domains" }, { method: "GET", path: "/categories" },
   { method: "GET", path: "/definitions" }, { method: "GET", path: "/definitions/:id" },

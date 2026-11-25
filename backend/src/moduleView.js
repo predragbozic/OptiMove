@@ -32,7 +32,7 @@ import { rolelessViewHandoff } from './viewWorkspaceHandoff.js';
 // VIEW_WORKSPACE_USABLE_WORDS (permissions.js), and its row to backend/tests/roles-v-sweep.test.mjs.
 import { isPlatformAdministrator } from "./authz.js";
 import { can } from "./permissions.js";
-import { VIEW_WORKSPACE_TYPES, pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
+import { VIEW_WORKSPACE_TYPES, pickFallbackWorkspace, rememberCheckedCoachWorkspace, resolveActiveWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
 
 // The view word of each module (roles R4 contract 4.1; the plan's section 2). Every word is in the VIEW package (v92).
 export const MODULE_VIEW_WORDS = Object.freeze({
@@ -101,11 +101,13 @@ export function coachModuleGate(module, { allowed, refuse = forbidden, resolve =
       if (req.moduleView?.module === module) return next();
       const a = req.authz;
       if (!req.user || !((a?.clubRoles?.length || 0) + (a?.teamRoles?.length || 0))) return next();
-      const { workspace, availableWorkspaces } = await resolve(req.user.id, a);
+      const resolveCoach = module === "load_team" && resolve === resolveActiveWorkspaceReadOnly ? resolveActiveWorkspace : resolve;
+      const { workspace, availableWorkspaces } = await resolveCoach(req.user.id, a);
       const active = workspace || pickFallbackWorkspace(availableWorkspaces);
       const type = active ? COACH_SCOPE_TYPES[active.type] : undefined;
       if (!type) return next();
       if (active.scopeId == null || active.scopeId === "" || !allowed(a, { type, id: String(active.scopeId) })) return refuse(req, res, next);
+      if (module === "load_team") rememberCheckedCoachWorkspace(req.user.id, a, { workspace: active, availableWorkspaces });
       return next();
     } catch (error) {
       return next(error);

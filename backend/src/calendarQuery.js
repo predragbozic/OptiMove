@@ -856,8 +856,8 @@ function newCard(fields) {
 
 export async function readCalendar(ctx, { from, to, today, kinds, filters, includeAthletes }) {
   const wantPlanned = kinds.has("planned");
-  const wantActivity = kinds.has("activity");
   const allowRpe = ctx.type !== "athlete" || await athleteTrainingLoadAllowed(ctx.athleteId);
+  const wantActivity = allowRpe && kinds.has("activity");
   const wantExternal = allowRpe && kinds.has("external");
   const wantTest = kinds.has("test");
   const teams = await loadWorkspaceTeams(ctx);
@@ -1349,7 +1349,7 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   const byDate = new Map();
   for (let cursor = from; cursor <= to; cursor = addDaysIso(cursor, 1)) byDate.set(cursor, []);
   for (const card of cards.values()) {
-    if (!kinds.has(card.kind)) continue;
+    if (!kinds.has(card.kind) || (!allowRpe && card.kind === "activity")) continue;
     const bucket = byDate.get(card.date);
     if (!bucket) continue;
     if (!allowRpe) {

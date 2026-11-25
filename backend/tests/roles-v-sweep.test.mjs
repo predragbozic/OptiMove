@@ -159,8 +159,9 @@ test("2. closed rows: every view word in club_view (and with a forged club prefe
   for (const forged of [false, true]) {
     if (forged) await setPref(w.all, "club", w.A);
     const prefBefore = (await k.query(`select workspace_type, scope_id, updated_at from public.user_workspace_preferences where user_id = $1`, [w.all.id])).rows;
-    for (const row of rows().filter((r) => !r.open)) {
-      for (const p of [...row.reads, ...ALWAYS_CLOSED()]) {
+    const closed = [...rows().filter((r) => !r.open), { module: "imports", reads: ALWAYS_CLOSED(), writes: [] }];
+    for (const row of closed) {
+      for (const p of row.reads) {
         const a = await srv.api(w.all.cookie, p);
         const b = await srv.api(w.nobody.cookie, p);
         assert.equal(a.status, b.status, `${row.module} ${p}: ${a.status} ${a.text.slice(0, 160)} vs ${b.status} ${b.text.slice(0, 160)}`);
@@ -1437,12 +1438,33 @@ test("V-5b: closing a club's Training Load licence hides an athlete's load and R
   assert.ok(openInbox.notifications.some(item => item.type === "training_load_manual_reminder"));
   const today = prefix + "/athlete/today";
   const openDate = ok(await srv.api(who.cookie, today)).date;
+  const schedule = async eventName => ok(await srv.api(w.adminA.cookie, prefix + "/external-schedules", {
+    method: "POST", body: {
+      eventName, scheduleKind: "one_time", timezone: "UTC", startDate: openDate,
+      opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athlete.id }],
+    },
+  }), 201).schedules[0];
+  const toRate = await schedule("Pending practice");
+  const prior = await schedule("Previously rated practice");
+  const active = ok(await srv.api(who.cookie, today)).sessions;
+  const pendingId = active.find(session => session.scheduleId === toRate.id).externalAssignmentId;
+  const priorId = active.find(session => session.scheduleId === prior.id).externalAssignmentId;
+  const feedback = { rpe: 6, durationMinutes: 30 };
+  const saveRpe = id => srv.api(who.cookie, prefix + "/external-assignments/" + id + "/rpe", { method: "POST", body: feedback });
+  ok(await saveRpe(priorId), 201);
+  const priorFeedback = ok(await srv.api(who.cookie, today)).sessions.find(session => session.externalAssignmentId === priorId).feedback;
+  assert.equal(priorFeedback.rpe, 6);
 
   await ceiling(pa, ["training_load"], []);
   try {
     const before = await snapshot();
     for (const path of reads) assert.equal((await srv.api(who.cookie, path)).status, 403, path);
     assert.deepEqual(ok(await srv.api(who.cookie, today)), { date: openDate, sessions: [] });
+    assert.equal((await saveRpe(pendingId)).status, 404, "a valid pending assignment remains closed");
+    const change = await srv.api(who.cookie, prefix + "/external-assignments/" + priorId + "/rpe/change", {
+      method: "POST", body: { ...feedback, rpe: 8, requestKey: key(), expectedRevision: 1 },
+    });
+    assert.equal(change.status, 404, "closed licence hides an existing editable answer");
     const closedInbox = ok(await srv.api(who.cookie, "/api/notifications"));
     assert.deepEqual(closedInbox.notifications.map(item => item.type), ["tests_reminder"]);
     assert.equal(closedInbox.unreadCount, 1);
@@ -1455,6 +1477,7 @@ test("V-5b: closing a club's Training Load licence hides an athlete's load and R
     await ceiling(pa, [], ["training_load"]);
   }
   ok(await srv.api(who.cookie, reads[0]));
+  assert.deepEqual(ok(await srv.api(who.cookie, today)).sessions.find(session => session.externalAssignmentId === priorId).feedback, priorFeedback);
 });
 
 test("V-5b: the read-only coach workspace reads scoped schedules and weekly data without creating occurrences", async () => {
@@ -1473,6 +1496,25 @@ test("V-5b: the read-only coach workspace reads scoped schedules and weekly data
   const own = await schedule(w.adminA, w.A, "Alpha practice");
   const foreign = await schedule(w.adminB, w.B, "Beta practice");
   const snapshotOccurrences = async () => (await k.query("select id from training_load.external_schedule_occurrences order by id")).rows;
+  const activity = async (teamId, title) => (await k.query(`insert into training.activities
+    (name,occurred_local_date,started_at,timezone_snapshot,owner_scope,owner_team_id,origin)
+    values($1,$2,now(),'UTC','team',$3,'manual') returning id`, [title, date, teamId])).rows[0].id;
+  const ownActivity = await activity(w.TA1, "Alpha workout");
+  const foreignActivity = await activity(w.TB1, "Beta workout");
+  const metric = async (clubId, label) => {
+    const { id } = (await k.query(`insert into training_load.metric_definitions
+      (key,label,owner_scope,owner_club_id,state,created_by_user_id)
+      values($1,$2,'club',$3,'active',$4) returning id`, [label.toLowerCase().replaceAll(" ", "_"), label, clubId, w.adminA.id])).rows[0];
+    const version = (await k.query(`insert into training_load.metric_definition_versions
+      (metric_definition_id,version_number,unit,value_type,daily_aggregation_method,created_by_user_id)
+      values($1,1,'m','numeric','sum',$2) returning id`, [id, w.adminA.id])).rows[0];
+    await k.query("update training_load.metric_definitions set current_version_id=$2 where id=$1", [id, version.id]);
+    return id;
+  };
+  const alphaMetric = await metric(w.A, "Alpha load");
+  const betaMetric = await metric(w.B, "Beta load");
+  const catalog = "/api/training-load/metrics/definitions";
+  const activityPath = "/api/training-activity/";
   const before = await snapshotOccurrences();
   for (const viewer of [named, counts]) {
     const list = ok(await srv.api(viewer.cookie, path));
@@ -1488,9 +1530,33 @@ test("V-5b: the read-only coach workspace reads scoped schedules and weekly data
     assert.equal(Object.hasOwn(detail.schedule, "ownerUserId"), false);
     const calendar = ok(await srv.api(viewer.cookie, "/api/training-load/calendar?dateFrom=" + date + "&dateTo=" + date));
     if (viewer === counts) assert.ok(calendar.days.flatMap(day => day.items).every(item => item.kind === "activity"));
+    const roster = ok(await srv.api(viewer.cookie, activityPath + ownActivity + "/roster"));
+    assert.deepEqual(roster.viewer, { readOnly: true });
+    assert.ok(roster.counts.total >= 1);
+    if (viewer === counts) assert.deepEqual(roster.athletes, []);
+    else assert.ok(roster.athletes.some(row => row.athleteId === w.athA.id));
+    assert.equal(Object.hasOwn(roster, "rosterFingerprint"), false);
+    const foreignRoster = await srv.api(viewer.cookie, activityPath + foreignActivity + "/roster");
+    const missingRoster = await srv.api(viewer.cookie, activityPath + key() + "/roster");
+    assert.deepEqual([foreignRoster.status, foreignRoster.text], [missingRoster.status, missingRoster.text]);
+    assert.equal(foreignRoster.status, 404);
+    const definitions = ok(await srv.api(viewer.cookie, catalog + "?ownerScope=club")).rows;
+    assert.ok(definitions.some(row => row.id === alphaMetric));
+    assert.ok(definitions.every(row => row.id !== betaMetric));
   }
   const weekly = "/api/training-load/weekly?weekStart=" + date;
   ok(await srv.api(named.cookie, weekly));
   assert.equal((await srv.api(counts.cookie, weekly)).status, 403);
   assert.deepEqual(await snapshotOccurrences(), before);
+  const pa = await person("v5bRosterOwner", id => F.grantPlatform(id));
+  await ceiling(pa, ["training_load"], []);
+  try {
+    const rejected = await srv.api(w.coachA.cookie, activityPath + ownActivity + "/roster/complete", {
+      method: "POST", body: {},
+    });
+    assert.equal(rejected.status, 404);
+    assert.deepEqual(rejected.body, { error: "notFound" });
+  } finally {
+    await ceiling(pa, [], ["training_load"]);
+  }
 });

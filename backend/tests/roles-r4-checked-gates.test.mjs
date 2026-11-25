@@ -87,7 +87,7 @@ export const WORKSPACE_BRANCH = new RegExp([
 // on an invitation's context and check the inviter's role rows; dashboardShellFilter.js and trainingLoadDashboardQuery.js
 // read the dashboard's data workspace (one of the five existing types, anything else refused).
 const REVIEWED = Object.freeze({
-  "activityRoster.js": 3,
+  "activityRoster.js": 5,
   // V-2: the view branch reads only the athletes gate's scope (req.moduleView, can(athletes.view)), never an offered
   // workspace; a view workspace without the gate's pass stays `and false` (+3).
   "athleteRosterScope.js": 7,
@@ -98,13 +98,14 @@ const REVIEWED = Object.freeze({
   // V-3: calendar.view on a coach workspace (its club or team scope), and the club of a team view scope (the gate's).
   "calendarModuleContext.js": 2,
   "calendarEventService.js": 5, // V-3: the catalog owner of a view workspace's GET /types (the club or team it names)
-  "calendarQuery.js": 11,
+  "calendarQuery.js": 12,
   "calendarQuestionService.js": 2,
   "calendarSettingsService.js": 3,
   // V-1: resolveVariableViewer reads the club of the gate's view scope (club or team), never an offered workspace.
   "canonicalVariableAdminService.js": 2,
   "clubCeilingLock.js": 2,
   // P3 owner contract: both helpers explicitly close every workspace except club/team.
+  "dashboardPages/service.js": 2, // Page scope consistency and athlete Training Load licence
   "dashboardReferences/access.js": 1,
   "dashboardReferences/bindingRouter.js": 1, // athlete/cohort groupBy validation, not a workspace authority
   "dashboardReferences/query.js": 1,
@@ -138,10 +139,10 @@ const REVIEWED = Object.freeze({
   "routes/organization.js": 22, // R4-2: the view branch of GET /, its fail-closed filter and the members rule (+3)
   "routes/taxonomy.js": 1, // V-1: viewScopeSql reads the gate's view scope (club or team), never an offered workspace
   "routes/tests.js": 1,
-  "routes/trainingActivity.js": 3,
-  "routes/trainingLoad.js": 13,
+  "routes/trainingActivity.js": 9,
+  "routes/trainingLoad.js": 16,
   "routes/trainingLoadDashboard.js": 1,
-  "routes/trainingLoadMetrics.js": 5,
+  "routes/trainingLoadMetrics.js": 8,
   "sessionTypeService.js": 6, // V-1: the club of the gate's view scope (club or team) (+1)
   "sourceConnectionService.js": 5,
   "sourceMetricAccess.js": 3,
@@ -152,13 +153,13 @@ const REVIEWED = Object.freeze({
   "trainingLoadAccess.js": 24,
   // V-6: dashboards.view at a coach workspace's own club or team (an old role row), and the club / team data workspace
   // that load.view.athlete is asked for (+2); a view workspace is read through viewReadScope (the gate's), never offered.
-  "trainingLoadDashboardAccess.js": 9,
+  "trainingLoadDashboardAccess.js": 10,
   "trainingLoadDashboardCatalog.js": 3,
   "trainingLoadDashboardQuery.js": 13,
   "trainingLoadDashboardWidgets.js": 1,
-  "trainingLoadMetricsAccess.js": 15,
+  "trainingLoadMetricsAccess.js": 16,
   "trainingLoadOccurrenceService.js": 4,
-  "workspace.js": 4, // R4-2: a stored club / team preference maps to club_view / team_view without the old row; L1 keeps such a preference (+3)
+  "workspace.js": 5, // R4-2: a stored club / team preference maps to club_view / team_view without the old row; L1 keeps such a preference (+3)
 });
 
 test("B0. the branch pattern finds a branch whatever the variable is called", () => {
