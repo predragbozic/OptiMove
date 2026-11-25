@@ -872,7 +872,9 @@ every write. Session types are V-1's.
 `can(load.view.athlete)` on the athlete-row reads (`/weekly`, the activity list and detail, the roster rows, results,
 occasions). The platform and a private coach are unchanged (R4 Q10). A basic Club admin and Team coach hold both
 words (v92 seed), so nobody loses anything until a club version takes a word away or the licence closes Training Load.
-The **athlete workspace** (an athlete's own RPE, weekly and results) is not a role and is not licence-gated in V-5.
+The **athlete workspace** (an athlete's own RPE, weekly and results) is not a role, but it IS licence-gated in V-5b (the
+owner's option (a) for choice 7, 12.4): an athlete of a club whose licence closes `training_load` gets no RPE prompt, no
+RPE entry and no own load; one named server-side check, with a test.
 
 **Registration.** `ENFORCED_PERMISSIONS` gets `load.view.team` and `load.view.athlete` with their gate files;
 `VIEW_WORKSPACE_USABLE_WORDS` both; `OPEN_VIEW_MODULES` gets `load_team`, `load_athlete` (both sides); B1 / B3 counts.
@@ -898,7 +900,12 @@ held). The licence screen as in 12.1. `ux-design-reviewer` and `mobile-qa` for b
 4. "Named athletes" needs `athletes.view` too (P-1), so a view workspace gets team totals only until V-2.
 5. `/weekly` (every row an athlete) is not opened for team totals; no totals endpoint is built (plan section 6, 4).
 6. The coach paths check `load.view.team` on every route and `load.view.athlete` on the athlete-row reads.
-7. The athlete workspace is not licence-gated in V-5.
+7. ~~The athlete workspace is not licence-gated in V-5.~~ **Decided by the owner (2026-11-25, relayed by the manager):
+   option (a).** When a club's licence closes `training_load`, the athlete workspace is gated too: that club's athletes
+   get no RPE prompts and no RPE entry, and do not see their own load. Built in V-5b, server-side, with a test; the RPE
+   gate is ONE named check, so it can later be pointed at its own licence item.
+   - **Future option, not designed now (plan-limits work):** RPE may become its own licence item that stays open while
+     Training Load is closed (an RPE-only package). Nothing beyond the one named check is built for it.
 8. **Split recommended:** V-5a = the hierarchy (v96, JS, licence screen; small, reviewable with `db-reviewer`, one
    production rehearsal); V-5b = the Training Load view reads (no migration). One PR if the manager prefers.
 

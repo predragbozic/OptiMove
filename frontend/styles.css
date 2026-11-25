@@ -30935,7 +30935,11 @@ body.athlete-questions-prompt-open {
 .club-licence-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .club-licence-state { flex: none; font-size: 0.875rem; }
 .club-licence-state.is-out { color: var(--danger, #b42318); }
-.club-licence-note { display: block; padding: 0 4px 8px 38px; color: var(--muted); }
+.club-licence-note { display: block; padding: 0 4px 8px 38px; color: var(--muted); overflow-wrap: anywhere; }
+/* V-5a, the licence hierarchy: a part closed with its parent cannot be switched here - not a pointer, its name muted
+   (the words "Not included" and the note carry the state, not the colour). */
+.club-licence-row.is-closed-by-parent .club-licence-switch { cursor: default; }
+.club-licence-row.is-closed-by-parent .club-licence-name { color: var(--muted); }
 .club-licence-save { margin-top: 12px; display: grid; gap: 8px; }
 .club-licence-save textarea { display: block; box-sizing: border-box; width: 100%; min-height: 88px; padding: 8px 10px; font: inherit; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); resize: vertical; }
 .club-licence-host { grid-column: 1 / -1; min-width: 0; }

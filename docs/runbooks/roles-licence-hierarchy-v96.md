@@ -73,9 +73,13 @@ close on its own. The preflight's block 3 counts those (club, child) pairs (`chi
 without the v96 file. It refuses, changing nothing, when v96 is not recorded, a later migration is recorded, or a body
 in force is not v96's. It restores v92's two bodies and v95's helper verbatim (checked by md5 at the end) and drops the
 two new functions. It changes no row: a club that closed Training Load but not a child gets that child back for its
-role holders in the database. The server code of this step reads the stored rows through its own
-`effectiveClosedModules`, so a rollback of v96 alone (the code still deployed) keeps `can()` applying the hierarchy;
-roll the code back too.
+role holders in the database.
+
+**Roll the code back together with the SQL.** The server code of this step derives the hierarchy itself
+(`effectiveClosedModules`), so after a rollback of v96 alone (this code still deployed) `can()` keeps refusing a
+child of a closed parent while the database's twin, rule 7 and dominance hold it again: the route gate is stricter
+(fail closed), but the database guards and the server disagree. Deploy a commit without this step's code (and without
+the v96 file) first, then run the rollback.
 
 ## Evidence
 

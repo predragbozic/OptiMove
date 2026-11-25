@@ -89,6 +89,7 @@ test("1. Training Load saved as closed: its three children read Not included, th
     assert.equal(box(root, child).disabled, true, child);
     assert.match(note(root, child).textContent, /^Closed because Training Load is closed\.$/, child);
     assert.match(row(root, child).textContent, /Not included/, child);
+    assert.equal(row(root, child).classList.contains("is-closed-by-parent"), true, `${child}: drawn as closed with its parent`);
     assert.equal(box(root, child).getAttribute("aria-describedby"), note(root, child).id, `${child}: the note describes the switch`);
   }
   assert.equal(box(root, "calendar").checked, true);

@@ -101,6 +101,13 @@ test("0. the JavaScript twin equals the database: the parent of every module, an
   assert.ok(modules.length >= FAMILY.length);
   for (const m of modules) assert.equal(MODULE_PARENTS[m.word] ?? null, m.parent, `parent of ${m.word}`);
   assert.deepEqual(Object.keys(MODULE_PARENTS).sort(), ["dashboards", "data_configuration", "imports"]);
+  // Every child and parent named by the hierarchy is a module of the catalog, and a parent is never itself a child.
+  const words = new Set(modules.map((m) => m.word));
+  for (const [child, parent] of Object.entries(MODULE_PARENTS)) {
+    assert.ok(words.has(child), `${child} is in permission_modules`);
+    assert.ok(words.has(parent), `${parent} is in permission_modules`);
+    assert.equal(MODULE_PARENTS[parent], undefined, `${parent} has no parent (one level only)`);
+  }
   const w = await world();
   let stored = [];
   for (let mask = 0; mask < 16; mask += 1) {
@@ -218,6 +225,9 @@ test("4. rule 7 and R2's dominance read the effective ceiling: with Training Loa
   await setModule(w.pa, w.club, "training_load", "close");
   // Rule 7 leaves out an effectively closed module: a platform admin's Club admin version without variables.view,
   // while Team coach (default) carries it, passes only because data_configuration is closed through its parent.
+  // Rule 7 still holds for a word that is NOT a child: a Club admin version without calendar.view (Team coach carries
+  // it, Calendar is open) is refused, with only the parent's row stored.
+  await refused(makeVersion(w.pa, w.club, ROLE_IDS.club_admin, { remove: ["calendar.view"] }), "23514");
   await makeVersion(w.pa, w.club, ROLE_IDS.club_admin, { remove: ["variables.view"] });
   assert.equal(await holdsInClub(w.admin, "variables.view", w.club), false, "the admin would not hold it when the parent opens");
   // The stricter half: the club's admin cannot give a closed child word it would not hold.

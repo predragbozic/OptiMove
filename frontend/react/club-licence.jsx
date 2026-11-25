@@ -15,7 +15,7 @@ function ModuleRow({ module, closed, parentLabel = "", parentClosed = false, dis
   const included = always || (!closed && !parentClosed);
   const noteId = useId();
   return (
-    <li className={`club-licence-row${included ? "" : " is-closed"}`}>
+    <li className={`club-licence-row${included ? "" : " is-closed"}${parentClosed ? " is-closed-by-parent" : ""}`}>
       <label className="club-licence-switch">
         <input
           type="checkbox"
