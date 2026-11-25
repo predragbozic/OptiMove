@@ -496,6 +496,8 @@ test("7. the calendar (calendar.view): club_view and team_view read their club's
     assert.ok(events.some((e) => String(e.eventId) === String(evA.id)), `${label}: the club's event`);
     assert.ok(!raw.text.includes(String(evB.id)) && !raw.text.includes(String(w.B)) && !raw.text.includes(String(w.TB1)), `${label}: nothing of club B`);
     assert.ok(!raw.text.includes("Vsweepalpha"), `${label}: no athlete name (P-1)`);
+    assert.ok(!raw.text.includes(String(w.athA.id)), `${label}: no athlete id either (P-1: counts only)`);
+    assert.ok(events.find((e) => String(e.eventId) === String(evA.id)).athleteCount > 0, `${label}: the count stays`);
     assert.ok(!raw.text.includes(SECRET), `${label}: no notes`);
     for (const e of events) assert.deepEqual([e.canManage, e.notes, e.details, e.eventTypeId], [false, undefined, undefined, undefined], label);
     assert.ok(cal.days.flatMap((d) => d.items).every((i) => !("athletes" in i)), `${label}: include=athletes left out`);
@@ -506,7 +508,7 @@ test("7. the calendar (calendar.view): club_view and team_view read their club's
     const one = await srv.api(who.cookie, `${E}/${evA.id}`);
     const ev = ok(one).event;
     assert.equal(ev.canManage, false);
-    assert.ok(!one.text.includes("Vsweepalpha") && !one.text.includes(SECRET), `${label}: no name, no note`);
+    assert.ok(!one.text.includes("Vsweepalpha") && !one.text.includes(SECRET) && !one.text.includes(String(w.athA.id)), `${label}: no name, no athlete id, no note`);
     assert.equal(ev.hiddenAthleteTargets, 1, `${label}: the athlete target counted`);
     assert.deepEqual(withoutAthleteTargets(ev), withoutAthleteTargets(coachReduced), `${label}: the reduced view a non-manager gets`);
     // Another club's event and a missing one: the identical 404.
@@ -574,6 +576,8 @@ test("7. the calendar (calendar.view): club_view and team_view read their club's
     await sameAsNobodyWrite(w.adminA, "POST", `${E}/${evA.id}/cancel`, { requestKey: key(), expectedRevision: evA.revision, reason: "Nope" });
     await sameAsNobodyWrite(w.adminA, "POST", E, { requestKey: key(), eventTypeId: types, title: "Nope", day, timezone: "UTC", targets: [{ kind: "team", id: w.TA1 }] });
     await sameAsNobody(w.adminA, "/api/calendar/settings", "closed by the licence");
+    // The athlete's own questions have no coach side: a coach still gets an empty list, not the module's refusal.
+    assert.deepEqual(ok(await srv.api(w.adminA.cookie, "/api/calendar/questions/mine")), { questions: [] });
     assert.equal((await srv.api(w.adminB.cookie, `/api/calendar?${q}`)).status, 200, "another club keeps it");
   } finally {
     await ceiling(pa, [], ["calendar"]);
