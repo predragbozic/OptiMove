@@ -107,6 +107,7 @@ function rows() {
 const ALWAYS_CLOSED = () => [`/api/training-load/gpexe/teams/${w.TA1}/status`, `/api/training-load/gpexe/teams/${w.TA1}/candidates`];
 
 const ORIGINAL_DASHBOARD_PAGES_ENABLED = process.env.DASHBOARD_PAGES_ENABLED;
+const ORIGINAL_DASHBOARD_REFERENCES_ENABLED = process.env.DASHBOARD_REFERENCES_ENABLED;
 
 before(async () => {
   db = await buildDatabase({ label: "rvsweep", upTo: "all" });
@@ -115,6 +116,7 @@ before(async () => {
   F = fixtures(k);
   await k.query("update training_load.dashboard_pages_activation set enabled=true where singleton");
   process.env.DASHBOARD_PAGES_ENABLED = "true";
+  process.env.DASHBOARD_REFERENCES_ENABLED = "true";
   srv = await startServer(db.url);
   mv = await import("../src/moduleView.js");
   ({ MODULE_VIEW_WORDS, OPEN_VIEW_MODULES } = mv);
@@ -138,6 +140,8 @@ after(async () => {
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
   if (ORIGINAL_DASHBOARD_PAGES_ENABLED === undefined) delete process.env.DASHBOARD_PAGES_ENABLED;
   else process.env.DASHBOARD_PAGES_ENABLED = ORIGINAL_DASHBOARD_PAGES_ENABLED;
+  if (ORIGINAL_DASHBOARD_REFERENCES_ENABLED === undefined) delete process.env.DASHBOARD_REFERENCES_ENABLED;
+  else process.env.DASHBOARD_REFERENCES_ENABLED = ORIGINAL_DASHBOARD_REFERENCES_ENABLED;
 });
 
 test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows are exactly OPEN_VIEW_MODULES (V-1: data configuration, presets; V-2: athletes; V-3: calendar; V-4: tests)", () => {
@@ -1134,6 +1138,38 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
   assert.ok(paListed.includes(String(dA.id)) && !paListed.includes(String(dB.id)) && !paListed.includes(String(dPriv.id)), "no platform shortcut in a view workspace");
   assert.equal(ok(await srv.api(paView.cookie, `${D}/${dA.id}/pages`)).canManage, false, "never offered managing");
   assert.equal(ok(await srv.api(paView.cookie, `${D}/${dA.id}/pages/${pageA}`)).canManage, false);
+  const { id: definitionId } = (await k.query(`insert into training_load.metric_definitions
+    (key,label,owner_scope,state,created_by_user_id)
+    values('v6_reference_distance','Reference distance','system','active',$1) returning id`, [w.adminA.id])).rows[0];
+  const { id: versionId } = (await k.query(`insert into training_load.metric_definition_versions
+    (metric_definition_id,version_number,unit,value_type,daily_aggregation_method,created_by_user_id)
+    values($1,1,'m','numeric','sum',$2) returning id`, [definitionId, w.adminA.id])).rows[0];
+  await k.query("update training_load.metric_definitions set current_version_id=$2 where id=$1", [definitionId, versionId]);
+  await k.query("insert into training_load.metric_definition_scope_capabilities values($1,'session')", [definitionId]);
+  order += 1;
+  const { id: referenceWidgetId, revision } = (await k.query(`insert into training_load.dashboard_widgets
+    (dashboard_id,widget_type,title,widget_order,x,y,width,height,mobile_order,group_by)
+    values($1,'bar_chart','Team reference',$2,0,$3,6,4,$2,'cohort') returning id,revision`, [dA.id, order, (order - 1) * 4])).rows[0];
+  await k.query(`select * from training_load.add_series($1,$2,0,$3,null,null,'primary',null,null,
+    'all_with_conflicts',null,'session','sum')`, [referenceWidgetId, revision, definitionId]);
+  const { id: referenceSeriesId } = (await k.query("select id from training_load.dashboard_widget_series where widget_id=$1", [referenceWidgetId])).rows[0];
+  const referenceConfig = {
+    schemaVersion: 1, source: "teamAverage", mode: "overlay", clubId: w.A, teamId: w.TA1,
+    axes: [{ seriesId: referenceSeriesId, valueKeys: ["teamAverage"] }]
+  };
+  await k.query("update training_load.dashboard_widgets set presentation_config=$2 where id=$1",
+    [referenceWidgetId, { schemaVersion: 1, referenceConfig }]);
+  for (const path of [`${D}/${dA.id}`, `${D}/${dA.id}/pages/${pageA}`]) {
+    const adminWidget = ok(await srv.api(w.adminA.cookie, path)).widgets.find(widget => widget.id === referenceWidgetId);
+    assert.deepEqual(adminWidget.presentation_config.referenceConfig, referenceConfig);
+    const viewWidget = ok(await srv.api(paView.cookie, path)).widgets.find(widget => widget.id === referenceWidgetId);
+    assert.equal("referenceConfig" in viewWidget.presentation_config, false);
+    const viewQuery = ok(await srv.api(paView.cookie, path + "/query", { method: "POST", body }));
+    const result = viewQuery.widgets.find(widget => widget.widgetId === referenceWidgetId);
+    assert.ok(result);
+    assert.equal(Object.hasOwn(result.presentation_config ?? {}, "referenceConfig"), false);
+    assert.equal(Object.hasOwn(result, "references"), false);
+  }
   // Old-vs-new: the coaches keep their dashboards, managing as before.
   const adminList = idsOf(ok(await srv.api(w.adminA.cookie, D)).dashboards);
   for (const d of [dA, dPriv, tSys]) assert.ok(adminList.includes(String(d.id)), `club admin lists ${d.name}`);
@@ -1187,7 +1223,13 @@ test("12. programs (programs.view) and exercises (exercises.use): a view workspa
      values ('program', $1, $2, true, 'optimove', $3, $4, true) returning id`, [by, name, visibility, status])).id;
   const tplPublic = await template(w.coachA.id, "Vseven public template", "public", "active");
   const tplPrivate = await template(w.adminB.id, "Vseven private template", "private", "active");
-  const tplDraft = await template(w.coachA.id, "Vseven public draft template", "public", "draft");
+  const tplDraft = await template(w.adminB.id, "Vseven public draft template", "public", "draft");
+  const tplWorkspace = await template(w.adminB.id, "Vseven workspace template", "public", "active");
+  await k.query("update plans.plans set library_scope='workspace', library_category='Workspace-only category' where id=$1", [tplWorkspace]);
+  await k.query("update plans.plans set library_category='Draft-only category' where id=$1", [tplDraft]);
+  const { id: draftTag } = await one(`insert into library.program_tag_definitions
+    (name, owner_scope, owner_user_id) values ('Draft-only tag','user',$1) returning id`, [w.adminB.id]);
+  await k.query("insert into library.program_tags (plan_id, tag_id) values ($1,$2)", [tplDraft, draftTag]);
   const exercise = async (name, scope, owner, active) => (await one(
     `insert into library.exercises (name, owner_scope, owner_user_id, is_active) values ($1, $2, $3, $4) returning id`,
     [name, scope, owner, active])).id;
@@ -1230,6 +1272,11 @@ test("12. programs (programs.view) and exercises (exercises.use): a view workspa
     for (const t of list.templates) for (const hidden of VIEW_TEMPLATE_HIDDEN_KEYS) assert.ok(!Object.hasOwn(t, hidden), `${label}: no ${hidden}`);
     const options = ok(await srv.api(who.cookie, "/api/templates/options"));
     assert.ok(!JSON.stringify(options).includes("@"), `${label}: no e-mail in the options`);
+    assert.deepEqual(has(JSON.stringify(options), ["Draft-only", "Workspace-only", w.adminB.id, w.B]), [], `${label}: options only from visible templates`);
+    const visibleTags = ok(await srv.api(who.cookie, `/api/templates/${tplPublic}/tags`));
+    assert.deepEqual(has(JSON.stringify(visibleTags), [draftTag, "Draft-only"]), []);
+    assert.equal((await srv.api(who.cookie, `/api/templates/${tplDraft}/tags`)).status, 404);
+    assert.deepEqual(await programIds(who, w.athA.id), [String(progActive)], `${label}: UUID resolves the same athlete`);
     assert.equal((await srv.api(who.cookie, `/api/plans/${tplPublic}/program`)).status, 200, `${label}: the public template's program`);
     assert.equal((await srv.api(who.cookie, `/api/templates/${tplPublic}/reviews`)).status, 200);
     const privateAnswer = await srv.api(who.cookie, `/api/plans/${tplPrivate}/program`);
@@ -1269,6 +1316,22 @@ test("12. programs (programs.view) and exercises (exercises.use): a view workspa
       ["POST", "/api/exercise-collections", { name: "Nope" }],
     ], 403);
   }
+  const sources = (await k.query("select id, source_external_id from public.athletes where id=any($1::uuid[])", [[w.athA.id, athB.id]])).rows;
+  await k.query("update public.athletes set source_external_id=null where id=$1", [w.athA.id]);
+  await k.query("update public.athletes set source_external_id=$1 where id=$2", [codeA, athB.id]);
+  try {
+    for (const who of [clubHolder, teamHolder]) {
+      const ambiguous = await srv.api(who.cookie, `/api/athletes/${codeA}/program-data?program=__all_programs__`);
+      assert.equal(ambiguous.status, 403);
+      assert.deepEqual(await programIds(who, w.athA.id), [String(progActive)]);
+    }
+  } finally {
+    await k.query("update public.athletes set source_external_id=null where id=$1", [athB.id]);
+    for (const { id, source_external_id } of sources) {
+      await k.query("update public.athletes set source_external_id=$2 where id=$1", [id, source_external_id]);
+    }
+  }
+
   // programs.view without athletes.view (P-1): the library, never an athlete's page.
   const libraryOnly = await holderOf("pgLibrary", ["programs.view"]);
   assert.deepEqual(await templateIds(libraryOnly), [String(tplPublic)]);

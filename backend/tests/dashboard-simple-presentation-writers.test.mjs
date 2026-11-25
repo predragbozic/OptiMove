@@ -31,6 +31,8 @@ if (needsModuleMocksRelaunch()) {
     dashboardVisibilitySql: () => "true",
     dataWorkspaceMatches: () => true,
     dashboardNamedAthletesAllowed: () => true,
+    dashboardWidgetsForViewer: (_req, widgets) => widgets,
+    isDashboardsViewRequest: () => false,
     redactDashboardAthleteFilters: (parts) => parts,
     resolveDashboardCreateContext: async (request, body, suppliedWorkspace) => {
       assert.equal(suppliedWorkspace, workspace);
