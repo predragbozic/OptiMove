@@ -3,6 +3,7 @@
 import { Router } from "express";
 import { isPoolCheckoutTimeout } from "../db.js";
 import { resolveCalendarContext } from "../calendarAccess.js";
+import { viewEntryGate } from "../moduleView.js";
 import {
   archivePosition, createPosition, hidePosition, listAthletePositions, listPositions, PositionError, renamePosition, restorePosition,
   setAthletePosition, showPosition,
@@ -11,7 +12,17 @@ import {
 const router = Router();
 const NOT_FOUND_BODY = Object.freeze({ error: "notFound", message: "Not found." });
 
+// Roles V-2: a view workspace reaches only the two reads, with athletes.view at its club or team (moduleView.js); every
+// other request of a view workspace gets the identical 404 this router answers it today. Read-only: the gate's workspace
+// is used as it is, never resolved again.
+router.use(viewEntryGate("athletes", [{ method: "GET", path: "/" }, { method: "GET", path: "/athletes" }], {
+  refuse: (_req, res) => res.status(404).set("Cache-Control", "no-store").json(NOT_FOUND_BODY),
+}));
+
 async function contextOf(req) {
+  if (req.moduleView?.module === "athletes") {
+    return { accountType: "view", workspace: req.moduleView.workspace, viewScope: req.moduleView.scope, userId: req.user.id, authz: req.authz };
+  }
   const c = await resolveCalendarContext(req);
   return { accountType: c.type, workspace: c.workspace ?? null, userId: req.user.id, authz: req.authz };
 }

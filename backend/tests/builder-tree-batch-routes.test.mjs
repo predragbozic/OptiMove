@@ -17,7 +17,7 @@ if (needsModuleMocksRelaunch()) {
     throw new Error(`Unexpected external query: ${sql}`);
   }
   mock.module("../src/db.js", { namedExports: { query, pool: { connect: async () => client } } });
-  mock.module("../src/access.js", { namedExports: { athleteAccessPredicate: () => "false", canAccessAllAthletes: () => false, canAccessPlan: async () => true } });
+  mock.module("../src/access.js", { namedExports: { athleteAccessPredicate: () => "false", athleteViewScopes: () => ({ clubIds: [], teamIds: [] }), canAccessAllAthletes: () => false, canAccessPlan: async () => true } });
   const { default: router, copyProgramTree, copyDaySessions, copySessionContent, copyWeeklyPlanTree } = await import("../src/routes/builder.js");
   const edit = router.stack.find((layer) => layer.route?.path === "/plans/:planId/edit").route.stack[0].handle;
 

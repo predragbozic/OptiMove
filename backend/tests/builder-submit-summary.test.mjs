@@ -66,7 +66,7 @@ if (needsModuleMocksRelaunch()) {
     throw new Error(`Unexpected mock query: ${normalized}`);
   }
   mock.module("../src/db.js", { namedExports: { query, pool: { connect: async () => ({ query, release: () => calls.push({ sql: "release" }) }) } } });
-  mock.module("../src/access.js", { namedExports: { athleteAccessPredicate: () => "false", canAccessAllAthletes: () => false, canAccessPlan: async () => true } });
+  mock.module("../src/access.js", { namedExports: { athleteAccessPredicate: () => "false", athleteViewScopes: () => ({ clubIds: [], teamIds: [] }), canAccessAllAthletes: () => false, canAccessPlan: async () => true } });
   mock.module("../src/realtime.js", { namedExports: { emitRealtimeEvent() {} } });
   mock.module("../src/trainingLoadAccess.js", { namedExports: { isAthleteInWorkspaceScope() {}, resolveExternalScheduleWorkspaceScope() {} } });
   const { default: router } = await import("../src/routes/builder.js");

@@ -56,7 +56,7 @@ test("1. a view workspace with org.view: Settings is offered, with only Overview
 });
 
 test("2. a view workspace without a word list (absent, unavailable) or without org.view: nothing is offered, never the old fallback", () => {
-  for (const extra of [{}, { permissions: null }, { permissions: ["org.view"], permissionsUnavailable: true }, { permissions: [] }, { permissions: ["athletes.view"] }]) {
+  for (const extra of [{}, { permissions: null }, { permissions: ["org.view"], permissionsUnavailable: true }, { permissions: [] }, { permissions: ["programs.view"] }]) {
     as(CLUB_VIEW, extra);
     const label = JSON.stringify(extra);
     assert.equal(access.hasOrganizationAccess(), false, label);
@@ -64,6 +64,13 @@ test("2. a view workspace without a word list (absent, unavailable) or without o
     assert.equal(permissionNav.permissionTabAllowed("overview"), false, label);
     assert.equal(permissionNav.permissionTabAllowed("athletes"), false, label);
   }
+});
+
+test("2b. V-2: athletes.view alone opens its own Settings section only (as presets.use in V-1), never org.view's", () => {
+  as(CLUB_VIEW, { permissions: ["athletes.view"] });
+  assert.deepEqual(permissionNav.viewSettingsSections(), ["athletes"]);
+  assert.equal(permissionNav.permissionTabAllowed("overview"), false);
+  assert.equal(access.hasOrganizationAccess(), false, "Settings itself still needs org.view");
 });
 
 test("3. the menu hides every module entry in a view workspace and gives them back in a staff workspace", () => {

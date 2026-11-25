@@ -2787,6 +2787,34 @@ input:focus {
   background: var(--surface);
 }
 
+/* Roles V-2: a view workspace's athlete list is read only - a row laid out as .athlete-button, not a control. */
+.athlete-button-readonly {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px;
+  color: var(--text);
+}
+
+.organization-view-athletes-note {
+  margin: 0 0 12px;
+}
+
+.athlete-position-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 13px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .avatar,
 .avatar-fallback {
   width: 42px;
@@ -8325,7 +8353,8 @@ body:not(.athlete-mode):not(.login-mode) .athlete-hero-compact .athlete-hero-fal
     font-size: 16px;
   }
 
-  body:not(.athlete-mode):not(.login-mode) .athlete-button {
+  body:not(.athlete-mode):not(.login-mode) .athlete-button,
+  body:not(.athlete-mode):not(.login-mode) .athlete-button-readonly {
     grid-template-columns: 54px minmax(0, 1fr);
     gap: 9px;
     padding: 9px;
