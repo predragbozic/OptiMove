@@ -40,7 +40,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: MAIN_MIGRATIONS }); // through v60, plus v62 (the importer reads it); everything but the error-tracking migration (it would record test 19's injected 500 as a row): the approval writes v59 columns, so v57 is no longer the last migration here (tests 20 and 22 keep their own v56/v57 slices)
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undou5", migrations: MAIN_MIGRATIONS, roleRead: true }); // through v60, plus v62 (the importer reads it); everything but the error-tracking migration (it would record test 19's injected 500 as a row): the approval writes v59 columns, so v57 is no longer the last migration here (tests 20 and 22 keep their own v56/v57 slices)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
