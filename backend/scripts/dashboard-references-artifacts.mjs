@@ -1,3 +1,4 @@
+import {REFERENCE_DATA_DIGEST_SQL} from '../src/dashboardReferences/evidence.js';
 // Development-only generator. Connects exclusively through the disposable helper.
 import fs from 'node:fs';import crypto from 'node:crypto';
 import {createPagesDatabase} from '../tests/support/dashboard-pages-db.mjs';
@@ -27,9 +28,9 @@ try{
  rollback+='end $restored$;\ndelete from public.schema_migrations where migration_name='+quote(file)+';\ncommit;\n';fs.writeFileSync(base+'-rollback.sql',rollback);
  const required="select exists(select 1 from public.schema_migrations where migration_name='migrations_v2/202611261000_training_load_v94_chart_shapes.sql' and checksum='2c018c784ace8edc1cb0c9b729d5e0143166d813477899f678060d6c6ac304cb') v94_exact;\n";
  let pre=required;for(const [,name,md5]of restore){const f=functions.find(f=>f.signature.startsWith('training_load.'+name+'('));pre+='select (select md5(prosrc) from pg_proc where oid=to_regprocedure('+quote(f.signature)+'))='+quote(md5)+' '+name+'_exact;\n';}
- pre+="select not exists(select 1 from public.schema_migrations where migration_name="+quote(file)+") v97_absent;\nselect (select count(*) from training_load.dashboards) dashboards,(select count(*) from training_load.dashboard_widgets) widgets,(select count(*) from training_load.dashboard_widget_series) series;\n";fs.writeFileSync(base+'-preflight.sql',pre);
+ pre+="select not exists(select 1 from public.schema_migrations where migration_name="+quote(file)+") v97_absent;\nselect (select count(*) from training_load.dashboards) dashboards,(select count(*) from training_load.dashboard_widgets) widgets,(select count(*) from training_load.dashboard_widget_series) series;\n";fs.writeFileSync(base+'-preflight.sql',pre+REFERENCE_DATA_DIGEST_SQL);
  let post='select count(*)=1 and bool_and(checksum='+quote(manifest.sha256)+') v97_exact from public.schema_migrations where migration_name='+quote(file)+';\n';
  for(const f of functions)post+='select (select md5(prosrc) from pg_proc where oid=to_regprocedure('+quote(f.signature)+'))='+quote(f.md5)+' body_exact;\n';
- post+="select not exists(select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='training_load' and (c.relname like 'dashboard_reference_%' or t.tgname like 'dashboard_reference_%') and not t.tgisinternal and t.tgenabled<>'O') triggers_enabled;\n";fs.writeFileSync(base+'-postcheck.sql',post);
+ post+="select not exists(select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='training_load' and (c.relname like 'dashboard_reference_%' or t.tgname like 'dashboard_reference_%') and not t.tgisinternal and t.tgenabled<>'O') triggers_enabled;\n";fs.writeFileSync(base+'-postcheck.sql',post+REFERENCE_DATA_DIGEST_SQL);
  console.log('Generated v97 packet from disposable catalog.');
 }finally{await db.drop();}

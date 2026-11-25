@@ -3,7 +3,7 @@ import { Router } from "express";
 import { adminWriteKit } from "../sourceMetricMappingService.js";
 import { resolveReferenceContext, referenceCanWrite } from "./access.js";
 import { referenceUuid, validReferenceWrite, REFERENCE_LIMITS } from "./contract.js";
-const { boundedRead, hashOf } = adminWriteKit;
+const { boundedRead, hashOf, rightsStillHold } = adminWriteKit;
 const missing = res => res.status(404).json({ error: "notFound" });
 const invalid = res => res.status(400).json({ error: "invalidRequest", message: "Check the reference values and try again." });
 const refusalMessages = Object.freeze({
@@ -77,6 +77,7 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
     const payload=action === "create"?{name:req.body.name}:action === "draft"?req.body.draft:{};
     const hash=hashOf({contract:"dashboard-reference/v1",action,club:ctx.owner.clubId,table:req.params.id??null,body:req.body});
     const receipt=await boundedRead(async client => {
+      if(!await rightsStillHold(client,ctx))throw Object.assign(new Error("notFound"),{code:"42501"});
       const result=await client.query("select training_load.mutate_dashboard_reference($1,$2,$3,$4,$5,$6,$7,$8) receipt",[ctx.userId,ctx.owner.clubId,req.body.requestId,hash,req.params.id??null,req.body.expectedRevision??null,action,payload]);
       return result.rows[0].receipt;
     },{locks:true});

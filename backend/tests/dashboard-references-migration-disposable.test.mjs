@@ -1,3 +1,4 @@
+import {REFERENCE_DATA_DIGEST_SQL} from '../src/dashboardReferences/evidence.js';
 import {before,after,test} from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {createPagesDatabase} from './support/dashboard-pages-db.mjs';import {PAGE_CATALOG_SQL} from './support/dashboard-pages-catalog.mjs';
 let db,q;const file='migrations_v2/202611291000_training_load_v97_references.sql';
@@ -5,7 +6,12 @@ const sql=kind=>fs.readFileSync(new URL('../../docs/runbooks/dashboard-reference
 before(async()=>{db=await createPagesDatabase({through:'202611271000',label:'reference_rollback'});q=db.client;});after(async()=>{await db?.drop();});
 async function allTrue(text){const result=await q.query(text);for(const part of Array.isArray(result)?result:[result])for(const row of part.rows??[])for(const value of Object.values(row))if(typeof value==='boolean')assert.equal(value,true,JSON.stringify(row));}
 test('v97 preflight, apply, postcheck, actual rollback, identical catalog and reapply',async()=>{
- const before=(await q.query(PAGE_CATALOG_SQL)).rows[0];await allTrue(sql('preflight'));await db.applyThrough('202611291000');await allTrue(sql('postcheck'));await q.query(sql('rollback'));assert.deepEqual((await q.query(PAGE_CATALOG_SQL)).rows[0],before);await db.applyThrough('202611291000');await allTrue(sql('postcheck'));
+ const actor=(await q.query("insert into public.users(email,first_name,last_name,full_name) values('before-references@test.local','Before','Refs','Before Refs') returning id")).rows[0].id;
+ const dashboard=(await q.query("select * from training_load.create_dashboard('Before references',null,'user',$1,null,null,'platform',null,false,$1,null)",[actor])).rows[0];
+ const widget=(await q.query("insert into training_load.dashboard_widgets(dashboard_id,widget_type,title,widget_order,x,y,width,height,mobile_order,group_by) values($1,'bar_chart','Before references',0,0,0,6,4,0,'day') returning *",[dashboard.id])).rows[0];
+ await q.query("select * from training_load.add_series($1,$2,0,null,'duration_minutes',null,'primary',null,null,'not_applicable',null,'session','sum')",[widget.id,widget.revision]);
+ const dataBefore=(await q.query(REFERENCE_DATA_DIGEST_SQL)).rows;
+ const before=(await q.query(PAGE_CATALOG_SQL)).rows[0];await allTrue(sql('preflight'));await db.applyThrough('202611291000');await allTrue(sql('postcheck'));assert.deepEqual((await q.query(REFERENCE_DATA_DIGEST_SQL)).rows,dataBefore);await q.query(sql('rollback'));assert.deepEqual((await q.query(PAGE_CATALOG_SQL)).rows[0],before);await db.applyThrough('202611291000');await allTrue(sql('postcheck'));
 });
 test('rollback refuses a changed function or a later recorded migration',async()=>{
  const def=(await q.query("select pg_get_functiondef('training_load.dashboard_reference_config_valid(jsonb)'::regprocedure) definition")).rows[0].definition;

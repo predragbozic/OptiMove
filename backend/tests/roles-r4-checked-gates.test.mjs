@@ -98,6 +98,10 @@ const REVIEWED = Object.freeze({
   // V-1: resolveVariableViewer reads the club of the gate's view scope (club or team), never an offered workspace.
   "canonicalVariableAdminService.js": 2,
   "clubCeilingLock.js": 2,
+  // P3 owner contract: both helpers explicitly close every workspace except club/team.
+  "dashboardReferences/access.js": 1,
+  "dashboardReferences/bindingRouter.js": 1, // athlete/cohort groupBy validation, not a workspace authority
+  "dashboardReferences/query.js": 1,
   "dashboardShellFilter.js": 5,
   "dashboardSimple/platformPilot.js": 1,
   "gpexeAthleteIdentityService.js": 3,

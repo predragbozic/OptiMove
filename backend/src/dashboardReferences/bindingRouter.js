@@ -4,7 +4,7 @@ import { adminWriteKit } from '../sourceMetricMappingService.js';
 import { resolveReferenceContext } from './access.js';
 import { referenceUuid, validReferenceConfig } from './contract.js';
 import { canManageDashboardRow,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches } from '../trainingLoadDashboardAccess.js';
-const {boundedRead,rightsStillHold,hashOf}=adminWriteKit;
+const { boundedRead, rightsStillHold, hashOf } = adminWriteKit;
 const missing=res=>res.status(404).json({error:'notFound'});
 const deny=()=>Object.assign(new Error('notFound'),{code:'42501'});
 export function createReferenceBindingRouter(){

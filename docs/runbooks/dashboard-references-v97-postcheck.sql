@@ -15,3 +15,11 @@ select (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load
 select (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.mutate_dashboard_reference(uuid,uuid,uuid,text,uuid,integer,text,jsonb)'))='4f1cf2472e9673a09a096e929ac8c4c2' body_exact;
 select (select md5(prosrc) from pg_proc where oid=to_regprocedure('training_load.save_dashboard_reference_binding(uuid,uuid,uuid,uuid,text,uuid,uuid,integer,text,jsonb)'))='b3ee6804636124abeec6b683a06f2721' body_exact;
 select not exists(select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='training_load' and (c.relname like 'dashboard_reference_%' or t.tgname like 'dashboard_reference_%') and not t.tgisinternal and t.tgenabled<>'O') triggers_enabled;
+select d.id as dashboard_id,md5(to_jsonb(d)::text) dashboard_digest,
+ (select count(*) from training_load.dashboard_pages p where p.dashboard_id=d.id) pages,
+ (select md5(coalesce(string_agg(to_jsonb(p)::text,E'\n' order by p.id),'')) from training_load.dashboard_pages p where p.dashboard_id=d.id) page_digest,
+ (select count(*) from training_load.dashboard_widgets w where w.dashboard_id=d.id) widgets,
+ (select md5(coalesce(string_agg(to_jsonb(w)::text,E'\n' order by w.id),'')) from training_load.dashboard_widgets w where w.dashboard_id=d.id) widget_digest,
+ (select count(*) from training_load.dashboard_widget_series s join training_load.dashboard_widgets w on w.id=s.widget_id where w.dashboard_id=d.id) series,
+ (select md5(coalesce(string_agg(to_jsonb(s)::text,E'\n' order by s.id),'')) from training_load.dashboard_widget_series s join training_load.dashboard_widgets w on w.id=s.widget_id where w.dashboard_id=d.id) series_digest
+from training_load.dashboards d order by d.id;
