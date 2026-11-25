@@ -839,6 +839,8 @@ test("9. programs (programs.view) and exercises (exercises.use): a view workspac
     assert.equal((await me(w.adminB)).activeWorkspace.type, "club_view");
     assert.deepEqual(await templateIds(w.adminB), [String(tplPublic)], "mixed: never its own private template");
     assert.ok(!(await exerciseIds(w.adminB)).includes(String(exOwn)), "mixed: never its own exercise");
+    assert.equal((await srv.api(w.adminB.cookie, `/api/exercises/${exOwn}`)).status, 404, "mixed: its own exercise's detail is not a view read");
+    assert.ok(!JSON.stringify(ok(await srv.api(w.adminB.cookie, "/api/templates/options"))).includes("Vseven private"), "mixed: no option of its own private template");
     assert.equal((await srv.api(w.adminB.cookie, `/api/athletes/${codeB}/program-data`)).status, 403, "mixed: never club B's athlete through the view");
     assert.deepEqual(await programIds(w.adminB, codeA), [String(progActive)], "mixed: club A's published program");
     await writesLandNothing(w.adminB, [["POST", "/api/builder/plans", { name: "Nope" }], ["POST", "/api/exercises", { name: "Nope" }],

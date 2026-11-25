@@ -234,7 +234,7 @@ test("8. permissionsForWorkspace (pure): a forged platform workspace for a non-a
   assert.deepEqual(P.permissionsForWorkspace(base, { type: "galaxy", scopeId: "x" }), { permissions: [], unavailable: false });
   assert.deepEqual(P.permissionsForWorkspace(base, null), { permissions: [], unavailable: false });
   const clubId = crypto.randomUUID();
-  const forged = { ...base, rolePermissions: [{ scopeType: "club", scopeId: clubId, teamIds: [], words: ["org.view", "programs.view"] }] };
+  const forged = { ...base, rolePermissions: [{ scopeType: "club", scopeId: clubId, teamIds: [], words: ["org.view", "load.view.team"] }] }; // an unchecked word (roles V-7 made programs.view checked)
   assert.deepEqual(P.permissionsForWorkspace(forged, { type: "athlete", scopeId: null }).permissions, []);
   assert.deepEqual(P.permissionsForWorkspace(forged, { type: "club", scopeId: clubId }).permissions, ["org.view"]);
   const privateForged = { ...base, rolePermissions: [{ scopeType: "private", scopeId: "u", teamIds: [], words: ["org.view"] }] };
