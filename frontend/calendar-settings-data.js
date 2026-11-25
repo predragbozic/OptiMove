@@ -7,6 +7,7 @@
 // club_admin role (T6), the identical 404 for an id it does not show - so
 // nothing here is the protection.
 import { api } from "./api.js";
+import { holdsPermission } from "./permission-nav.js";
 import { CENTRAL_CALENDAR_WRITE_BOUND_MS, centralCalendarErrorInfo, centralCalendarOutcomeUnknown, newCentralCalendarRequestKey } from "./central-calendar-data.js";
 import { emptyCalendarSettingsState, state } from "./state.js";
 
@@ -42,7 +43,7 @@ export function calendarSettingsContext() {
   if (!ws || ws.type !== "club" || !ws.scopeId) return null;
   const clubId = String(ws.scopeId);
   const admin = (user.clubs || []).some((club) => String(club?.id) === clubId && club?.role === "club_admin");
-  return admin ? { clubId } : null;
+  return admin && holdsPermission("calendar.settings.manage", user.permissionsUnavailable !== true, user) ? { clubId } : null;
 }
 
 export function resetCalendarSettingsForWorkspaceChange() {

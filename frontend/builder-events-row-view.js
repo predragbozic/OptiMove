@@ -17,6 +17,7 @@ import {
   SAVE_FIRST_QUESTION,
 } from "./builder-events-row.js";
 import { isLibraryKey, renderIconSvg } from "./icon-render.js";
+import { canCreateCalendarEvents } from "./permission-nav.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml } from "./utils.js";
 
@@ -81,7 +82,7 @@ export function renderBuilderEventsRowHtml(block) {
   return `<div class="b-ev-row" role="group" aria-label="${escapeAttr(`Events on ${block.date}`)}">
       <span class="b-ev-label">Events:</span>
       ${chips || `<span class="b-ev-quiet">None on this day.</span>`}
-      <button type="button" class="plain-button b-ev-create" data-action="builder-events-create" data-date="${escapeAttr(block.date)}"${busy ? " disabled" : ""}>${ICON_CAL}<span>Create event →</span></button>
+      ${canCreateCalendarEvents(state.currentUser?.activeWorkspace?.type) ? `<button type="button" class="plain-button b-ev-create" data-action="builder-events-create" data-date="${escapeAttr(block.date)}"${busy ? " disabled" : ""}>${ICON_CAL}<span>Create event →</span></button>` : ""}
     </div>
     ${loading}${error}${made}
     ${wholeDay}

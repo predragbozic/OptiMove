@@ -940,6 +940,19 @@ test("30. another role in the same club (not club_admin) is offered no tab", () 
   assert.equal(data.calendarSettingsContext(), null);
 });
 
+test("M-1: Calendar Settings follow their own permission, independently of event management", () => {
+  state.currentUser = {
+    activeWorkspace: { type: "club", scopeId: CLUB },
+    clubs: [{ id: CLUB, role: "club_admin" }],
+    permissions: ["calendar.view", "calendar.events.manage"],
+  };
+  assert.equal(data.calendarSettingsContext(), null);
+  assert.doesNotMatch(renderSettingsNavHtml(state.organization.data, "overview"), /data-section="calendar"/);
+  state.currentUser.permissions = ["calendar.view", "calendar.settings.manage"];
+  assert.deepEqual(data.calendarSettingsContext(), { clubId: CLUB });
+  assert.match(renderSettingsNavHtml(state.organization.data, "overview"), /data-section="calendar"/);
+});
+
 test("31. a late answer after a workspace switch lands on nothing: no request, no notice, no state in the new slice (S17)", async () => {
   await loaded();
   let release;

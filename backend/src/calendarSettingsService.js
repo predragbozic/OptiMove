@@ -3,9 +3,9 @@
 // place). Plan: docs/ai/central-calendar-k2b-plan.md, sections 2-6 and 16
 // (D24 who writes, D30 hidden options, D33-D38); migration v51.
 //
-// Who: the active CLUB workspace only, on the basis eventWriteBasis gives a
-// club-owned event there (club_admin; a platform admin reaches a club
-// workspace only through that club's club_admin role, T6). Everyone else:
+// Who: the active CLUB workspace only, with its club_admin role and
+// calendar.settings.manage at that club. A platform admin in a club
+// workspace still needs the club_admin role (T6). Everyone else:
 // 403 on a collection route (workspace_required from the platform
 // workspace), the identical 404 on a route that names an id (ADR-006), and
 // the identical 400 for an id in a body (missing, foreign, archived and
@@ -23,10 +23,11 @@ import { pool } from "./db.js";
 import { boundedText, unitTokenOk } from "./metricTextRules.js";
 import { isIconKey } from "./iconKeys.js";
 import { isCalendarColorKey } from "./calendarColors.js";
-import { EventError, eventWriteBasis, forbidden, notFound } from "./calendarEventAccess.js";
+import { EventError, forbidden, notFound } from "./calendarEventAccess.js";
 import { EVENT_EXPECTS, eventCatalogOwner, expectsField, isUuid, listEventTypes, requestKeyOf, revisionField, textField } from "./calendarEventService.js";
 import { hashOf, runCalendarCommand } from "./calendarCommandRunner.js";
-import { isPlatformAdministrator } from "./authz.js";
+import { holdsClubAdminRole, isPlatformAdministrator } from "./authz.js";
+import { can, clubScope } from "./permissions.js";
 import { questionsOff, typeQuestions, validateDefaultQuestions } from "./calendarQuestions.js";
 
 export const EVENT_KINDS = Object.freeze(["training", "match", "travel", "meeting", "day_off", "camp", "test"]);
@@ -54,12 +55,9 @@ export function settingsClub(ctx, { withId = false } = {}) {
   if (ctx.workspace?.type === "platform") throw withId ? notFound() : workspaceRequired();
   if (ctx.workspace?.type !== "club") throw refuse();
   const clubId = String(ctx.workspace.scopeId);
-  // T6: a club workspace is offered only to the holders of that club's
-  // club_admin role (a platform admin included), and eventWriteBasis answers
-  // club_admin first — the one basis Settings -> Calendar writes on.
-  const basis = eventWriteBasis(ctx, { scope: "club", clubId, teamId: null, userId: null, teamClubId: null, teamActive: true, clubActive: true });
-  if (basis !== "club_admin") throw refuse();
-  return { clubId, basis };
+  if (ctx.readOnly === true || ctx.view || !holdsClubAdminRole(ctx.authz, clubId)
+    || !can(ctx.authz, "calendar.settings.manage", clubScope(clubId))) throw refuse();
+  return { clubId, basis: "club_admin" };
 }
 
 // ---------------------------------------------------------------------------

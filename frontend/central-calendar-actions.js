@@ -16,6 +16,7 @@ import {
   ccWindowWire,
 } from "./central-calendar-questions.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
+import { canCreateCalendarEvents } from "./permission-nav.js";
 import { athleteSwitcherScrollIntoView } from "./athlete-switcher.js";
 import { weeklyFlowFromCalendar, weeklyFlowFromPanel } from "./weekly-k6-actions.js";
 import {
@@ -557,11 +558,10 @@ export function centralCalendarRosterIndex() {
 // private coach's workspace - the answer's own workspace decides, and the
 // server decides again on the write. The platform workspace edits only
 // (support); the athlete never reaches this screen.
-const CREATE_WORKSPACES = new Set(["club", "team", "private_coach"]);
 const NOT_AVAILABLE = "This event is no longer available in this workspace.";
 
 export function centralCalendarCanCreateEvents() {
-  return CREATE_WORKSPACES.has(state.centralCalendar.data?.workspace?.type);
+  return canCreateCalendarEvents(state.centralCalendar.data?.workspace?.type);
 }
 
 // The workspace's athletes as the form's targets: the rail roster's UUID
@@ -1132,7 +1132,7 @@ function prefillFromBuilder(form, cal, prefill) {
 
 export async function openCentralCalendarCreateForBuilder(prefill, render) {
   const cal = state.centralCalendar;
-  if (!cal || cal.form || !prefill?.day) return false;
+  if (!cal || cal.form || !prefill?.day || !canCreateCalendarEvents(state.currentUser?.activeWorkspace?.type)) return false;
   if (pendingEntryFor({ mode: "create" })) return false;
   dropStaleEventTypes(cal);
   cal.anchor = prefill.day;
