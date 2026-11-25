@@ -1,3 +1,4 @@
+import { viewModuleOpen } from "./view-modules.js";
 import { api } from "./api.js";
 import { emptyTemplatePreview, state } from "./state.js";
 import { clean } from "./utils.js";
@@ -34,7 +35,8 @@ async function openTemplatePreviewWithRenderer(selected, renderAfter, options = 
     } catch (reviewsLoadError) {
       reviewError = reviewsLoadError.message || "Could not load reviews.";
     }
-    if (String(state.currentUser?.accessScope || "").toLowerCase() !== "athlete") {
+    // Roles V-7: a view workspace has no access requests to read (the route refuses it).
+    if (String(state.currentUser?.accessScope || "").toLowerCase() !== "athlete" && !viewModuleOpen("programs")) {
       try {
         accessRequestsData = await api(`/api/templates/${encodeURIComponent(selected.plan_id)}/access-requests`);
       } catch (requestsLoadError) {

@@ -35,7 +35,7 @@ test("until a roster is read (first load, a switch, a failed read) the list stay
   const clears = [...app.matchAll(/^ +athleteRosterPending = false;/gm)].map((m) => app.slice(Math.max(0, m.index - 120), m.index));
   assert.equal(clears.length, 2, "cleared on the two successful reads only");
   assert.ok(clears.every((before) => /state\.athletes = (data|roster)\.adminRows \|\| \[\];\n\s*$/.test(before)), "each right after a roster was read");
-  assert.match(app, /renderAthleteListHtml\(athletes, state\.selectedAthleteId, \{ searching: Boolean\(search\), pending: athleteRosterPending(, readOnly: isViewWorkspace\(\))? \}\)/);
+  assert.match(app, /renderAthleteListHtml\(athletes, state\.selectedAthleteId, \{ searching: Boolean\(search\), pending: athleteRosterPending(, readOnly: [^}]*)? \}\)/);
 });
 
 test("a zero count is quieter than a real count", () => {

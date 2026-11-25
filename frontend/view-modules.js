@@ -25,7 +25,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 // calendar, read only: no New event, events in their reduced view, no athlete names without athletes.view).
 // V-4: Tests (the Schedule, Results and Test Library sections, read only; no Today, which writes occurrences).
 // V-6 opens Dashboards read-only.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards"]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises"]);
 
 // The menu places of a view workspace: each opens when ANY of its modules is open and its word is held. A place with
 // no module (Coaches) never opens there.
@@ -33,7 +33,10 @@ export const VIEW_NAV_PLACES = Object.freeze([
   { key: "athletes", selectors: ["#athletesToggle", "#athleteSearch", "#athleteList"], tabs: [], modules: ["athletes"] },
   { key: "calendar", selectors: ["#calendarToggle"], tabs: ["central-calendar"], modules: ["calendar"] },
   { key: "coaches", selectors: ['[data-library-tab="coaches"]'], tabs: [], modules: [] },
-  { key: "programs", selectors: ['[data-library-tab="builder"]', '[data-sidebar-submenu="program-library"]'], tabs: ["builder", "templates"], modules: ["programs"] },
+  // The Builder never opens in a view workspace (a view workspace writes nothing); the Program Library does, and an
+  // athlete's two plan pages (weekly, programs) with it.
+  { key: "builder", selectors: ['[data-library-tab="builder"]'], tabs: [], modules: [] },
+  { key: "programs", selectors: ['[data-sidebar-submenu="program-library"]'], tabs: ["templates", "weekly", "programs"], modules: ["programs"] },
   { key: "exercises", selectors: ['[data-library-tab="exercises"]'], tabs: ["exercises"], modules: ["exercises"] },
   // V-4: results alone open nothing (every Tests read needs tests.view first, routes/tests.js).
   { key: "tests", selectors: ['[data-library-tab="tests"]'], tabs: ["tests"], modules: ["tests"] },

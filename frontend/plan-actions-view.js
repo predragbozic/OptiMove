@@ -1,3 +1,4 @@
+import { isViewWorkspace } from "./access.js";
 import { escapeAttr } from "./utils.js";
 
 const ICON_PENCIL = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidden="true"><path d="M4 20l1-4.5L15.5 5 19 8.5 8.5 19 4 20z"></path><path d="M13 7l4 4"></path></svg>`;
@@ -6,6 +7,8 @@ const ICON_TRASH = `<svg viewBox="0 0 24 24" class="builder-icon-svg" aria-hidde
 
 export function renderPlanMoreMenu(planId, objectType) {
   if (document.body.classList.contains("athlete-mode")) return "";
+  // Roles V-7: a view workspace reads plans and templates; it never edits, copies or deletes one.
+  if (isViewWorkspace()) return "";
   const isTemplate = objectType === "template";
   const isWeekly = objectType === "weekly";
   const objectLabel = isTemplate ? "template" : isWeekly ? "weekly plan" : "program";

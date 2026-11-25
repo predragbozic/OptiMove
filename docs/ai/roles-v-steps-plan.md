@@ -1237,3 +1237,99 @@ No migration. The licence hierarchy
   - Simple runtime: the gate with no read answers its 404.
 - **Mobile-qa LOWs, applied.** The restricted sentence is now "This widget shows each athlete's values, which you
   can't see here." The empty state names "the people who manage this club or team".
+
+## V-7 design (Programs and exercises; the executor's discovery, before code)
+
+Branch `claude/roles-v7-programs-exercises` from `2aada5d0`. No migration. P-1 and P-2 as decided (section 7).
+
+### What the code has today (checked at `2aada5d0`)
+
+- `/api/builder`, `/api/exercises`, `/api/exercise-collections`: `requireCoach` (an old role row anywhere), so a pure
+  role holder gets 403 everywhere; a mixed account passes, whatever its active workspace.
+- `/api/templates` and `/api/plans` have **no** `requireCoach`. Any signed-in account already reads public Program
+  Library templates (`GET /api/templates`: admin, own or `visibility = 'public'`) and `GET /api/plans/:id/program` of a
+  public template. `GET /api/plans/:id/program` answers 404 `Plan not found` for a missing id and 403 for a foreign one
+  (an existing exists-or-not difference).
+- An athlete's plans reach the screen only through `GET /api/athletes/:athleteId/program-data` (`?program=__weekly__`,
+  `__all_programs__`, a name), gated by `canAccessAthlete` (gate A, V-2). V-2's entry gate hands it on with `next()`, so
+  a view workspace gets 403 there today. `:athleteId` is an athlete code or a source id, not a UUID.
+- Plan access (`canAccessPlan`, Builder's `editablePlanAccessSql`) reaches a club's plans only through gate A's
+  athlete branch (V-2's `athleteViewScopes`, `athletes.view`). Own plans and public templates are personal, not club
+  data.
+- Exercises: system, own, or a collection grant (`exerciseAccess.js`); no club column. Exercise media is signed per
+  context (`exerciseMedia.js` `createMediaAccessService`): `exercise` through `exerciseReadScopeSql` (system rows pass
+  for anyone), `plan_item` through `canAccessPlan`.
+
+### The view path (a `club_view` / `team_view` workspace)
+
+**`programs.view` (with `athletes.view` for an athlete's plans, P-1):**
+- `routes/athletes.js`: a second gate, `viewEntryGate("programs", [GET /:athleteId/program-data])` with a closed
+  pattern for the athlete code. The route then requires `canView(athletes)` as well (the page is a named athlete; without
+  it there is no list to choose from anyway), and that the athlete has an active membership of the view scope (club
+  membership for `club_view`, the team's for `team_view`, in an active club / team). Anything else: the identical
+  `403 Forbidden` the route answers today. `adminRows` come from the view roster (V-2's branch, opened for this gate
+  too). In the answer: weekly plans `status = 'active'` (as today) and **programs only when not `draft` / `archived`**
+  (a coach today also sees drafts; a view holder never sees one, P-2 "nikada tuđe nacrte").
+- `routes/templates.js`: the gate with `GET /`, `GET /options`, `GET /:planId/tags`, `GET /:planId/reviews`. `GET /`
+  in a view workspace reads **public templates only** (never the account's own, never `workspace` scope), and the
+  answer carries no `pending_access_count` / `user_access_*` (they are the account's own or the author's management
+  facts). Every other request of a view workspace (writes, `access-requests`) answers `403 Forbidden` and never runs
+  (a mixed account never writes its own template from a view workspace).
+- `routes/plans.js`: the gate with `GET /:planId/program`; in a view workspace only a public, active, non-template-draft
+  Program Library template; a missing id and a not-allowed one both answer `403 Forbidden` (identical). `GET
+  /:planId/weekly` stays closed (no screen uses it; an athlete's weekly plan comes through `program-data`).
+- `/api/builder`: closed (`requireCoach` unchanged; no gate needed, it already answers 403 to a pure role holder; a
+  mixed account in a view workspace gets 403 by a gate with no reads, so a view workspace never writes a draft).
+
+**`exercises.use`:**
+- `server.js` mounts `viewEntryGate("exercises", [GET /, GET /options, GET /:exerciseId])` **before** `requireCoach` on
+  `/api/exercises` (the `taxonomyViewGate` pattern of V-1); `/api/exercise-collections` gets a gate with no reads (403).
+- A view workspace reads **active system exercises only** (`owner_scope = 'system'`, `is_active`, and the existing
+  collection rule, so a restricted collection stays hidden: a role holder has no grant). The answer offers nothing
+  editable (`can_edit`/`can_copy` false, no `is_hidden`/`is_favorite` state, `canManageCollections` false, no locked
+  previews); `/options` reads the system rows only. Favorites, hide, personal tags, classification and every write: 403.
+
+### The coach path (checked words, R4 section 6)
+
+- `programs.view` narrows the **club-shaped** branch exactly like V-2: `canAccessPlan`, Builder's
+  `editablePlanAccessSql` / weekly-plans read and the two athlete plan reads take the clubs / teams where both
+  `athletes.view` and `programs.view` hold (`programViewScopes(req)` in `access.js`). Own plans and drafts and the
+  public library are untouched (they are the person's, not the club's).
+- In a `club` / `team` workspace, `canView(programs)` is also required on `/api/builder`, `/api/templates` and
+  `/api/plans`, and `canView(exercises)` on `/api/exercises` and `/api/exercise-collections` (reads and writes): taking the
+  word away (a club's role version or its licence) closes the module there, as V-1 and V-3 do. The platform, a private
+  coach, an athlete and an account with no workspace keep today's behaviour. Refusal: `403 Forbidden`, what
+  `requireCoach` answers.
+
+### Small choices (the executor)
+
+1. An athlete's plans need both `programs.view` and `athletes.view` in a view workspace (P-1); without `athletes.view`
+   a view holder sees the public Program Library and the system exercises only.
+2. A view holder never sees a draft or archived program, even one assigned to the club's athlete.
+3. `GET /api/plans/:id/weekly` and `GET /api/athletes/:id/plans` (the Builder's copy picker) stay closed in V.
+4. The view path answers a missing and a not-allowed plan id with the same `403 Forbidden`; the coach path's
+   404-vs-403 difference stays as it is (pre-existing, recorded).
+5. Plan-item media (pictures and videos inside an athlete's program) are not signed for a view workspace in V-7
+   (`POST /api/media/access` has no module gate; opening it is a follow-up). System exercise media already sign.
+6. The coach-path check resolves the workspace read-only once per request on the five routers (one extra small read
+   per Builder call); the view gate's resolve is reused when it ran.
+7. Frontend: the Programs place opens only the Program Library tab (never the Builder), and an athlete row becomes a
+   button to the athlete's Calendar / Specific programs pages, read only (no Edit, New, Copy, Assign), only with both
+   words. The Exercise library opens read only (no New, Edit, Copy, favorite, hide, tag, block controls).
+
+### Owner questions
+
+None new: P-1, P-2 and R4 section 6 decide every point above.
+
+### Tests to write
+
+- `roles-v-sweep` rows `programs` and `exercises`: the listed reads with club A's data only (an athlete of club B, a
+  draft, an archived program and a private template never), `club_view` and `team_view`, a forged preference, a mixed
+  account (its own templates, drafts and exercises never in a view answer, and its writes refused), the hidden reads and
+  every write equal to an account with no role (or the 403 above) and landing nothing, no preference write, the word
+  taken away, the licence (role holders and the old roles), old-vs-new for the club admin and the team coach.
+- Mutations: the gate's `canView`, the public-only filter, the system-only filter, the draft filter, the membership
+  check, the coach path's `canView`, `programViewScopes`.
+- Word lists: the five suites named in V-1..V-3 take `programs.view` and `exercises.use`; checked-gates A1/A2, B1, B3.
+- Frontend: `roles-v7-view.test.mjs`; e2e `roles-v7-view-programs-exercises.test.mjs` at 1280, 390 and 360 px; the
+  builder, program library and exercise library e2e unchanged.

@@ -1,3 +1,4 @@
+import { viewModuleOpen } from "./view-modules.js";
 import { renderCopyPlanModal } from "./builder-modals.js";
 import { renderCoachDetailModalHtml } from "./coach-profiles.js";
 import { templateScopeMeta, visibleTemplateScopes } from "./navigation.js";
@@ -168,9 +169,12 @@ export function renderTemplateFiltersViewHtml({
   });
 }
 
+// Roles V-7: a view workspace with programs.view sees a public template read only (no assign, settings, more menu,
+// access requests or use).
 export function renderTemplatePreviewModalViewHtml(data) {
   return renderTemplatePreviewModalHtml({
     ...data,
+    readOnly: viewModuleOpen("programs"),
     renderPlanMoreMenu,
   });
 }

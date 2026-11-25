@@ -4211,8 +4211,9 @@ function renderAthleteList() {
   const filteredAthletes = state.athletes.filter((athlete) => athleteMatches(athlete, search));
   const athletes = filteredAthletes;
 
-  // Roles V-2: a view workspace's list is read only (no plans to open there).
-  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId, { searching: Boolean(search), pending: athleteRosterPending, readOnly: isViewWorkspace() });
+  // Roles V-2: a view workspace's list is read only (no plans to open there), with no plan counts. Roles V-7: with Programs
+  // open (programs.view) an athlete opens its Weekly plans and Specific programs, read only.
+  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId, { searching: Boolean(search), pending: athleteRosterPending, readOnly: isViewWorkspace() && !viewModuleOpen("programs"), noCounts: isViewWorkspace() });
 
   renderAthleteListState();
 
@@ -4726,7 +4727,7 @@ function renderTemplateFilters() {
     scopes: visibleTemplateScopes(),
     scopeLabel: (scope) => templateScopeMeta(scope).label,
     showAdminFilters: canUseProgramAdminFilters(),
-    showRequests: !isAthleteMode(),
+    showRequests: !isAthleteMode() && !isViewWorkspace(),
     athlete: isAthleteMode(),
   });
 }

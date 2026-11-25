@@ -114,7 +114,8 @@ export function renderLibraryNav() {
     const tab = button.dataset.libraryTab;
     const scope = button.dataset.templateScope || "";
     const programLibrarySection = button.dataset.programLibrarySection || "";
-    const isHiddenScope = tab === "templates" && scope && button.classList.contains("sidebar-subnav-button") && !visibleTemplateScopes().includes(scope);
+    const isHiddenScope = tab === "templates" && button.classList.contains("sidebar-subnav-button")
+      && ((scope && !visibleTemplateScopes().includes(scope)) || (programLibrarySection === "requests" && isViewWorkspace()));
     const organizationSection = button.dataset.organizationSection || "";
     const isHiddenOrganizationSection = tab === "organization" && button.classList.contains("sidebar-subnav-button") && (isCoachSettings() ? !coachSettingsSections().includes(organizationSection) : !permissionTabAllowed(organizationSection));
     button.hidden = isHiddenScope || isHiddenOrganizationSection;
@@ -178,7 +179,8 @@ export function updateProgramLibraryNavLabels() {
 export function visibleTemplateScopes() {
   const allowed = new Set(state.templateAllowedScopes || TEMPLATE_SCOPES);
   const base = isAthleteMode() ? ATHLETE_TEMPLATE_SCOPES : TEMPLATE_SCOPES;
-  return base.filter((scope) => allowed.has(scope));
+  // Roles V-7: a view workspace reads the public library only; it has no programs of its own.
+  return base.filter((scope) => allowed.has(scope) && !(scope === "my_programs" && isViewWorkspace()));
 }
 
 export function ensureTemplateScopeIsVisible() {

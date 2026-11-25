@@ -13,7 +13,7 @@ if (needsModuleMocksRelaunch()) {
 } else {
 // db.js is replaced: any query from the helper would be a failure (the gate resolves the workspace through its stub).
 mock.module("../src/db.js", { namedExports: { query: async () => { throw new Error("no database in this test"); }, pool: {} } });
-const { MODULE_VIEW_WORDS, OPEN_VIEW_MODULES, canView, viewEntryGate, viewReadScope } = await import("../src/moduleView.js");
+const { MODULE_VIEW_WORDS, NO_VIEWER_ID, OPEN_VIEW_MODULES, canView, coachModuleGate, handOnReadsRefuseWrites, viewEntryGate, viewReadScope } = await import("../src/moduleView.js");
 const { PERMISSIONS, STORABLE_PERMISSIONS } = await import("../src/permissions.js");
 
 const CLUB = "11111111-0000-4000-8000-0000000000a1";
@@ -43,7 +43,7 @@ test("1. every module's view word is a known, storable (VIEW package) word, scop
 });
 
 test("2. only the open modules (V-1: data_configuration, presets; V-2: athletes; V-3: calendar; V-4: tests, tests_results): a view workspace holding every view word is refused every other module", () => {
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "dashboards", "data_configuration", "presets", "tests", "tests_results"]);
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "dashboards", "data_configuration", "exercises", "presets", "programs", "tests", "tests_results"]);
   const all = authzWith(Object.values(MODULE_VIEW_WORDS));
   for (const module of Object.keys(MODULE_VIEW_WORDS)) {
     const open = OPEN_VIEW_MODULES.includes(module);
@@ -265,4 +265,49 @@ test('central handoff also covers listed reads denied by missing word or closed 
  }
 });
 
+
+
+test("13. V-7 coachModuleGate: a club or team workspace goes on only when the module's own check holds there; every other workspace, an account with no old role row (no read) and a request the view gate admitted go on; a resolver error goes to the error handler", async () => {
+  assert.throws(() => coachModuleGate("programs"), /needs the module's can\(\) check/);
+  assert.throws(() => coachModuleGate("nope", { allowed: () => true }), /Unknown view module/);
+  const seen = [];
+  const allowed = (authz, scope) => { seen.push(scope); return authz.ok === true; };
+  const coach = (extra) => ({ userId: "u1", clubRoles: [{ clubId: CLUB }], teamRoles: [], platformRoles: [], ...extra });
+  for (const [ws, scope] of [[{ type: "club", scopeId: CLUB }, { type: "club", id: CLUB }], [{ type: "team", scopeId: TEAM }, { type: "team", id: TEAM }]]) {
+    seen.length = 0;
+    const gate = coachModuleGate("programs", { allowed, resolve: resolver(ws) });
+    assert.equal((await runGate(gate, { user: { id: "u1" }, authz: coach({ ok: true }), method: "POST", path: "/plans" })).next, true, ws.type);
+    const refused = await runGate(gate, { user: { id: "u1" }, authz: coach({ ok: false }), method: "GET", path: "/drafts" });
+    assert.deepEqual([refused.next, refused.status, refused.body], [false, 403, { error: "Forbidden" }], `${ws.type}: refused`);
+    assert.deepEqual(seen, [scope, scope], `${ws.type}: asked at its own scope`);
+  }
+  for (const ws of [{ type: "platform" }, { type: "private_coach", scopeId: "u1" }, { type: "athlete", scopeId: "x" }, clubView, teamView, null]) {
+    seen.length = 0;
+    const gate = coachModuleGate("programs", { allowed, resolve: resolver(ws) });
+    assert.equal((await runGate(gate, { user: { id: "u1" }, authz: coach({ ok: false }), method: "POST", path: "/plans" })).next, true, String(ws?.type));
+    assert.deepEqual(seen, [], `${ws?.type}: no check`);
+  }
+  const calls = [];
+  const quiet = coachModuleGate("programs", { allowed, resolve: resolver({ type: "club", scopeId: CLUB }, calls) });
+  assert.equal((await runGate(quiet, { user: { id: "u1" }, authz: { userId: "u1", clubRoles: [], teamRoles: [] }, method: "GET", path: "/" })).next, true);
+  assert.equal((await runGate(quiet, { user: { id: "u1" }, authz: coach({ ok: false }), moduleView: { module: "programs" }, method: "GET", path: "/" })).next, true, "the view gate's admission");
+  assert.deepEqual(calls, [], "no workspace read for an account without an old role row or a view-admitted request");
+  const blank = coachModuleGate("programs", { allowed: () => true, resolve: resolver({ type: "club", scopeId: "" }) });
+  assert.equal((await runGate(blank, { user: { id: "u1" }, authz: coach({}), method: "GET", path: "/" })).status, 403, "a club workspace without a scope fails closed");
+  const boom = new Error("db down");
+  const failing = coachModuleGate("programs", { allowed, resolve: async () => { throw boom; } });
+  assert.equal((await runGate(failing, { user: { id: "u1" }, authz: coach({ ok: true }), method: "GET", path: "/" })).error, boom);
+});
+
+test("13. V-7 handOnReadsRefuseWrites: an unlisted read goes on without req.moduleView, every other method is 403 and never runs; NO_VIEWER_ID matches no user", async () => {
+  const gate = viewEntryGate("programs", [{ method: "GET", path: "/" }], { open: ["programs"], resolve: resolver(clubView), refuse: handOnReadsRefuseWrites });
+  const holder = authzWith(["programs.view"]);
+  const read = { user: { id: "u1" }, authz: holder, method: "GET", path: "/x" };
+  assert.deepEqual([(await runGate(gate, read)).next, read.moduleView], [true, undefined]);
+  for (const method of ["POST", "PATCH", "PUT", "DELETE"]) {
+    const r = await runGate(gate, { user: { id: "u1" }, authz: holder, method, path: "/" });
+    assert.deepEqual([r.next, r.status, r.body], [false, 403, { error: "Forbidden" }], method);
+  }
+  assert.equal(NO_VIEWER_ID, "00000000-0000-0000-0000-000000000000");
+});
 }

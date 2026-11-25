@@ -102,7 +102,7 @@ test("17. ceiling: a club's admin adds a word it does not hold, a platform-only 
   }
   code(await change(w.adminA, role.id, { expectedRevision: 1, items: ["org.view", "import.check"] }), 409, "permission_not_honoured");
   // R4 (O6): a storable word no route checks yet is locked: never added (it is "not available yet").
-  code(await change(w.adminA, role.id, { expectedRevision: 1, items: ["org.view", "programs.view"] }), 409, "permission_not_available_yet");
+  code(await change(w.adminA, role.id, { expectedRevision: 1, items: ["org.view", "load.view.team"] }), 409, "permission_not_available_yet");
   // The platform admin takes org.club.edit out of Club admin: the club's admin no longer holds it.
   await clubAdminItems(w.pa, CLUB_ADMIN_SEED.filter((x) => x !== "org.club.edit"));
   try {
