@@ -1,3 +1,5 @@
+import { attachReferenceResults } from "../dashboardReferences/query.js";
+import { resolveReferenceContext } from "../dashboardReferences/access.js";
 import {attachGalleryResult,galleryAvailable,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { pageDatabaseEnabled } from '../dashboardPages/config.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
@@ -832,7 +834,10 @@ router.post("/:dashboardId/query", async (req, res, next) => {
     const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter });
     const galleryWidgets=await hydrateGalleryWidgets(query,targetWidgets);
     const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
-    res.json({ dashboardRevision: dashboard.revision, widgets: result.map((widget) => attachGalleryResult(galleryWidgets.find(w=>w.id===widget.widgetId),{ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
+    const referenceEnabled=process.env.DASHBOARD_REFERENCES_ENABLED==='true';
+    const referenceContext=referenceEnabled&&targetWidgets.some(w=>w.presentation_config?.referenceConfig)?await resolveReferenceContext(req):null;
+    const referenced=await attachReferenceResults({query,widgets:targetWidgets,results:result,workspace:dataWorkspaceQueryArgs(dataWorkspace),period:{dateFrom:b.dateFrom,dateTo:b.dateTo},defaultFilter:dashboard.default_filter,requestFilter,shellFilter,referenceClubId:referenceContext?.owner.clubId,enabled:referenceEnabled});
+    res.json({ dashboardRevision: dashboard.revision, widgets: referenced.map((widget) => attachGalleryResult(galleryWidgets.find(w=>w.id===widget.widgetId),{ ...widget, presentation_config: presentationByWidgetId.get(widget.widgetId) })) });
   } catch (error) {
     respondToServiceError(res, next, error);
   }

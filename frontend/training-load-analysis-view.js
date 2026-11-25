@@ -379,6 +379,7 @@ function renderWidgetMenuHtml(widget) {
           ${blocked ? `<p class="tl-menu-note" role="note">${pageBusy() ? (a.pagePending ? "Check the pending page update before editing widgets." : "Wait until this page finishes updating.") : "Save or cancel the layout changes first."}</p>` : ""}
           ${menuItemHtml({ action: "training-load-analysis-edit-widget", label: "Settings", dataset, disabled: blocked || a.saving })}
           ${menuItemHtml({ action: "training-load-analysis-open-advanced", label: "Advanced settings", dataset, disabled: blocked || a.saving })}
+          ${a.referencesAvailable && ["line_chart","bar_chart"].includes(widget.widget_type) ? menuItemHtml({ action: "training-load-reference-open", label: "References and Radar", dataset, disabled: blocked || a.saving }) : ""}
           ${a.pagesAvailable ? menuItemHtml({ action: "training-load-pages-open-copy", label: "Copy to page", dataset, disabled: blocked || a.saving }) : ""}
           ${a.editMode ? "" : menuItemHtml({ action: "training-load-analysis-toggle-edit", label: "Edit layout", disabled: pageBusy() })}
           <div class="tl-menu-separator" role="separator"></div>
@@ -494,6 +495,7 @@ function renderChartHtml(model) {
 }
 
 function renderWidgetBodyHtml(widget, results) {
+  if(widget.presentation_config?.schemaVersion===1&&widget.presentation_config.referenceConfig) return `<div data-reference-island="chart" data-widget-id="${escapeAttr(widget.id)}"></div>`;
   const analysis = state.trainingLoad.analysis;
   const querySkipped = analysis.queryResult === null && (analysis.dashboard?.is_template || analysis.dashboard?.status === "archived");
   const catalog = state.trainingLoad.analysis.metricPicker.definitions ?? [];
@@ -909,7 +911,7 @@ export function renderTrainingLoadAnalysisHtml() {
   const a = state.trainingLoad.analysis;
   return `
     <div class="tl-analysis">
-      <div${a.simpleEditor?.open ? ' inert' : ''}>
+      <div${a.simpleEditor?.open || a.referenceEditorOpen ? ' inert' : ''}>
       ${renderTopBarHtml()}
       ${renderDashboardPages()}
       ${a.simpleWorkspaceRequired ? '<p role="status">This club dashboard is outside your active workspace, so open a platform dashboard to use Simple.</p>' : ""}
@@ -921,6 +923,7 @@ export function renderTrainingLoadAnalysisHtml() {
       ${renderMetricPanelHtml()}
       ${renderEditorHtml()}
       </div>
+      <div data-reference-island="binding"></div>
       ${renderSimpleEditorHtml(a.simpleEditor, state.currentUser?.activeWorkspace?.type === "platform")}
     </div>
   `;

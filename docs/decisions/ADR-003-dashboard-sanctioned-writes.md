@@ -131,3 +131,9 @@ SQL copy function is the other documented composite INSERT implementation; its a
 presentation UPDATE stays in the same transaction and receipt protocol. The append-only
 chart-use evidence survives deletion and blocks v94 rollback after use. No new access
 right or athlete/fact source is introduced.
+
+## P3 references (v97)
+
+Reference-table writes use mutate_dashboard_reference, under the existing canonical-variable admin basis. save_dashboard_reference_binding uses the existing dashboard manage/data-workspace checks in the route, rechecks the canonical-variable actor basis in PostgreSQL and calls update_widget_content_with_presentation. It takes the request advisory lock before dashboard -> Page -> widget -> ordered series locks. No reference route performs a raw dashboard write. cleanup_dashboard_reference_requests deletes expired receipts only in bounded batches from the existing retention schedule; receipts cannot be updated or truncated. Table/widget usage evidence survives receipt retention and prevents rollback after use.
+
+The replaced presentation validators and gallery remapper retain the exact v94 bodies as gated helpers. Known reference axes are remapped alongside gallery axes by both sanctioned Page copy and cloneDashboard's documented composite raw-write exception. Published table versions remain pinned; copying never grants permission to their club.

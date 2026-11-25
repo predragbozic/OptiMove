@@ -54,3 +54,17 @@ test("authorized editor labels each extensible value with mobile-safe controls",
     assert.equal(input.value, "");
   } finally { host.close(); }
 });
+
+test('binding controls stay disabled while an update is unconfirmed',()=>{
+ const host=mount(islands.ReferenceBindingEditor,{model:{busy:false,pending:{},binding:{mode:'overlay',source:'teamAverage',groupBy:'cohort',teamId:'',series:[],selected:[],axes:{}},options:{teams:[]},tables:[]},onAction:()=>{}});
+ try{for(const select of host.container.querySelectorAll('select'))assert.equal(select.matches(':disabled'),true);assert.equal(host.container.querySelector('[aria-label="Close reference settings"]').disabled,true);}finally{host.close();}
+});
+test('Radar distinguishes same-name athletes and leaves values above 100 unclamped without identifiers',async()=>{
+ const {referenceChartModel}=await import('../dashboard-reference-model.js');
+ const axes=['Distance','Fast distance','Sprint distance'].map(label=>({label,unit:'m',status:'ready',points:[{personKey:'athlete_0',label:'Alex',status:'ok',normalized:150,references:[{key:'target',label:'Target',value:100,normalized:100}]},{personKey:'athlete_1',label:'Alex',status:'ok',normalized:80,references:[{key:'target',label:'Target',value:100,normalized:100}]}]}));
+ const model=referenceChartModel({mode:'radar',axes},{display_config:{legend:{visible:false}}});assert.equal(model.option.legend.show,false);const names=model.option.series.map(s=>s.name);assert.equal(new Set(names).size,names.length);assert.ok(names.includes('Alex (2)'));assert.equal(model.option.series[0].data[0].value[0],150);assert.ok(model.option.radar.indicator[0].max>150);
+});
+test('reference chart scrubs an unresolved athlete identity from text, attributes and chart data',()=>{
+ const id='12345678-1234-4234-8234-123456789abc';const host=mount(islands.ReferenceChart,{widget:{id:'widget'},data:{mode:'overlay',tableName:'Targets',axes:[{label:'Distance',unit:'m',status:'ready',points:[{label:'Athlete '+id,actual:0,status:'ok',references:[{key:'target',label:'Target',value:100}]}]}]}});
+ try{assert.doesNotMatch(host.container.innerHTML,new RegExp(id));assert.match(host.container.textContent,/Athlete name unavailable/);assert.match(host.container.textContent,/Target: 100/);}finally{host.close();}
+});

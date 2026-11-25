@@ -1,3 +1,5 @@
+import { attachReferenceResults } from "../dashboardReferences/query.js";
+import { resolveReferenceContext } from "../dashboardReferences/access.js";
 import {attachGalleryResult,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { isMetricVisibleToDashboard, isSourceConnectionVisibleToDashboard } from '../trainingLoadDashboardAccess.js';
 import { assertDashboardAggregation } from '../dashboardRatios.js';
@@ -103,7 +105,10 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const selected=widgets.filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
    const result=await queryDashboard(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q});
    const galleryWidgets=await hydrateGalleryWidgets(q,selected);
-   return {dashboardRevision:target.dashboard.revision,pageId:page.id,pageRevision:page.revision,defaultsRevision:page.defaults_revision,resolvedPeriod:period,widgets:result.map(w=>attachGalleryResult(galleryWidgets.find(x=>x.id===w.widgetId),{...w,presentation_config:selected.find(x=>x.id===w.widgetId)?.presentation_config}))};
+   const referenceEnabled=process.env.DASHBOARD_REFERENCES_ENABLED==='true';
+   const referenceContext=referenceEnabled&&selected.some(w=>w.presentation_config?.referenceConfig)?await resolveReferenceContext({...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)}):null;
+   const referenced=await attachReferenceResults({query:q,widgets:selected,results:result,workspace:target.workspace,period,defaultFilter:page.default_filter,requestFilter:filter,shellFilter,referenceClubId:referenceContext?.owner.clubId,enabled:referenceEnabled});
+   return {dashboardRevision:target.dashboard.revision,pageId:page.id,pageRevision:page.revision,defaultsRevision:page.defaults_revision,resolvedPeriod:period,widgets:referenced.map(w=>attachGalleryResult(galleryWidgets.find(x=>x.id===w.widgetId),{...w,presentation_config:selected.find(x=>x.id===w.widgetId)?.presentation_config}))};
   });
  }
  async function status({req,dashboardId,requestId}){

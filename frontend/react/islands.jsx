@@ -4,3 +4,4 @@ export { mountIsland, unmountIsland, isIslandMounted } from "./mount.jsx";
 export { BottomNav } from "./bottom-nav.jsx";
 export { ReferenceTables, ReferenceValues } from "./reference-tables.jsx";
 export { DashboardPeriodButton, DashboardPeriodFields, DashboardPageStrip } from "./dashboard-controls.jsx";
+export { ReferenceWorkspace, ReferenceEntry, ReferenceBindingEditor, ReferenceChart } from "./dashboard-references.jsx";

@@ -126,6 +126,7 @@ export function compileSimpleDraft(draft, snapshot, context = {}, existing = nul
     if(view.chartKind==='standard')delete presentation.chartShape;
     else presentation.chartShape={schemaVersion:1,kind:view.chartKind,seriesIds:[previous?.id??idFor(draft.draftId,'series')]};
   }
+  if (presentation?.schemaVersion === 1 && presentation.referenceConfig) return { status: 'advancedRequired', issues: [{ code: 'referenceSettingsRequired', path: '$.presentation' }] };
   const supportedPresentation = presentation?.schemaVersion === 1;
   if (supportedPresentation && !validateContract('presentationV1', presentation).valid) return { status: 'advancedRequired', issues: [{ code: 'invalidStoredPresentation', path: '$.presentation' }] };
   const semanticChanged = existing && (existing.widget_type !== view.type || existing.group_by !== view.groupBy || previous.metric_definition_id !== (builtin ? null : m.id) || previous.built_in_series_key !== (builtin ? m.key : null) || previous.data_scope_level !== view.dataScopeLevel || previous.analytical_aggregation !== view.analyticalAggregation || canonicalKey(existing.local_filter_override ?? {}) !== canonicalKey(localFilter));

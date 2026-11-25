@@ -1,3 +1,4 @@
+import { getVariable } from "../canonicalVariableAdminService.js";
 import { Router } from "express";
 import { adminWriteKit } from "../sourceMetricMappingService.js";
 import { resolveReferenceContext, referenceCanWrite } from "./access.js";
@@ -29,8 +30,16 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
     }
   };
   router.get("/",handle(async(req,res)=>{
-    const result=await boundedRead(client=>client.query("select id,name,revision,archived,published_version_id from training_load.dashboard_reference_tables where club_id=$1 order by lower(name),id limit 100",[req.referenceContext.owner.clubId]));
+    const result=await boundedRead(client=>client.query("select id,name,revision,archived,published_version_id from training_load.dashboard_reference_tables where club_id=$1 and ($2::boolean or published_version_id is not null) order by lower(name),id limit 100",[req.referenceContext.owner.clubId,referenceCanWrite(req.referenceContext)]));
     return res.json({tables:result.rows,canCreate:referenceCanWrite(req.referenceContext)});
+  }));
+  router.get("/options",handle(async(req,res)=>{
+    const club=req.referenceContext.owner.clubId;
+    const result=await boundedRead(async client=>{
+      const positions=(await client.query("select p.id,coalesce(o.name,p.name) name from public.sport_positions p left join public.club_position_overrides o on o.position_id=p.id and o.club_id=$1 where p.archived_at is null and (p.owner_scope='system' or p.owner_club_id=$1) and not coalesce(o.hidden,false) order by p.sort_order,coalesce(o.name,p.name),p.id",[club])).rows;
+      const teams=(await client.query("select id,name from public.teams where club_id=$1 and coalesce(is_active,true) order by name,id",[club])).rows;
+      return {clubId:club,positions,teams,canEdit:referenceCanWrite(req.referenceContext)};
+    });return res.json(result);
   }));
   const detail = async(req,res) => {
     if (!referenceUuid(req.params.id) || req.params.versionId && !referenceUuid(req.params.versionId)) return missing(res);
@@ -39,8 +48,8 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
       if (!table) return null;
       const version=(await client.query(req.params.versionId
         ? "select * from training_load.dashboard_reference_versions where table_id=$1 and id=$2 and published"
-        : "select * from training_load.dashboard_reference_versions where table_id=$1 order by version desc limit 1",
-      req.params.versionId?[table.id,req.params.versionId]:[table.id])).rows[0];
+        : "select * from training_load.dashboard_reference_versions where table_id=$1 and ($2::boolean or published) order by version desc limit 1",
+      req.params.versionId?[table.id,req.params.versionId]:[table.id,referenceCanWrite(req.referenceContext)])).rows[0];
       if (!version) return null;
       const [columns,rows,valueKinds,cells]=await Promise.all([
         client.query("select c.definition_id,c.unit,c.aggregation,c.data_level,c.sort_order,d.label name from training_load.dashboard_reference_columns c join training_load.metric_definitions d on d.id=c.definition_id where c.version_id=$1 order by c.sort_order",[version.id]),
@@ -50,6 +59,13 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
       ]);
       return {table:{id:table.id,name:table.name,revision:table.revision,archived:table.archived},version:{id:version.id,number:version.version,published:version.published},columns:columns.rows,rows:rows.rows,valueKinds:valueKinds.rows,cells:cells.rows,canEdit:referenceCanWrite(req.referenceContext)&&!table.archived};
     });
+    if(result){
+      const visible=new Set();
+      for(const column of result.columns){const current=await getVariable({ctx:req.referenceContext,variableId:column.definition_id,query:{}});if(current?.variable?.state==='active'){visible.add(column.definition_id);column.name=current.variable.label;}}
+      result.unavailableColumns=result.columns.some(column=>!visible.has(column.definition_id));
+      if(result.unavailableColumns)result.canEdit=false;
+      result.columns=result.columns.filter(column=>visible.has(column.definition_id));result.cells=result.cells.filter(cell=>visible.has(cell.definition_id));
+    }
     return result?res.json(result):missing(res);
   };
   router.get("/:id",handle(detail));

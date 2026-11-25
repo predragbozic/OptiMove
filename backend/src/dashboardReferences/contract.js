@@ -39,3 +39,19 @@ export function validReferenceWrite(action,body) {
   if (!Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 1) return false;
   return action === "draft" ? validReferenceDraft(body.draft) : ["publish","archive"].includes(action);
 }
+
+export function validReferenceConfig(value) {
+ const allowed=["schemaVersion","source","mode","clubId","tableId","versionId","teamId","axes"];
+ if(!keys(value,allowed,["schemaVersion","source","mode","clubId","axes"])||value.schemaVersion!==1||!["preset","teamAverage"].includes(value.source)
+  ||!["overlay","radar"].includes(value.mode)||!uuid(value.clubId)||!Array.isArray(value.axes)||value.axes.length<1||value.axes.length>20)return false;
+ if(value.source==="preset"?(!uuid(value.tableId)||!uuid(value.versionId)||Object.hasOwn(value,"teamId"))
+  :(!uuid(value.teamId)||Object.hasOwn(value,"tableId")||Object.hasOwn(value,"versionId")))return false;
+ const seen=new Set(); const key=x=>typeof x==='string'&&/^[a-z][a-z0-9_]{0,39}$/.test(x);
+ return value.axes.every(axis=>{
+  if(!keys(axis,["seriesId","anchorKey","valueKeys","band"],["seriesId","valueKeys"])||!uuid(axis.seriesId)||seen.has(axis.seriesId.toLowerCase())
+   ||!Array.isArray(axis.valueKeys)||axis.valueKeys.length<1||axis.valueKeys.length>20||!axis.valueKeys.every(item=>key(item)||(value.source==='teamAverage'&&item==='teamAverage'))||new Set(axis.valueKeys).size!==axis.valueKeys.length)return false;
+  seen.add(axis.seriesId.toLowerCase());
+  if(value.source==='teamAverage')return !Object.hasOwn(axis,'anchorKey')&&!Object.hasOwn(axis,'band')&&axis.valueKeys.length===1&&axis.valueKeys[0]==='teamAverage';
+  return key(axis.anchorKey)&&(!Object.hasOwn(axis,'band')||keys(axis.band,['lowerKey','upperKey'])&&key(axis.band.lowerKey)&&key(axis.band.upperKey));
+ });
+}

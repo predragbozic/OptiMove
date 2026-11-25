@@ -1,3 +1,4 @@
+import {formatReferenceValue} from '../dashboard-reference-model.js';
 // Presentation only: the bridge supplies authorized labels and capabilities.
 // No permission inference, network request, or separate application state.
 export function ReferenceTables({ tables = [], canCreate = false, onCreate, onOpen }) {
@@ -22,7 +23,7 @@ export function ReferenceValues({ title, columns = [], rows = [], canEdit = fals
               style={{ fontSize: 16, minHeight: 44 }} value={value ?? ""}
               onChange={(event) => onChange?.({ rowKey: row.key, columnKey: column.key, valueKey: kind.key,
                 value: event.target.value === "" ? null : Number(event.target.value) })} /></label>
-              : <span>{kind.name}: {value ?? "Not available"}</span>}</div>;
+              : <span>{kind.name}: {value===undefined||value===null?"Not available":formatReferenceValue(value)}</span>}</div>;
           })}</td>)}</tr>)}</tbody></table>
     </div>
   </section>;

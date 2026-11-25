@@ -1,0 +1,38 @@
+import {before,after,test} from 'node:test';import assert from 'node:assert/strict';import crypto from 'node:crypto';import pg from 'pg';
+import {startWorld} from '../lib/world.mjs';import {launch,openAs,openTrainingLoad} from '../lib/browser.mjs';import {seedGalleryMeasurements} from '../../backend/tests/support/dashboard-gallery-seed.mjs';
+let world,browser,definitions,position,dashboards=new Map();
+before(async()=>{
+ const previous={DASHBOARD_REFERENCES_ENABLED:process.env.DASHBOARD_REFERENCES_ENABLED,DASHBOARD_PAGES_ENABLED:process.env.DASHBOARD_PAGES_ENABLED};Object.assign(process.env,{DASHBOARD_REFERENCES_ENABLED:'true',DASHBOARD_PAGES_ENABLED:'true'});
+ try{world=await startWorld();}finally{for(const[k,v]of Object.entries(previous))if(v===undefined)delete process.env[k];else process.env[k]=v;}
+ const q=new pg.Client({connectionString:world.databaseUrl});await q.connect();try{
+ const actor=world.accounts.find(a=>a.role==='club_admin');await q.query('update training_load.dashboard_pages_activation set enabled=true');definitions=[];
+ for(const name of ['Distance','Fast distance','Sprint distance']){
+  const d=(await q.query("insert into training_load.metric_definitions(key,label,owner_scope,state,created_by_user_id) values($1,$2,'system','active',$3) returning id",['p3_'+crypto.randomUUID(),name,actor.id])).rows[0];
+  const v=(await q.query("insert into training_load.metric_definition_versions(metric_definition_id,version_number,unit,value_type,daily_aggregation_method,created_by_user_id) values($1,1,'m','numeric','sum',$2) returning id",[d.id,actor.id])).rows[0];await q.query('update training_load.metric_definitions set current_version_id=$2 where id=$1',[d.id,v.id]);await q.query("insert into training_load.metric_definition_scope_capabilities values($1,'session')",[d.id]);definitions.push({id:d.id,versionId:v.id,name});
+ }
+ await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,athleteIds:world.ids.athleteIds,existingDefinitions:definitions});
+ position=(await q.query('select id,name from public.sport_positions order by sort_order limit 1')).rows[0];
+ await q.query('begin');await q.query("select set_config('optimove.position_actor',$1||':'||pg_current_xact_id()::text,true)",[actor.id]);for(const id of world.ids.athleteIds.slice(0,3))await q.query("insert into public.athlete_positions(athlete_id,club_id,position_id,set_by_user_id,basis,request_key,request_hash) values($1,$2,$3,$4,'club_admin',gen_random_uuid(),repeat('a',64))",[id,world.ids.clubA,position.id,actor.id]);await q.query('commit');
+ for(const width of [390,1280]){
+  const d=(await q.query("select * from training_load.create_dashboard($1,null,'user',$2,null,null,'club',$3,false,$2,null)",['P3 browser '+width,actor.id,world.ids.clubA])).rows[0];
+  await q.query('update training_load.dashboard_pages set period_config=$2 where dashboard_id=$1',[d.id,{schemaVersion:1,mode:'fixed',dateFrom:'2026-11-01',dateTo:'2026-11-07',timeZone:'UTC'}]);
+  const w=(await q.query("insert into training_load.dashboard_widgets(dashboard_id,widget_type,title,widget_order,x,y,width,height,mobile_order,group_by) values($1,'bar_chart','Position comparison',0,0,0,6,8,0,'athlete') returning *",[d.id])).rows[0];
+  for(const [i,def]of definitions.entries()){const rev=(await q.query('select revision from training_load.dashboard_widgets where id=$1',[w.id])).rows[0].revision;await q.query("select * from training_load.add_series($1,$2,$3,$4,null,null,'primary',null,null,'manual',null,'session','sum')",[w.id,rev,i,def.id]);}dashboards.set(width,d.id);
+ }
+ }finally{await q.end();}browser=await launch();
+});after(async()=>{await browser?.close();await world?.stop();});
+for(const width of [390,1280])test(width+'px: React target table publishes and binds a real Radar with safe names',async()=>{
+ const {context,page,pageErrors}=await openAs(browser,world,'club_admin',width);page.setDefaultTimeout(10000);try{
+ await openTrainingLoad(page);await page.getByRole('tab',{name:'Data configuration',exact:true}).click();await page.getByRole('button',{name:'Reference tables →',exact:true}).click();
+ await page.getByRole('button',{name:'Add reference table',exact:true}).click();await page.getByLabel('Table name',{exact:true}).fill('Game targets '+width);await page.getByRole('button',{name:'Create table',exact:true}).click();
+ const workspace=page.locator('.tl-reference-workspace');await workspace.getByRole('heading',{name:'Game targets '+width,exact:true}).waitFor();
+ for(const definition of definitions){await workspace.getByLabel('Variable',{exact:true}).selectOption({label:definition.name});await workspace.getByRole('button',{name:'Add variable',exact:true}).click();}
+ await workspace.getByLabel('Position',{exact:true}).selectOption({label:position.name});await workspace.getByRole('button',{name:'Add position',exact:true}).click();
+ for(const [i,cell]of (await workspace.locator('tbody td').all()).entries()){await cell.getByLabel('Minimum',{exact:true}).fill('0');await cell.getByLabel('Maximum',{exact:true}).fill(String((i+1)*200));await cell.getByLabel('Target',{exact:true}).fill(String((i+1)*100));}
+ await workspace.getByRole('button',{name:'Save draft',exact:true}).click();await workspace.getByRole('button',{name:'Publish version',exact:true}).click();await workspace.getByText('✓ Published',{exact:false}).waitFor();
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.getByRole('tab',{name:'Data & Analysis',exact:true}).click();const tab=page.getByRole('tab',{name:'Dashboards',exact:true});if(await tab.isVisible())await tab.click();await page.locator('.tl-dash-picker-trigger').click();await page.locator('[data-dashboard-id="'+dashboards.get(width)+'"]').first().click();
+ await page.getByRole('button',{name:'Widget actions: Position comparison',exact:true}).click();await page.getByText('References and Radar',{exact:true}).click();const dialog=page.getByRole('dialog',{name:'References and Radar'});await dialog.waitFor();await dialog.getByLabel('Display',{exact:true}).selectOption('radar');await dialog.getByLabel('Published table',{exact:true}).selectOption({label:'Game targets '+width});await dialog.getByText('Pinned to version 1.',{exact:false}).waitFor();await dialog.getByRole('button',{name:'Save references',exact:true}).click();await dialog.waitFor({state:'hidden'});
+ const chart=page.locator('.tl-reference-chart');await chart.locator('optimove-dashboard-chart svg').waitFor();const plotted=await chart.locator('optimove-dashboard-chart').evaluate(el=>el.chart.getOption());assert.equal(plotted.radar[0].indicator.length,3);assert.ok(plotted.series.length>=2);const html=await chart.evaluate(el=>{const copy=el.cloneNode(true);for(const node of copy.querySelectorAll('[data-widget-id]'))node.removeAttribute('data-widget-id');return copy.innerHTML;}),match=html.match(/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/i);assert.equal(match?html.slice(match.index-70,match.index+80):null,null,'No raw identity in rendered comparison');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(pageErrors,[]);
+ }catch(error){await page.screenshot({path:process.env.TEMP+'/optimove-p3-browser-'+width+'.png',fullPage:true});throw new Error(error.message+'\nVISIBLE PAGE:\n'+(await page.locator('body').innerText()).slice(-10000),{cause:error});}finally{await context.close();}
+});

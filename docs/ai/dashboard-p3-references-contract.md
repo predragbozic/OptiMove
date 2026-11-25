@@ -371,3 +371,13 @@ commit. This docs-only update starts no code and allocates no migration.
 Unknown until implementation planning: React foundation commit/helper API, then-current
 R4 module gate completion, migration slot/checksums/live md5 manifest and final
 resource limits. None is inferred from production or blocks reviewing this document.
+
+## As-built implementation boundary (P3 v97)
+
+The owner directed P3 to use today's canonical-variable admin/read predicates for tables and existing dashboard manage/data-workspace predicates for bindings, without partially enabling R4 words. Training Load / dashboards / Data configuration VIEW and MANAGE will move to R4 together in the manager stream. P3 explicitly accepts club/team workspaces only; club_view/team_view and platform/private/athlete contexts are closed. A platform admin uses the relevant club workspace. DASHBOARD_REFERENCES_ENABLED defaults false.
+
+React screens use the merged foundation and committed islands build. Limits: 100 live tables per club, 20 columns, 100 position rows, 20 extensible named values, 300 filled cells and a 60000-byte write envelope. Manual and future import feed the same normalized draft payload. Published references are immutable; missing values remain absent. Overlay supports one variable with multiple named lines and a band; Radar supports at least three variables with multiple named reference lines, with no shaded band control. Reference rows currently use position identities; team/athlete preset rows remain a later storage extension.
+
+A team reference uses only authorized roster athletes of the selected team's own activities in the existing data_workspace fact set. In a club workspace, club-owned activities cannot borrow a team workspace's facts or roster: if no eligible team activities are present the comparison is unavailable. No widening is performed. Mixed activity types are unavailable; choose one activity/type-compatible period. Calculated metrics remain unavailable for the computed team reference. Preset comparisons keep actual ratio math unchanged.
+
+Current-position assignments are evaluated at query time. Historical positions and file import remain open follow-ups; neither gets a fabricated fallback.

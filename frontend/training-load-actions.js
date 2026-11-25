@@ -1,3 +1,4 @@
+import { loadReferenceSection, referencesMayBeLeft, referenceAction } from "./dashboard-references.js";
 import {formatDate as formatDashboardReportDate} from './utils.js';
 import {printDashboardPage} from './training-load-dashboard-print.js';
 import {handleDashboardPageAction} from './training-load-pages-data.js';
@@ -138,6 +139,7 @@ export function loadTrainingLoadSectionData(section, render) {
   if (section === "today") return loadTrainingLoadCalendarWeek(render);
   if (section === "analysis") return loadTrainingLoadAnalysis(render);
   if (section === "imports") return loadGpexeImports(render);
+  if (section === "references") return loadReferenceSection(render);
   if (section === "variables") return loadVariablesSection(render);
   if (section === "source-fields") return loadSourceFieldsSection(render);
   if (section === "mappings") return loadMappingsSection(render);
@@ -240,6 +242,7 @@ export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   // about. Both live in state and survive a move inside the app; a
   // workspace switch resets Training Load, so that is the case that loses
   // them.
+  if (!referencesMayBeLeft()) return false;
   if (!importsBatchMayBeLeft(_nextTab)) return false;
   // Phase 5a3b: a roster write in flight or a result not confirmed is the
   // only local view of that outcome (same protection as an Imports result).
@@ -247,6 +250,7 @@ export function confirmLeaveTrainingLoad(_nextTab, { discard = true } = {}) {
   // Data configuration: a variable being saved, a result not confirmed or a
   // form not saved is asked about; the reset of a workspace switch or the
   // leave below drops it.
+  if (state.trainingLoad.section === "references" && !referencesMayBeLeft()) return false;
   if (state.trainingLoad.section === "variables" && !variablesMayBeLeft()) return false;
   if (state.trainingLoad.section === "source-fields" && !sourceFieldsMayBeLeft()) return false;
   if (state.trainingLoad.section === "mappings" && !mappingsMayBeLeft()) return false;
@@ -1535,6 +1539,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if(!/^\d{4}-\d{2}-\d{2}$/.test(from??'')||!/^\d{4}-\d{2}-\d{2}$/.test(to??'')||to<from)return true;
     a.period={...a.period,dateFrom:from,dateTo:to};await queryAnalysisDashboard(renderTrainingLoad,{force:true});return true;
   }
+  if(type==='training-load-reference-open'){await referenceAction('openBinding',action.dataset.widgetId);return true;}
   if(type==='training-load-analysis-print'){
     const a=state.trainingLoad.analysis;if(a.queryLoading||a.saving)return true;
     try{await printDashboardPage(document.querySelector('.tl-analysis-grid'),{title:a.dashboard?.name??'Dashboard',subtitle:[a.page?.name,formatDashboardReportDate(a.period.dateFrom),formatDashboardReportDate(a.period.dateTo)].filter(Boolean).join(' · ')});}catch(error){a.notice=error.message;renderTrainingLoad();}return true;

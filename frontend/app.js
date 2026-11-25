@@ -1,3 +1,4 @@
+import { mountReferenceIslands, disposeReferenceIslands } from "./dashboard-references.js";
 import { mountDashboardControls, disposeDashboardControls, closeDashboardControlPanel } from "./dashboard-controls.js";
 import { captureChangedFields, restoreChangedFields } from "./form-keep.js";
 import { api } from "./api.js";
@@ -3036,9 +3037,11 @@ function renderTrainingLoad() {
   // IMP1: a search repaints Imports every 2 s; the tab row keeps where the person scrolled it, and the active tab is
   // brought into view only when it is not.
   const importsRowLeft = state.trainingLoad.section === "imports" ? els.content.querySelector(".imports-tabs")?.scrollLeft || 0 : 0;
+  disposeReferenceIslands();
   disposeDashboardControls();
   els.content.innerHTML = renderTrainingLoadCoachHtml();
   void mountDashboardControls(els.content, renderTrainingLoad);
+  void mountReferenceIslands(els.content, renderTrainingLoad);
   renderImportsBackBand();
   if (state.trainingLoad.section === "imports") keepImportsTabRow(importsRowLeft);
   if (state.trainingLoad.section === "analysis") {

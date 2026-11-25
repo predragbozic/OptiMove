@@ -1545,7 +1545,7 @@ function trainingLoadFilterCount() {
 // Pure, exported so both the render side and tests can assert space
 // membership directly instead of re-deriving it from markup.
 export function trainingLoadTopLevelSpace(section) {
-  if (section === "variables" || section === "source-fields" || section === "mappings" || section === "board") return "dataConfig";
+  if (section === "references" || section === "variables" || section === "source-fields" || section === "mappings" || section === "board") return "dataConfig";
   return section === "schedule" ? "schedule" : "dataAnalysis";
 }
 
@@ -1688,6 +1688,7 @@ export function renderTrainingLoadCoachHtml() {
       ${section === "analysis" ? renderTrainingLoadAnalysisHtml() : ""}
       ${section === "imports" ? renderGpexeImportsHtml() : ""}
       ${section === "variables" ? renderVariablesHtml() : ""}
+      ${section === "references" ? '<div data-reference-island="workspace"></div>' : ""}
       ${section === "source-fields" ? renderSourceFieldsHtml() : ""}
       ${section === "mappings" ? renderMappingsHtml() : ""}
       ${section === "board" ? renderBoardHtml() : ""}
