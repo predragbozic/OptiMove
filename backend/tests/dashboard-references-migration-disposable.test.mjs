@@ -4,7 +4,7 @@ import {createPagesDatabase} from './support/dashboard-pages-db.mjs';import {PAG
 let db,q;const file='migrations_v2/202611291000_training_load_v97_references.sql';
 const sql=kind=>fs.readFileSync(new URL('../../docs/runbooks/dashboard-references-v97-'+kind+'.sql',import.meta.url),'utf8');
 before(async()=>{db=await createPagesDatabase({through:'202611271000',label:'reference_rollback'});q=db.client;});after(async()=>{await db?.drop();});
-async function allTrue(text){const result=await q.query(text);for(const part of Array.isArray(result)?result:[result])for(const row of part.rows??[])for(const value of Object.values(row))if(typeof value==='boolean')assert.equal(value,true,JSON.stringify(row));}
+async function allTrue(text){const result=await q.query(text);for(const part of Array.isArray(result)?result:[result])for(const row of part.rows??[])for(const [key,value]of Object.entries(row))if(typeof value==='boolean'||key.endsWith('_exact')||['v97_absent','triggers_enabled'].includes(key))assert.equal(value,true,JSON.stringify(row));}
 test('v97 preflight, apply, postcheck, actual rollback, identical catalog and reapply',async()=>{
  const actor=(await q.query("insert into public.users(email,first_name,last_name,full_name) values('before-references@test.local','Before','Refs','Before Refs') returning id")).rows[0].id;
  const dashboard=(await q.query("select * from training_load.create_dashboard('Before references',null,'user',$1,null,null,'platform',null,false,$1,null)",[actor])).rows[0];
@@ -23,4 +23,8 @@ test('rollback refuses once a real reference table has been created, even with n
  const actor=(await q.query("insert into public.users(email,first_name,last_name,full_name) values('rollback-ref@test.local','Ref','Admin','Ref Admin') returning id")).rows[0].id;
  const club=(await q.query("insert into public.clubs(name) values('Rollback reference club') returning id")).rows[0].id;await q.query("insert into public.user_club_roles(user_id,club_id,role) values($1,$2,'club_admin')",[actor,club]);
  await q.query("select training_load.mutate_dashboard_reference($1,$2,gen_random_uuid(),repeat('a',64),null,null,'create','{\"name\":\"Real targets\"}')",[actor,club]);await assert.rejects(q.query(sql('rollback')),/real reference writes/);await q.query('rollback');await allTrue(sql('postcheck'));
+});
+
+test('postcheck refuses a missing function as false, never as an ignored null',async()=>{
+ await q.query('begin');try{await q.query('drop function training_load.dashboard_reference_column_available(uuid,uuid,text,text,text)');await assert.rejects(allTrue(sql('postcheck')),error=>error.code==='ERR_ASSERTION');}finally{await q.query('rollback');}await allTrue(sql('postcheck'));
 });
