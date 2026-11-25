@@ -106,11 +106,15 @@ function rows() {
 // Imports has no view word (R4 Q16): closed for a view workspace in every V step.
 const ALWAYS_CLOSED = () => [`/api/training-load/gpexe/teams/${w.TA1}/status`, `/api/training-load/gpexe/teams/${w.TA1}/candidates`];
 
+const ORIGINAL_DASHBOARD_PAGES_ENABLED = process.env.DASHBOARD_PAGES_ENABLED;
+
 before(async () => {
   db = await buildDatabase({ label: "rvsweep", upTo: "all" });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);
+  await k.query("update training_load.dashboard_pages_activation set enabled=true where singleton");
+  process.env.DASHBOARD_PAGES_ENABLED = "true";
   srv = await startServer(db.url);
   mv = await import("../src/moduleView.js");
   ({ MODULE_VIEW_WORDS, OPEN_VIEW_MODULES } = mv);
@@ -132,6 +136,8 @@ after(async () => {
   await k?.end().catch(() => {});
   await db?.drop();
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
+  if (ORIGINAL_DASHBOARD_PAGES_ENABLED === undefined) delete process.env.DASHBOARD_PAGES_ENABLED;
+  else process.env.DASHBOARD_PAGES_ENABLED = ORIGINAL_DASHBOARD_PAGES_ENABLED;
 });
 
 test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows are exactly OPEN_VIEW_MODULES (V-1: data configuration, presets; V-2: athletes; V-3: calendar; V-4: tests)", () => {
