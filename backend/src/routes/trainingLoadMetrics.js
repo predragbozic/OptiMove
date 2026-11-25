@@ -40,7 +40,10 @@ const catalogViewGate = viewEntryGate("load_team", [
 const measurementsViewGate = viewEntryGate("load_athlete", [
   { method: "GET", path: "/results" }, { method: "GET", path: "/occasions/:id" },
 ], { refuse: handOnReadsRefuseWrites });
-const metricsCoachGate = coachModuleGate("load_team", { allowed: (authz, scope) => can(authz, "load.view.team", scope) });
+const metricsCoachGate = coachModuleGate("load_team", {
+  resolve: resolveActiveWorkspace,
+  allowed: (authz, scope) => can(authz, "load.view.team", scope),
+});
 
 router.use((req, res, next) => {
   const section = req.path.split("/").filter(Boolean)[0];

@@ -45,6 +45,7 @@ const activityNamedViewGate = viewEntryGate("load_athlete", [
   { method: "GET", path: "/:activityId" },
 ], { refuse: (_req, _res, next) => next() });
 const activityCoachGate = coachModuleGate("load_team", {
+  resolve: resolveActiveWorkspace,
   allowed: (authz, scope) => can(authz, "load.view.team", scope),
   refuse(req, res) {
     if (req.path.split("/").filter(Boolean)[1] === "roster") return res.status(404).json({ error: "notFound" });

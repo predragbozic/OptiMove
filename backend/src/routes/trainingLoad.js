@@ -39,6 +39,7 @@ const loadAthleteViewGate = viewEntryGate("load_athlete", [
 
 const closedTrainingLoadViewGate = viewEntryGate("load_team", [], { refuse: (_req, _res, next) => next() });
 const trainingLoadCoachGate = coachModuleGate("load_team", {
+  resolve: resolveActiveWorkspace,
   allowed: (authz, scope) => can(authz, "load.view.team", scope),
 });
 
