@@ -6,6 +6,7 @@
 // uniquely-named temporary database (never OPTIMOVE, never monitoring2),
 // through the real Strategy B runner, with the real Express app driven
 // over real HTTP with real session cookies.
+import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
@@ -229,6 +230,7 @@ before(async () => {
   await adminClient.query(LEGACY_FIXTURE_SQL);
   migrationsDir = await writeMigrationsDir("primary", await readMigrationFiles(MIGRATIONS));
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  await applyRoleReadMigrations(db.url);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");

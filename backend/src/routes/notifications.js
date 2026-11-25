@@ -1,28 +1,39 @@
 import { Router } from "express";
 import { query } from "../db.js";
+import { athleteTrainingLoadAllowed } from "../athleteTrainingLoadLicence.js";
+
+const athleteRpePromptTypes = [
+  "training_load_external_invitation",
+  "training_load_external_reminder",
+  "training_load_manual_reminder",
+];
 
 const router = Router();
 
 router.get("/", async (req, res, next) => {
   try {
     const limit = Math.min(Math.max(Number(req.query.limit || 30), 1), 80);
+    const athleteId = req.authz?.athleteId;
+    const hiddenTypes = athleteId && !(await athleteTrainingLoadAllowed(athleteId)) ? athleteRpePromptTypes : [];
     const [rows, unread] = await Promise.all([
       query(
         `select id, type, title, body, entity_type, entity_id, href, metadata, read_at, created_at
          from public.app_notifications
          where recipient_user_id = $1
            and type <> 'message_received'
+           and type <> all($3::text[])
          order by created_at desc
          limit $2`,
-        [req.user.id, limit],
+        [req.user.id, limit, hiddenTypes],
       ),
       query(
         `select count(*)::int as count
          from public.app_notifications
          where recipient_user_id = $1
            and type <> 'message_received'
+           and type <> all($2::text[])
            and read_at is null`,
-        [req.user.id],
+        [req.user.id, hiddenTypes],
       ),
     ]);
     res.json({ notifications: rows.rows, unreadCount: unread.rows[0]?.count || 0 });

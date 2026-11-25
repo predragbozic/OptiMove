@@ -271,9 +271,9 @@ test("4. the truth table of contract 3.6 in can() and in the twin (rows 1-13)", 
   assert.equal(await canOf(w4.coach, W, perms.teamScope(w4.team)), false);
   await openModule(w4.pa, w4.club, "athletes");
   assert.equal(await canOf(w4.coach, W, perms.teamScope(w4.team)), true, "row 10");
-  // 11. a word stored but unchecked acts nowhere: it is in no ENFORCED gate.
-  // (athletes.view is checked since roles V-2; a view word no V step checked yet stands for the row.)
-  assert.ok(!Object.hasOwn(perms.ENFORCED_PERMISSIONS, "load.view.team"), "row 11");
+  // V-5b checks both remaining view words.
+  assert.ok(Object.hasOwn(perms.ENFORCED_PERMISSIONS, "load.view.team"));
+  assert.ok(Object.hasOwn(perms.ENFORCED_PERMISSIONS, "load.view.athlete"));
 });
 
 test("5. can() and the twin agree over a random matrix of layers", async () => {

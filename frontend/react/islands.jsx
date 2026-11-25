@@ -8,3 +8,4 @@ export { ClubRoles } from "./club-roles.jsx";
 export { PersonAccess } from "./person-access.jsx";
 export { DashboardPeriodButton, DashboardPeriodFields, DashboardPageStrip } from "./dashboard-controls.jsx";
 export { ReferenceWorkspace, ReferenceEntry, ReferenceBindingEditor, ReferenceChart } from "./dashboard-references.jsx";
+export { TrainingLoadViewSchedules } from "./training-load-view-schedules.jsx";

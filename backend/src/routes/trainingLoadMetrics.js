@@ -10,6 +10,9 @@
 // functions exported from trainingLoadMetricsMeasurements.js, which exist
 // as tested service code only, ready for a future connector to call.
 import { Router } from "express";
+import { athleteTrainingLoadAllowed } from "../athleteTrainingLoadLicence.js";
+import { coachModuleGate, handOnReadsRefuseWrites, viewEntryGate } from "../moduleView.js";
+import { can } from "../permissions.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import {
   resolveMetricsWorkspaceScope,
@@ -29,6 +32,27 @@ import {
 } from "../trainingLoadMetricsMeasurements.js";
 
 const router = Router();
+const catalogViewGate = viewEntryGate("load_team", [
+  { method: "GET", path: "/domains" }, { method: "GET", path: "/categories" },
+  { method: "GET", path: "/definitions" }, { method: "GET", path: "/definitions/:id" },
+  { method: "GET", path: "/structure-links" },
+], { refuse: handOnReadsRefuseWrites });
+const measurementsViewGate = viewEntryGate("load_athlete", [
+  { method: "GET", path: "/results" }, { method: "GET", path: "/occasions/:id" },
+], { refuse: handOnReadsRefuseWrites });
+const metricsCoachGate = coachModuleGate("load_team", {
+  resolve: resolveActiveWorkspace,
+  allowed: (authz, scope) => can(authz, "load.view.team", scope),
+});
+
+router.use((req, res, next) => {
+  const section = req.path.split("/").filter(Boolean)[0];
+  const gate = ["results", "occasions"].includes(section) ? measurementsViewGate : catalogViewGate;
+  return gate(req, res, error => {
+    if (error || req.moduleView) return next(error);
+    return metricsCoachGate(req, res, next);
+  });
+});
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -141,11 +165,29 @@ async function requireMetricsScope(req, res) {
 // coach-scoped results, exactly like GET /weekly in trainingLoad.js
 // branches on workspace.type === "athlete", never on the bare capability).
 async function resolveReadContext(req, res) {
-  const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-  const authzContext = { authz: req.authz, user: req.user };
+  const view = req.moduleView?.module === "load_athlete" ? req.moduleView : null;
+  const { workspace } = view || await resolveActiveWorkspace(req.user.id, req.authz);
+  const authzContext = { authz: req.authz, user: req.user, moduleView: view };
+  if (view) {
+    if (!can(req.authz, "athletes.view", view.scope)) {
+      res.status(403).json({ error: "Forbidden" });
+      return null;
+    }
+    const scope = view.scope.type === "club" ? { type: "club", clubId: view.scope.id } : { type: "team", teamId: view.scope.id };
+    return { isAthleteSelf: false, athleteId: null, scope, authzContext };
+  }
+  if (["club", "team"].includes(workspace?.type)
+      && !can(req.authz, "load.view.athlete", { type: workspace.type, id: String(workspace.scopeId) })) {
+    res.status(403).json({ error: "Forbidden" });
+    return null;
+  }
   if (workspace?.type === "athlete") {
     if (!req.authz.athleteId) {
       res.status(403).json({ error: "This account has no athlete profile." });
+      return null;
+    }
+    if (!(await athleteTrainingLoadAllowed(req.authz.athleteId))) {
+      res.status(403).json({ error: "Forbidden" });
       return null;
     }
     return { isAthleteSelf: true, athleteId: req.authz.athleteId, scope: { type: null }, authzContext };
@@ -268,12 +310,12 @@ router.get("/definitions", async (req, res, next) => {
     // team workspace's club; none for the platform, a private coach or an
     // athlete - never from req.authz's roles. The rows themselves and the
     // visibility rule do not change (the pickers drop flagged rows themselves).
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const { workspace } = req.moduleView || await resolveActiveWorkspace(req.user.id, req.authz);
     const hideClubId = workspace?.type === "club" ? workspace.scopeId ?? null : workspace?.type === "team" ? workspace.clubId ?? null : null;
     const { rows, nextCursor } = await listDefinitions(req, {
       search: req.query.search, ownerScope: req.query.ownerScope, state: req.query.state, cursor, limit: req.query.limit, hideClubId,
       teamClubId: req.query.purpose === "dashboardSeries" && workspace?.type === "team" ? workspace.clubId ?? null : null,
-      hideCalculated: hidesCalculated(workspace),
+      hideCalculated: !req.moduleView && hidesCalculated(workspace),
     });
     res.json({ rows, nextCursor });
   } catch (error) {
@@ -291,8 +333,8 @@ function hidesCalculated(workspace) {
 router.get("/definitions/:id", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    const row = await getDefinition(req, req.params.id, { hideCalculated: hidesCalculated(workspace) });
+    const { workspace } = req.moduleView || await resolveActiveWorkspace(req.user.id, req.authz);
+    const row = await getDefinition(req, req.params.id, { hideCalculated: !req.moduleView && hidesCalculated(workspace) });
     if (!row) return res.status(404).json({ error: "Metric definition not found." });
     res.json({ row });
   } catch (error) {
@@ -360,8 +402,8 @@ router.put("/definitions/:id/scope-capabilities", async (req, res, next) => {
 router.get("/definitions/:id/versions", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    const rows = await listDefinitionVersions(req, req.params.id, { hideCalculated: hidesCalculated(workspace) });
+    const { workspace } = req.moduleView || await resolveActiveWorkspace(req.user.id, req.authz);
+    const rows = await listDefinitionVersions(req, req.params.id, { hideCalculated: !req.moduleView && hidesCalculated(workspace) });
     if (rows === null) return res.status(404).json({ error: "Metric definition not found." });
     res.json({ rows });
   } catch (error) {
@@ -388,8 +430,8 @@ router.post("/definitions/:id/versions", async (req, res, next) => {
 router.post("/definitions/:id/hide", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    const result = await hideDefinitionForUser(req, req.params.id, { hideCalculated: hidesCalculated(workspace) });
+    const { workspace } = req.moduleView || await resolveActiveWorkspace(req.user.id, req.authz);
+    const result = await hideDefinitionForUser(req, req.params.id, { hideCalculated: !req.moduleView && hidesCalculated(workspace) });
     sendServiceResult(res, result);
   } catch (error) {
     next(error);
@@ -399,8 +441,8 @@ router.post("/definitions/:id/hide", async (req, res, next) => {
 router.delete("/definitions/:id/hide", async (req, res, next) => {
   try {
     if (!validUuid(req.params.id)) return res.status(404).json({ error: "Metric definition not found." });
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    const result = await unhideDefinitionForUser(req, req.params.id, { hideCalculated: hidesCalculated(workspace) });
+    const { workspace } = req.moduleView || await resolveActiveWorkspace(req.user.id, req.authz);
+    const result = await unhideDefinitionForUser(req, req.params.id, { hideCalculated: !req.moduleView && hidesCalculated(workspace) });
     sendServiceResult(res, result);
   } catch (error) {
     next(error);
@@ -416,8 +458,8 @@ router.get("/structure-links", async (req, res, next) => {
     if (req.query.domainId !== undefined && !validUuid(req.query.domainId)) return res.status(400).json({ error: "Invalid domainId." });
     if (req.query.categoryId !== undefined && !validUuid(req.query.categoryId)) return res.status(400).json({ error: "Invalid categoryId." });
     if (req.query.definitionId !== undefined && !validUuid(req.query.definitionId)) return res.status(400).json({ error: "Invalid definitionId." });
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    const rows = await listStructureLinks(req, { domainId: req.query.domainId, categoryId: req.query.categoryId, definitionId: req.query.definitionId, hideCalculated: hidesCalculated(workspace) });
+    const { workspace } = req.moduleView || await resolveActiveWorkspace(req.user.id, req.authz);
+    const rows = await listStructureLinks(req, { domainId: req.query.domainId, categoryId: req.query.categoryId, definitionId: req.query.definitionId, hideCalculated: !req.moduleView && hidesCalculated(workspace) });
     res.json({ rows });
   } catch (error) {
     next(error);

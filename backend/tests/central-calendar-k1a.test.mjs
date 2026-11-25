@@ -403,7 +403,7 @@ async function rowDigests(tables) {
 // Setup
 // ---------------------------------------------------------------------------
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calendar", migrations: MIGRATIONS });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calendar", roleRead: true, migrations: MIGRATIONS });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

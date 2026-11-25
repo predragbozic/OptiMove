@@ -137,6 +137,11 @@ export function rememberReadOnlyWorkspace(userId, authz, resolution) {
  if (!VIEW_WORKSPACE_TYPES.has(resolution.workspace?.type)) throw new Error('A resolved view workspace is required.');
  readOnlyWorkspaceSnapshots.set(authz, { userId: String(userId), resolution });
 }
+export function rememberCheckedCoachWorkspace(userId, authz, resolution) {
+  if (!["club", "team"].includes(resolution.workspace?.type)) throw new Error("A checked coach workspace is required.");
+  readOnlyWorkspaceSnapshots.set(authz, { userId: String(userId), resolution });
+}
+
 function rememberedWorkspace(userId, authz) {
  const known = authz && readOnlyWorkspaceSnapshots.get(authz);
  return known?.userId === String(userId) ? known.resolution : null;

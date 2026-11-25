@@ -38,7 +38,7 @@ let appPool;
 
 before(async () => {
   assert.ok(MIGRATIONS.includes(V88_FILE), "v88 is in this suite's migrations");
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "st4", migrations: MIGRATIONS });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "st4", roleRead: true, migrations: MIGRATIONS });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

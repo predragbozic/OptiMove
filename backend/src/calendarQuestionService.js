@@ -8,6 +8,7 @@
 //        questions, after the day's occurrence and her assignment are made
 //   POST /api/calendar/questions/:questionId/later  her *Later* (requestKey)
 import { pool } from "./db.js";
+import { athleteTrainingLoadAllowed } from "./athleteTrainingLoadLicence.js";
 import { EventError, eventOwnerOfRow, eventWriteBasis, notFound } from "./calendarEventAccess.js";
 import { requestKeyOf, isUuid } from "./calendarEventService.js";
 import { withinBound } from "./calendarCommandRunner.js";
@@ -135,7 +136,9 @@ const HER_QUESTIONS_SQL = `
 export async function myOpenQuestions(ctx) {
   if (ctx.type !== "athlete") return { questions: [] };
   if (!(await questionsInstalled(pool))) return { questions: [] };
-  const candidates = (await pool.query(HER_QUESTIONS_SQL, [ctx.athleteId])).rows;
+  const asked = (await pool.query(HER_QUESTIONS_SQL, [ctx.athleteId])).rows;
+  const allowRpe = !asked.some(question => question.kind === "rpe") || await athleteTrainingLoadAllowed(ctx.athleteId);
+  const candidates = allowRpe ? asked : asked.filter(question => question.kind !== "rpe");
   for (const q of candidates) {
     if (q.kind === "rpe") await ensureCurrentExternalOccurrence({ id: q.external_schedule_id }, pool);
     else await ensureCurrentOccurrence(pool, { id: q.test_schedule_id });

@@ -48,7 +48,7 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undo76", migrations: MAIN_MIGRATIONS }); // through v60, plus v62 (the importer reads it); not the error-tracking one (an injected failure would be recorded as a row)
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "undo76", migrations: MAIN_MIGRATIONS, roleRead: true }); // through v60, plus v62 (the importer reads it); not the error-tracking one (an injected failure would be recorded as a row)
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

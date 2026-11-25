@@ -37,6 +37,7 @@ import { isAthleteInWorkspaceScope } from "./trainingLoadAccess.js";
 import { query } from "./db.js";
 import { calculatedDefinitionSql } from "./calculatedValues.js";
 import { can } from "./permissions.js";
+import { athleteTrainingLoadAllowed } from "./athleteTrainingLoadLicence.js";
 import { canView, viewReadScope } from "./moduleView.js";
 
 export { isAthleteInWorkspaceScope };
@@ -146,7 +147,8 @@ export function dashboardNamedAthletesAllowed(req, dataWorkspace) {
   if (!dataWorkspace || dataWorkspace.type === null) return false;
   if (dataWorkspace.dataWorkspaceType !== "club" && dataWorkspace.dataWorkspaceType !== "team") return true;
   const workspace = RESOLVED_WORKSPACE.get(dataWorkspace);
-  return Boolean(workspace) && canView(req.authz, workspace, "load_athlete");
+  return Boolean(workspace) && canView(req.authz, workspace, "load_athlete")
+    && (!viewReadScope(workspace) || canView(req.authz, workspace, "athletes"));
 }
 
 // Resolves the CALLER's own currently active workspace as a data-
@@ -180,6 +182,7 @@ export function resolveActiveDataWorkspace(req) {
       if (req.dashboardsViewRefused === true) return { type: null };
       if (req.moduleView?.module === VIEW_MODULE) return dataWorkspaceFromActiveWorkspace(req.moduleView.workspace, req);
       const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+      if (workspace?.type === "athlete" && !(await athleteTrainingLoadAllowed(req.authz?.athleteId))) return { type: null };
       return dataWorkspaceFromActiveWorkspace(workspace, req);
     })();
     req._resolvedDataWorkspacePromise.catch(() => {

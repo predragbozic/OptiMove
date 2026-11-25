@@ -2,8 +2,12 @@ import crypto from "node:crypto";
 import { insertExternalSchedule, insertExternalTargets, insertNotificationRules } from "../externalScheduleWriter.js";
 import { MANAGED_BY_CALENDAR, scheduleManagedByCalendar } from "../calendarQuestions.js";
 import { Router } from "express";
+import { athleteTrainingLoadAllowed } from "../athleteTrainingLoadLicence.js";
 import { pool, query } from "../db.js";
 import { resolveActiveWorkspace } from "../workspace.js";
+import { coachModuleGate, viewEntryGate } from "../moduleView.js";
+import { can } from "../permissions.js";
+import { viewMembershipScope } from "../athleteRosterScope.js";
 import {
   WEEKLY_PLAN_SESSION_FILTER_SQL,
   canManageExternalScheduleInScope,
@@ -23,6 +27,40 @@ import { recordedByOf, recordedBySql } from "../trainingActivityResults.js";
 import { countSessionResults, writePublishedSessionFlags } from "../plannedSessionFlags.js";
 
 const router = Router();
+
+const loadTeamViewGate = viewEntryGate("load_team", [
+  { method: "GET", path: "/calendar" },
+  { method: "GET", path: "/external-schedules" },
+  { method: "GET", path: "/external-schedules/:scheduleId" },
+], { refuse: (_req, _res, next) => next() });
+const loadAthleteViewGate = viewEntryGate("load_athlete", [
+  { method: "GET", path: "/weekly" },
+], { refuse: (_req, _res, next) => next() });
+
+const closedTrainingLoadViewGate = viewEntryGate("load_team", [], { refuse: (_req, _res, next) => next() });
+const trainingLoadCoachGate = coachModuleGate("load_team", {
+  resolve: resolveActiveWorkspace,
+  allowed: (authz, scope) => can(authz, "load.view.team", scope),
+});
+
+function viewTrainingLoadReadScope(view) {
+  return view.scope.type === "club" ? { type: "club", clubId: view.scope.id } : { type: "team", teamId: view.scope.id };
+}
+
+function viewCoachAthleteScopeSql(view, alias, startIndex) {
+  const filter = viewMembershipScope(view.scope, alias);
+  return { sql: filter.sql.replace(/\$1\b/g, `$${startIndex}`), params: filter.params };
+}
+
+function canReadNamedLoad(req, view) {
+  return can(req.authz, "load.view.athlete", view.scope) && can(req.authz, "athletes.view", view.scope);
+}
+
+function coachCanReadLoad(req, workspace, named) {
+  if (!["club", "team"].includes(workspace?.type)) return true;
+  const scope = { type: workspace.type, id: String(workspace.scopeId) };
+  return can(req.authz, "load.view.team", scope) && (!named || can(req.authz, "load.view.athlete", scope));
+}
 
 // Training load (RPE/sRPE). One RPE/sRPE submission always belongs to
 // exactly one plans.plan_sessions row inside an athlete's ACTIVE
@@ -194,12 +232,13 @@ async function athleteLocalDate(athleteId, executor = query) {
 // Athlete
 // ------------------------------------------------------------
 
-router.get("/athlete/today", async (req, res, next) => {
+router.get("/athlete/today", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   try {
     const athleteId = requireAthlete(req, res);
     if (!athleteId) return;
     const localToday = await athleteLocalDate(athleteId);
     if (!localToday) return res.status(404).json({ error: "Athlete profile not found." });
+    if (!(await athleteTrainingLoadAllowed(athleteId))) return res.json({ date: localToday, sessions: [] });
 
     // On-demand generation right before reading - mirrors WELLNESS's own
     // "ensureCurrentOccurrence, called from the view that needs it" trigger
@@ -331,7 +370,7 @@ router.get("/athlete/today", async (req, res, next) => {
 // first and committed), the re-read after the lock simply finds nothing
 // and this responds with the same controlled 404 as any other not-found
 // session - never a 500.
-router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
+router.post("/sessions/:sessionId/rpe", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   let client;
   try {
     const athleteId = requireAthlete(req, res);
@@ -342,7 +381,7 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
     // Postgres itself rejects the query with a raw 22P02 type-mismatch
     // error (a 500, and a distinguishable response from the info-hiding
     // 404 every other not-found/not-yours/not-actionable case below uses).
-    if (!UUID_PATTERN.test(sessionId)) {
+    if (!UUID_PATTERN.test(sessionId) || !(await athleteTrainingLoadAllowed(athleteId))) {
       return res.status(404).json({ error: "Training session not found." });
     }
 
@@ -555,7 +594,7 @@ router.post("/sessions/:sessionId/rpe", async (req, res, next) => {
 // if disable wins, the submit that was waiting re-reads rpe_enabled=false
 // and gets the controlled 409 the submit route already implements. Never
 // a partial write, never a 500.
-router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
+router.patch("/sessions/:sessionId/rpe-enabled", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   let client;
   try {
     if (!requireCoachWorkspace(req, res)) return;
@@ -674,7 +713,7 @@ router.patch("/sessions/:sessionId/rpe-enabled", async (req, res, next) => {
 // rpe_enabled - a coach must re-enable RPE explicitly and separately
 // (the CHECK constraint guarantees rpe_enabled was already false while
 // tracking was off, so there's nothing to restore).
-router.patch("/sessions/:sessionId/training-load-enabled", async (req, res, next) => {
+router.patch("/sessions/:sessionId/training-load-enabled", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   let client;
   try {
     if (!requireCoachWorkspace(req, res)) return;
@@ -762,7 +801,7 @@ router.patch("/sessions/:sessionId/training-load-enabled", async (req, res, next
 // the scope it belongs to.
 // ------------------------------------------------------------
 
-router.get("/planned-rpe-setting", async (req, res, next) => {
+router.get("/planned-rpe-setting", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   try {
     const scope = await requireExternalScheduleWorkspace(req, res);
     if (!scope) return;
@@ -781,7 +820,7 @@ router.get("/planned-rpe-setting", async (req, res, next) => {
   }
 });
 
-router.patch("/planned-rpe-setting", async (req, res, next) => {
+router.patch("/planned-rpe-setting", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   const client = await pool.connect();
   try {
     const scope = await requireExternalScheduleWorkspace(req, res);
@@ -895,7 +934,7 @@ function sameOwnerContext(a, b) {
   );
 }
 
-router.post("/plans/resolve-rpe-ownership", async (req, res, next) => {
+router.post("/plans/resolve-rpe-ownership", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   const client = await pool.connect();
   try {
     const scope = await requireExternalScheduleWorkspace(req, res);
@@ -1079,7 +1118,7 @@ function athleteExtraFilterSql(alias, clubIds, teamIds, athleteIds, params) {
   return conditions.length ? ` and (${conditions.join(" or ")})` : "";
 }
 
-router.get("/weekly", async (req, res, next) => {
+router.get("/weekly", loadAthleteViewGate, async (req, res, next) => {
   try {
     const weekStart = String(req.query?.weekStart || "");
     if (!isValidGregorianDateString(weekStart)) return res.status(400).json({ error: "weekStart must be a valid YYYY-MM-DD date." });
@@ -1119,10 +1158,14 @@ router.get("/weekly", async (req, res, next) => {
     // never shared across requests/accounts.
     const ownershipMembershipCache = new Map();
 
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const view = req.moduleView?.module === "load_athlete" ? req.moduleView : null;
+    const { workspace } = view || await resolveActiveWorkspace(req.user.id, req.authz);
+    if (view && !canReadNamedLoad(req, view)) return res.status(403).json({ error: "Forbidden" });
+    if (!view && !coachCanReadLoad(req, workspace, true)) return res.status(403).json({ error: "Forbidden" });
     const athleteWeekly = workspace?.type === "athlete";
     if (workspace?.type === "athlete") {
       if (!req.authz.athleteId) return res.status(403).json({ error: "This account has no athlete profile." });
+      if (!(await athleteTrainingLoadAllowed(req.authz.athleteId))) return res.status(403).json({ error: "Forbidden" });
       params.push(req.authz.athleteId);
       // Same rule as GET /athlete/today: the athlete's own weekly view
       // (this endpoint doubles as the athlete's weekly overlay) must never
@@ -1147,7 +1190,7 @@ router.get("/weekly", async (req, res, next) => {
       scopeSqlExternal = `and a.id = $${params.length} and (sf.id is not null or (s.status = 'active' and asg.status in ('pending','open','in_progress')))`;
       await ensureCurrentExternalOccurrencesForAthlete(req.authz.athleteId);
     } else {
-      if (!requireCoachWorkspace(req, res)) return;
+      if (!view && !requireCoachWorkspace(req, res)) return;
       // Resolved ONCE and reused for BOTH the athlete-visibility scope
       // below AND the external-schedule scope/occurrence generation
       // further down - hardening correction, item 5: this used to call
@@ -1157,7 +1200,7 @@ router.get("/weekly", async (req, res, next) => {
       // could scope planned/session_feedback rows to workspace A while
       // generating/scoping external-schedule occurrences for workspace B
       // in the very same response.
-      const scope = coachWorkspaceScopeSqlForWorkspace(workspace, req, "a", 3);
+      const scope = view ? viewCoachAthleteScopeSql(view, "a", 3) : coachWorkspaceScopeSqlForWorkspace(workspace, req, "a", 3);
       scopeSqlLive = scope.sql;
       scopeSqlSf = scope.sql;
       scopeSqlExternal = scope.sql;
@@ -1172,7 +1215,7 @@ router.get("/weekly", async (req, res, next) => {
       // never every schedule the account could manage across every
       // club/team it happens to hold a role in (see
       // resolveExternalScheduleWorkspaceScope's own header comment).
-      await ensureCurrentExternalOccurrencesForCoach(externalScheduleScopeForWorkspace(workspace, req));
+      if (!view) await ensureCurrentExternalOccurrencesForCoach(externalScheduleScopeForWorkspace(workspace, req));
       // (correction round 4) Reuses the SAME workspace read (never a
       // second, independent resolveActiveWorkspace call) to compute the
       // discriminated scope object canResolvePlanOwnership needs below,
@@ -1182,7 +1225,7 @@ router.get("/weekly", async (req, res, next) => {
       // workspace for RPE". Purely informational for the frontend (which
       // button/state to render) - the resolve endpoint itself re-checks
       // this from scratch and is the only real authorization boundary.
-      resolutionScope = externalScheduleScopeForWorkspace(workspace, req);
+      if (!view) resolutionScope = externalScheduleScopeForWorkspace(workspace, req);
     }
 
     const liveResult = await query(
@@ -1514,7 +1557,7 @@ function calendarActivityOwnerScopeSql(scope, alias, params) {
   return activityReadScopeSqlForWorkspace(scope, alias, params);
 }
 
-router.get("/calendar", async (req, res, next) => {
+router.get("/calendar", loadTeamViewGate, async (req, res, next) => {
   try {
     const dateFrom = String(req.query?.dateFrom || "");
     const dateTo = String(req.query?.dateTo || "");
@@ -1533,10 +1576,14 @@ router.get("/calendar", async (req, res, next) => {
       return res.status(400).json({ error: "clubIds/teamIds/athleteIds must be valid UUIDs." });
     }
 
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+    const view = req.moduleView?.module === "load_team" ? req.moduleView : null;
+    const { workspace } = view || await resolveActiveWorkspace(req.user.id, req.authz);
+    const countsOnly = view && !canReadNamedLoad(req, view);
+    if (!view && !coachCanReadLoad(req, workspace, false)) return res.status(403).json({ error: "Forbidden" });
     const isAthlete = workspace?.type === "athlete";
     if (isAthlete && !req.authz.athleteId) return res.status(403).json({ error: "This account has no athlete profile." });
-    if (!isAthlete && !requireCoachWorkspace(req, res)) return;
+    if (isAthlete && !(await athleteTrainingLoadAllowed(req.authz.athleteId))) return res.status(403).json({ error: "Forbidden" });
+    if (!isAthlete && !view && !requireCoachWorkspace(req, res)) return;
 
     let activitySql, activityParams, plannedScopeSql, externalScopeSql, planParams, externalParams;
 
@@ -1552,7 +1599,9 @@ router.get("/calendar", async (req, res, next) => {
       externalScopeSql = `and asg.athlete_id = $3`;
       await ensureCurrentExternalOccurrencesForAthlete(athleteId);
     } else {
-      const activityScope = activityScopeForWorkspace(workspace, req);
+      const activityScope = view
+        ? viewTrainingLoadReadScope(view)
+        : activityScopeForWorkspace(workspace, req);
       if (activityScope.type === null) return res.status(403).json({ error: "Forbidden" });
       activityParams = [dateFrom, dateTo];
       let ownerSql = calendarActivityOwnerScopeSql(activityScope, "a", activityParams);
@@ -1579,13 +1628,13 @@ router.get("/calendar", async (req, res, next) => {
       // itself. coachWorkspaceScopeSqlForWorkspace/athleteExtraFilterSql
       // are generic on their `alias` argument, so this is simply passed
       // through correctly, never a copy-paste of the activities alias.
-      const scope = coachWorkspaceScopeSqlForWorkspace(workspace, req, "ath", 3);
+      const scope = view ? viewCoachAthleteScopeSql(view, "ath", 3) : coachWorkspaceScopeSqlForWorkspace(workspace, req, "ath", 3);
       planParams = [dateFrom, dateTo].concat(scope.params);
       plannedScopeSql = scope.sql + athleteExtraFilterSql("ath", clubFilter.ids, teamFilter.ids, athleteFilter.ids, planParams);
       externalParams = [dateFrom, dateTo].concat(scope.params);
       externalScopeSql = scope.sql + athleteExtraFilterSql("ath", clubFilter.ids, teamFilter.ids, athleteFilter.ids, externalParams);
 
-      await ensureCurrentExternalOccurrencesForCoach(externalScheduleScopeForWorkspace(workspace, req));
+      if (!view) await ensureCurrentExternalOccurrencesForCoach(externalScheduleScopeForWorkspace(workspace, req));
     }
 
     // Every canonical (non-superseded) activity in range/scope, ONE row
@@ -1659,7 +1708,7 @@ router.get("/calendar", async (req, res, next) => {
     );
 
     // Tracked planned sessions with NO confirmed activity link yet.
-    const plannedResult = await query(
+    const plannedResult = countsOnly ? { rows: [] } : await query(
       `select ps.id as session_id, ps.logical_session_id, ps.name as session_name, ps.session_time, ps.rpe_enabled,
               pd.date as occurred_date, p.id as plan_id,
               ath.id as athlete_id, coalesce(ath.display_name, ath.full_name, concat_ws(' ', ath.first_name, ath.last_name), ath.athlete_id) as athlete_name
@@ -1680,7 +1729,7 @@ router.get("/calendar", async (req, res, next) => {
     );
 
     // External assignments with NO confirmed activity link yet.
-    const externalResult = await query(
+    const externalResult = countsOnly ? { rows: [] } : await query(
       `select asg.id as assignment_id, asg.local_scheduled_date, asg.opens_at, asg.closes_at, asg.status as assignment_status,
               s.id as schedule_id, s.event_name, s.status as schedule_status,
               ath.id as athlete_id, coalesce(ath.display_name, ath.full_name, concat_ws(' ', ath.first_name, ath.last_name), ath.athlete_id) as athlete_name
@@ -2001,6 +2050,13 @@ function formatExternalScheduleRow(row, datesList) {
   };
 }
 
+function formatExternalScheduleForView(row, datesList) {
+  const { id, scheduleKind, timezone, startDate, endDate, dates, recurrenceRule,
+    opensTime, dueTime, closesTime, status, eventName, eventType, targetCount } = formatExternalScheduleRow(row, datesList);
+  return { id, scheduleKind, timezone, startDate, endDate, dates, recurrenceRule,
+    opensTime, dueTime, closesTime, status, eventName, eventType, targetCount };
+}
+
 function formatExternalTargetRow(row) {
   return {
     kind: row.target_kind,
@@ -2108,7 +2164,7 @@ function resolveAndValidateExternalScheduleBody(body, fallback) {
   return { ok: true, eventName, eventType, eventNote, timezone, opensTime, dueTime, closesTime, scheduleKind, recurrenceRule, startDate, endDate, dates };
 }
 
-router.post("/external-schedules", async (req, res, next) => {
+router.post("/external-schedules", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   const client = await pool.connect();
   try {
     const scope = await requireExternalScheduleWorkspace(req, res);
@@ -2154,9 +2210,10 @@ router.post("/external-schedules", async (req, res, next) => {
   }
 });
 
-router.get("/external-schedules", async (req, res, next) => {
+router.get("/external-schedules", loadTeamViewGate, trainingLoadCoachGate, async (req, res, next) => {
   try {
-    const workspaceScope = await requireExternalScheduleWorkspace(req, res);
+    const view = req.moduleView?.module === "load_team" ? req.moduleView : null;
+    const workspaceScope = view ? viewTrainingLoadReadScope(view) : await requireExternalScheduleWorkspace(req, res);
     if (!workspaceScope) return;
     const params = [];
     const scopeSql = externalScheduleScopeSqlForWorkspace(workspaceScope, params);
@@ -2174,21 +2231,30 @@ router.get("/external-schedules", async (req, res, next) => {
        order by s.start_date desc, s.created_at desc`,
       params,
     );
-    res.json({ schedules: result.rows.map((row) => formatExternalScheduleRow(row, row.dates_list)) });
+    const formatSchedule = view ? formatExternalScheduleForView : formatExternalScheduleRow;
+    res.json({ schedules: result.rows.map((row) => formatSchedule(row, row.dates_list)) });
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/external-schedules/:scheduleId", async (req, res, next) => {
+router.get("/external-schedules/:scheduleId", loadTeamViewGate, trainingLoadCoachGate, async (req, res, next) => {
   try {
-    const scope = await requireExternalScheduleWorkspace(req, res);
+    const view = req.moduleView?.module === "load_team" ? req.moduleView : null;
+    const scope = view ? viewTrainingLoadReadScope(view) : await requireExternalScheduleWorkspace(req, res);
     if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
-    const scheduleResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
+    const params = [req.params.scheduleId];
+    const scopeSql = externalScheduleScopeSqlForWorkspace(scope, params);
+    const scheduleResult = view ? await query(`select s.*, (select count(*)::int
+      from training_load.external_schedule_targets t where t.schedule_id=s.id) as target_count
+      from training_load.external_schedules s where s.id=$1 and ${scopeSql}`, params)
+      : await query("select * from training_load.external_schedules where id=$1", [req.params.scheduleId]);
     const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) return res.status(404).json({ error: "Schedule not found." });
-    const targetsResult = await query(
+    if (!schedule || (!view && !canManageExternalScheduleInScope(scope, schedule))) {
+      return res.status(404).json({ error: "Schedule not found." });
+    }
+    const targetsResult = view && !canReadNamedLoad(req, view) ? { rows: [] } : await query(
       `select t.target_kind, t.target_athlete_id, t.target_team_id, t.target_club_id,
               coalesce(a.display_name, a.full_name, concat_ws(' ', a.first_name, a.last_name), a.athlete_id) as athlete_name,
               tm.name as team_name, cl.name as club_name
@@ -2209,7 +2275,7 @@ router.get("/external-schedules/:scheduleId", async (req, res, next) => {
        limit 30`,
       [schedule.id],
     );
-    const notificationRulesResult = await query(
+    const notificationRulesResult = view ? null : await query(
       `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
       [schedule.id],
     );
@@ -2217,17 +2283,17 @@ router.get("/external-schedules/:scheduleId", async (req, res, next) => {
       ? await query(`select scheduled_date::text as scheduled_date from training_load.external_schedule_dates where schedule_id = $1 order by scheduled_date`, [schedule.id])
       : null;
     res.json({
-      schedule: formatExternalScheduleRow(schedule, datesResult?.rows.map((r) => r.scheduled_date)),
+      schedule: (view ? formatExternalScheduleForView : formatExternalScheduleRow)(schedule, datesResult?.rows.map((r) => r.scheduled_date)),
       targets: targetsResult.rows.map(formatExternalTargetRow),
       occurrences: occurrencesResult.rows.map((row) => ({ id: row.id, scheduledDate: row.scheduled_date, status: row.status, assignmentCount: row.assignment_count, ratedCount: row.rated_count })),
-      notificationRules: normalizeNotificationRuleRows(notificationRulesResult.rows),
+      ...(view ? {} : { notificationRules: normalizeNotificationRuleRows(notificationRulesResult.rows) }),
     });
   } catch (error) {
     next(error);
   }
 });
 
-router.patch("/external-schedules/:scheduleId", async (req, res, next) => {
+router.patch("/external-schedules/:scheduleId", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   const client = await pool.connect();
   try {
     const scope = await requireExternalScheduleWorkspace(req, res);
@@ -2453,9 +2519,9 @@ async function setExternalScheduleStatus(req, res, next, newStatus) {
     client.release();
   }
 }
-router.post("/external-schedules/:scheduleId/pause", (req, res, next) => setExternalScheduleStatus(req, res, next, "paused"));
-router.post("/external-schedules/:scheduleId/resume", (req, res, next) => setExternalScheduleStatus(req, res, next, "active"));
-router.post("/external-schedules/:scheduleId/cancel", (req, res, next) => setExternalScheduleStatus(req, res, next, "cancelled"));
+router.post("/external-schedules/:scheduleId/pause", closedTrainingLoadViewGate, trainingLoadCoachGate, (req, res, next) => setExternalScheduleStatus(req, res, next, "paused"));
+router.post("/external-schedules/:scheduleId/resume", closedTrainingLoadViewGate, trainingLoadCoachGate, (req, res, next) => setExternalScheduleStatus(req, res, next, "active"));
+router.post("/external-schedules/:scheduleId/cancel", closedTrainingLoadViewGate, trainingLoadCoachGate, (req, res, next) => setExternalScheduleStatus(req, res, next, "cancelled"));
 
 // Creates a genuinely NEW schedule - never mutates or reactivates the
 // original (cancelled or not), and never copies dates/occurrences/
@@ -2477,7 +2543,7 @@ router.post("/external-schedules/:scheduleId/cancel", (req, res, next) => setExt
 // new schedule is free to pick a different kind entirely (closes the old
 // "source is Dates, coach picks Daily" mismatch, where the backend kept
 // silently requiring a dates[] array regardless of what the form showed).
-router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, next) => {
+router.post("/external-schedules/:scheduleId/schedule-again", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   const client = await pool.connect();
   try {
     const scope = await requireExternalScheduleWorkspace(req, res);
@@ -2557,13 +2623,15 @@ router.post("/external-schedules/:scheduleId/schedule-again", async (req, res, n
 // NOTHING / idempotent-200 / genuine-409 shape the planned route already
 // uses, keyed on unique(external_assignment_id) instead of
 // (athlete_id, logical_session_id).
-router.post("/external-assignments/:assignmentId/rpe", async (req, res, next) => {
+router.post("/external-assignments/:assignmentId/rpe", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   let client;
   try {
     const athleteId = requireAthlete(req, res);
     if (!athleteId) return;
     const assignmentId = req.params.assignmentId;
-    if (!UUID_PATTERN.test(assignmentId)) return res.status(404).json({ error: "Training session not found." });
+    if (!UUID_PATTERN.test(assignmentId) || !(await athleteTrainingLoadAllowed(athleteId))) {
+      return res.status(404).json({ error: "Training session not found." });
+    }
 
     const rpeRaw = req.body?.rpe;
     const durationRaw = req.body?.durationMinutes;
@@ -2709,11 +2777,13 @@ router.post("/external-assignments/:assignmentId/rpe", async (req, res, next) =>
 // a malformed id, another athlete's or a missing assignment all get the one
 // 404. The submit above keeps its contract: a different second answer through
 // it is still 409.
-router.post("/external-assignments/:assignmentId/rpe/change", async (req, res, next) => {
+router.post("/external-assignments/:assignmentId/rpe/change", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   try {
     res.set("Cache-Control", "no-store");
     const assignmentId = req.params.assignmentId;
-    if (!req.authz?.isAthlete || !UUID_PATTERN.test(assignmentId)) return res.status(404).json(RPE_CHANGE_NOT_FOUND);
+    if (!req.authz?.isAthlete || !UUID_PATTERN.test(assignmentId) || !(await athleteTrainingLoadAllowed(req.authz.athleteId))) {
+      return res.status(404).json(RPE_CHANGE_NOT_FOUND);
+    }
     const body = req.body || {};
     const { rpe, durationMinutes, requestKey, expectedRevision } = body;
     if (typeof rpe !== "number" || !Number.isInteger(rpe) || rpe < 0 || rpe > 10) {
@@ -2762,7 +2832,7 @@ const athleteDisplayNameSql = `coalesce(a.display_name, a.full_name, nullif(conc
 // outcome (never a silent drop), the real sliding-window cooldown above,
 // and the same shared public.app_notifications.dedupe_key convention
 // builder.js's own one-shot notifications already use.
-router.post("/external-schedules/:scheduleId/remind", async (req, res, next) => {
+router.post("/external-schedules/:scheduleId/remind", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   // Hardening correction: scheduleId itself used to reach the very first
   // DB query with no UUID format check at all - a malformed path param
   // was a raw Postgres 22P02, not the controlled 404 every other route
@@ -2852,6 +2922,10 @@ router.post("/external-schedules/:scheduleId/remind", async (req, res, next) => 
         continue;
       }
       const base = { assignmentId, athleteId: row.athlete_id, athleteName: row.athlete_name };
+      if (!(await athleteTrainingLoadAllowed(row.athlete_id, client.query.bind(client)))) {
+        results.push({ ...base, outcome: "skippedNotOpen" });
+        continue;
+      }
       if (row.status === "completed") {
         results.push({ ...base, outcome: "skippedCompleted" });
         continue;

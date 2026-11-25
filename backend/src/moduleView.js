@@ -32,7 +32,7 @@ import { rolelessViewHandoff } from './viewWorkspaceHandoff.js';
 // VIEW_WORKSPACE_USABLE_WORDS (permissions.js), and its row to backend/tests/roles-v-sweep.test.mjs.
 import { isPlatformAdministrator } from "./authz.js";
 import { can } from "./permissions.js";
-import { VIEW_WORKSPACE_TYPES, pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
+import { VIEW_WORKSPACE_TYPES, pickFallbackWorkspace, rememberCheckedCoachWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
 
 // The view word of each module (roles R4 contract 4.1; the plan's section 2). Every word is in the VIEW package (v92).
 export const MODULE_VIEW_WORDS = Object.freeze({
@@ -51,7 +51,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 
 // The modules a view workspace may read. A module enters here only in its own V pull request, with its entry gate.
 // V-6 opens Dashboards read-only.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises"]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises", "load_team", "load_athlete"]);
 
 // The base scope of each view workspace type (the club or team it names).
 const VIEW_SCOPE_TYPES = Object.freeze({ club_view: "club", team_view: "team" });
@@ -106,6 +106,7 @@ export function coachModuleGate(module, { allowed, refuse = forbidden, resolve =
       const type = active ? COACH_SCOPE_TYPES[active.type] : undefined;
       if (!type) return next();
       if (active.scopeId == null || active.scopeId === "" || !allowed(a, { type, id: String(active.scopeId) })) return refuse(req, res, next);
+      if (module === "load_team") rememberCheckedCoachWorkspace(req.user.id, a, { workspace: active, availableWorkspaces });
       return next();
     } catch (error) {
       return next(error);

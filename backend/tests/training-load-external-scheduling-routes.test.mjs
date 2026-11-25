@@ -8,6 +8,7 @@
 // generation correctness, timezone regression) are already covered in
 // training-load-external-scheduling.test.mjs; this file is scoped to the
 // API surface built on top of that schema.
+import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
@@ -261,6 +262,7 @@ before(async () => {
   await adminClient.query(LEGACY_FIXTURE_SQL);
   migrationsDir = await writeMigrationsDir("primary", files);
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  await applyRoleReadMigrations(db.url);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");
