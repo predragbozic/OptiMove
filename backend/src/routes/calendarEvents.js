@@ -13,8 +13,14 @@ import {
 import { getEventQuestions } from "../calendarQuestionService.js";
 import { eventFormOptions } from "../calendarSettingsService.js";
 import { calendarCommand, calendarContextOf, respondCalendarError } from "./calendarRouteErrors.js";
+import { CALENDAR_VIEW_READS, calendarViewRefused } from "../calendarModuleContext.js";
+import { viewEntryGate } from "../moduleView.js";
 
 const router = Router();
+
+// Roles V-3 (docs/ai/roles-v-steps-plan.md section 2.4): a view workspace reaches GET /types and the reduced GET
+// /:eventId with calendar.view; the questions and every write keep the answer they had (calendarModuleContext.js).
+router.use(viewEntryGate("calendar", CALENDAR_VIEW_READS.events, { refuse: calendarViewRefused }));
 
 router.get("/types", async (req, res) => {
   try {

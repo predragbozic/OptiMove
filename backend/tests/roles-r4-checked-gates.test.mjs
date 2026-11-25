@@ -89,9 +89,13 @@ export const WORKSPACE_BRANCH = new RegExp([
 const REVIEWED = Object.freeze({
   "activityRoster.js": 3,
   "athleteRosterScope.js": 4,
+  // V-3: the read scopes branch on the type of the workspace a READ shows (calendarReadWorkspace: the active one, or the
+  // club or team a view workspace names, from the entry gate only); the same 17 branches as before, renamed.
   "calendarAccess.js": 17,
   "calendarEventAccess.js": 7,
-  "calendarEventService.js": 4,
+  // V-3: calendar.view on a coach workspace (its club or team scope), and the club of a team view scope (the gate's).
+  "calendarModuleContext.js": 2,
+  "calendarEventService.js": 5, // V-3: the catalog owner of a view workspace's GET /types (the club or team it names)
   "calendarQuery.js": 11,
   "calendarQuestionService.js": 2,
   "calendarSettingsService.js": 3,

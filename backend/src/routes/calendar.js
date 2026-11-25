@@ -6,10 +6,15 @@
 // live here; the scopes in calendarAccess.js, the reads and the item model
 // in calendarQuery.js. No route here writes.
 import { Router } from "express";
-import { resolveCalendarContext } from "../calendarAccess.js";
+import { CALENDAR_VIEW_READS, calendarViewRefused, resolveCalendarModuleContext } from "../calendarModuleContext.js";
+import { viewEntryGate } from "../moduleView.js";
 import { CALENDAR_KINDS, CALENDAR_MAX_RANGE_DAYS, isValidCalendarDate, readCalendar } from "../calendarQuery.js";
 
 const router = Router();
+
+// Roles V-3 (docs/ai/roles-v-steps-plan.md section 2.4): a view workspace (club_view / team_view) reads its club's or
+// team's calendar with calendar.view; anything else keeps the answer it had (calendarModuleContext.js).
+router.use(viewEntryGate("calendar", CALENDAR_VIEW_READS.calendar, { refuse: calendarViewRefused }));
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // How far the caller's `today` may lie from the server's UTC date (manager
@@ -71,7 +76,7 @@ router.get("/", async (req, res, next) => {
 
     const include = req.query?.include === undefined || req.query.include === "" ? [] : String(req.query.include).split(",").map((s) => s.trim()).filter(Boolean);
     if (include.some((part) => part !== "athletes")) return badRequest(res, "invalid_include", "include may only name athletes.");
-    const includeAthletes = include.includes("athletes");
+    const askedAthletes = include.includes("athletes");
 
     const clubFilter = parseUuidList(req.query?.clubIds);
     const teamFilter = parseUuidList(req.query?.teamIds);
@@ -80,7 +85,7 @@ router.get("/", async (req, res, next) => {
       return badRequest(res, "invalid_ids", "clubIds/teamIds/athleteIds must be valid UUIDs.");
     }
 
-    const ctx = await resolveCalendarContext(req);
+    const ctx = await resolveCalendarModuleContext(req);
     // The event cards' `canManage` (K2a) is decided from the same roles the
     // events router writes with (calendarEventAccess.js).
     ctx.authz = req.authz;
@@ -90,6 +95,9 @@ router.get("/", async (req, res, next) => {
     }
     // The athlete workspace is always self-scoped; its filters are ignored,
     // as GET /api/training-load/calendar ignores them.
+    // Roles V-3, P-1: the athletes' names only where the answer may name them (a view workspace needs athletes.view);
+    // otherwise the cards keep their counts and the asked list is left out.
+    const includeAthletes = askedAthletes && ctx.athleteNames === true;
     const filters = ctx.type === "athlete" ? {} : { clubIds: clubFilter.ids, teamIds: teamFilter.ids, athleteIds: athleteFilter.ids };
 
     const result = await readCalendar(ctx, { from, to, today, kinds, filters, includeAthletes });
