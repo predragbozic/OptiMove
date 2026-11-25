@@ -12,7 +12,7 @@ import {createHash} from 'node:crypto';
 import {loadAuthorizationContext} from '../authz.js';
 import {pickFallbackWorkspace,resolveActiveWorkspaceReadOnly} from '../workspace.js';
 import {viewReadScope} from '../moduleView.js';
-import {canViewDashboardRow,canManageDashboardRow,dashboardNamedAthletesAllowed,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches,redactDashboardAthleteFilters} from '../trainingLoadDashboardAccess.js';
+import {canViewDashboardRow,canManageDashboardRow,dashboardWidgetsForViewer,dashboardNamedAthletesAllowed,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches,redactDashboardAthleteFilters} from '../trainingLoadDashboardAccess.js';
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
@@ -32,7 +32,7 @@ async function lockActor(q,req){
  for(const table of ['user_global_roles','user_club_roles','user_team_roles','user_workspace_preferences'])await q(`select user_id from public.${table} where user_id=$1 for share`,[req.user.id]);
 }
 export async function pageTarget(q,req,dashboardId,{write=false,manage=false}={}){
- if(!isUuid(req.user?.id)||!isUuid(dashboardId))throw pageError();
+ if(req.dashboardsViewRefused||!isUuid(req.user?.id)||!isUuid(dashboardId))throw pageError();
  const args=[req.user.id];
  let sessionSql='';
  if(req.sessionToken){args.push(createHash('sha256').update(String(req.sessionToken)).digest('base64url'));sessionSql='and exists(select 1 from public.auth_sessions s where s.user_id=u.id and s.token_hash=$2 and s.expires_at>now())';}
@@ -46,7 +46,7 @@ export async function pageTarget(q,req,dashboardId,{write=false,manage=false}={}
  // manages (canManageDashboardRow).
  const admitted=req.moduleView?.module==='dashboards'&&!write&&!manage;
  const active=resolved.workspace||(admitted?pickFallbackWorkspace(resolved.availableWorkspaces):null);
- if(!active)throw pageError();
+ if(!active || (admitted && (active.type!==req.moduleView.workspace.type || String(active.scopeId)!==String(req.moduleView.workspace.scopeId))))throw pageError();
  const actor={user,authz};
  if(viewReadScope(active)){if(admitted)actor.moduleView=req.moduleView;else actor.dashboardsViewRefused=true;}
  const workspace=dataWorkspaceForActiveWorkspace(active,actor);
@@ -97,7 +97,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
    const pages=(await q('select * from training_load.dashboard_pages where dashboard_id=$1 order by position,id',[dashboardId])).rows;
-   const full={dashboard:target.dashboard,page,pages,widgets:widgets.map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}))};
+   const full={dashboard:target.dashboard,page,pages,widgets:dashboardWidgetsForViewer(target.req,widgets).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}))};
    // Roles V-6: without load.view.athlete the filters' athletes are not returned (dashboard, pages, widgets).
    const shown=dashboardNamedAthletesAllowed(target.req,target.workspace)?full:redactDashboardAthleteFilters(full);
    return {requestIssuedAt:new Date(now()).toISOString(),dashboard:shown.dashboard,page:shown.page,resolvedPeriod:page.period_config?resolvePeriod(page.period_config,new Date(now()).toISOString()):null,pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard),widgets:shown.widgets};
@@ -117,7 +117,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    let shellFilter;try{shellFilter=normalizeShellFilter(body.shellFilter)}catch{throw pageError('invalidRequest',400)}
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
-   let selected=widgets.filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
+   let selected=dashboardWidgetsForViewer(target.req,widgets).filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
    const referenceRequest={...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)};
    if(body.referencePreview!==undefined){
     if(!validReferencePreview(body.referencePreview))throw pageError('invalidRequest',400);

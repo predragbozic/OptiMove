@@ -1,9 +1,10 @@
+import { isDashboardsViewRequest } from "../trainingLoadDashboardAccess.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import { resolveVariableEditor } from "../canonicalVariableAdminService.js";
 // The owner explicitly chose today's canonical-variable gates, NOT partially
 // activated R4 words. The manager stream moves these with the whole module.
 export function resolveReferenceContext(req) {
-  if (!req.user?.id || !req.authz) return Promise.resolve(null);
+  if (!req.user?.id || !req.authz || isDashboardsViewRequest(req)) return Promise.resolve(null);
   if (!req._referenceContext) req._referenceContext = (async () => {
     const known = req._resolvedDataWorkspacePromise ? await req._resolvedDataWorkspacePromise : null;
     const workspace = known ? {type:known.type,scopeId:known.dataWorkspaceScopeId} : (await resolveActiveWorkspace(req.user.id, req.authz)).workspace;

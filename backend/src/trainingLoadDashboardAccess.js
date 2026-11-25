@@ -62,6 +62,16 @@ export function isDashboardsViewRequest(req) {
   return req?.moduleView?.module === VIEW_MODULE || req?.dashboardsViewRefused === true;
 }
 
+export function dashboardWidgetsForViewer(req, widgets) {
+  if (!isDashboardsViewRequest(req)) return widgets;
+  return widgets.map(widget => {
+    if (!Object.hasOwn(widget.presentation_config ?? {}, "referenceConfig")) return widget;
+    const presentation_config = { ...widget.presentation_config };
+    delete presentation_config.referenceConfig;
+    return { ...widget, presentation_config };
+  });
+}
+
 // The resolved workspace behind each data-workspace descriptor (the descriptor's own shape is unchanged: it is stored
 // with a page request and compared on its replay).
 const RESOLVED_WORKSPACE = new WeakMap();
