@@ -30541,6 +30541,25 @@ body.athlete-questions-prompt-open {
      arrives; it comes back only if the bar's code cannot be loaded (bottom-nav.js marks the page). */
   body:not(.login-mode):not(.bottom-nav-unavailable) .mobile-nav-toggle { display: none !important; }
 
+  /* Without the menu button the coach's header row has no first 44 px column for it: the workspace switcher takes
+     the free width (at least 96 px), and its name stays on one line with an ellipsis (the full name is its title and
+     accessible name). Before this the switcher fell into the menu button's 44 px column and its name broke letter by
+     letter. */
+  body:not(.athlete-mode):not(.login-mode):not(.bottom-nav-unavailable) .topbar-actions {
+    grid-template-columns: minmax(96px, 1fr) repeat(3, var(--om-tap-target));
+  }
+  body:not(.athlete-mode):not(.login-mode):not(.bottom-nav-unavailable) .topbar-actions > .workspace-menu { min-width: 96px; }
+  body:not(.athlete-mode):not(.login-mode):not(.bottom-nav-unavailable) .topbar .workspace-toggle-label {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* The desktop athlete drawer's scrim (body.athletes-drawer-open::before) is never a phone's: there the athlete list
+     is inside the menu drawer, whose own backdrop dims the page while it is open. */
+  body.has-bottom-nav:not(.athlete-mode):not(.login-mode).athletes-drawer-open::before { content: none; }
+
   body.has-bottom-nav:not(.login-mode) .app-shell { padding-bottom: var(--om-bottom-nav-space); }
 
   body.has-bottom-nav:not(.login-mode) :is(.builder-mobile-sticky-bar, .tests-schedule-form-actions, .tl-roster-sticky, .gpexe-map .gpexe-map-results .gpexe-link-actions, .imports-batch .imports-batch-actions, .mb-savebar, .k3-save-bar, .node-detail-footer):not(:is([role="dialog"], [aria-modal="true"], .exercise-editor-overlay, .builder-section-overlay, .exercise-detail-overlay, .program-preview-overlay, .k3-sheet-layer) *) {
@@ -30869,6 +30888,34 @@ body.athlete-questions-prompt-open {
   }
 }
 
+/* Roles R4-4: the short Home of a view workspace (club_view / team_view). */
+.coach-home-view-note { margin: 8px 0 16px; overflow-wrap: anywhere; }
+.coach-home-view-sections { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.coach-home-view-section { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 48px; padding: 12px 16px; text-align: left; overflow-wrap: anywhere; }
+.coach-home-view-others { margin: 24px 0 0; font-size: 1rem; }
+
+/* Roles R4-4: the Club licence island (Settings > Clubs, a platform administrator). */
+.club-licence { margin: 12px 0; }
+.club-licence-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.club-licence-head h3 { margin: 0; overflow-wrap: anywhere; }
+.club-licence-toggle { min-height: 44px; min-width: 44px; }
+.club-licence-list { display: grid; gap: 0; margin: 8px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.club-licence-row { border-bottom: 1px solid var(--line); }
+.club-licence-switch { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 8px 4px; cursor: pointer; }
+.club-licence-switch input { width: 22px; height: 22px; flex: none; }
+.club-licence-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.club-licence-state { flex: none; font-size: 0.875rem; }
+.club-licence-state.is-out { color: var(--danger, #b42318); }
+.club-licence-note { display: block; padding: 0 4px 8px 38px; color: var(--muted); }
+.club-licence-save { margin-top: 12px; display: grid; gap: 8px; }
+.club-licence-save textarea { display: block; box-sizing: border-box; width: 100%; min-height: 88px; padding: 8px 10px; font: inherit; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); resize: vertical; }
+.club-licence-host { grid-column: 1 / -1; min-width: 0; }
+.club-licence-save .plain-button, .club-licence-body .data-sources-form-actions .plain-button { min-height: 44px; }
+.club-licence-changes { margin: 0; overflow-wrap: anywhere; }
+.club-licence-history { margin-top: 12px; }
+.club-licence-history summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.club-licence-history li { overflow-wrap: anywhere; }
+
 /* Dashboard compact navigation: React controls, on-demand filters, horizontal Pages. */
 .tl-analysis-topbar.tl-analysis-topbar-compact {
   display: grid; grid-template-columns: minmax(0, 1fr) auto 44px; gap: 6px;
@@ -30974,3 +31021,50 @@ body.athlete-questions-prompt-open {
  .tl-reference-workspace .tl-reference-footer { position: sticky; bottom: var(--om-bottom-nav-space,64px); z-index: 5; background: var(--surface,#fff); padding: 12px 8px; border-top: 1px solid var(--line,#dce2e7); }
  .tl-reference-setup > label { flex: 1 1 100%; }
 }
+/* Roles R4-4, PR B: the role word list (shared), Club roles and Access in this club (React islands). */
+.club-roles, .person-access { min-width: 0; }
+.club-roles-head h3, .person-access-head h3 { margin: 0; overflow-wrap: anywhere; }
+.club-roles-notice { overflow-wrap: anywhere; }
+.club-roles-licence { margin: 8px 0 12px; overflow-wrap: anywhere; }
+.club-roles-section { margin: 16px 0 8px; font-size: 1rem; }
+.club-roles-section-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.club-roles-list { display: grid; gap: 0; border-top: 1px solid var(--line); }
+.club-roles-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.club-roles-row-main { display: grid; gap: 2px; min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+.club-roles-row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.club-roles .plain-button, .person-access .plain-button { min-height: 44px; }
+.club-roles-state { font-size: 0.875rem; }
+.club-roles-state.is-question_pending { color: var(--danger, #b42318); font-weight: 600; }
+.club-roles-back { margin-bottom: 8px; }
+.club-roles-editor-title { margin: 0 0 4px; overflow-wrap: anywhere; }
+.club-roles-question, .club-roles-still, .person-access-end { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.club-roles-question h4, .club-roles-still h4 { margin: 0 0 6px; overflow-wrap: anywhere; }
+.club-roles-still li, .person-access-diff li, .person-access-drift li { overflow-wrap: anywhere; }
+.club-roles-save { position: sticky; bottom: calc(var(--om-bottom-nav-height, 0px) + env(safe-area-inset-bottom, 0px)); z-index: 5; display: grid; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 -6px 18px #122c3414; }
+.club-roles-changes { margin: 0; overflow-wrap: anywhere; }
+.club-roles textarea, .person-access textarea { display: block; box-sizing: border-box; width: 100%; min-height: 72px; padding: 8px 10px; font: inherit; font-size: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--text); resize: vertical; }
+.person-access select { box-sizing: border-box; width: 100%; min-height: 44px; font-size: 16px; }
+.role-words { display: grid; gap: 8px; margin-top: 12px; }
+.role-words-group { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); min-width: 0; }
+.role-words-group.is-closed { background: transparent; border-style: dashed; }
+.role-words-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 48px; padding: 8px 12px; border: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.role-words-title { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.role-words-count { flex: none; font-size: 0.875rem; color: var(--muted); }
+.role-words-list { margin: 0; padding: 0 12px 8px; list-style: none; }
+.role-words-row { border-top: 1px solid var(--line); }
+.role-words-label { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 4px 0; cursor: pointer; }
+.role-words-label input { width: 22px; height: 22px; flex: none; }
+.role-words-name { min-width: 0; overflow-wrap: anywhere; }
+.role-words-row.is-locked .role-words-label { cursor: default; }
+.role-words-lock, .role-words-through { display: block; padding: 0 0 6px 34px; color: var(--muted); overflow-wrap: anywhere; }
+.person-access-drift { margin: 8px 0 12px; }
+.person-access-drift summary, .person-access-history summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; overflow-wrap: anywhere; }
+.person-access-drift-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--line); }
+.person-access-pick { margin: 8px 0; }
+.person-access-holdings { display: grid; gap: 16px; margin-top: 12px; }
+.person-access-holding { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.person-access-holding-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.person-access-holding-head > div:first-child { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.person-access-holding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.person-access-diff { margin: 8px 0 0; padding-left: 18px; }
+.person-access-blocked { margin: 8px 0 0; }

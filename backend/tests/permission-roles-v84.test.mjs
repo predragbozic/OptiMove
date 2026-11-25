@@ -247,7 +247,10 @@ test("2b. the text rule is a byte-for-byte copy of v40's; the honoured list of t
   assert.equal(bodies[0].prosrc, bodies[1].prosrc);
   const { HONOURED_PERMISSIONS } = await import("../src/permissions.js");
   const honoured = (await k.query(`select word from public.permissions where public.permission_word_honoured(word) order by word`)).rows.map((r) => r.word);
-  assert.deepEqual(honoured, [...HONOURED_PERMISSIONS].sort());
+  // v84's twin is the list R2 checked. A word checked later (roles V-1: variables.view, presets.use) is storable since
+  // v92 (roles-r4-v92 compares that twin with STORABLE_PERMISSIONS), so it is not in v84's list.
+  const LATER = ["variables.view", "presets.use"];
+  assert.deepEqual(honoured, HONOURED_PERMISSIONS.filter((w) => !LATER.includes(w)).sort());
 });
 
 test("2c. no v84 function body, CHECK, default, trigger definition or comment holds a literal the legacy-schema tool refuses (a schema-only dump of a database with v84 must stay generatable; the seed's literal ids are data, not schema)", async () => {

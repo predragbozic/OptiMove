@@ -345,3 +345,123 @@ test("(1280 px) a computer keeps the rail: no bar and React is never downloaded"
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });
+
+// The header's workspace switcher on a phone (owner's Android report after the menu button went): it fell into the
+// menu button's old 44 px column and its name broke letter by letter. With a long (invented) club name it keeps at
+// least 96 px, one line with an ellipsis, the full name in its title and accessible name, and nothing overflows.
+for (const width of [360, 375, 390, 412]) {
+  test(`(club_admin, ${width} px) the workspace switcher keeps its width: one line, ellipsis, the full name in its title`, async () => {
+    // Invented, and long enough to be cut even at 412 px.
+    const longName = "FK Primer Grad Sportski Klub Omladinski Pogon Sever";
+    const admin = await openAs(browser, world, "club_admin", width);
+    let restore = null;
+    try {
+      const me = await (await admin.context.request.get(`${world.baseUrl}/api/auth/me`)).json();
+      const ws = (me.user || me).activeWorkspace;
+      assert.equal(ws?.type, "club");
+      const before = (me.user || me).clubs.find((c) => String(c.id) === String(ws.scopeId))?.name;
+      assert.ok(before, "the club's own name, to put back afterwards");
+      const put = await admin.context.request.put(`${world.baseUrl}/api/organization/clubs/${ws.scopeId}`, { data: { name: longName } });
+      assert.equal(put.status(), 200, await put.text());
+      restore = () => admin.context.request.put(`${world.baseUrl}/api/organization/clubs/${ws.scopeId}`, { data: { name: before } });
+      await admin.page.reload();
+      await admin.page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+      await admin.page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
+      await admin.page.waitForFunction((n) => (document.getElementById("workspaceToggle")?.title || "").includes(n), longName, { timeout: 20_000 });
+      const g = await admin.page.evaluate(() => {
+        const button = document.getElementById("workspaceToggle");
+        const label = button.querySelector(".workspace-toggle-label");
+        const r = button.getBoundingClientRect();
+        const lr = label.getBoundingClientRect();
+        const lineHeight = parseFloat(getComputedStyle(label).lineHeight) || parseFloat(getComputedStyle(label).fontSize) * 1.3;
+        return {
+          width: r.width,
+          oneLine: lr.height <= lineHeight * 1.5,
+          ellipsis: getComputedStyle(label).textOverflow === "ellipsis" && getComputedStyle(label).whiteSpace === "nowrap",
+          // The name really is cut (not merely styled for it), and the label stays inside the button.
+          truncated: label.scrollWidth > label.clientWidth && lr.right <= r.right + 0.5,
+          inside: r.left >= 0 && r.right <= innerWidth,
+          title: button.title,
+          aria: button.getAttribute("aria-label"),
+          overflow: document.documentElement.scrollWidth - innerWidth,
+        };
+      });
+      assert.ok(g.width >= 96, `the switcher is at least 96 px wide (${g.width})`);
+      assert.equal(g.oneLine, true, "its name is on one line");
+      assert.equal(g.ellipsis, true, "a long name ends with an ellipsis");
+      assert.equal(g.truncated, true, "the long name is cut inside the button");
+      assert.equal(g.inside, true);
+      assert.equal(g.overflow, 0, "no horizontal overflow");
+      assert.ok(g.title.includes(longName) && g.aria.includes(longName), "the full name stays in its title and accessible name");
+      assert.deepEqual(admin.pageErrors, []);
+    } finally {
+      if (restore) assert.equal((await restore()).status(), 200, "the club's name is put back");
+      await admin.context.close();
+    }
+  });
+}
+
+// No scrim stays on a phone after any bottom-bar navigation, back navigation, or More open and close (owner's Android
+// report: after Athletes and then another tab, the whole page stayed dimmed under the bar). A tap is a finger on the
+// bar's spot: while the athlete list is open its backdrop takes that tap, as on a real phone.
+async function tapBar(page, id) {
+  const box = await page.locator(`${bar} [data-nav-id="${id}"]`).boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForTimeout(400);
+}
+async function noScrim(page, step) {
+  // Wait for the page to settle (a back or a tab's render), then assert: a scrim that stays fails the assertion below.
+  await page.waitForFunction(() => !/\b(athletes-drawer-open|mobile-nav-open)\b/.test(document.body.className)
+    && !document.querySelector(".om-bottom-sheet-backdrop"), null, { timeout: 5_000 }).catch(() => {});
+  const s = await page.evaluate(() => {
+    const backdrop = document.getElementById("mobileNavBackdrop");
+    const centre = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+    return {
+      bodyScrim: getComputedStyle(document.body, "::before").content,
+      backdrop: backdrop ? getComputedStyle(backdrop).display : "none",
+      sheet: Boolean(document.querySelector(".om-bottom-sheet-backdrop")),
+      centreIsContent: Boolean(centre?.closest("main.workspace")) && !centre.closest(".mobile-nav-backdrop, .om-bottom-sheet-backdrop"),
+      classes: document.body.className,
+    };
+  });
+  const listOpen = /\b(athletes-drawer-open|mobile-nav-open)\b/.test(s.classes);
+  assert.deepEqual({ bodyScrim: s.bodyScrim, backdrop: s.backdrop, sheet: s.sheet, centreIsContent: s.centreIsContent, listOpen },
+    { bodyScrim: "none", backdrop: "none", sheet: false, centreIsContent: true, listOpen: false }, `${step}: ${s.classes}`);
+}
+
+for (const role of ["team_coach", "club_admin"]) test(`(${role}, 390 px) no scrim stays after any bar tab, another tab, browser back, or More`, async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, role, 390);
+  try {
+    await page.waitForSelector(`${bar} [data-nav-id]`, { timeout: 20_000 });
+    const ids = (await barIds(page)).filter((id) => id !== "more");
+    for (const first of ids) {
+      for (const second of ids.filter((id) => id !== first)) {
+        await tapBar(page, first);
+        await tapBar(page, second);
+        // A second tap where the first only closed the athlete list: the section opens now.
+        if (await page.evaluate(() => document.body.classList.contains("mobile-nav-open"))) await tapBar(page, second);
+        await page.goBack();
+        assert.ok(page.url().startsWith(world.baseUrl), "still in the app after back");
+        await noScrim(page, `${first} -> ${second} -> back`);
+      }
+      // More opened and closed after this tab.
+      await tapBar(page, first);
+      if (first === "athletes") await tapBar(page, first);
+      await tapBar(page, "more");
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => !document.querySelector(".om-bottom-sheet"));
+      await noScrim(page, `${first} -> More -> close`);
+    }
+    // Athletes twice: the list opens and closes from the bar itself.
+    await tapBar(page, "athletes");
+    await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"));
+    await tapBar(page, "athletes");
+    await noScrim(page, "athletes -> athletes");
+    // Athletes, then browser back closes it.
+    await tapBar(page, "athletes");
+    await page.waitForFunction(() => document.body.classList.contains("mobile-nav-open"));
+    await page.goBack();
+    await noScrim(page, "athletes -> back");
+    assert.deepEqual(pageErrors, []);
+  } finally { await context.close(); }
+});

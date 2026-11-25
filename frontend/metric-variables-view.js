@@ -50,6 +50,8 @@ function scopeIntro(s, ctx) {
     return ctx.view === "coach" ? "OptiMove's ready-made variables, shared by all clubs and changed only by OptiMove. Your club's administrator chooses which ones your teams use."
       : "OptiMove's ready-made variables. Use one as it is if it measures what you need. Copy it only if your club wants its own name and to decide itself when it changes. Hide the ones you don't need.";
   }
+  // Roles V-1: a view workspace only reads (the server offers it no action).
+  if (ctx.readOnly) return "Variables of this club, shared by all its teams. You can look at them here; an administrator of the club creates and changes them.";
   if (ctx.view === "coach") return "Variables of this team's club, shared by all its teams. As a coach of the team you can rename, archive and restore them; each change applies to every team of the club. An administrator of the club creates them and changes how they are measured.";
   return `Variables of ${escapeHtml(ctx.clubName || "this club")}: this club's own source data can be mapped to them.`;
 }

@@ -10,6 +10,7 @@
 import { api } from "./api.js";
 import { state } from "./state.js";
 import { isLibraryKey } from "./icon-render.js";
+import { viewModuleOpen } from "./view-modules.js";
 
 const BASE = "/api/training-load/sources/metrics/variables";
 
@@ -98,6 +99,16 @@ export function variablesContext(user = state.currentUser) {
   if (ws.type === "team" && ws.scopeId && ws.clubId) {
     const clubId = String(ws.clubId);
     return { owner: "club", clubId, clubName: "", view: "coach", teamName: ws.label || "", basis: teamBasis(user, clubId) };
+  }
+  // Roles V-1: a view workspace with variables.view reads the club's and the system variables in the reduced view, read
+  // only (the server offers no action and refuses every write; nothing here offers one either).
+  if (viewModuleOpen("data_configuration", user) && ws.scopeId) {
+    const clubId = ws.type === "club_view" ? String(ws.scopeId) : (ws.clubId ? String(ws.clubId) : "");
+    if (!clubId) return null;
+    return {
+      owner: "club", clubId, clubName: ws.type === "club_view" ? ws.label || "" : "", view: "coach", readOnly: true,
+      teamName: ws.type === "team_view" ? ws.label || "" : "", basis: null,
+    };
   }
   return null;
 }

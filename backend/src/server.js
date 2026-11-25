@@ -28,7 +28,7 @@ import permissionRolesRouter from "./routes/permissionRoles.js";
 import coachesRouter from "./routes/coaches.js";
 import notificationsRouter from "./routes/notifications.js";
 import messagesRouter from "./routes/messages.js";
-import taxonomyRouter from "./routes/taxonomy.js";
+import taxonomyRouter, { taxonomyViewGate } from "./routes/taxonomy.js";
 import testsRouter from "./routes/tests.js";
 import testsCheckInRouter from "./routes/testsCheckIn.js";
 import trainingLoadRouter from "./routes/trainingLoad.js";
@@ -151,7 +151,9 @@ app.use("/api/organization/roles", requireAuth, permissionRolesRouter);
 // Roles R4-2: requireCoach, plus the read-only way in for a view workspace
 // (organizationEntry.js: GET / only, every other method and path 403 as before).
 app.use("/api/organization", requireAuth, organizationEntryGate, organizationRouter);
-app.use("/api/taxonomy", requireAuth, requireCoach, taxonomyRouter);
+// Roles V-1: the read-only way in for a view workspace (taxonomy.js taxonomyViewGate: the three reads with presets.use,
+// every other method and path 403 as requireCoach answers); every other account goes through requireCoach as before.
+app.use("/api/taxonomy", requireAuth, taxonomyViewGate, (req, res, next) => (req.moduleView ? next() : requireCoach(req, res, next)), taxonomyRouter);
 app.use("/api/coaches", requireAuth, coachesRouter);
 app.use("/api/notifications", requireAuth, notificationsRouter);
 app.use("/api/messages", requireAuth, messagesRouter);

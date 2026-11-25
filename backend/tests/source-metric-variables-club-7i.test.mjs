@@ -81,8 +81,8 @@ before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V53), "v53 is a test migration");
   // Later migrations (v54, LO-2) exist; this suite is v53's, so its databases stop at v53.
   [rdb, db] = await Promise.all([
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v53rb", migrations: UP_TO_V52 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v53", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V53) + 1) }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v53rb", migrations: UP_TO_V52, roleRead: true }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v53", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V53) + 1), roleRead: true }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });

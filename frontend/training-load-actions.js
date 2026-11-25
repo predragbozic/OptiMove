@@ -97,6 +97,7 @@ import {
 } from "./training-load-calendar-data.js";
 import { isHiddenInClub } from "./metric-picker-visibility.js";
 import { athleteQuestionsAnswered } from "./athlete-questions-data.js";
+import { viewSafeTrainingLoadSection } from "./view-modules.js";
 import { athleteLoadPreviewHtml, externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 let analysisLayoutPointer = null;
@@ -147,7 +148,9 @@ export function loadTrainingLoadSectionData(section, render) {
   return loadTrainingLoadWeekly(section, render);
 }
 
-export function setTrainingLoadSection(section) {
+export function setTrainingLoadSection(asked) {
+  // Roles V-1: a view workspace stays on the sections of its open modules (view-modules.js).
+  const section = viewSafeTrainingLoadSection(asked);
   // Leaving Imports drops the GPEXE names and dates of birth it held.
   if (state.trainingLoad.section === "imports" && section !== "imports") clearGpexeIdentities();
   state.trainingLoad.section = section;

@@ -11,6 +11,7 @@
 //    App health) stay on the workspace type and are never opened by a word: a platform admin in a club workspace is
 //    returned every word, which must not show platform sections there.
 import { state } from "./state.js";
+import { viewModuleSettingsSections } from "./view-modules.js";
 
 // The words of /me, or null when the screens must behave as before (no list, or the server could not read the roles).
 export function heldPermissions(user = state.currentUser) {
@@ -32,7 +33,19 @@ const SETTINGS_TAB_WORDS = Object.freeze({
   users: ["staff.assign"],
 });
 
+// A view workspace (club_view / team_view, roles R4 contract 5.2): only the sections a word of /me opens, and when
+// /me carries no list the answer is HIDDEN, never today's visibility - a role holder has no "before".
+export const VIEW_WORKSPACE_SECTIONS = Object.freeze(["overview", "clubs", "teams"]);
+const VIEW_TYPES = new Set(["club_view", "team_view"]);
+export function viewSettingsSections(user = state.currentUser) {
+  const held = heldPermissions(user);
+  if (!held) return [];
+  // V-0: a module's V step adds its Settings section (view-modules.js); none in V-0.
+  return [...VIEW_WORKSPACE_SECTIONS.filter((section) => SETTINGS_TAB_WORDS[section].some((word) => held.has(word))), ...viewModuleSettingsSections(user)];
+}
+
 export function permissionTabAllowed(section, user = state.currentUser) {
+  if (VIEW_TYPES.has(user?.activeWorkspace?.type)) return viewSettingsSections(user).includes(section);
   const words = SETTINGS_TAB_WORDS[section];
   const held = heldPermissions(user);
   if (!words || !held) return true;

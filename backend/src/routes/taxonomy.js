@@ -1,10 +1,13 @@
 import { Router } from "express";
 import { query } from "../db.js";
 import { isPlatformAdministrator } from "../authz.js";
+import { can, clubScope, teamScope } from "../permissions.js";
+import { viewEntryGate } from "../moduleView.js";
 
 const router = Router();
 const NODE_TYPES = new Set(["domain", "category", "section"]);
 const SCOPES = new Set(["system", "club", "team", "user"]);
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const LIBRARY_LOOKUPS = {
   domain: { table: "domains", parentColumn: null },
   category: { table: "categories", parentColumn: "domain_id" },
@@ -12,6 +15,36 @@ const LIBRARY_LOOKUPS = {
   tag: { table: "tags", parentColumn: null },
   attractor: { table: "attractors", parentColumn: null },
 };
+
+// Roles V-1 (docs/ai/roles-v-steps-plan.md section 2.2): the entry of /api/taxonomy (server.js mounts it before
+// requireCoach). A view workspace (club_view / team_view) reaches only the three reads, with presets.use, and reads the
+// system rows and its own club's (and its teams') or team's rows, never another club's and never as a manager; every
+// write answers it what requireCoach answers an account without a coach workspace (403 Forbidden). Any other account
+// goes on to requireCoach exactly as before.
+export const taxonomyViewGate = viewEntryGate("presets", [
+  { method: "GET", path: "/node-presets" },
+  { method: "GET", path: "/template-tags" },
+  { method: "GET", path: "/library/:kind", params: { kind: /^(?:domain|category|section|tag|attractor)$/ } },
+]);
+
+// The coach path's word (presets.use): a club or team row counts only while the account holds the word there (the
+// club's licence is inside can(); a platform admin passes). System rows and the account's own user rows are no club's.
+function presetsUsable(req, row) {
+  if (row.owner_scope === "club") return can(req.authz, "presets.use", clubScope(row.owner_club_id));
+  if (row.owner_scope === "team") return can(req.authz, "presets.use", teamScope(row.owner_team_id));
+  return true;
+}
+
+// A view workspace's rows of `alias`: its club's and its club's teams' (club_view), or its team's (team_view).
+function viewScopeSql(alias, scope, params) {
+  params.push(scope.id);
+  const at = `$${params.length}::uuid`;
+  if (scope.type === "club") {
+    return `((${alias}.owner_scope = 'club' and ${alias}.owner_club_id = ${at})
+             or (${alias}.owner_scope = 'team' and ${alias}.owner_team_id in (select t.id from public.teams t where t.club_id = ${at} and coalesce(t.is_active, true))))`;
+  }
+  return `(${alias}.owner_scope = 'team' and ${alias}.owner_team_id = ${at})`;
+}
 
 router.get("/node-presets", async (req, res, next) => {
   try {
@@ -233,6 +266,20 @@ router.delete("/library/:kind/:id", async (req, res, next) => {
 
 async function loadVisibleNodePresets(req, nodeType) {
   const user = req.user;
+  if (req.moduleView) {
+    const params = [user.id, nodeType || null];
+    const scoped = viewScopeSql("p", req.moduleView.scope, params);
+    return (await query(
+      `select p.*, false as can_manage
+         from library.node_presets p
+        where p.is_active = true
+          and ($2::varchar is null or p.node_type = $2)
+          and ((p.owner_scope = 'system' and not exists (select 1 from library.node_preset_hidden h where h.preset_id = p.id and h.user_id = $1))
+               or ${scoped})
+        order by p.owner_scope, p.name`,
+      params,
+    )).rows;
+  }
   const admin = isPlatformAdministrator(req.authz);
   const result = await query(
     `select p.*,
@@ -261,11 +308,24 @@ async function loadVisibleNodePresets(req, nodeType) {
      order by p.owner_scope, p.name`,
     [user.id, nodeType || null, admin],
   );
-  return result.rows;
+  return result.rows.filter((row) => presetsUsable(req, row));
 }
 
 async function loadVisibleTemplateTags(req) {
   const user = req.user;
+  if (req.moduleView) {
+    const params = [user.id];
+    const scoped = viewScopeSql("t", req.moduleView.scope, params);
+    return (await query(
+      `select t.*, false as can_manage
+         from library.program_tag_definitions t
+        where t.is_active = true
+          and ((t.owner_scope = 'system' and not exists (select 1 from library.program_tag_hidden h where h.tag_id = t.id and h.user_id = $1))
+               or ${scoped})
+        order by t.owner_scope, t.name`,
+      params,
+    )).rows;
+  }
   const admin = isPlatformAdministrator(req.authz);
   const result = await query(
     `select t.*,
@@ -293,11 +353,24 @@ async function loadVisibleTemplateTags(req) {
      order by t.owner_scope, t.name`,
     [user.id, admin],
   );
-  return result.rows;
+  return result.rows.filter((row) => presetsUsable(req, row));
 }
 
 async function loadVisibleLibraryRows(req, kind, config) {
   const user = req.user;
+  if (req.moduleView) {
+    const params = [user.id, kind];
+    const scoped = viewScopeSql("r", req.moduleView.scope, params);
+    return (await query(
+      `select r.*, false as can_manage
+         from library.${config.table} r
+        where r.is_active = true
+          and ((r.owner_scope = 'system' and not exists (select 1 from library.filter_hidden h where h.kind = $2 and h.item_id = r.id and h.user_id = $1))
+               or ${scoped})
+        order by r.owner_scope, r.name`,
+      params,
+    )).rows;
+  }
   const admin = isPlatformAdministrator(req.authz);
   const result = await query(
     `select r.*,
@@ -325,7 +398,7 @@ async function loadVisibleLibraryRows(req, kind, config) {
      order by r.owner_scope, r.name`,
     [user.id, admin, kind],
   );
-  return result.rows;
+  return result.rows.filter((row) => presetsUsable(req, row));
 }
 
 async function loadLibraryRow(config, id) {
@@ -348,6 +421,8 @@ async function canManagePreset(req, owned) {
   if (isPlatformAdministrator(req.authz)) return true;
   if (owned.owner_scope === "system") return false;
   if (owned.owner_scope === "user") return owned.owner_user_id === user.id;
+  // Roles V-1: a club or team row is managed only with presets.use there (the club's licence is inside can()).
+  if ((owned.owner_scope === "club" || owned.owner_scope === "team") && !presetsUsable(req, owned)) return false;
   if (owned.owner_scope === "club") {
     const result = await query(`select 1 from public.user_club_roles where user_id = $1 and club_id = $2 and is_active = true`, [user.id, owned.owner_club_id]);
     return result.rowCount > 0;
@@ -376,15 +451,18 @@ async function resolveOwnerScope(req, body) {
     return { scope, clubId: null, teamId: null, userId: null };
   }
   if (scope === "club") {
-    const clubId = clean(body?.clubId);
+    // Roles V-1: the id goes to can(), which compares canonical (lower-case) ids; a uuid in any case is accepted as before.
+    const clubId = clean(body?.clubId).toLowerCase();
     if (!clubId) return { error: "Club is required for club-scoped entries.", status: 400 };
+    if (!UUID_TEXT.test(clubId)) return { error: "Club is outside your access.", status: 403 };
     const allowed = await canManagePreset(req, { owner_scope: "club", owner_club_id: clubId });
     if (!allowed) return { error: "Club is outside your access.", status: 403 };
     return { scope, clubId, teamId: null, userId: null };
   }
   if (scope === "team") {
-    const teamId = clean(body?.teamId);
+    const teamId = clean(body?.teamId).toLowerCase();
     if (!teamId) return { error: "Team is required for team-scoped entries.", status: 400 };
+    if (!UUID_TEXT.test(teamId)) return { error: "Team is outside your access.", status: 403 };
     const allowed = await canManagePreset(req, { owner_scope: "team", owner_team_id: teamId });
     if (!allowed) return { error: "Team is outside your access.", status: 403 };
     return { scope, clubId: null, teamId, userId: null };

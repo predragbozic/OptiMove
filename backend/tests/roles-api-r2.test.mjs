@@ -135,11 +135,14 @@ test("17. ceiling: a club's admin adds a word it does not hold, a platform-only 
 });
 
 test("17-honoured. HONOURED_PERMISSIONS equals the (word, scope type) pairs of organization.js's can() calls at a club or team scope, plus roles.manage; a word checked only at a global site is not in it", async () => {
-  const { HONOURED_PERMISSIONS } = await import("../src/permissions.js");
+  const { ENFORCED_PERMISSIONS, HONOURED_PERMISSIONS } = await import("../src/permissions.js");
   const source = fs.readFileSync(path.join(REPO, "backend/src/routes/organization.js"), "utf8");
   const pairs = [...source.matchAll(/can\(\s*req\.authz\s*,\s*"([^"]+)"\s*,\s*(clubScope|teamScope|GLOBAL_SCOPE)/g)].map((m) => [m[1], m[2]]);
   const honoured = new Set(pairs.filter(([, s]) => s !== "GLOBAL_SCOPE").map(([w]) => w));
   honoured.add("roles.manage");
+  // Roles V-1 on: a module's view word is checked in its own module's files, not in organization.js
+  // (roles-r4-checked-gates A1/A2 prove its gates).
+  for (const [word, gates] of Object.entries(ENFORCED_PERMISSIONS)) if (!gates.includes("routes/organization.js")) honoured.add(word);
   assert.deepEqual([...HONOURED_PERMISSIONS].sort(), [...honoured].sort());
   assert.ok(pairs.some(([w, s]) => w === "accounts.manage" && s === "GLOBAL_SCOPE"));
   assert.ok(!HONOURED_PERMISSIONS.includes("accounts.manage"));

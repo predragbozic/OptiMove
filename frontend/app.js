@@ -3,7 +3,9 @@ import { mountDashboardControls, disposeDashboardControls, closeDashboardControl
 import { captureChangedFields, restoreChangedFields } from "./form-keep.js";
 import { api } from "./api.js";
 import { openExerciseClassification } from "./exercise-classification.js";
-import { accessScopeLabel, currentUserWorkspaceContextParts, isAthleteMode, roleLabel } from "./access.js";
+import { accessScopeLabel, currentUserWorkspaceContextParts, isAthleteMode, isViewWorkspace, roleLabel } from "./access.js";
+import { viewSettingsSections } from "./permission-nav.js";
+import { viewModuleOpen } from "./view-modules.js";
 import {
   renderInviteAccept as renderInviteAcceptAction,
   renderLogin as renderLoginAction,
@@ -35,6 +37,7 @@ import { handleAppHealthAction } from "./app-health-actions.js";
 import { handleSessionTypesAction, submitSessionTypesForm } from "./session-types-actions.js";
 import { loadSessionTypesSettings, resetSessionTypesForWorkspaceChange } from "./session-types-data.js";
 import { renderSessionTypesPanelHtml } from "./session-types-view.js";
+import { taxonomyReadOnly } from "./taxonomy-view.js";
 import { detached, guardHandler, installAppErrorCapture } from "./app-errors-capture.js";
 import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
 import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storage-admin-actions.js";
@@ -89,7 +92,7 @@ import {
   submitCoachProfileForm as submitCoachProfileFormAction,
 } from "./coach-profile-actions.js";
 import { renderCoachesHtml } from "./coach-profiles.js";
-import { coachHomeDayAthleteKeys, coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows } from "./coach-home.js";
+import { coachHomeDayAthleteKeys, coachHomePickerRows, coachHomeWorkspaceLabel, renderCoachHomeHtml, renderCoachHomeAthleteRows, renderViewHomeHtml } from "./coach-home.js";
 import { bindCoachHomeCarousels, captureCoachHomeView, handleCoachHomeAction, renderCoachHomeSection, restoreCoachHomeView } from "./coach-home-actions.js";
 import { answerSaveFirst, builderEventMade, builderEventTargets, builderEventsResetForWorkspaceChange, checkBuilderEventsResult, chooseSessionEvent, chooseWholeDay, loadBuilderEvents, setBuilderEventsRender } from "./builder-events-row.js";
 import { appHistoryEntryOf, appHistoryTopEntry, beginAppBack, clearAppHistoryEntries, endAppBack, popAppHistoryEntry, pushAppHistoryEntry, skipStaleAppBackEntry, takeAppBackEntry } from "./app-history.js";
@@ -182,6 +185,9 @@ import { CALENDAR_SETTINGS_ICON_HOST, calendarSettingsMayBeLeft, handleCalendarS
 import { calendarSettingsNeedLoad, enterCalendarSettingsSection, loadCalendarSettings, resetCalendarSettingsForWorkspaceChange } from "./calendar-settings-data.js";
 import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
 import { handleRolesAction, handleRolesBeforeUnload, handleRolesInput, rolesMayBeLeft, submitRolesForm } from "./roles-actions.js";
+import { leaveClubLicence, syncClubLicence } from "./club-licence-actions.js";
+import { leaveRolesLayers, syncRolesLayers } from "./roles-layers-actions.js";
+import { resetClubLicence } from "./club-licence-data.js";
 import { enterRolesSection, loadRoles, markRolesUsersStale, loadWho, resetRolesForWorkspaceChange, rolesContext, rolesNeedLoad, rolesUsersAvailable, whoNeedsLoad } from "./roles-data.js";
 import { renderRolesAssignHtml, renderRolesPanelHtml, renderRolesWhoHtml } from "./roles-view.js";
 import { installThumbnailResolver, retryExpiredMediaImage } from "./media-playback.js";
@@ -298,6 +304,7 @@ import {
   emptyBuilderState,
   emptyTemplateFilters,
   emptyTemplatePreview,
+  emptyTaxonomyState,
   state,
 } from "./state.js";
 import {
@@ -1923,7 +1930,8 @@ function toggleRail() {
 }
 
 function toggleMobileNav() {
-  state.mobileNavOpen = !state.mobileNavOpen;
+  if (state.mobileNavOpen) { closeMobileNav(); return; }
+  state.mobileNavOpen = true;
   renderMobileNavState();
 }
 
@@ -1934,6 +1942,13 @@ function closeMobileNav() {
   const focusInDrawer = Boolean(document.activeElement?.closest?.(".sidebar"));
   state.mobileNavOpen = false;
   renderMobileNavState();
+  // On a phone the athlete list lives inside the drawer (the bottom bar's Athletes opens both): it closes with it, so
+  // the page is never left marked as having the athlete list open (body.athletes-drawer-open and its scrim).
+  if (state.athletesExpanded) {
+    state.athletesExpanded = false;
+    renderAthleteListState();
+    renderLibraryNav();
+  }
   if (!focusInDrawer) return;
   // On a phone the drawer is opened by the bottom bar's Athletes (the header's menu button is hidden there).
   // (Athletes moved to More by Edit menu: focus goes to More, where it was opened from.)
@@ -2105,7 +2120,7 @@ async function handleGlobalClick(event) {
   if (await handleWorkspaceAction(action, { onWorkspaceChanged, beforeSwitch: boardBeforeSwitch, afterSwitchFailed: boardSwitchFailed, confirmLeave: (leave) => askLeaveTrainingLoad() && centralCalendarMayBeLeft({ final: leave?.reload ? "switch" : false }) && calendarSettingsMayBeLeft({ final: "switch" }) && rolesMayBeLeft({ final: "switch" }) })) {
     return;
   }
-  if (await handleNotificationAction(action, { openProgramRequests, openTestAssignment, openTestsToday, openTestsResults, openTrainingLoadAssignment, openTrainingLoadResults, openCalendarQuestion: (questionId) => openCalendarQuestion(questionId, athleteQuestionHandlers()), openWeeklyPlanFromNotification: openWeeklyPlanOnDate, openSpecificProgramFromNotification, confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
+  if (await handleNotificationAction(action, { openProgramRequests: notInViewWorkspace(openProgramRequests), openTestAssignment: notInViewWorkspace(openTestAssignment), openTestsToday: notInViewWorkspace(openTestsToday), openTestsResults: notInViewWorkspace(openTestsResults), openTrainingLoadAssignment: notInViewWorkspace(openTrainingLoadAssignment), openTrainingLoadResults: notInViewWorkspace(openTrainingLoadResults), openCalendarQuestion: notInViewWorkspace((questionId) => openCalendarQuestion(questionId, athleteQuestionHandlers())), openWeeklyPlanFromNotification: notInViewWorkspace(openWeeklyPlanOnDate), openSpecificProgramFromNotification: notInViewWorkspace(openSpecificProgramFromNotification), confirmLeave: askLeaveTrainingLoad, discardLeave: discardTrainingLoadLeaveDrafts })) {
     renderMessages();
     return;
   }
@@ -2517,10 +2532,40 @@ async function loadAthletes() {
   }
 }
 
+// Roles R4-4: a notification is the person's, not the workspace's. In a view workspace (club_view / team_view) a
+// notification that opens a module goes to Home instead: the module is not reachable there (its menu entry is hidden).
+// The view module (view-modules.js) a notification opener belongs to; an opener of no module never opens in a view
+// workspace (the calendar question opener is an athlete's).
+function viewModuleOfOpener(open) {
+  if (open === openProgramRequests || open === openWeeklyPlanOnDate || open === openSpecificProgramFromNotification) return "programs";
+  if (open === openTestAssignment || open === openTestsToday) return "tests";
+  if (open === openTestsResults) return "tests_results";
+  if (open === openTrainingLoadAssignment || open === openTrainingLoadResults) return "load_athlete";
+  return "";
+}
+
+function notInViewWorkspace(open) {
+  return (...args) => {
+    // Every notification opener leaves Settings without loadActiveTab: the Club licence island goes with it.
+    leaveClubLicence();
+    leaveRolesLayers();
+    if (!isViewWorkspace()) return open(...args);
+    // V-0: once a module opens for a view workspace (its V step), that module's notification links open too.
+    if (viewModuleOpen(viewModuleOfOpener(open))) return open(...args);
+    state.activeTab = "coach-home";
+    return loadActiveTab();
+  };
+}
+
 async function loadActiveTab() {
   if (isAthleteMode() && state.activeTab === "coach-home") state.activeTab = "athlete-home";
   renderTabs();
   renderLibraryNav();
+  // Roles R4-4: the Club licence and role-layer islands live only in Settings; leaving it unmounts them at once.
+  if (state.activeTab !== "organization") {
+    leaveClubLicence();
+    leaveRolesLayers();
+  }
   if (state.activeTab === "athlete-settings") return renderAthleteSettings();
   if (state.activeTab === "coach-account") return renderCoachAccount();
   if (state.activeTab === "athlete-library") return renderAthleteLibrary();
@@ -2577,6 +2622,11 @@ async function loadCoachHome({ forceRefresh = false } = {}) {
   els.context.textContent = "Overview";
   els.title.textContent = "Home";
   els.toolbar.innerHTML = "";
+  // A view workspace (roles R4) has a short Home and reads nothing: the coach's cards belong to modules it cannot reach.
+  if (isViewWorkspace()) {
+    els.content.innerHTML = renderViewHomeHtml(state.currentUser, viewSettingsSections());
+    return;
+  }
   // The calendar's dots, the chosen day and the exercise and program strips
   // load beside the roster, each drawing its own card when it arrives.
   if (state.currentUser?.activeWorkspace?.type !== "platform") detached(loadCoachHomeExtras({ onChange: refreshCoachHomeSection, forceRefresh }), "open-tab");
@@ -3002,6 +3052,8 @@ async function loadTrainingLoad() {
   els.context.textContent = "Training load";
   els.title.textContent = "Training load";
   els.toolbar.innerHTML = "";
+  // Roles V-1: a view workspace opens on the sections of its open modules (Data configuration's Variables).
+  setTrainingLoadSection(state.trainingLoad.section);
   // perf: renders the tab shell (Schedule / Data & Analysis nav + whatever
   // this section's own nav.data/loading already says) BEFORE awaiting
   // anything below - previously this whole function awaited the fetch
@@ -3431,6 +3483,12 @@ async function handleContentClick(event) {
   }
   if (type === "coach-home-picker-close") {
     closeCoachHomePicker();
+    return;
+  }
+  // The short Home of a view workspace (roles R4): opens one Settings section it may see.
+  if (type === "view-home-open-settings") {
+    const section = action.dataset.section || "";
+    if (viewSettingsSections().includes(section)) await openLibraryTab({ libraryTab: "organization", organizationSection: section });
     return;
   }
   // Home's error state (renderErrorStateHtml, coach-home.js): the same
@@ -3873,6 +3931,7 @@ function renderRolesSurface() {
     return;
   }
   panel.outerHTML = renderRolesPanelHtml();
+  syncRolesLayers(els.content, { renderRoles: renderRolesSurface, renderUsers: renderRolesUsersSurface });
 }
 
 // Users (R3): the assignment form and "who holds what" repaint on their own, so what is typed elsewhere stays.
@@ -3917,7 +3976,8 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
       void loadSessionTypesSettings(renderSessionTypesSurface);
     }
     // v87: positions for Tags & Presets and for an athlete's Edit window; read once, then after every write.
-    if ((state.organization.section === "presets" || (state.organizationEditor.open && state.organizationEditor.type === "athlete"))
+    // (Not in a view workspace: positions are the Athletes module's, closed there; the panel shows none.)
+    if (((state.organization.section === "presets" && !taxonomyReadOnly()) || (state.organizationEditor.open && state.organizationEditor.type === "athlete"))
         && !state.positions.loaded && !state.positions.loading && !state.positions.error) {
       void loadPositions().then(() => renderOrganizationPanel({ refresh: false }));
     }
@@ -3978,6 +4038,10 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     }
     // The Settings tab row scrolls sideways when it does not fit: keep the active tab in view.
     revealActiveTab(els.content);
+    // Roles R4-4: the Club licence island of a chosen club (a platform administrator), mounted after the paint, and
+    // the role-layer islands (Club roles in Roles, Access in this club in Users).
+    void syncClubLicence(els.content);
+    syncRolesLayers(els.content, { renderRoles: renderRolesSurface, renderUsers: renderRolesUsersSurface });
   };
 
   await loadCachedView({
@@ -4030,9 +4094,13 @@ async function onWorkspaceChanged() {
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
   resetSessionTypesForWorkspaceChange();
+  // Roles V-1: the tags and presets a view workspace reads are its club's only, so the list is read again for the new one.
+  state.taxonomy = emptyTaxonomyState();
   // v87: the positions list and the athletes' positions are the workspace's own.
   resetPositions();
   resetRolesForWorkspaceChange();
+  // Roles R4-4: a club's licence on screen belongs to the old workspace (the switch already asked about an open write).
+  resetClubLicence();
   resetTestsScheduleFormForWorkspaceChange();
   // The Builder's Make an event panel and badges belong to the old workspace;
   // a create not confirmed stays in the calendar's memory under it.

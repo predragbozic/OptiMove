@@ -1,3 +1,4 @@
+import { isViewWorkspace } from "./access.js";
 import { calendarSettingsContext } from "./calendar-settings-data.js";
 import { renderCalendarSettingsPanelHtml } from "./calendar-settings-view.js";
 import { renderDataSourcesPanelHtml } from "./data-sources-view.js";
@@ -103,7 +104,7 @@ const ICON_MANAGE_USERS = `
 
 // U1b: the card beside "Signed in as" says, in plain words, which workspace the
 // settings below belong to and in which role, from the active workspace (never role_hint).
-const WORKSPACE_ROLE_TEXT = { platform: "Platform administrator", club: "Club administrator", team: "Team coach", private_coach: "Private coach" };
+const WORKSPACE_ROLE_TEXT = { platform: "Platform administrator", club: "Club administrator", team: "Team coach", private_coach: "Private coach", club_view: "a role holder (view)", team_view: "a role holder (view)" };
 export function renderWorkspaceScopeCard(workspace, { scope = "" } = {}) {
   const place = workspace?.type === "platform" ? "All clubs and teams" : workspace?.type === "private_coach" ? "Private coaching" : (workspace?.label || scope || "Workspace");
   const as = WORKSPACE_ROLE_TEXT[workspace?.type] || "";
@@ -298,6 +299,16 @@ function canArchiveTeam(data, team) {
 function renderOrganizationSelectableRow(row, type, selectedId, { canArchive = null } = {}) {
   const isSelected = String(row.id) === String(selectedId);
   const isTeam = type === "team";
+  // A view workspace (roles R4) only reads: no Edit or Delete that the server would always refuse.
+  if (isViewWorkspace()) {
+    return `
+    <article class="organization-row ${isSelected ? "is-selected" : ""}">
+      <button class="organization-row-main" type="button" data-action="organization-select-${escapeAttr(type)}" data-${escapeAttr(type)}-id="${escapeAttr(row.id)}">
+        ${renderOrganizationRowContent(row, type)}
+      </button>
+    </article>
+  `;
+  }
   const deleteControl = isTeam
     ? (canArchive?.(row) ? `<button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="team" data-org-id="${escapeAttr(row.id)}" aria-label="Archive team" title="Archive team">${ICON_TRASH}</button>` : "")
     : `<button class="plain-button icon-button danger-action" type="button" data-action="organization-delete" data-org-type="${escapeAttr(type)}" data-org-id="${escapeAttr(row.id)}" aria-label="Delete" title="Delete">${ICON_TRASH}</button>`;
@@ -344,6 +355,21 @@ function renderSectionHead(title, count, actions = "", eyebrow = "") {
       </div>`;
 }
 
+// Roles R4-4 (docs/ai/roles-r4-4-screens-contract.md 5.1): the empty host of the Club licence island, for a platform
+// administrator on a chosen club. club-licence-actions.js mounts the island after the paint; the server decides again.
+// Roles R4-4, PR B (contract 5.4, 5.5): the host of *Access in this club* in Users, for whoever gives roles in this
+// club's workspace (a club's staff.assign holder, or a platform administrator there). The routes decide again.
+function renderPersonAccessHost(data) {
+  const ctx = rolesContext(data);
+  if (!ctx?.clubId || !(ctx.platform || holdsPermission("staff.assign", true))) return "";
+  const club = (data.clubs || []).find((c) => String(c.id) === String(ctx.clubId));
+  return `<div class="person-access-host" data-person-access-host data-club-id="${escapeAttr(ctx.clubId)}" data-club-name="${escapeAttr(club?.name || "")}"></div>`;
+}
+
+function renderClubLicenceHost(club) {
+  return `<div class="club-licence-host" data-club-licence-host data-club-id="${escapeAttr(club.id)}" data-club-name="${escapeAttr(club.name || "")}"></div>`;
+}
+
 export function renderOrganizationBrowser(data) {
   const clubs = data.clubs || [];
   const teams = data.teams || [];
@@ -378,6 +404,9 @@ export function renderOrganizationBrowser(data) {
   // S2 (the Settings plan): one section, one list. Each section draws its own list under one heading with its count;
   // Overview is the summary that links to them. A selected club or team still opens its detail (its teams, its roster).
   const coach = isCoachSettings();
+  // A view workspace (roles R4): athletes open only with the Athletes VIEW step, so a chosen club or team shows no
+  // roster here (the server sends none; "No athletes" would be untrue).
+  const viewOnly = isViewWorkspace();
   const showAll = state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : "";
   const addToggle = renderOrganizationAddToggle(data);
   const addForm = renderOrganizationAddForm(data);
@@ -401,22 +430,25 @@ export function renderOrganizationBrowser(data) {
         ${tiles.map(([value, noun, count]) => `<button class="organization-section-summary-tile" type="button" data-action="organization-section" data-section="${value}" aria-label="${escapeAttr(countLabel(count, noun))}"><strong>${count}</strong><span>${escapeHtml(countLabel(count, noun).replace(/^\d+ /, "").replace(/^./, (c) => c.toUpperCase()))}</span></button>`).join("")}
       </nav>`;
   } else if (section === "users") {
+    // R4-4 (contract 5.5): Access in this club, with its drift, opens the section.
     body = `${head("Users", countLabel(activeUserCount, "active user"), organizationUsersControls(data))}
+      ${renderPersonAccessHost(data)}
       <section class="organization-lists organization-lists-browser">${renderOrganizationUsersSection(data, { bare: true })}</section>
       ${renderRolesWhoHtml(data)}`;
   } else if (section === "clubs") {
     body = `${head(selectedTeam?.name || selectedClub?.name || "Clubs", selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : countLabel(clubs.length, "club"), showAll)}
       <section class="organization-lists organization-lists-browser">
         ${renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId, { bare: true })}
+        ${selectedClub && !selectedTeam && isPlatformAdmin ? renderClubLicenceHost(selectedClub) : ""}
         ${selectedClub ? renderOrganizationSelectableList(`Teams - ${selectedClub.name}`, visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team) }) : ""}
-        ${selectedClub ? athletesBlock() : ""}
+        ${selectedClub && !viewOnly ? athletesBlock() : ""}
       </section>`;
   } else if (section === "teams") {
     const archived = archivedTeamsOffered(data, isPlatformAdmin) ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-teams">${state.organization.showArchivedTeams ? "Hide archived" : `Show archived (${data.archivedTeams.length})`}</button>` : "";
     body = `${head(selectedTeam?.name || (selectedClub ? `Teams - ${selectedClub.name}` : "Teams"), selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : countLabel(visibleTeams.length, "team"), `${archived}${showAll}`)}
       <section class="organization-lists organization-lists-browser">
         ${renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team), bare: !selectedTeam })}
-        ${selectedTeam ? athletesBlock() : ""}
+        ${selectedTeam && !viewOnly ? athletesBlock() : ""}
       </section>`;
   } else {
     // Athletes (the coach's only list): the whole list, or the selected club's or team's roster.

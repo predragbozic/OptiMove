@@ -9,6 +9,8 @@ import {
 } from "./roles-data.js";
 import { assignScopeOptions, assignableRoles, permissionLabel, permissionReason, BASIC_ASSIGNABLE } from "./roles-view.js";
 import { state } from "./state.js";
+import { licence } from "./club-licence-data.js";
+import { clubRoles, person } from "./roles-layers-data.js";
 
 const rs = () => state.roles;
 
@@ -83,15 +85,21 @@ async function execute(cmd, { holder, owner, render }) {
 }
 
 const rolesAsk = (question) => Boolean(globalThis.window?.confirm?.(question));
-const rolesCommands = () => { const d = rs(); return [d.command, d.assign.command, d.who.command]; };
+// R4-4: the club licence's write and the role-layer islands' writes (club versions, custom roles) are asked about by the
+// same guards. The first three are the R3 role writes.
+const rolesCommands = () => { const d = rs(); return [d.command, d.assign.command, d.who.command, licence.command, clubRoles.command, person.command]; };
 // A role write in flight or not confirmed (no question: beforeunload uses this too).
 const rolesWriteOpen = () => rolesCommands().some((c) => c?.busy || c?.unconfirmed);
 
 // A workspace switch, a sign-out or the app's reload asks first, like the calendar's settings ("final" leaves the page).
 export function rolesMayBeLeft({ final = false } = {}) {
   const verb = final === "sign-out" || final === true ? "Sign out" : final === "switch" ? "Switch" : "Leave";
-  if (rolesCommands().some((c) => c?.busy)) return rolesAsk(`A role change is still being saved. ${verb} anyway? Its result will not be shown here.`);
-  if (rolesCommands().some((c) => c?.unconfirmed)) return rolesAsk(`The last role change is not confirmed. ${verb} without checking?`);
+  // The question names what is open: a licence write alone is a licence change, anything else a role change.
+  const open = (c) => c?.busy || c?.unconfirmed;
+  const cmds = rolesCommands();
+  const noun = open(cmds[3]) && !cmds.some((c, i) => i !== 3 && open(c)) ? "licence change" : "role change";
+  if (rolesCommands().some((c) => c?.busy)) return rolesAsk(`A ${noun} is still being saved. ${verb} anyway? Its result will not be shown here.`);
+  if (rolesCommands().some((c) => c?.unconfirmed)) return rolesAsk(`The last ${noun} is not confirmed. ${verb} without checking?`);
   return true;
 }
 export function handleRolesBeforeUnload(event) {

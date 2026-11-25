@@ -4,6 +4,7 @@ import { renderExerciseThumb } from "./exercise-view-modes.js";
 import { ICON_ADD_ATHLETE } from "./organization-view.js";
 import { renderOpenInCalendarHtml } from "./open-in-calendar.js";
 import { emptyCoachHomeState } from "./state.js";
+import { VIEW_SETTINGS_LABELS } from "./view-modules.js";
 import { exerciseText } from "./exercise-text.js";
 import { escapeAttr, escapeHtml, localDateIso, monthLabel, monthWeeksIso, programInitials } from "./utils.js";
 
@@ -44,7 +45,7 @@ function renderMenuIcon(name) {
 }
 
 function renderWorkspaceButton(entry) {
-  const kind = entry.type === "club" ? "Club" : entry.type === "team" ? "Team" : entry.type === "athlete" ? "Athlete" : "Private";
+  const kind = { club: "Club", team: "Team", athlete: "Athlete", club_view: "Club (view)", team_view: "Team (view)" }[entry.type] || "Private";
   return `<button class="coach-home-workspace" type="button" data-action="workspace-select" data-workspace-type="${escapeAttr(entry.type)}" data-workspace-scope-id="${escapeAttr(entry.scopeId || "")}">
     <svg class="coach-home-workspace-icon" viewBox="0 0 24 24" aria-hidden="true">${WORKSPACE_ICONS[entry.type] || WORKSPACE_ICONS.private_coach}</svg>
     <span class="coach-home-workspace-label"><strong>${escapeHtml(coachHomeWorkspaceLabel(entry))}</strong><small>${kind}</small></span>
@@ -383,6 +384,26 @@ function renderPlatformClubsHtml(clubs) {
         <span class="coach-home-workspace-label"><strong>${escapeHtml(club.name)}</strong><small>${escapeHtml(`${plural(club.teamCount, "team")} · ${plural(club.athleteCount, "athlete")}`)}</small></span>
         ${ICON_CHEVRON_RIGHT}
       </button></li>`).join("")}</ul>
+  </section>`;
+}
+
+// The short Home of a view workspace (club_view / team_view, roles R4 contract 5.2): the club's or team's name, one
+// sentence, and a button for each Settings section /me lets it open. Nothing is read: the coach's cards (athletes,
+// exercises, programs) belong to modules a view workspace does not reach yet.
+// Roles V-1: one label map for every section a view workspace can open (view-modules.js).
+const VIEW_SECTION_LABELS = VIEW_SETTINGS_LABELS;
+export function renderViewHomeHtml(user, sections = []) {
+  const workspace = user?.activeWorkspace;
+  const place = workspace?.type === "team_view" ? "team" : "club";
+  const others = (user?.availableWorkspaces || []).filter((entry) => entry.type !== "platform"
+    && !(entry.type === workspace?.type && String(entry.scopeId || "") === String(workspace?.scopeId || "")));
+  return `<section class="content-section coach-home coach-home-view">
+    <header class="coach-home-header"><h2>${escapeHtml(coachHomeWorkspaceLabel(workspace))}</h2></header>
+    <p class="muted coach-home-view-note">${sections.length
+    ? `You can see this ${place}'s details. More parts of OptiMove will open here as your role allows them.`
+    : `Your role does not open any part of OptiMove in this ${place} yet.`}</p>
+    ${sections.length ? `<ul class="coach-home-view-sections">${sections.map((section) => `<li><button class="plain-button coach-home-view-section" type="button" data-action="view-home-open-settings" data-section="${escapeAttr(section)}">${escapeHtml(VIEW_SECTION_LABELS[section] || section)}${ICON_CHEVRON_RIGHT}</button></li>`).join("")}</ul>` : ""}
+    ${others.length ? `<h3 class="coach-home-view-others">Your other workspaces</h3><ul class="coach-home-workspaces">${renderWorkspaceList(others)}</ul>` : ""}
   </section>`;
 }
 

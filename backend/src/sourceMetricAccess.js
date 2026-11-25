@@ -14,6 +14,7 @@
 // support). A body never names an owner.
 import { isPlatformAdministrator, holdsClubAdminRole } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
+import { can, clubScope } from "./permissions.js";
 
 // The error of the source-metric administration services; the routes answer
 // its status and code (backend/src/routes/sourceMetrics.js).
@@ -100,7 +101,9 @@ export async function resolveMappingAdminWith(read, req, known = undefined) {
   if (isPlatformAdministrator(req.authz)) {
     if (workspace.type === "platform") return { userId, basis: "platform_admin", owner: { scope: "system", clubId: null } };
     if (workspace.type === "club" && scopeId) ctx = { userId, basis: "platform_admin", owner: { scope: "club", clubId: scopeId } };
-  } else if (workspace.type === "club" && scopeId && holdsClubAdminRole(req.authz, scopeId)) {
+  } else if (workspace.type === "club" && scopeId && holdsClubAdminRole(req.authz, scopeId)
+    // Roles V-1: Data configuration's view word at the club (the club's licence is inside can()).
+    && can(req.authz, "variables.view", clubScope(scopeId))) {
     ctx = { userId, basis: "club_admin", owner: { scope: "club", clubId: scopeId } };
   }
   if (!ctx || !UUID.test(scopeId)) return null;
