@@ -644,12 +644,15 @@ Its refusal depends on the route:
 - **Results and the group:** a view workspace also needs `tests.results.view` (`canView(tests_results)` in the route),
   otherwise 403.
 - **The week:** `GET /weekly` counts a schedule's results (`resultsCount`) only with `tests.results.view`; without it,
-  0. The day's completion counts (`counts`) are the schedule's state and stay with `tests.view`.
+  0. The day's completion counts (`counts`: completed, open, missed) are deliberately visible with `tests.view`, and
+  `counts.completed` is in practice the same number as `resultsCount`. So `tests.results.view` hides the scores, the
+  injuries and the per-athlete rows, not how many athletes answered.
 - **Names (P-1):** a view workspace gets no athlete names without `canView(athletes)`, which stays false until V-2:
   - the schedule's athlete targets are dropped and counted (`hiddenAthleteTargets`);
   - the group's and the results' `athleteId` and `athleteName` are null;
   - the group's rows carry no `assignmentId`;
-  - the rows are no longer sorted by name (the group by state and window, the results newest first);
+  - the rows are no longer sorted by name (the group by state, window, then a hash of the assignment id; the results
+    newest first);
   - the result's `athleteName` is null.
 
 **The coach paths (checked words).**

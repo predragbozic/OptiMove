@@ -663,8 +663,9 @@ function renderCoachTodayGroupHtml(group, { date } = {}) {
         <span class="tests-count-chip tests-count-completed">${counts.completed} completed</span>
         <span class="tests-count-chip">${counts.pending} pending</span>
         <span class="tests-count-chip tests-count-missed">${counts.missed} missed</span>
-        <span class="tests-count-chip tests-count-injury">${counts.injuries} injuries</span>
+        ${group.resultsHidden ? "" : `<span class="tests-count-chip tests-count-injury">${counts.injuries} injuries</span>`}
       </div>
+      ${group.resultsHidden ? `<p class="muted">Scores and injuries are not shown for your role.</p>` : ""}
       <div class="tests-athlete-table">
         ${athletes.map((row) => `
           <div class="tests-athlete-row">

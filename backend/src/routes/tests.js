@@ -55,13 +55,16 @@ const mayReadResults = (req, schedule) => (req.moduleView ? !viewMissesResults(r
 // A group without its results (roles V-4): the athletes' states stay, their scores and injuries do not.
 function withoutResults(group) {
   const athletes = group.athletes.map((a) => ({ ...a, wellnessScore: null, injury: null }));
-  return { ...group, athletes, counts: { ...group.counts, injuries: 0 }, resultsHidden: true };
+  return { ...group, athletes, counts: { ...group.counts, injuries: null }, resultsHidden: true };
 }
 // A view answer without names (P-1): no athlete id or name, no assignment id, and an order that is not the names'.
 function withoutNames(group) {
+  // Ties (one state, one window) are broken by a hash of the assignment id, never by the SQL order (which is by name).
+  const tie = (id) => crypto.createHash("sha256").update(String(id)).digest("hex");
   const athletes = group.athletes
-    .map(({ assignmentId: _a, ...a }) => ({ ...a, athleteId: null, athleteName: null }))
-    .sort((x, y) => String(x.status).localeCompare(String(y.status)) || new Date(x.closesAt) - new Date(y.closesAt));
+    .map((a) => ({ a, key: tie(a.assignmentId) }))
+    .sort((x, y) => String(x.a.status).localeCompare(String(y.a.status)) || new Date(x.a.closesAt) - new Date(y.a.closesAt) || x.key.localeCompare(y.key))
+    .map(({ a: { assignmentId: _a, ...a } }) => ({ ...a, athleteId: null, athleteName: null }));
   return { ...group, athletes };
 }
 
