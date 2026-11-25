@@ -1481,7 +1481,8 @@ function renderResultsWeeklyHtml() {
     weekEnd: nav.data.weekEnd,
     selectedDate: nav.selectedDate,
     emptyAgendaText: "No results for this day. Results appear here once athletes complete a check-in.",
-    emptyAgendaAction: `<button class="om-btn" type="button" data-action="tests-section" data-section="today">See today's check-ins</button>`,
+    // A view workspace has no Today (roles V-4), so no way there.
+    emptyAgendaAction: testsReadOnly() ? "" : `<button class="om-btn" type="button" data-action="tests-section" data-section="today">See today's check-ins</button>`,
     renderSessionRow: (session, date) => renderWeeklySessionRowShell({
       dataAction: "tests-weekly-open-results",
       dataAttrs: `data-schedule-id="${escapeAttr(session.scheduleId)}" data-date="${escapeAttr(date)}"`,

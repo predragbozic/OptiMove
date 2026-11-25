@@ -15,6 +15,7 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
+import { applyRoleReadMigrations } from "./support/role-read-migrations.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_FILES = [
@@ -212,6 +213,8 @@ before(async () => {
   MIGRATION_FILES.forEach((name, i) => { files[name] = contents[i]; });
   migrationsDir = await writeMigrationsDir("primary", files);
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  // Roles V-4: the role read the Tests paths now ask (support/role-read-migrations.mjs).
+  await applyRoleReadMigrations(db.url);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");

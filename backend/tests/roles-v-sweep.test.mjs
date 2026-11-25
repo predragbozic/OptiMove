@@ -654,7 +654,7 @@ test("8. Tests (tests.view, tests.results.view): club_view and team_view read th
     }
     const group = await srv.api(who.cookie, `${T}/schedules/${own.id}/group?date=${today}`);
     secretFree(`${label} group`, group);
-    assert.ok(ok(group).group.athletes.length > 0 && ok(group).group.athletes.every((a) => a.athleteName === null && a.athleteId === null), `${label}: the group without names`);
+    assert.ok(ok(group).group.athletes.length > 0 && ok(group).group.athletes.every((a) => a.athleteName === null && a.athleteId === null && a.assignmentId === undefined), `${label}: the group without names or assignment ids`);
     const results = await srv.api(who.cookie, `${T}/results`);
     secretFree(`${label} results`, results);
     const rows = ok(results).results;
@@ -680,8 +680,12 @@ test("8. Tests (tests.view, tests.results.view): club_view and team_view read th
       ["POST", `${T}/schedules/${schedA.id}/remind`, { assignmentIds: [assignment.assignmentId] }],
     ]) await sameAsNobodyWrite(who, method, p, b);
   }
-  // One word without the other: the schedule without results; results alone open nothing.
+  // One word without the other: the schedule without results (its week counts no result); results alone open nothing.
   ok(await srv.api(schedOnly.cookie, `${T}/schedules`));
+  const schedWeek = ok(await srv.api(schedOnly.cookie, `${T}/weekly?weekStart=${mondayOf(today)}`));
+  const sessions = schedWeek.days.flatMap((d) => d.sessions);
+  assert.ok(sessions.some((x) => String(x.scheduleId) === String(schedA.id)) && sessions.every((x) => x.resultsCount === 0), "no result counted without tests.results.view");
+  assert.ok(ok(await srv.api(clubHolder.cookie, `${T}/weekly?weekStart=${mondayOf(today)}`)).days.flatMap((d) => d.sessions).some((x) => x.resultsCount > 0), "counted with it");
   for (const p of [`${T}/results`, `${T}/results/${resultOf[String(schedA.id)]}`, `${T}/schedules/${schedA.id}/group?date=${today}`]) await sameAsNobody(schedOnly, p, "tests.view only");
   for (const p of [`${T}/schedules`, `${T}/library`, `${T}/results`]) await sameAsNobody(resultsOnly, p, "tests.results.view only");
   // A forged club preference resolves to club_view and reads the same.
@@ -702,10 +706,19 @@ test("8. Tests (tests.view, tests.results.view): club_view and team_view read th
   } finally {
     await setPref(w.adminB, "club", w.B);
   }
-  // Old-vs-new: the club admin still sees the link and the names.
+  // Old-vs-new (the coaches hold both words): the club admin still sees the link, the names and the scores; the team
+  // coach its team's schedule, group, results and Today. (The Tests suites tests-module-*, tests-weekly-calendar and
+  // tests-manual-reminder are the full regression of the coach paths.)
   const adminDetail = ok(await srv.api(w.adminA.cookie, `${T}/schedules/${schedA.id}`));
   assert.equal(adminDetail.link.publicToken, link.publicToken);
   assert.ok(ok(await srv.api(w.adminA.cookie, `${T}/results`)).results.some((r) => r.athleteName === "Tessa Vsweeptest"));
+  const adminGroup = ok(await srv.api(w.adminA.cookie, `${T}/schedules/${schedA.id}/group?date=${today}`)).group;
+  assert.ok(adminGroup.athletes.some((a) => a.athleteName === "Tessa Vsweeptest" && a.assignmentId && a.wellnessScore != null), "the admin's group: names, ids, scores");
+  assert.equal(adminGroup.resultsHidden, undefined);
+  const coachList = idsOf(ok(await srv.api(w.coachA.cookie, `${T}/schedules`)).schedules);
+  assert.ok(coachList.includes(String(schedT.id)) && !coachList.includes(String(schedA.id)) && !coachList.includes(String(schedB.id)), "the team coach: its team's schedules, as before");
+  assert.ok(ok(await srv.api(w.coachA.cookie, `${T}/results`)).results.some((r) => r.athleteName === "Tessa Vsweeptest" && String(r.scheduleId) === String(schedT.id)));
+  assert.ok(ok(await srv.api(w.coachA.cookie, `${T}/today`)).groups.some((g) => g.athletes.some((a) => a.wellnessScore != null)), "the coach's Today with scores");
   // The licence closes Tests for the role holders and for the club's own admin (reads and writes); club B keeps it.
   await ceiling(pa, ["tests"], []);
   try {

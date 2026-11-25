@@ -48,6 +48,22 @@ async function scheduleReadScope(req, word) {
 const viewHidesNames = (req) => Boolean(req.moduleView) && !canView(req.authz, req.moduleView.workspace, "athletes");
 // Results and the per-athlete group: a view workspace also needs tests.results.view.
 const viewMissesResults = (req) => Boolean(req.moduleView) && !canView(req.authz, req.moduleView.workspace, "tests_results");
+// May this read show the results of this schedule (scores, injuries, completed counts)? A view workspace with
+// tests.results.view; a coach with tests.results.view at the schedule's club or team (its own schedule and a platform
+// admin as before).
+const mayReadResults = (req, schedule) => (req.moduleView ? !viewMissesResults(req) : canManageSchedule(req, schedule, { word: TESTS_RESULTS_VIEW }));
+// A group without its results (roles V-4): the athletes' states stay, their scores and injuries do not.
+function withoutResults(group) {
+  const athletes = group.athletes.map((a) => ({ ...a, wellnessScore: null, injury: null }));
+  return { ...group, athletes, counts: { ...group.counts, injuries: 0 }, resultsHidden: true };
+}
+// A view answer without names (P-1): no athlete id or name, no assignment id, and an order that is not the names'.
+function withoutNames(group) {
+  const athletes = group.athletes
+    .map(({ assignmentId: _a, ...a }) => ({ ...a, athleteId: null, athleteName: null }))
+    .sort((x, y) => String(x.status).localeCompare(String(y.status)) || new Date(x.closesAt) - new Date(y.closesAt));
+  return { ...group, athletes };
+}
 
 // WELLNESS's real, seeded UUIDs (migrations_v2/202608221000_tests_v42_seed_
 // wellness_fms.sql) - the only test this phase's scheduling/execution UI
@@ -1156,6 +1172,8 @@ router.get("/weekly", async (req, res, next) => {
       }
     }
 
+    // Roles V-4: which schedules' results this read may count.
+    const resultsReadable = new Map(schedulesResult.rows.map((schedule) => [schedule.id, mayReadResults(req, schedule)]));
     const byDate = new Map();
     for (let d = weekStart; d <= weekEnd; d = addDaysIso(d, 1)) byDate.set(d, []);
     for (const schedule of schedulesResult.rows) {
@@ -1171,8 +1189,10 @@ router.get("/weekly", async (req, res, next) => {
           opensTime: schedule.opens_time,
           closesTime: schedule.closes_time,
           occurrenceExists: countsByKey.has(key),
+          // The day's completion counts are the schedule's state (tests.view); its results count needs
+          // tests.results.view (roles V-4).
           counts: countsByKey.get(key) || null,
-          resultsCount: resultsByKey.get(key) || 0,
+          resultsCount: resultsReadable.get(schedule.id) ? (resultsByKey.get(key) || 0) : 0,
           // Item 1 correction: structured, not pre-formatted - each tab
           // builds its own compact recipient line from these same three
           // fields (identical shape to formatScheduleRow's own athlete
@@ -1303,11 +1323,13 @@ router.get("/schedules/:scheduleId/group", async (req, res, next) => {
     const date = text(req.query?.date);
     if (viewMissesResults(req)) return res.status(403).json({ error: "Forbidden" });
     if (!isValidGregorianDateString(date)) return res.status(400).json({ error: "date must be a valid YYYY-MM-DD date." });
-    // Roles V-4: the per-athlete group is a result read (tests.results.view).
-    const schedule = await loadManageableSchedule(req, req.params.scheduleId, { word: TESTS_RESULTS_VIEW });
+    // Roles V-4: a coach reads the group of a schedule it manages with tests.view (the Today detail and its reminder);
+    // the scores and injuries only with tests.results.view there. A view workspace needs tests.results.view (above).
+    const schedule = await loadManageableSchedule(req, req.params.scheduleId);
     if (!schedule) return res.status(404).json({ error: "Schedule not found." });
-    const group = await loadScheduleGroupForDate(schedule, date);
-    if (viewHidesNames(req)) group.athletes = group.athletes.map((a) => ({ ...a, athleteId: null, athleteName: null }));
+    let group = await loadScheduleGroupForDate(schedule, date);
+    if (!mayReadResults(req, schedule)) group = withoutResults(group);
+    if (viewHidesNames(req)) group = withoutNames(group);
     res.json({ group, ...(req.moduleView ? { readOnly: true } : {}) });
   } catch (error) { next(error); }
 });
@@ -1718,7 +1740,9 @@ router.get("/today", async (req, res, next) => {
       // below reads assignments directly, never a single "the" occurrence
       // id, so there is nothing to gate on here anymore.
       await ensureCurrentOccurrence(pool, schedule);
-      groups.push(await loadScheduleGroup(schedule));
+      const group = await loadScheduleGroup(schedule);
+      // Roles V-4: the scores and injuries only with tests.results.view at the schedule's club or team.
+      groups.push(mayReadResults(req, schedule) ? group : withoutResults(group));
     }
     res.json({ groups });
   } catch (error) { next(error); }
@@ -1894,8 +1918,10 @@ router.get("/results", async (req, res, next) => {
       [WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID, WELLNESS_TEST_VERSION_ID, read.userId, read.clubIds, read.teamIds, read.all, scheduleId, date],
     );
     const hideNames = viewHidesNames(req);
+    // P-1: without names, an order that is not the names' (the newest first).
+    const ordered = hideNames ? [...result.rows].sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at)) : result.rows;
     res.json({
-      results: result.rows.map((row) => ({
+      results: ordered.map((row) => ({
         assessmentId: row.assessment_id,
         completedAt: row.completed_at,
         // P-1: a view workspace without athletes.view gets neither the name nor the id.

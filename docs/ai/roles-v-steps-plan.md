@@ -628,16 +628,24 @@ Its refusal depends on the route:
   never takes that branch. Another club's schedule gives the 404 of a missing one.
 - **`GET /schedules/:id`:** never reads the group link. A view answer has no `link` block and so no `publicToken`
   (plan choice 3); it carries `readOnly: true`.
-- **Results and the group:** also need `tests.results.view` (`canView(tests_results)` in the route), otherwise 403.
+- **Results and the group:** a view workspace also needs `tests.results.view` (`canView(tests_results)` in the route),
+  otherwise 403.
+- **The week:** `GET /weekly` counts a schedule's results (`resultsCount`) only with `tests.results.view`; without it,
+  0. The day's completion counts (`counts`) are the schedule's state and stay with `tests.view`.
 - **Names (P-1):** a view workspace gets no athlete names without `canView(athletes)`, which stays false until V-2:
   - the schedule's athlete targets are dropped and counted (`hiddenAthleteTargets`);
   - the group's and the results' `athleteId` and `athleteName` are null;
+  - the group's rows carry no `assignmentId`;
+  - the rows are no longer sorted by name (the group by state and window, the results newest first);
   - the result's `athleteName` is null.
 
 **The coach paths (checked words).**
 - `manageableClubIds` / `manageableTeamIds` keep only the clubs and teams where the account holds the word:
   `tests.view`, or `tests.results.view` for results.
 - `canManageSchedule` asks the same word at the schedule's club or team (`holds`, two literal `can()` calls).
+- **The group and Today keep their reach for a coach.** A coach opens a schedule's group (`GET /schedules/:id/group`,
+  the Today detail and its reminder) and its Today with `tests.view`. The scores and injuries need
+  `tests.results.view` at the schedule's club or team: without it they are null, and the group says `resultsHidden`.
 - A new schedule (`POST /schedules`, `/schedules/bulk`) needs `tests.view` at its owner scope.
 - A platform admin and a person's own schedule are unchanged (R4 Q10).
 - A licence that closes Tests therefore leaves the club out of its admin's lists, makes its schedules and results the
@@ -671,9 +679,17 @@ Its refusal depends on the route:
   - old-vs-new for the club admin (the link and the names);
   - the licence closing the admin's list, reads and writes.
 - Mutations killed: the view branch that drops the link and the names; the coach path's word check forced true.
+- **Old-vs-new for the coaches:** the coach paths' regression is the Tests suites (`tests-module-*`,
+  `tests-weekly-calendar`, `tests-manual-reminder`, `tests-notification-worker`, `tests-athlete-device-timezone`),
+  which pass unchanged. They build their databases from the Tests migrations only, so they now also apply v84 and v92
+  (`backend/tests/support/role-read-migrations.mjs`, a second runner call over a folder named `migrations_v2`). Test 8
+  also checks the club admin's link, names and scores, and the team coach's list, results and Today. No full-body
+  comparison against `main` is made.
 - e2e: `roles-v4-view-tests.test.mjs` at 1280, 390 and 360 px.
 
 **Follow-ups (not built).**
+- A coach whose club version keeps `tests.view` but drops `tests.results.view` is not set up in a test (no fixture
+  for club role versions here); the rule is covered by the view holders and the mutation of `holds()`.
 - The weekly view's "Open in calendar" stays visible for a view holder without `calendar.view`; the calendar tab is
   then not available to it.
 - The remaining reads of `routes/tests.js` that branch on the athlete (`/athlete/*`) are not part of V.

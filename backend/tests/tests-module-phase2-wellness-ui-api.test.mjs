@@ -26,6 +26,7 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
+import { applyRoleReadMigrations } from "./support/role-read-migrations.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.resolve(__dirname, "../../migrations_v2/202608220900_tests_v42_schema.sql");
@@ -224,6 +225,8 @@ before(async () => {
     [ASSIGNMENT_TIMEZONE_WINDOW_NAME]: assignmentTimezoneWindowSql,
   });
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  // Roles V-4: the role read the Tests paths now ask (support/role-read-migrations.mjs).
+  await applyRoleReadMigrations(db.url);
 
   // Point the app's own pool at the temp database BEFORE importing it for
   // the first time - db.js reads process.env.DATABASE_URL once, at module
