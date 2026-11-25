@@ -18,7 +18,7 @@ PowerShell (Node >=20):
 
     .\backend\scripts\dashboard-references-rehearsal.ps1 -Port 55470
 
-The wrapper asks for the password securely (Enter for trust), restores DATABASE_URL afterwards and never prints it. For a trust cluster, DATABASE_URL may instead be set process-locally and backend/scripts/dashboard-references-rehearsal.mjs run directly. On Linux use the .sh wrapper with a loopback DATABASE_URL; PGPASSWORD is supported by PostgreSQL. Success ends with RESULT: PASS.
+The wrapper asks for the password securely (Enter for trust), restores DATABASE_URL afterwards and never prints it. For a trust cluster, DATABASE_URL may instead be set process-locally and backend/scripts/dashboard-references-rehearsal.mjs run directly. On Linux use the .sh wrapper with a loopback DATABASE_URL; PGPASSWORD is supported by PostgreSQL. Success ends with RESULT: PASS. Node 20 runs the same real-DB packet; the additional isolated mock.module unit test is included on Node >=22 and is also covered by backend-fast on Node 22.
 
 The rehearsal includes actual apply -> rollback -> identical dashboard catalog -> reapply, body-change and later-migration refusals, refusal after real table creation, strict JS/SQL contract checks, real HTTP access and replay tests, reference query checks and math. Browser evidence is separate; run pages, gallery, simple and references e2e files before freeze.
 
