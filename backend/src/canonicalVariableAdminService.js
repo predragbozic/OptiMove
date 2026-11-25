@@ -50,6 +50,7 @@ import {
 import { lockHides } from "./sourceMetricActivationSteps.js";
 import { classificationFilterSql, variableClassification } from "./canonicalClassificationService.js";
 import { resolveActiveWorkspace } from "./workspace.js";
+import { can, teamScope } from "./permissions.js";
 import { unitTokenOk } from "./metricTextRules.js";
 import { isIconKey } from "./iconKeys.js";
 
@@ -579,7 +580,8 @@ function actionsOf(row, ctx, editable, club = null) {
 // The reduced view of a team workspace (Q7): never the versions, the levels,
 // the mapping readiness or the timestamps.
 function reducedOut(row, ctx, club = null) {
-  const editable = isOwn(row, ctx);
+  // Roles V-1: a view workspace's context is read only - nothing is its own to change, so no action is ever offered.
+  const editable = !ctx.readOnly && isOwn(row, ctx);
   const key = boundedOut(row.key, TEXT_LIMITS.key);
   const label = boundedOut(row.label, TEXT_LIMITS.label);
   const shortLabel = boundedOut(row.short_label, TEXT_LIMITS.shortLabel);
@@ -1120,8 +1122,31 @@ export async function resolveVariableEditor(req, known = undefined) {
     [teamId, userId],
   ))).rows[0];
   if (!row) return null;
+  // Roles V-1: the module's view word at the team (the club's licence is inside can(); a platform admin passes).
+  if (!can(req.authz, "variables.view", teamScope(teamId))) return null;
   const basis = row.platform_admin ? "platform_admin" : row.club_admin ? "club_admin" : "team_coach";
   return { userId, basis, owner: { scope: "club", clubId: String(row.club_id) }, view: "coach", ...(basis === "team_coach" ? { teamId } : {}) };
+}
+
+// Roles V-1 (docs/ai/roles-v-steps-plan.md section 2.1): the context of the two variable reads in a view workspace
+// (club_view / team_view). `moduleView` is the entry gate's (moduleView.js), which already resolved the workspace
+// read-only and checked variables.view at its scope; it is never resolved again here. The owner is the workspace's club
+// (for a team view workspace, its team's club), active, the team active; the view is C99's reduced one, read only (no action, no
+// write: the gate lets a view workspace reach the two GET routes only, and a write never takes this context).
+export async function resolveVariableViewer(req, moduleView) {
+  if (!req?.user?.id || moduleView?.module !== "data_configuration") return null;
+  const scope = moduleView.scope;
+  if (!scope || !UUID.test(scope.id)) return null;
+  const id = scope.id.toLowerCase();
+  const row = (await boundedRead((client) => client.query(
+    scope.type === "club"
+      ? `select c.id as club_id from public.clubs c where c.id = $1 and coalesce(c.is_active, true)`
+      : `select t.club_id from public.teams t join public.clubs c on c.id = t.club_id
+          where t.id = $1 and coalesce(t.is_active, true) and coalesce(c.is_active, true)`,
+    [id],
+  ))).rows[0];
+  if (!row) return null;
+  return { userId: String(req.user.id), basis: "role_holder", owner: { scope: "club", clubId: String(row.club_id) }, view: "coach", readOnly: true };
 }
 
 // v38's request guard derives the basis again when the request row is written.

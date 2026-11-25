@@ -30,8 +30,9 @@ after(async () => {
 const ok = (res, status = 200) => { assert.equal(res.status, status, res.text); return res.body; };
 const hex = () => crypto.randomBytes(3).toString("hex");
 const sorted = (list) => [...list].sort();
-const CLUB_ADMIN = ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign"];
-const TEAM_COACH = ["athletes.manage", "athletes.remove", "org.view"];
+// Roles V-1: variables.view and presets.use are checked words, held by both basic roles (v92's seed).
+const CLUB_ADMIN = ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "presets.use", "roles.manage", "staff.assign", "variables.view"];
+const TEAM_COACH = ["athletes.manage", "athletes.remove", "org.view", "presets.use", "variables.view"];
 
 async function person(label, setup = async () => {}) {
   const id = await F.user(label);

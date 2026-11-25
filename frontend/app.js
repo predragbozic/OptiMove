@@ -36,6 +36,7 @@ import { handleAppHealthAction } from "./app-health-actions.js";
 import { handleSessionTypesAction, submitSessionTypesForm } from "./session-types-actions.js";
 import { loadSessionTypesSettings, resetSessionTypesForWorkspaceChange } from "./session-types-data.js";
 import { renderSessionTypesPanelHtml } from "./session-types-view.js";
+import { taxonomyReadOnly } from "./taxonomy-view.js";
 import { detached, guardHandler, installAppErrorCapture } from "./app-errors-capture.js";
 import { enterDataSourcesSection, loadDataSources } from "./data-sources-data.js";
 import { handleStorageAdminAction, submitStorageAdminForm } from "./media-storage-admin-actions.js";
@@ -302,6 +303,7 @@ import {
   emptyBuilderState,
   emptyTemplateFilters,
   emptyTemplatePreview,
+  emptyTaxonomyState,
   state,
 } from "./state.js";
 import {
@@ -3049,6 +3051,8 @@ async function loadTrainingLoad() {
   els.context.textContent = "Training load";
   els.title.textContent = "Training load";
   els.toolbar.innerHTML = "";
+  // Roles V-1: a view workspace opens on the sections of its open modules (Data configuration's Variables).
+  setTrainingLoadSection(state.trainingLoad.section);
   // perf: renders the tab shell (Schedule / Data & Analysis nav + whatever
   // this section's own nav.data/loading already says) BEFORE awaiting
   // anything below - previously this whole function awaited the fetch
@@ -3969,7 +3973,8 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
       void loadSessionTypesSettings(renderSessionTypesSurface);
     }
     // v87: positions for Tags & Presets and for an athlete's Edit window; read once, then after every write.
-    if ((state.organization.section === "presets" || (state.organizationEditor.open && state.organizationEditor.type === "athlete"))
+    // (Not in a view workspace: positions are the Athletes module's, closed there; the panel shows none.)
+    if (((state.organization.section === "presets" && !taxonomyReadOnly()) || (state.organizationEditor.open && state.organizationEditor.type === "athlete"))
         && !state.positions.loaded && !state.positions.loading && !state.positions.error) {
       void loadPositions().then(() => renderOrganizationPanel({ refresh: false }));
     }
@@ -4086,6 +4091,8 @@ async function onWorkspaceChanged() {
   // Settings -> Calendar reads the new club's catalog (the switch asked first).
   resetCalendarSettingsForWorkspaceChange();
   resetSessionTypesForWorkspaceChange();
+  // Roles V-1: the tags and presets a view workspace reads are its club's only, so the list is read again for the new one.
+  state.taxonomy = emptyTaxonomyState();
   // v87: the positions list and the athletes' positions are the workspace's own.
   resetPositions();
   resetRolesForWorkspaceChange();

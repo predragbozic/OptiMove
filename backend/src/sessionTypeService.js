@@ -13,6 +13,7 @@ import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { boundedText } from "./metricTextRules.js";
 import { holdsClubAdminRole, isPlatformAdministrator } from "./authz.js";
+import { can, clubScope, teamScope } from "./permissions.js";
 
 export const LABEL_MAX = 60;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -39,17 +40,42 @@ function withinBound(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+// The club of a team, active (null: none).
+async function teamClub(client, teamId) {
+  const r = await client.query(`select club_id from public.teams where id = $1 and is_active = true`, [teamId]);
+  return r.rowCount ? String(r.rows[0].club_id) : null;
+}
+
+// Roles V-1 (docs/ai/roles-v-steps-plan.md section 2.2): a club or team workspace sees its club's types only with
+// presets.use there (the club's licence is inside can(); a platform admin passes); without it, the system types only.
+const SCOPE_OF = Object.freeze({ club: clubScope, team: teamScope });
+const presetsAt = (ctx, w) => can(ctx.authz, "presets.use", SCOPE_OF[w.type](String(w.scopeId)));
+
 // The club whose types this workspace sees (null: system types only), or a refusal.
 async function workspaceClub(ctx, client) {
+  // A view workspace (the entry gate of routes/sessionTypes.js checked presets.use and resolved it read only): its club,
+  // or its team's club, to read; never a writer (writableOwner).
+  if (ctx.moduleView) {
+    const scope = ctx.moduleView.scope;
+    if (!scope || !UUID.test(scope.id)) throw notFound();
+    if (scope.type === "club") {
+      const r = await client.query(`select id from public.clubs where id = $1 and coalesce(is_active, true)`, [scope.id]);
+      if (!r.rowCount) throw notFound();
+      return String(r.rows[0].id);
+    }
+    const clubId = await teamClub(client, scope.id);
+    if (!clubId) throw notFound();
+    return clubId;
+  }
   if (ctx.accountType !== "coach") throw notFound();
   const w = ctx.workspace;
   if (!w) throw notFound();
   if (w.type === "platform" || w.type === "private_coach") return null;
-  if (w.type === "club") return String(w.scopeId);
+  if (w.type === "club") return presetsAt(ctx, w) ? String(w.scopeId) : null;
   if (w.type === "team") {
-    const r = await client.query(`select club_id from public.teams where id = $1 and is_active = true`, [w.scopeId]);
-    if (!r.rowCount) throw notFound();
-    return String(r.rows[0].club_id);
+    const clubId = await teamClub(client, w.scopeId);
+    if (!clubId) throw notFound();
+    return presetsAt(ctx, w) ? clubId : null;
   }
   throw notFound();
 }
@@ -61,9 +87,9 @@ const view = (row) => ({
 // Which owner this caller writes in this workspace, or null.
 function writableOwner(ctx) {
   const w = ctx.workspace;
-  if (ctx.accountType !== "coach" || !w) return null;
+  if (ctx.moduleView || ctx.accountType !== "coach" || !w) return null;
   if (w.type === "platform" && isPlatformAdministrator(ctx.authz)) return { ownerScope: "system", clubId: null };
-  if (w.type === "club" && holdsClubAdminRole(ctx.authz, w.scopeId)) return { ownerScope: "club", clubId: String(w.scopeId) };
+  if (w.type === "club" && holdsClubAdminRole(ctx.authz, w.scopeId) && presetsAt(ctx, w)) return { ownerScope: "club", clubId: String(w.scopeId) };
   return null;
 }
 

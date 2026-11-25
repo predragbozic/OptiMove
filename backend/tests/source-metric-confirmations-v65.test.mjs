@@ -86,8 +86,8 @@ before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V65), "v65 is a test migration");
   assert.ok(BEFORE_V65.length > 0, "v65 follows the earlier migrations");
   [rdb, db] = await Promise.all([
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v65rb", migrations: BEFORE_V65 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v65", migrations: [...BEFORE_V65, V65] }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v65rb", migrations: BEFORE_V65, roleRead: true }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v65", migrations: [...BEFORE_V65, V65], roleRead: true }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });

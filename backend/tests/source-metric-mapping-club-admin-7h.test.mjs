@@ -84,10 +84,10 @@ before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V52), "v52 is a test migration");
   assert.ok(GPEXE_TEST_MIGRATIONS.indexOf(V52) > 0, "v52 follows v51 (v53, phase 7i-B, comes after it)");
   [rdb, db] = await Promise.all([
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52rb", migrations: UP_TO_V51 }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52rb", migrations: UP_TO_V51, roleRead: true }),
     // v66 (J18, M-B) gates a club admin's activation of a version of a field without parameters; this suite's fields
     // have none, so its database is built through v65 (see GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE).
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v52", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE, roleRead: true }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });

@@ -330,7 +330,7 @@ test("10. no fallback is persisted when the role tables could not be read (5.1, 
 // unchecked word, O6), in club_view - and again with a forged club preference - gets from every module exactly what an
 // account with no role at all gets (the same status and the same answer), and no write lands. The modules open one by
 // one in their VIEW pull requests, which change their rows here.
-test("11. section 6: a view workspace with every view word opens no module beyond the organization read", async () => {
+test("11. section 6: a view workspace with every view word opens no module beyond the organization read and the modules V steps opened", async () => {
   const full = await createRole(w.adminA, w.A, ["club", "team"]);
   await k.query(`set session_replication_role = replica`);
   try {
@@ -342,14 +342,16 @@ test("11. section 6: a view workspace with every view word opens no module beyon
   await grant(w.adminA, holder.id, full.id, "club", w.A);
   const hm = await me(holder);
   assert.equal(hm.activeWorkspace.type, "club_view");
-  assert.deepEqual(hm.permissions, ["org.view"], "only checked words reach /me");
+  // Roles V-1 opened Data configuration (variables.view) and Tags, presets and session types (presets.use): their words
+  // reach /me and their reads are proven in roles-v-sweep.test.mjs (tests 5 and 6), so they leave the list below.
+  assert.deepEqual(hm.permissions, ["org.view", "variables.view", "presets.use"], "only checked words of open modules reach /me");
   const q = `from=2026-11-01&to=2026-11-30`;
   const reads = ["/api/athletes", "/api/plans", "/api/templates", "/api/exercises", "/api/exercise-collections", "/api/builder/plans",
     "/api/taxonomy", `/api/calendar?${q}`, `/api/calendar/events?${q}`, `/api/calendar/settings?clubId=${w.A}`,
-    `/api/training-activity?${q}`, "/api/training-activity/session-types", "/api/training-load/weekly",
+    `/api/training-activity?${q}`, "/api/training-load/weekly",
     "/api/training-load/external-schedules", "/api/training-load/metrics/definitions", `/api/training-load/metrics/occasions?${q}`,
     "/api/training-load/dashboards", "/api/tests", `/api/training-load/gpexe/teams/${w.TA1}/status`,
-    "/api/training-load/sources/metrics/variables", "/api/positions", "/api/coaches", `/api/athletes/${w.athA.id}`];
+    "/api/positions", "/api/coaches", `/api/athletes/${w.athA.id}`];
   const writes = [["/api/calendar/events", { title: "x", clubId: w.A }], ["/api/training-load/dashboards", { name: "x" }],
     ["/api/training-activity/session-types", { name: "x" }], ["/api/plans", { name: "x" }], ["/api/tests", { name: "x" }]];
   const norm = (who, text) => text.split(who.id).join("<me>");

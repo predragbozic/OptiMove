@@ -47,7 +47,7 @@ before(async () => {
   // v66 (J18, M-B) gates a club admin's activation of a version of a field without parameters; this suite's fields have
   // none, so its database is built through v65 (see GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE).
   // The last test (Z) applies v66 and runs the same races on the full schema.
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "lo1", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "lo1", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE, roleRead: true });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
   await k.connect();

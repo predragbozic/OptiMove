@@ -1295,14 +1295,7 @@ export const createInitialState = () => ({
   organizationJoinLinks: { pending: false, error: "", justCreatedId: "", justCreatedUrl: "", copiedId: "", reviewPendingId: "" },
   joinPage: { token: "", loading: true, error: "", link: null, submitted: false, statusToken: "", requiresLogin: false, prefillEmail: "", application: null },
   workspaceSwitcher: { open: false, pending: false, error: "" },
-  taxonomy: {
-    loaded: false,
-    error: "",
-    nodePresets: [],
-    templateTags: [],
-    libraryRows: { domain: [], category: [], section: [], tag: [], attractor: [] },
-    addOpenKind: "",
-  },
+  taxonomy: emptyTaxonomyState(),
   // v87: the list of positions (Tags & Presets) and the athletes' positions of the workspace (Settings -> Athletes).
   positions: emptyPositionsState(),
   coaches: { rows: [], selected: null, detail: null, editOpen: false, contactOpen: false, error: "" },
@@ -1367,3 +1360,16 @@ export function emptyAthleteQuestionsState() {
 }
 
 export const state = createInitialState();
+
+// Settings -> Tags & Presets: the lists and the open Add form. Roles V-1: read again (reset to this) after a workspace
+// switch, because a view workspace reads its own club's rows only.
+export function emptyTaxonomyState() {
+  return {
+    loaded: false,
+    error: "",
+    nodePresets: [],
+    templateTags: [],
+    libraryRows: { domain: [], category: [], section: [], tag: [], attractor: [] },
+    addOpenKind: "",
+  };
+}

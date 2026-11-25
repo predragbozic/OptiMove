@@ -35,7 +35,10 @@ const CLUB = "22222222-2222-4222-8222-222222222222";
 const OTHER_CLUB = "33333333-3333-4333-8333-333333333333";
 const TEAM = "44444444-4444-4444-8444-444444444444";
 const platformAdmin = { user: { id: USER }, authz: { platformRoles: [{ role: "platform_admin" }], clubRoles: [], teamRoles: [] } };
-const clubAdmin = { user: { id: USER }, authz: { platformRoles: [], clubRoles: [{ clubId: CLUB, role: "club_admin" }], teamRoles: [] } };
+// Roles V-1: the club admin's branch also asks can(variables.view) at the club, so the context carries the role's loaded
+// entry as loadAuthorizationContext builds it (a basic Club admin holds the word, v92).
+const clubEntry = (words = ["variables.view"], closedModules = []) => ({ scopeType: "club", scopeId: CLUB, clubId: CLUB, words, teamIds: [], closedModules });
+const clubAdmin = { user: { id: USER }, authz: { platformRoles: [], clubRoles: [{ clubId: CLUB, role: "club_admin" }], teamRoles: [], rolePermissions: [clubEntry()] } };
 const coach = { user: { id: USER }, authz: { platformRoles: [], clubRoles: [], teamRoles: [{ teamId: TEAM, role: "team_coach" }] } };
 
 // A fake bounded read: records each statement and answers the given row count.
@@ -99,4 +102,15 @@ test("6. no user, no authorization, no workspace or a club id that is not a uuid
   assert.equal(await resolveMappingAdminWith(read, platformAdmin, { type: "club", scopeId: "not-a-uuid" }), null);
   assert.equal(await resolveMappingAdminWith(read, clubAdmin, { type: "club", scopeId: null }), null);
   assert.equal(calls.length, 0);
+});
+
+test("7. roles V-1: a club admin without variables.view at the club, or with Data configuration closed by the club's licence, gets nothing, without a read; a platform admin is not limited", async () => {
+  const { read, calls } = fakeRead(1);
+  for (const entry of [clubEntry(["org.view"]), clubEntry(["variables.view"], ["data_configuration"])]) {
+    const req = { ...clubAdmin, authz: { ...clubAdmin.authz, rolePermissions: [entry] } };
+    assert.equal(await resolveMappingAdminWith(read, req, { type: "club", scopeId: CLUB }), null);
+  }
+  assert.equal(calls.length, 0);
+  const pa = { ...platformAdmin, authz: { ...platformAdmin.authz, rolePermissions: [clubEntry(["org.view"], ["data_configuration"])] } };
+  assert.equal((await resolveMappingAdminWith(fakeRead(1).read, pa, { type: "club", scopeId: CLUB })).basis, "platform_admin");
 });

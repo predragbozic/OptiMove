@@ -1,8 +1,9 @@
 // Roles V-0 (docs/ai/roles-v-steps-plan.md sections 3 and 4): the fail-closed sweep of the V steps, one row per module.
-// Disposable database, the real server. V-0 opens no module, so every row is "closed": an account holding EVERY view word
-// in a club_view workspace (and again with a forged `club` preference) gets from each module exactly what an account with
-// no role gets, and no write lands anywhere. Each module's V pull request turns its row to "open" and adds the checks of
-// the plan's section 4 for it (only the listed reads, club A only, the ceiling, old-vs-new, the word taken away, mutations).
+// Disposable database, the real server. A closed row: an account holding EVERY view word in a club_view workspace (and
+// again with a forged `club` preference) gets from that module exactly what an account with no role gets, and no write
+// lands anywhere. Each module's V pull request turns its row to "open" and adds the checks of the plan's section 4 for it
+// (only the listed reads, club A only, the ceiling, old-vs-new, the word taken away). V-1 opens data_configuration (test
+// 5) and presets (test 6).
 //
 // Also proven here, for the V steps to build on:
 //   - the old-role baseline: a basic Club admin and Team coach hold every view word of the modules at their club / team
@@ -30,16 +31,21 @@ const setPref = (who, type, scopeId) => k.query(
 const grant = async (who, userId, roleId, scopeType, scopeId) => ok(await srv.api(who.cookie, `${R}/assignments`, { method: "POST", body: {
   requestKey: key(), reason: "Needed", userId, roleId, scopeType, scopeId } })).assignment;
 const has = (text, ids) => ids.filter((id) => id && text.includes(String(id)));
-// A role of club A holding `words` (planted: the service refuses an unchecked word, O6), given to a new account.
-async function holderOf(label, words, scopeType = "club", scopeId = null) {
-  const role = ok(await srv.api(w.adminA.cookie, R, { method: "POST", body: {
-    requestKey: key(), clubId: w.A, scopeTypes: ["club", "team"], items: ["org.view"], name: `V ${key().slice(0, 6)}` } })).role;
+// A role of a club holding `words` (planted: the service refuses an unchecked word, O6), made by that club's admin.
+async function roleOf(words, { admin = w.adminA, club = w.A } = {}) {
+  const role = ok(await srv.api(admin.cookie, R, { method: "POST", body: {
+    requestKey: key(), clubId: club, scopeTypes: ["club", "team"], items: ["org.view"], name: `V ${key().slice(0, 6)}` } })).role;
   await k.query(`set session_replication_role = replica`);
   try {
     for (const word of words) await k.query(`insert into public.permission_role_items (role_id, permission_word) values ($1, $2) on conflict do nothing`, [role.id, word]);
   } finally {
     await k.query(`set session_replication_role = origin`);
   }
+  return role;
+}
+// A role of club A holding `words`, given to a new account.
+async function holderOf(label, words, scopeType = "club", scopeId = null) {
+  const role = await roleOf(words);
   const who = await person(label);
   await grant(w.adminA, who.id, role.id, scopeType, scopeId || w.A);
   return who;
@@ -63,10 +69,10 @@ const changed = (a, b) => Object.keys({ ...a, ...b }).filter((t) => a[t] !== b[t
 function rows() {
   const q = "from=2026-11-01&to=2026-11-30";
   return [
-    { module: "data_configuration", open: false,
+    { module: "data_configuration", open: true,
       reads: ["/api/training-load/sources/metrics/variables"],
       writes: [["POST", "/api/training-load/sources/metrics/variables", { name: "x" }]] },
-    { module: "presets", open: false,
+    { module: "presets", open: true,
       reads: ["/api/taxonomy/node-presets", "/api/taxonomy/template-tags", "/api/training-activity/session-types"],
       writes: [["POST", "/api/taxonomy/node-presets", { name: "x" }], ["POST", "/api/training-activity/session-types", { name: "x" }]] },
     { module: "athletes", open: false,
@@ -128,17 +134,17 @@ after(async () => {
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
 });
 
-test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows are exactly OPEN_VIEW_MODULES (none in V-0)", () => {
+test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows are exactly OPEN_VIEW_MODULES (V-1: data configuration, presets)", () => {
   const table = rows();
   assert.deepEqual(table.map((r) => r.module).sort(), Object.keys(MODULE_VIEW_WORDS).sort());
   assert.deepEqual(table.filter((r) => r.open).map((r) => r.module).sort(), [...OPEN_VIEW_MODULES].sort());
-  assert.deepEqual(OPEN_VIEW_MODULES, []);
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["data_configuration", "presets"]);
 });
 
 test("2. closed rows: every view word in club_view (and with a forged club preference) = an account with no role; no write lands; no preference is written", async () => {
   const hm = await me(w.all);
   assert.equal(hm.activeWorkspace.type, "club_view");
-  assert.deepEqual(hm.permissions, ["org.view"], "/me offers no word of a module that has not opened");
+  assert.deepEqual([...hm.permissions].sort(), ["org.view", "presets.use", "variables.view"], "/me offers only the words of open modules");
   const norm = (who, text) => text.split(who.id).join("<me>");
   for (const forged of [false, true]) {
     if (forged) await setPref(w.all, "club", w.A);
@@ -216,4 +222,220 @@ test("4. the entry gate on the real chain: with the word the listed read passes 
   assert.equal((await gateAnswer(holder, "GET", "/")).status, 403, "closed by the licence");
   ok(await srv.api(pa.cookie, `${R}/clubs/${w.A}/ceiling`, { method: "POST", body: { requestKey: key(), close: [], open: ["calendar"], reason: "Back" } }));
   assert.equal((await gateAnswer(holder, "GET", "/")).next, true, "reopened");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// V-1: the open rows (the plan's sections 2.1, 2.2 and 4).
+// ---------------------------------------------------------------------------------------------------------------------
+const M = "/api/training-load/sources/metrics";
+const RANDOM_ID = "6f0e8a52-8d0b-4a8e-9b51-3a3c0e0c0b11";
+const ceiling = async (pa, close, open) => ok(await srv.api(pa.cookie, `${R}/clubs/${w.A}/ceiling`, { method: "POST", body: { requestKey: key(), close, open, reason: "V-1 test" } }));
+const idsOf = (list) => list.map((r) => String(r.id));
+const sameAsNobody = async (who, p, label) => {
+  const a = await srv.api(who.cookie, p);
+  const b = await srv.api(w.nobody.cookie, p);
+  assert.equal(a.status, b.status, `${label} ${p}: ${a.status} vs ${b.status}`);
+  assert.equal(a.text.split(who.id).join("<me>"), b.text.split(w.nobody.id).join("<me>"), `${label} ${p}`);
+};
+async function writesLandNothing(who, writes, status) {
+  for (const [method, p, body] of writes) {
+    const before = await snapshot();
+    const a = await srv.api(who.cookie, p, { method, body });
+    assert.equal(a.status, status, `${method} ${p}: ${a.status} ${a.text.slice(0, 160)}`);
+    assert.deepEqual(changed(before, await snapshot()), [], `${method} ${p}: nothing written`);
+  }
+}
+
+test("5. data configuration (variables.view): club_view and team_view read the club's and the system variables in C99's reduced shape, read only; another club, the admin reads and every write are the identical 404; the word and the licence close it", async () => {
+  const pa = await person("paV1", (id) => F.grantPlatform(id));
+  const vbody = (label) => ({ requestKey: key(), label, unit: "m", levels: ["session", "drill"], dailyAggregationMethod: "sum" });
+  const sys = ok(await srv.api(pa.cookie, `${M}/variables`, { method: "POST", body: vbody(`Sys distance ${key().slice(0, 6)}`) }), 201).variable;
+  const varA = ok(await srv.api(w.adminA.cookie, `${M}/variables`, { method: "POST", body: vbody(`Alpha distance ${key().slice(0, 6)}`) }), 201).variable;
+  const varB = ok(await srv.api(w.adminB.cookie, `${M}/variables`, { method: "POST", body: vbody(`Beta distance ${key().slice(0, 6)}`) }), 201).variable;
+  const catA = ok(await srv.api(w.adminA.cookie, `${M}/classification/categories`, { method: "POST", body: { requestKey: key(), name: `Alpha load ${key().slice(0, 6)}` } }), 201);
+  const catB = ok(await srv.api(w.adminB.cookie, `${M}/classification/categories`, { method: "POST", body: { requestKey: key(), name: `Beta load ${key().slice(0, 6)}` } }), 201);
+  const nodeId = (r) => String((r.category || r.node || r).id);
+  const clubHolder = await holderOf("dcClub", ["variables.view"]);
+  const teamHolder = await holderOf("dcTeam", ["variables.view"], "team", w.TA1);
+  const coachShape = ok(await srv.api(w.coachA.cookie, `${M}/variables/${varA.id}`)).variable;
+  for (const [who, label] of [[clubHolder, "club_view"], [teamHolder, "team_view"]]) {
+    const own = ok(await srv.api(who.cookie, `${M}/variables`)).variables;
+    assert.deepEqual(idsOf(own), [String(varA.id)], `${label}: the club's own variables only`);
+    const system = ok(await srv.api(who.cookie, `${M}/variables?scope=system`)).variables;
+    assert.ok(idsOf(system).includes(String(sys.id)), `${label}: the system reference`);
+    for (const v of [...own, ...system]) {
+      assert.equal(v.editable, false, `${label}: read only`);
+      assert.deepEqual(v.actions, [], `${label}: no action`);
+      assert.equal(v.currentVersion, undefined, `${label}: the reduced view (no versions)`);
+    }
+    const one = ok(await srv.api(who.cookie, `${M}/variables/${varA.id}`)).variable;
+    assert.deepEqual(Object.keys(one).sort(), Object.keys(coachShape).sort(), `${label}: C99's coach shape`);
+    assert.equal(one.editable, false);
+    for (const id of [varB.id, RANDOM_ID]) {
+      const r = await srv.api(who.cookie, `${M}/variables/${id}`);
+      assert.deepEqual([r.status, r.body], [404, { error: "notFound" }], `${label}: another club's variable is the identical 404`);
+    }
+    const tree = ok(await srv.api(who.cookie, `${M}/classification`));
+    assert.ok(idsOf(tree.categories).includes(nodeId(catA)) && !idsOf(tree.categories).includes(nodeId(catB)), `${label}: the club's categories, never another club's`);
+    for (const node of [...tree.domains, ...tree.categories, ...tree.categoryDomains]) {
+      assert.equal(node.editable, false, `${label}: the classification read only`);
+      assert.deepEqual(node.actions, []);
+    }
+    for (const p of [`${M}/fields`, `${M}/mappings`, `${M}/targets`, `${M}/board`, `${M}/variables/key-suggestion?label=Speed`,
+      `${M}/conversions`, `${M}/activations`, `${M}/field-inventory`, `${M}/confirmations`]) {
+      const r = await srv.api(who.cookie, p);
+      assert.equal(r.status, 404, `${label} ${p}`);
+    }
+    await sameAsNobody(who, `${M}/fields`, label);
+    await writesLandNothing(who, [
+      ["POST", `${M}/variables`, vbody("Nope")],
+      ["POST", `${M}/variables/${varA.id}/rename`, { requestKey: key(), label: "Nope" }],
+      ["POST", `${M}/variables/${varA.id}/archive`, { requestKey: key() }],
+      ["POST", `${M}/variables/${sys.id}/hide`, { requestKey: key() }],
+    ], 404);
+  }
+  // The coach paths keep their answers with the word (old-vs-new): the club admin's admin view, the team coach's own club variable.
+  assert.equal(ok(await srv.api(w.adminA.cookie, `${M}/variables/${varA.id}`)).variable.editable, true);
+  assert.equal(coachShape.editable, true);
+  // The word taken away: an account holding only presets.use reads nothing here.
+  const other = await holderOf("dcOther", ["presets.use"]);
+  await sameAsNobody(other, `${M}/variables`, "no word");
+  await sameAsNobody(other, `${M}/variables/${varA.id}`, "no word");
+  // The licence closes the module for the role holder and for the club's old roles alike; reopened, all read again.
+  await ceiling(pa, ["data_configuration"], []);
+  try {
+    for (const who of [clubHolder, teamHolder, w.adminA, w.coachA]) {
+      const r = await srv.api(who.cookie, `${M}/variables`);
+      assert.deepEqual([r.status, r.body], [404, { error: "notFound" }], "closed by the licence");
+    }
+    assert.equal((await srv.api(w.adminB.cookie, `${M}/variables`)).status, 200, "another club keeps it");
+  } finally {
+    await ceiling(pa, [], ["data_configuration"]);
+  }
+  for (const who of [clubHolder, w.adminA, w.coachA]) assert.equal((await srv.api(who.cookie, `${M}/variables`)).status, 200, "reopened");
+});
+
+test("6. tags, presets and session types (presets.use): a view workspace reads the system rows and its club's (and teams') or team's only, never as a manager; every write is refused and lands nothing; a mixed account sees the view club only; the word and the licence close it", async () => {
+  const pa = await person("paV1p", (id) => F.grantPlatform(id));
+  const T = "/api/taxonomy";
+  const make = async (who, p, body) => {
+    const r = await srv.api(who.cookie, p, { method: "POST", body });
+    assert.equal(r.status, 201, r.text);
+    return r.body.preset || r.body.tag || r.body.row;
+  };
+  const n = (s) => `${s} ${key().slice(0, 6)}`;
+  const sysP = await make(pa, `${T}/node-presets`, { nodeType: "domain", name: n("Sys preset"), scope: "system" });
+  const aClubP = await make(w.adminA, `${T}/node-presets`, { nodeType: "domain", name: n("Alpha preset"), scope: "club", clubId: w.A });
+  const aTeamP = await make(w.adminA, `${T}/node-presets`, { nodeType: "domain", name: n("Alpha team preset"), scope: "team", teamId: w.TA1 });
+  const aUserP = await make(w.adminA, `${T}/node-presets`, { nodeType: "domain", name: n("Own preset") });
+  const bClubP = await make(w.adminB, `${T}/node-presets`, { nodeType: "domain", name: n("Beta preset"), scope: "club", clubId: w.B });
+  const aTag = await make(w.adminA, `${T}/template-tags`, { name: n("Alpha tag"), scope: "club", clubId: w.A });
+  const bTag = await make(w.adminB, `${T}/template-tags`, { name: n("Beta tag"), scope: "club", clubId: w.B });
+  const aLib = await make(w.adminA, `${T}/library/tag`, { name: n("Alpha lib"), scope: "club", clubId: w.A });
+  const bLib = await make(w.adminB, `${T}/library/tag`, { name: n("Beta lib"), scope: "club", clubId: w.B });
+  const ST = "/api/training-activity/session-types";
+  const aType = ok(await srv.api(w.adminA.cookie, ST, { method: "POST", body: { requestKey: key(), label: n("Alpha type") } })).type;
+  const bType = ok(await srv.api(w.adminB.cookie, ST, { method: "POST", body: { requestKey: key(), label: n("Beta type") } })).type;
+
+  const read = async (who) => ({
+    presets: ok(await srv.api(who.cookie, `${T}/node-presets`)).presets,
+    tags: ok(await srv.api(who.cookie, `${T}/template-tags`)).tags,
+    lib: ok(await srv.api(who.cookie, `${T}/library/tag`)).rows,
+    types: ok(await srv.api(who.cookie, ST)),
+  });
+  const clubHolder = await holderOf("prClub", ["presets.use"]);
+  const teamHolder = await holderOf("prTeam", ["presets.use"], "team", w.TA1);
+  const c = await read(clubHolder);
+  assert.deepEqual(idsOf(c.presets).filter((id) => [sysP, aClubP, aTeamP, aUserP, bClubP].some((p) => String(p.id) === id)).sort(),
+    idsOf([sysP, aClubP, aTeamP]).sort(), "club_view: system, the club's and its teams' rows; never another club's or a person's own");
+  assert.ok(c.presets.every((p) => p.can_manage === false), "never as a manager");
+  assert.ok(idsOf(c.tags).includes(String(aTag.id)) && !idsOf(c.tags).includes(String(bTag.id)));
+  assert.ok(idsOf(c.lib).includes(String(aLib.id)) && !idsOf(c.lib).includes(String(bLib.id)));
+  assert.ok(c.types.types.some((t) => t.key === aType.key) && !c.types.types.some((t) => t.key === bType.key), "the club's session types");
+  assert.ok(c.types.types.every((t) => t.editable === false) && c.types.canAdd === null, "session types read only");
+  const t = await read(teamHolder);
+  assert.deepEqual(idsOf(t.presets).filter((id) => [sysP, aClubP, aTeamP, aUserP, bClubP].some((p) => String(p.id) === id)).sort(),
+    idsOf([sysP, aTeamP]).sort(), "team_view: system and the team's rows");
+  assert.ok(t.types.types.some((x) => x.key === aType.key), "team_view: its team's club's session types");
+  // Every library kind's view read is valid SQL and gives the club's row of that kind (the security review's LOW 4).
+  // (An attractor cannot be created through the route today - its table's NOT NULL kind column is never filled, a
+  // 500 that predates V-1 - so for that kind only the read is checked.)
+  for (const kind of ["domain", "category", "section", "tag", "attractor"]) {
+    const row = kind === "attractor" ? null : await make(w.adminA, `${T}/library/${kind}`, { name: n(`Alpha ${kind}`), scope: "club", clubId: w.A });
+    for (const who of [clubHolder, teamHolder]) {
+      const rows = ok(await srv.api(who.cookie, `${T}/library/${kind}`)).rows;
+      if (row) assert.equal(idsOf(rows).includes(String(row.id)), who === clubHolder, `${kind}: the club's row for club_view only`);
+      assert.ok(rows.every((r) => r.can_manage === false), kind);
+    }
+  }
+  // An archived team's rows are not "its teams" (as the other V-1 reads, and as no team_view is offered for it).
+  const archivedTeam = await F.team(w.A, "TA-archived");
+  const archivedP = await make(w.adminA, `${T}/node-presets`, { nodeType: "domain", name: n("Archived team preset"), scope: "team", teamId: archivedTeam });
+  await k.query(`update public.teams set is_active = false where id = $1`, [archivedTeam]);
+  assert.ok(!idsOf(ok(await srv.api(clubHolder.cookie, `${T}/node-presets`)).presets).includes(String(archivedP.id)), "no archived team's preset");
+  // The coach path's can() compares canonical ids: a club id sent in upper case is accepted as before V-1.
+  const upper = await make(w.adminA, `${T}/node-presets`, { nodeType: "domain", name: n("Upper id preset"), scope: "club", clubId: String(w.A).toUpperCase() });
+  assert.equal(String(upper.owner_club_id), String(w.A).toLowerCase());
+  assert.equal((await srv.api(w.adminA.cookie, `${T}/node-presets`, { method: "POST", body: { nodeType: "domain", name: "Nope", scope: "club", clubId: "not-a-uuid" } })).status, 403,
+    "a club id that is not a uuid is outside the caller's access");
+  // Only the three reads; every write answers what requireCoach / the session-type router answer, and lands nothing.
+  for (const who of [clubHolder, teamHolder]) {
+    assert.equal((await srv.api(who.cookie, `${T}/library/bogus`)).status, 403, "a kind not on the list");
+    await writesLandNothing(who, [
+      ["POST", `${T}/node-presets`, { nodeType: "domain", name: "Nope", scope: "club", clubId: w.A }],
+      ["PATCH", `${T}/node-presets/${aClubP.id}`, { name: "Nope" }],
+      ["DELETE", `${T}/node-presets/${sysP.id}`, undefined],
+      ["DELETE", `${T}/template-tags/${aTag.id}`, undefined],
+      ["POST", `${T}/library/tag`, { name: "Nope", scope: "club", clubId: w.A }],
+    ], 403);
+    await writesLandNothing(who, [
+      ["POST", ST, { requestKey: key(), label: "Nope" }],
+      ["POST", `${ST}/${aType.key}/rename`, { requestKey: key(), label: "Nope" }],
+      ["POST", `${ST}/${aType.key}/archive`, { requestKey: key() }],
+    ], 404);
+  }
+  // Old-vs-new for the coaches (they hold the word): the club admin keeps every row it managed, the team coach its team's.
+  // (Today's list leaves a team's rows out for a club admin without a team role, while it may manage them; unchanged.)
+  const adminRows = idsOf(ok(await srv.api(w.adminA.cookie, `${T}/node-presets`)).presets);
+  for (const p of [sysP, aClubP, aUserP]) assert.ok(adminRows.includes(String(p.id)), "club admin");
+  assert.ok(!adminRows.includes(String(bClubP.id)) && !adminRows.includes(String(aTeamP.id)));
+  const coachRows = idsOf(ok(await srv.api(w.coachA.cookie, `${T}/node-presets`)).presets);
+  assert.ok(coachRows.includes(String(aTeamP.id)) && coachRows.includes(String(sysP.id)) && !coachRows.includes(String(aClubP.id)), "team coach");
+  // A mixed account: club A's admin who also holds a club B role, in club_view B, sees club B's rows only.
+  const roleB = await roleOf(["presets.use"], { admin: w.adminB, club: w.B });
+  await grant(w.adminB, w.adminA.id, roleB.id, "club", w.B);
+  // A stored club B preference: without an old role there, workspace.js maps it to club_view B.
+  await setPref(w.adminA, "club", w.B);
+  try {
+    assert.equal((await me(w.adminA)).activeWorkspace.type, "club_view");
+    const mixed = idsOf(ok(await srv.api(w.adminA.cookie, `${T}/node-presets`)).presets);
+    assert.ok(mixed.includes(String(bClubP.id)), "club B's row");
+    for (const p of [aClubP, aTeamP, aUserP]) assert.ok(!mixed.includes(String(p.id)), "never club A's or its own rows in club B's view");
+    assert.equal((await srv.api(w.adminA.cookie, `${T}/node-presets`, { method: "POST", body: { nodeType: "domain", name: "Nope", scope: "club", clubId: w.A } })).status, 403,
+      "no write from a view workspace, even for the club it administers");
+  } finally {
+    await setPref(w.adminA, "club", w.A);
+  }
+  // The word taken away.
+  const other = await holderOf("prOther", ["variables.view"]);
+  await sameAsNobody(other, `${T}/node-presets`, "no word");
+  await sameAsNobody(other, ST, "no word");
+  // The licence: closed for club A, the role holders are refused and the old roles keep only the system and own rows.
+  await ceiling(pa, ["presets"], []);
+  try {
+    for (const who of [clubHolder, teamHolder]) {
+      assert.equal((await srv.api(who.cookie, `${T}/node-presets`)).status, 403);
+      assert.equal((await srv.api(who.cookie, ST)).status, 404);
+    }
+    const closed = idsOf(ok(await srv.api(w.adminA.cookie, `${T}/node-presets`)).presets);
+    assert.ok(closed.includes(String(sysP.id)) && closed.includes(String(aUserP.id)), "system and own rows stay");
+    assert.ok(!closed.includes(String(aClubP.id)) && !closed.includes(String(aTeamP.id)), "the club's rows are closed");
+    assert.equal((await srv.api(w.adminA.cookie, `${T}/node-presets/${aClubP.id}`, { method: "PATCH", body: { name: "Nope" } })).status, 403);
+    const types = ok(await srv.api(w.adminA.cookie, ST));
+    assert.ok(!types.types.some((x) => x.key === aType.key) && types.canAdd === null, "the club's session types closed");
+    assert.equal((await srv.api(w.adminB.cookie, `${T}/node-presets`)).status, 200, "another club keeps it");
+  } finally {
+    await ceiling(pa, [], ["presets"]);
+  }
+  assert.equal((await srv.api(clubHolder.cookie, `${T}/node-presets`)).status, 200, "reopened");
 });

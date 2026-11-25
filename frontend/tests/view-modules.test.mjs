@@ -36,7 +36,7 @@ test("1. the module keys, words and open list are the backend's (moduleView.js)"
   assert.deepEqual(vm.MODULE_VIEW_WORDS, words);
   const open = src.match(/OPEN_VIEW_MODULES = Object\.freeze\(\[([^\]]*)\]\)/)[1].split(",").map((s) => s.trim().replace(/"/g, "")).filter(Boolean);
   assert.deepEqual([...vm.OPEN_VIEW_MODULES], open);
-  assert.deepEqual(open, [], "V-0 opens no module");
+  assert.deepEqual(open, ["data_configuration", "presets"], "V-1 opens Data configuration and Tags & Presets");
   for (const place of vm.VIEW_NAV_PLACES) for (const m of place.modules) assert.ok(Object.hasOwn(vm.MODULE_VIEW_WORDS, m), m);
 });
 
@@ -45,18 +45,38 @@ test("2. the places cover exactly the menu R4-4 hides in a view workspace", () =
   assert.deepEqual([...vm.VIEW_BASE_TABS], [...nav.VIEW_WORKSPACE_TABS]);
 });
 
-test("3. V-0: a view workspace holding every view word still sees only Home, Settings (Overview, Clubs, Teams) and Account", () => {
+test("3. V-1: a view workspace holding every view word sees Home, Settings (Overview, Clubs, Teams, Tags & Presets), Training Load and Account; nothing else", () => {
   as(CLUB_VIEW, ["org.view", ...Object.values(vm.MODULE_VIEW_WORDS)]);
-  for (const module of Object.keys(vm.MODULE_VIEW_WORDS)) assert.equal(vm.viewModuleOpen(module), false, module);
-  assert.deepEqual(vm.viewHiddenMenuSelectors().sort(), [...nav.VIEW_WORKSPACE_MENU_HIDDEN].sort());
-  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS]);
-  assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams"]);
+  for (const module of Object.keys(vm.MODULE_VIEW_WORDS)) {
+    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets"].includes(module), module);
+  }
+  const shown = ['[data-library-tab="training-load"]'];
+  assert.deepEqual(vm.viewHiddenMenuSelectors().sort(), nav.VIEW_WORKSPACE_MENU_HIDDEN.filter((s) => !shown.includes(s)).sort());
+  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "training-load"]);
+  assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams", "presets"]);
+  assert.deepEqual(vm.viewTrainingLoadSections(), ["variables"]);
   nav.renderAccessNav();
   for (const selector of nav.VIEW_WORKSPACE_MENU_HIDDEN) {
     const el = document.querySelector(selector);
     const target = el.id === "athleteSearch" ? el.closest(".search-field") || el : el;
-    assert.equal(target.hidden, true, selector);
+    assert.equal(target.hidden, !shown.includes(selector), selector);
   }
+  // Without the words, the V-0 picture: only Home, Settings (Overview, Clubs, Teams) and Account.
+  as(CLUB_VIEW, ["org.view"]);
+  assert.deepEqual(vm.viewHiddenMenuSelectors().sort(), [...nav.VIEW_WORKSPACE_MENU_HIDDEN].sort());
+  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS]);
+  assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams"]);
+  assert.deepEqual(vm.viewTrainingLoadSections(), []);
+});
+
+test("3b. V-1: Training Load in a view workspace stays on Data configuration's Variables; other workspaces keep their section", () => {
+  as(CLUB_VIEW, ["org.view", "variables.view"]);
+  for (const s of ["schedule", "today", "analysis", "imports", "source-fields", "mappings", "board", "variables"]) {
+    assert.equal(vm.viewSafeTrainingLoadSection(s), "variables", s);
+  }
+  as({ type: "club", scopeId: CLUB }, ["variables.view"]);
+  assert.equal(vm.viewTrainingLoadSections(), null);
+  assert.equal(vm.viewSafeTrainingLoadSection("schedule"), "schedule", "a coach workspace keeps its own rules");
 });
 
 test("4. an opened module (inside the test): its place, tab and Settings section open only with its word; other places stay hidden", () => {

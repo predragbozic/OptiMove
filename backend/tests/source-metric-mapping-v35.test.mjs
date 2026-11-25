@@ -81,8 +81,8 @@ async function applyV35(url) {
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V35), "v35 is a test migration");
   [rdb, db] = await Promise.all([
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v35rb", migrations: UP_TO_V34 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v35", migrations: UP_TO_V34 }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v35rb", migrations: UP_TO_V34, roleRead: true }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v35", migrations: UP_TO_V34, roleRead: true }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });

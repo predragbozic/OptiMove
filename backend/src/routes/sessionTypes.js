@@ -4,6 +4,7 @@
 import { Router } from "express";
 import { isPoolCheckoutTimeout } from "../db.js";
 import { resolveCalendarContext } from "../calendarAccess.js";
+import { viewEntryGate } from "../moduleView.js";
 import {
   archiveSessionType, createSessionType, listSessionTypes, renameSessionType, restoreSessionType, SessionTypeError,
 } from "../sessionTypeService.js";
@@ -11,7 +12,14 @@ import {
 const router = Router();
 const NOT_FOUND_BODY = Object.freeze({ error: "notFound", message: "Not found." });
 
+// Roles V-1 (docs/ai/roles-v-steps-plan.md section 2.2): a view workspace (club_view / team_view) reaches only the list,
+// with presets.use, and reads its club's types; every write answers it the identical 404.
+router.use(viewEntryGate("presets", [{ method: "GET", path: "/" }], {
+  refuse: (_req, res) => res.status(404).set("Cache-Control", "no-store").json(NOT_FOUND_BODY),
+}));
+
 async function contextOf(req) {
+  if (req.moduleView) return { moduleView: req.moduleView, workspace: null, userId: req.user.id, authz: req.authz };
   const c = await resolveCalendarContext(req);
   return { accountType: c.type, workspace: c.workspace ?? null, userId: req.user.id, authz: req.authz };
 }

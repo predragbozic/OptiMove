@@ -22,7 +22,8 @@
 //   - req.moduleView means "a read context for a view workspace"; a write never checks it as a permission.
 //   - A gated route reads req.moduleView.workspace / .scope and does not resolve the workspace again.
 //
-// V-0 opens no module: OPEN_VIEW_MODULES is empty and no router mounts the gate yet. Each module's V pull request adds its
+// V-0 opened no module; V-1 opens data_configuration (routes/sourceMetrics.js) and presets (routes/taxonomy.js through
+// server.js, routes/sessionTypes.js). Each module's V pull request adds its
 // key to OPEN_VIEW_MODULES, mounts the gate with its reads, adds its word to ENFORCED_PERMISSIONS and
 // VIEW_WORKSPACE_USABLE_WORDS (permissions.js), and its row to backend/tests/roles-v-sweep.test.mjs.
 import { isPlatformAdministrator } from "./authz.js";
@@ -45,7 +46,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 });
 
 // The modules a view workspace may read. A module enters here only in its own V pull request, with its entry gate.
-export const OPEN_VIEW_MODULES = Object.freeze([]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets"]);
 
 // The base scope of each view workspace type (the club or team it names).
 const VIEW_SCOPE_TYPES = Object.freeze({ club_view: "club", team_view: "team" });
@@ -91,10 +92,14 @@ function compileRoute(route) {
   const params = route.params || {};
   const parts = path.split("/").filter(Boolean).map((p) => {
     if (!p.startsWith(":")) return (segment) => segment === p;
-    const pattern = Object.hasOwn(params, p.slice(1)) ? params[p.slice(1)] : UUID_SEGMENT;
-    if (!(pattern instanceof RegExp) || !pattern.source.startsWith("^") || !pattern.source.endsWith("$")) {
-      throw new Error(`Bad view route parameter (a closed ^…$ pattern): ${JSON.stringify(route)}`);
+    if (!Object.hasOwn(params, p.slice(1))) return (segment) => UUID_SEGMENT.test(segment);
+    const given = params[p.slice(1)];
+    // A custom pattern is wrapped whole, `^(?:…)$`, so an alternation such as /^a|b$/ cannot match a prefix or a suffix
+    // alone; the g, y and m flags are refused (g and y keep state between test() calls, m lets ^ and $ match per line).
+    if (!(given instanceof RegExp) || !given.source.startsWith("^") || !given.source.endsWith("$") || /[gym]/.test(given.flags)) {
+      throw new Error(`Bad view route parameter (a closed ^…$ pattern without g, y or m): ${JSON.stringify(route)}`);
     }
+    const pattern = new RegExp(`^(?:${given.source})$`, given.flags);
     return (segment) => pattern.test(segment);
   });
   return (req) => {
