@@ -605,6 +605,10 @@ decided.
   - the licence closing reads and writes for role holders and the club's old roles.
 - Mutations killed: the coach path's `calendar.view` check dropped; the name gate forced open.
 - e2e: `roles-v3-view-calendar.test.mjs` at 1280, 390 and 360 px.
+- The suites that list the checked words take `calendar.view`, as V-1 did for its words: `me-permissions-r3` (both
+  basic roles), `roles-r4-2-view-workspace` test 11 (/me; the calendar reads leave its list), `roles-r4-api` tests 1
+  and 2, `roles-r4-3-api` tests 1, 2 and 6 (`dashboards.view` is now their unchecked word), `permission-roles-v84` 2b
+  (`LATER`).
 - **Older suites:** `startCalendarApp` (`backend/tests/support/calendar-fixture.mjs`) builds its database with
   `roleRead: true`. `central-calendar-k2b-settings` builds only up to v51, so a coach's `can(calendar.view)` failed
   closed there (`503 permissions_unavailable`). It is a no-op for the suites whose list has v84 and v92.
