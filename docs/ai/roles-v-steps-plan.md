@@ -1333,3 +1333,24 @@ None new: P-1, P-2 and R4 section 6 decide every point above.
 - Word lists: the five suites named in V-1..V-3 take `programs.view` and `exercises.use`; checked-gates A1/A2, B1, B3.
 - Frontend: `roles-v7-view.test.mjs`; e2e `roles-v7-view-programs-exercises.test.mjs` at 1280, 390 and 360 px; the
   builder, program library and exercise library e2e unchanged.
+
+## V package as built
+
+| Step | Release | Behaviour |
+| --- | --- | --- |
+| Mixed-account central fix | #775, `81c2b186` | A request handed from a club or team view gate to a legacy router uses roleless authorization for that request. Old roles in other clubs grant no access through that handoff. |
+| V-6 Dashboards | #772, `c4b0a903` | `dashboards.view` admits the listed read routes for the active club or team. Dashboard owner and data workspace checks remain separate. Page reads are read-only and P3 reference bindings and resolution stay closed in view workspaces. |
+| V-7 Programs and exercises | #773, `102032c4` | `programs.view` opens the public Program Library and published athlete plans within the allowed scope. Athlete plans also require `athletes.view`. `exercises.use` opens the read-only Exercise Library for system exercises. Builder and writes stay closed in view workspaces. |
+| V-5b Training Load view reads | #776, `4097071f` | `load.view.team` opens scoped team reads. Named reads require `load.view.athlete` and the applicable Athletes access. The athlete licence check covers own-load reads, RPE entry and prompts, with unrelated Calendar features still available. |
+| Role assignment entry | #777, `a370c59b` | Users → Manage account → Give a role opens the existing assignment flow inside the selected person's profile. The server checks and existing club/team scope rules are unchanged. |
+
+The V-6, V-7 and V-5b frozen heads each ran all 209 disposable backend files on Node 22.22.0
+and PostgreSQL 17 and received independent GO. The 185 pass, one known-fail, 19 fail and four crash
+file outcomes and the failing test titles match the preceding baseline for each release. The role sweep
+passed 11, 13 and 15 cases respectively. The #777 integrated browser run passed 7/7, including a
+custom club-role assignment and holding read-back with the profile tested at 360, 375, 390 and 1280px.
+These release steps added no migration.
+
+The next package is the M steps for write access. Calendar and Training Load come first, with imports
+last. Each slice specifies the active workspace, write words, licence ceiling and legacy response before
+implementation. PL-1 through PL-5 follow M.
