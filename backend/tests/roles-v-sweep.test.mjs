@@ -772,6 +772,16 @@ test("8. dashboards (dashboards.view): club_view and team_view list, open and qu
   } finally {
     await setPref(w.adminB, "club", w.B);
   }
+  // A platform admin holding club A's dashboards role, in club_view A: limited like anyone there (no shortcut); the
+  // pages read never offers managing (canManageDashboardRow's view line).
+  const paView = await person("paViewV6", (id) => F.grantPlatform(id));
+  await grant(w.adminA, paView.id, roleA.id, "club", w.A);
+  await setPref(paView, "club", w.A);
+  assert.equal((await me(paView)).activeWorkspace.type, "club_view");
+  const paListed = idsOf(ok(await srv.api(paView.cookie, D)).dashboards);
+  assert.ok(paListed.includes(String(dA.id)) && !paListed.includes(String(dB.id)) && !paListed.includes(String(dPriv.id)), "no platform shortcut in a view workspace");
+  assert.equal(ok(await srv.api(paView.cookie, `${D}/${dA.id}/pages`)).canManage, false, "never offered managing");
+  assert.equal(ok(await srv.api(paView.cookie, `${D}/${dA.id}/pages/${pageA}`)).canManage, false);
   // Old-vs-new: the coaches keep their dashboards, managing as before.
   const adminList = idsOf(ok(await srv.api(w.adminA.cookie, D)).dashboards);
   for (const d of [dA, dPriv, tSys]) assert.ok(adminList.includes(String(d.id)), `club admin lists ${d.name}`);
