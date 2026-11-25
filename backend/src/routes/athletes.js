@@ -6,8 +6,16 @@ import { buildPrograms, buildWeeks } from "../utils/grouping.js";
 import { canAccessAthlete } from "../access.js";
 import { currentAthleteRosterScope } from "../athleteRosterScope.js";
 import { linkedSessionTimes } from "../linkedSessionTimes.js";
+import { viewEntryGate } from "../moduleView.js";
 
 const router = Router();
+
+// Roles V-2 (docs/ai/roles-v-steps-plan.md section 9): a view workspace (club_view / team_view) with athletes.view at its
+// club or team reads the athlete list of its workspace (GET /) and nothing else here. Every other request of a view
+// workspace - /today and /training-days (plan data), /:id/plans and /:id/program-data (programs.view), or any read
+// without the word - is handed on unchanged (no req.moduleView), so the router answers it exactly as it did before V-2
+// (the roster scope of a view workspace is `and false`; canAccessAthlete reads the old role rows only).
+router.use(viewEntryGate("athletes", [{ method: "GET", path: "/" }], { refuse: (_req, _res, next) => next() }));
 
 // Kept local, the same small validators trainingLoad.js and tests.js keep in
 // their own route modules.
@@ -61,6 +69,8 @@ router.get("/", async (req, res, next) => {
       order by nullif(regexp_replace(coalesce(a.source_external_id, a.athlete_id), '\\D', '', 'g'), '')::numeric nulls last,
                athlete_name
     `, filter.params);
+    // A view workspace's list carries no plan counts: they are program data (programs.view), not athletes.view.
+    const viewer = req.moduleView?.module === "athletes";
     res.json({
       mode: "admin",
       adminRows: result.rows.map((row) => ({
@@ -68,8 +78,8 @@ router.get("/", async (req, res, next) => {
         athlete_id: row.athlete_source_external_id || row.athlete_id,
         athlete: row.athlete_name,
         athlete_image_url: row.athlete_image_url || "",
-        weekly_plan_count: Number(row.weekly_plan_count || 0),
-        program_count: Number(row.program_count || 0),
+        weekly_plan_count: viewer ? null : Number(row.weekly_plan_count || 0),
+        program_count: viewer ? null : Number(row.program_count || 0),
       })),
       rows: [],
     });

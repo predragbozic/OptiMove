@@ -23,7 +23,8 @@
 //   - A gated route reads req.moduleView.workspace / .scope and does not resolve the workspace again.
 //
 // V-0 opened no module; V-1 opens data_configuration (routes/sourceMetrics.js) and presets (routes/taxonomy.js through
-// server.js, routes/sessionTypes.js); V-3 opens calendar (routes/calendar.js, routes/calendarEvents.js, and the gate with
+// server.js, routes/sessionTypes.js); V-2 opens athletes (routes/athletes.js, routes/positions.js, the athletes of
+// routes/organization.js GET /); V-3 opens calendar (routes/calendar.js, routes/calendarEvents.js, and the gate with
 // no read on routes/calendarSettings.js; calendarModuleContext.js). Each module's V pull request adds its
 // key to OPEN_VIEW_MODULES, mounts the gate with its reads, adds its word to ENFORCED_PERMISSIONS and
 // VIEW_WORKSPACE_USABLE_WORDS (permissions.js), and its row to backend/tests/roles-v-sweep.test.mjs.
@@ -47,7 +48,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 });
 
 // The modules a view workspace may read. A module enters here only in its own V pull request, with its entry gate.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "calendar"]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar"]);
 
 // The base scope of each view workspace type (the club or team it names).
 const VIEW_SCOPE_TYPES = Object.freeze({ club_view: "club", team_view: "team" });
@@ -117,8 +118,9 @@ function forbidden(_req, res) {
 
 // `refuse(req, res, next)` answers what the module's router answers today to an account without a role (403 Forbidden
 // unless the module says otherwise, e.g. its identical 404). A module whose routes already answer a view workspace
-// that way (V-3, the calendar: no context) may instead mark the request and call `next()` without req.moduleView, so
-// each route gives its own pre-V answer. `resolve` and `open` are injectable for the unit tests only.
+// read-only and fail-closed (V-2, athletes; V-3, the calendar: no context) may instead call `next()` without
+// req.moduleView (V-3 also marks the request), so each route gives its own pre-V answer. `resolve` and `open` are
+// injectable for the unit tests only.
 export function viewEntryGate(module, readRoutes, {
   refuse = forbidden, resolve = resolveActiveWorkspaceReadOnly, open = OPEN_VIEW_MODULES,
 } = {}) {

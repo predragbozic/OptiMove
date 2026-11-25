@@ -20,6 +20,7 @@ import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { boundedText } from "./metricTextRules.js";
 import { holdsClubAdminRole, holdsTeamCoachRole, isPlatformAdministrator } from "./authz.js";
+import { can, clubScope, teamScope } from "./permissions.js";
 
 export const NAME_MAX = 60;
 export const SPORT_NAME = "Football";
@@ -48,6 +49,7 @@ function withinBound(promise, ms) {
 
 // The workspace's club and team (null club: the platform's system list only), or a refusal.
 async function workspaceScope(ctx, client) {
+  if (ctx.accountType === "view") return viewWorkspaceScope(ctx, client);
   if (ctx.accountType !== "coach") throw notFound();
   const w = ctx.workspace;
   if (!w) throw notFound();
@@ -57,6 +59,29 @@ async function workspaceScope(ctx, client) {
     const r = await client.query(`select club_id from public.teams where id = $1 and is_active = true`, [w.scopeId]);
     if (!r.rowCount || !r.rows[0].club_id) throw notFound();
     return { clubId: String(r.rows[0].club_id), teamId: String(w.scopeId) };
+  }
+  throw notFound();
+}
+
+// Roles V-2 (docs/ai/roles-v-steps-plan.md section 9): a view workspace (club_view / team_view) that the athletes
+// module's entry gate let through (routes/positions.js: can(athletes.view) at its club or team) reads its club's list and
+// its athletes' positions, never a write (writableOwner and settingBasis answer null for it). The club must be active;
+// for team_view, the team and its club.
+async function viewWorkspaceScope(ctx, client) {
+  const scope = ctx.viewScope;
+  if (scope?.type === "club") {
+    const r = await client.query(`select id from public.clubs where id = $1::uuid and coalesce(is_active, true)`, [scope.id]);
+    if (!r.rowCount) throw notFound();
+    return { clubId: String(scope.id), teamId: null };
+  }
+  if (scope?.type === "team") {
+    const r = await client.query(
+      `select t.club_id from public.teams t join public.clubs c on c.id = t.club_id
+        where t.id = $1::uuid and coalesce(t.is_active, true) and coalesce(c.is_active, true)`,
+      [scope.id],
+    );
+    if (!r.rowCount || !r.rows[0].club_id) throw notFound();
+    return { clubId: String(r.rows[0].club_id), teamId: String(scope.id) };
   }
   throw notFound();
 }
@@ -433,8 +458,15 @@ export async function listAthletePositions(ctx) {
   const client = await pool.connect();
   try {
     const scope = await workspaceScope(ctx, client);
-    const setter = settingBasis(ctx, scope);
-    if (!setter) throw notFound();
+    const viewer = ctx.accountType === "view";
+    // The coach path also asks for athletes.view at its workspace's club or team (roles V-2, R4 section 6): a club whose
+    // version or licence takes the word away shows its athletes' positions to nobody but a platform admin.
+    if (!viewer) {
+      const setter = settingBasis(ctx, scope);
+      if (!setter) throw notFound();
+      const wordScope = ctx.workspace.type === "team" ? teamScope(String(ctx.workspace.scopeId)) : clubScope(scope.clubId);
+      if (!can(ctx.authz, "athletes.view", wordScope)) throw notFound();
+    }
     const athletes = scopeAthletesSql(scope);
     const rows = (await client.query(
       `with a as (${athletes.sql})
@@ -443,7 +475,7 @@ export async function listAthletePositions(ctx) {
     )).rows;
     return {
       clubId: scope.clubId,
-      canSet: true,
+      canSet: !viewer,
       assignments: rows.filter((r) => r.position_id).map((r) => ({ athleteId: String(r.athlete_id), positionId: String(r.position_id) })),
     };
   } finally {
