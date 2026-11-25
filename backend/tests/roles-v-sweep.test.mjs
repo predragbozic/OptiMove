@@ -512,6 +512,11 @@ test("7. athletes (athletes.view): a view workspace reads its club's or team's a
     const org = await orgOf(w.adminB);
     assert.deepEqual(org.athletes.map((a) => String(a.id)).sort(), clubIds, "mixed: club A's organization athletes");
     assert.deepEqual(has(JSON.stringify(org), foreign), [], "mixed: nothing of club B");
+    // Pinned, not changed by V-2 (recorded in the plan's section 10): a read the athletes gate hands on unchanged still
+    // answers from the account's OLD roles, whatever the active workspace - club B's admin reads its club B athlete's
+    // plans while in club_view A, as before V-2. The view role itself gives nothing there.
+    assert.equal((await srv.api(w.adminB.cookie, `/api/athletes/${athB.id}/plans`)).status, 200, "mixed hand-on read: club B, its old role, as before");
+    assert.equal((await srv.api(w.adminB.cookie, `/api/athletes/${w.athA.id}/plans`)).status, 403, "mixed hand-on read: nothing of club A through the view role");
     // The view role gives no write in club A (organization writes check the old roles, as before V-2; a write for
     // club B, which it administers, is unchanged by the active workspace and is not a V-2 question).
     await writesLandNothing(w.adminB, [["POST", "/api/organization/athletes", { fullName: "Nope Vtwo", clubId: w.A }],
@@ -525,9 +530,20 @@ test("7. athletes (athletes.view): a view workspace reads its club's or team's a
   await sameAsNobody(other, "/api/athletes", "no word");
   assert.deepEqual((await orgOf(other)).athletes, [], "no word: no organization athletes");
   assert.equal((await srv.api(other.cookie, "/api/positions/athletes")).status, 404, "no word: no positions");
+  // The two branches the word never narrows (R4 Q10): a private-coach link and the athlete's own login.
+  const privateCoach = await person("atPrivate");
+  await k.query(`insert into public.user_athletes (user_id, athlete_id, relationship_type, is_active) values ($1, $2, 'coach', true)`, [privateCoach.id, w.athA.id]);
+  const ownLogin = await person("atOwn");
+  await k.query(`update public.athletes set user_id = $1 where id = $2`, [ownLogin.id, athA2.id]);
+  for (const [who, id, label] of [[privateCoach, w.athA.id, "private-coach link"], [ownLogin, athA2.id, "own login"]]) {
+    assert.equal((await srv.api(who.cookie, `/api/athletes/${id}/plans`)).status, 200, `${label}: as before V-2`);
+  }
   // The licence closes Athletes for club A: the role holders AND the club's old roles lose every reader of the word.
   await ceiling(pa, ["athletes"], []);
   try {
+    for (const [who, id, label] of [[privateCoach, w.athA.id, "private-coach link"], [ownLogin, athA2.id, "own login"]]) {
+      assert.equal((await srv.api(who.cookie, `/api/athletes/${id}/plans`)).status, 200, `licence: the ${label} is not narrowed by the word`);
+    }
     for (const who of [clubHolder, teamHolder]) {
       await sameAsNobody(who, "/api/athletes", "licence");
       assert.deepEqual((await orgOf(who)).athletes, [], "licence: no organization athletes");

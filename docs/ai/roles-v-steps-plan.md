@@ -657,8 +657,17 @@ the word taken away; the licence closes it for role holders, the club admin and 
 never limited; reopened). `athlete-roster-scope` (the view branch fails closed without the gate's pass). Frontend
 `roles-v2-view.test.mjs`; e2e `roles-v2-view-athletes.test.mjs` at 1280, 390 and 360 px.
 
+Test 7 also pins the two branches the word never narrows (a private-coach link and the athlete's own login: their
+`/plans` stays 200 with the licence closed) and the mixed account's hand-on reads (below). Section 9's "a minor's data
+only in its own club" has no test of its own: no rule reads an athlete's age, so it is the same check as "another club's
+athletes never", which test 7 makes for every read.
+
 **Recorded, not built.**
 - A mixed account (club B's admin, a view role in club A) in `club_view` A can still write to club B's athletes through
   the organization routes: those writes check the old roles, not the active workspace, as before V-2.
+- The same account's reads that the athletes gate hands on unchanged (`/:id/plans`, `/:id/program-data`, `/today`,
+  `/training-days`) still answer from its old roles in club B while `club_view` A is active, as before V-2 (pinned in
+  test 7: club B's athlete's plans 200, club A's 403). Closing it means answering those routes in a view workspace with
+  what an account without a role gets, instead of `next()`; a manager's decision.
 - A view-workspace read the gate hands on unchanged (`/today`, `/training-days`) still resolves the workspace with the
   preference-writing resolver, as before V-2.
