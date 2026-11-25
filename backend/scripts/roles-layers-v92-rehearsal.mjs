@@ -161,8 +161,15 @@ export async function rehearse(args, password) {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-roles92-rehearsal-"));
     const before = path.join(tmp, "migrations_v2");
     fs.mkdirSync(before);
-    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V92_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
+    // The migrations that replace v92's bodies (v95, v96) need v92 in force and the v92 rollback refuses after them: they
+    // never enter this rehearsal. Every other file does (v93 before v92, as on production). The runner records a
+    // migration by its folder's name, so both folders are called migrations_v2.
+    const dependents = ["202611271000_roles_v95_closed_module_dominance.sql", "202611281000_roles_v96_licence_hierarchy.sql"];
+    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V92_FILE && !dependents.includes(f)) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
     await runMigrations({ databaseUrl: url, migrationsRoot: before });
+    const upToV92 = path.join(tmp, "with-v92", "migrations_v2");
+    fs.mkdirSync(upToV92, { recursive: true });
+    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && !dependents.includes(f)) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(upToV92, f));
     const c = new pg.Client({ connectionString: url });
     await c.connect();
     try {
@@ -188,7 +195,7 @@ export async function rehearse(args, password) {
       report("2. preflight: every ok column true", preFalse.length === 0, preFalse.join(", "));
 
       // 3. Apply.
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upToV92 });
       const recorded = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows;
       const sha = crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V92_FILE))).digest("hex");
       report("3. v92 applied by the runner after v93, recorded once with the file's sha256", recorded.length === 1 && recorded[0].checksum === sha);
@@ -239,7 +246,7 @@ export async function rehearse(args, password) {
 
       // 5. The runner again.
       const count = Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count);
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upToV92 });
       report("5. the runner again: v92 skipped by its checksum", Number((await c.query(`select count(*) from public.schema_migrations`)).rows[0].count) === count);
 
       // 6. Rollback (allowed: v93 was applied before v92).
@@ -251,7 +258,7 @@ export async function rehearse(args, password) {
         sameCatalog ? "" : Object.keys(catalogBefore).filter((k) => catalogBefore[k] !== catalogAfter[k]).join(", "));
 
       // 7. Apply again.
-      await runMigrations({ databaseUrl: url, migrationsRoot: MIGRATIONS });
+      await runMigrations({ databaseUrl: url, migrationsRoot: upToV92 });
       const bad2 = await postCheck();
       report("7. v92 applied again; the post-check again", bad2.length === 0, bad2.join(", "));
       const gw2 = await guardedWrite({ commit: true });

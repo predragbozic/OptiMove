@@ -92,6 +92,10 @@ export function licenceNeedsLoad(clubId) {
 export function toggleLicenceModule(module) {
   if (ALWAYS_OPEN.has(module) || licence.command) return;
   const next = new Set(licenceDraftClosed());
+  // v96, the licence hierarchy: a part whose parent the draft closes is closed with it; its own switch waits for the
+  // parent (the screen shows it disabled).
+  const parent = (licence.view?.modules || []).find((m) => m.module === module)?.parent;
+  if (parent && next.has(parent)) return;
   if (next.has(module)) next.delete(module);
   else next.add(module);
   licence.draftClosed = [...next].sort();

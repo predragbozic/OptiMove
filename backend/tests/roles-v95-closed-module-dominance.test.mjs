@@ -10,9 +10,12 @@ import fs from "node:fs";
 import path from "node:path";
 import pg from "pg";
 import { runMigrations } from "../src/migrate.js";
-import { asActor, buildDatabase, fixtures, migrationsWithout, MIGRATIONS, RUNBOOKS, ROLE_IDS } from "./support/permission-roles-world.mjs";
+import { asActor, buildDatabase, fixtures, MIGRATIONS, migrationsWithout, RUNBOOKS, ROLE_IDS } from "./support/permission-roles-world.mjs";
 
 const V95_FILE = "202611271000_roles_v95_closed_module_dominance.sql";
+// v96 (the licence hierarchy) replaces v95's helper, so this suite stops at v95: its database is built up to it and
+// re-applied from a folder that ends with it (v96's own suite covers v96 on top).
+const UP_TO_V95 = migrationsWithout([], V95_FILE);
 const V95_NAME = `migrations_v2/${V95_FILE}`;
 const V92_MD5 = {
   permission_club_role_version_items_guard: "d98a0076818f143a932b5f8f835c8635",
@@ -38,6 +41,7 @@ before(async () => {
 after(async () => {
   await k?.end().catch(() => {});
   await db?.drop();
+  UP_TO_V95.cleanup();
 });
 
 const one = async (sql, params = []) => (await k.query(sql, params)).rows[0];
@@ -120,9 +124,7 @@ test("1. the migration: v95 recorded with the file's sha256, the bodies v95's; t
   assert.equal((await one(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V95_NAME])).n, 0);
   // Under v92's bodies the club's admin cannot version Team coach while Tests is closed (it carries tests.view).
   await refused(makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] }), "42501");
-  // A rollback rehearsal must stop at its own migration; later migrations are tested below.
-  const stage = migrationsWithout([], V95_FILE);
-  try { await runMigrations({ databaseUrl: db.url, migrationsRoot: stage.dir }); } finally { stage.cleanup(); }
+  await runMigrations({ databaseUrl: db.url, migrationsRoot: UP_TO_V95.dir });
   assert.deepEqual(await md5s(), V95_MD5);
   await makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] });
   // A later migration recorded: refused, nothing changed.

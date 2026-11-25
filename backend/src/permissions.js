@@ -247,6 +247,9 @@ export const STORABLE_PERMISSIONS = Object.freeze([
   "load.view.athlete", "dashboards.view",
 ]);
 
+// The licence hierarchy (v96) lives in permissionModules.js, which authz.js reads without importing this file.
+export { MODULE_PARENTS, effectiveClosedModules } from "./permissionModules.js";
+
 // Resource scopes. A scope names the club or team the row belongs to, the
 // independent coach's own workspace ("private", the coach's user id), or
 // "global" for something that belongs to no club or team.
