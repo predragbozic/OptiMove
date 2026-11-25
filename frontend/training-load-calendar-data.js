@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { currentUserWorkspaceContextParts } from "./access.js";
 import { state } from "./state.js";
+import { viewTrainingLoadSections } from "./view-modules.js";
 import { addDaysIso, endOfWeekIso, localDateIsoInTimeZone, monthStartIso, startOfWeekIso, weekMondayIso } from "./utils.js";
 import { buildContextKey, invalidateCacheEntriesWithPrefix, invalidateCacheNamespace, loadCachedView } from "./view-cache.js";
 import { trainingLoadFilterQuery } from "./training-load-data.js";
@@ -183,6 +184,8 @@ export async function loadTrainingLoadCalendarMonth(onPainted) {
 // exactly one request regardless of how many activities the athlete had
 // that week, never N+1.
 export async function loadResultsAthleteActivities(athleteId, weekStart, onPainted) {
+  const sections = viewTrainingLoadSections();
+  if (sections && !sections.includes("today")) return;
   const nav = state.trainingLoad.resultsAthleteActivities;
   const weekEnd = addDaysIso(weekStart, 6);
   const generation = ++resultsAthleteActivitiesGeneration;

@@ -1438,6 +1438,8 @@ function renderResultsOverviewHtml(nav) {
 // as if it were theirs alone). One batched fetch already scoped server-
 // side to this athlete (loadResultsAthleteActivities) - never N+1.
 function renderResultsAthleteActivitiesHtml(athleteId, weekStart) {
+  const sections = viewTrainingLoadSections();
+  if (sections && !sections.includes("today")) return "";
   const nav = state.trainingLoad.resultsAthleteActivities;
   if (nav.athleteId !== athleteId) return "";
   if (nav.loading && !nav.data) return `<p class="muted training-load-empty tl-calendar-loading" aria-live="polite">Loading activities&hellip;</p>`;
