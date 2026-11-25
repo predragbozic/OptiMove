@@ -17,14 +17,21 @@ const ATHLETE_CODE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/;
 // workspace - /today and /training-days (plan data), /:id/plans and /:id/program-data (programs.view), or any read
 // without the word - is handed on with no old-role authority (no req.moduleView), so the router gives its no-role answer
 // (the roster scope of a view workspace is `and false`; canAccessAthlete reads the old role rows only).
-router.use(viewEntryGate("athletes", [{ method: "GET", path: "/" }], { refuse: (_req, _res, next) => next() }));
+const athletesViewGate = viewEntryGate("athletes", [{ method: "GET", path: "/" }], { refuse: (_req, _res, next) => next() });
 // Roles V-7 (docs/ai/roles-v-steps-plan.md, "V-7 design"): a view workspace with programs.view also reads ONE athlete's
 // program page (GET /:athleteId/program-data), for an athlete of its club or team and with athletes.view there; any other
 // request is handed on unchanged, as above. On the coach path an athlete's plan reads need programs.view (coachModuleGate
 // in a club or team workspace; canAccessAthletePlans, the programs.view arrays, for the athlete).
-router.use(viewEntryGate("programs", [
+const programsViewGate = viewEntryGate("programs", [
   { method: "GET", path: "/:athleteId/program-data", params: { athleteId: ATHLETE_CODE } },
-], { refuse: (_req, _res, next) => next() }));
+], { refuse: (_req, _res, next) => next() });
+
+router.use((req, res, next) => {
+  // Applying a second gate would discard the first gate's authorization context.
+  const [athleteId, action, ...rest] = req.path.split("/").filter(Boolean);
+  const isProgramRead = req.method === "GET" && action === "program-data" && rest.length === 0 && ATHLETE_CODE.test(athleteId);
+  return (isProgramRead ? programsViewGate : athletesViewGate)(req, res, next);
+});
 const programsCoachGate = coachModuleGate("programs", { allowed: canViewProgramsAt });
 
 // Kept local, the same small validators trainingLoad.js and tests.js keep in

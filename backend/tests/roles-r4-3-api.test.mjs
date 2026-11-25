@@ -149,7 +149,7 @@ test("1. the ceiling: a platform admin closes and opens a module; the club's adm
   assert.equal(a.ceilingEffective, true, "athletes.manage acts (Q12)");
   assert.equal(asAdmin.modules.find((m) => m.module === "calendar").ceilingEffective, true, "calendar.view acts (roles V-3)");
   assert.equal(asAdmin.modules.find((m) => m.module === "dashboards").ceilingEffective, true, "dashboards.view acts (roles V-6)");
-  assert.equal(asAdmin.modules.find((m) => m.module === "exercises").ceilingEffective, false, "exercises' words act nowhere yet");
+  assert.equal(asAdmin.modules.find((m) => m.module === "exercises").ceilingEffective, true, "exercises.view acts (roles V-7)");
   const asPa = ok(await srv.api(w.pa.cookie, `${R}/clubs/${w.A}/ceiling`));
   assert.equal(asPa.modules.find((m) => m.module === "athletes").reason, "Licence");
   assert.equal(asPa.history.length, 1);
