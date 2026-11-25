@@ -117,7 +117,7 @@ begin
  perform pg_advisory_xact_lock(hashtextextended('dashboard-reference:'||p_actor::text||':'||p_request::text,0));
  basis=training_load.source_metric_actor_basis(p_actor,p_club);
  if basis is null or p_club is null then raise exception using errcode='42501',message='notFound'; end if;
- if p_hash !~ '^[a-f0-9]{64}$' or p_request is null then raise exception using errcode='23514',message='invalidRequest'; end if;
+ if p_hash is null or p_hash !~ '^[a-f0-9]{64}$' or p_request is null or p_action is null or p_action not in ('create','draft','publish','archive') or (p_action<>'create' and (p_revision is null or p_revision<1)) then raise exception using errcode='23514',message='invalidRequest'; end if;
  select * into prior from training_load.dashboard_reference_requests where actor_id=p_actor and request_id=p_request;
  if found then
   if prior.request_hash<>p_hash then raise exception using errcode='23514',message='requestIdReused'; end if;
@@ -313,6 +313,7 @@ create constraint trigger dashboard_reference_series_check after insert or updat
 create function training_load.save_dashboard_reference_binding(p_actor uuid,p_club uuid,p_team uuid,p_request uuid,p_hash text,p_dashboard uuid,p_widget uuid,p_revision integer,p_group text,p_config jsonb) returns jsonb language plpgsql as $$
 declare w training_load.dashboard_widgets; prior training_load.dashboard_reference_requests; presentation jsonb; result jsonb; basis text;
 begin
+ if p_request is null or p_hash is null or p_hash !~ '^[a-f0-9]{64}$' or p_revision is null or p_revision<1 or p_group is null or p_group not in ('athlete','cohort') then raise exception 'invalidRequest' using errcode='23514';end if;
  perform pg_advisory_xact_lock(hashtextextended('dashboard-reference:'||p_actor::text||':'||p_request::text,0));
  basis=training_load.metric_variable_change_basis(p_actor,p_club,p_team);
  if basis is null or p_club is null then raise exception 'notFound' using errcode='42501'; end if;

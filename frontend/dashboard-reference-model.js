@@ -1,8 +1,12 @@
+import {sortAthletes} from './athlete-list-tools.js';
 import { formatDashboardValue } from './training-load-dashboard-table.js';
 export const safeReferenceText=(value,fallback='Unavailable')=>typeof value==='string'&&value.trim()&&!/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}/i.test(value)?value:fallback;
 export const formatReferenceValue=value=>typeof value==='number'&&Number.isFinite(value)?formatDashboardValue(value,{config:{effective:{numberFormat:{maximumFractionDigits:2}}}}):'—';
 export const referenceReason=reason=>({noPosition:'Reference not available: no position is selected.',mixedActivities:'Team average is not available across different activity types.',noData:'No data for this period.',dataConflict:'Conflicting measurements cannot be compared.',incompatibleUnit:'This reference does not match the metric’s unit or calculation.',metricUnavailable:'This metric is not available.',teamUnavailable:'This team reference is not available.',tooFewAthletes:'Team average not available: fewer than three athletes have matching measurements.',calculatedMetric:'Team average is not available for a calculated metric.',invalidAnchor:'This Radar axis needs a positive reference value.',invalidActual:'This value cannot be shown on Radar.',missingReference:'Reference not available for this position and metric.',invalidBand:'The selected band limits do not match.'}[reason]??'This reference is not available.');
-export function referenceChartModel(data,widget={}) {
+export const referenceDisplayAxes=data=>(data?.axes??[]).map(axis=>({...axis,points:sortAthletes((axis.points??[]).map(point=>({...point,name:safeReferenceText(point.label,'Athlete name unavailable')})))}));
+export const referenceNextStep=reason=>({noPosition:'Choose a position in the athlete profile.',invalidAnchor:'Choose a positive 100% reference value.',incompatibleUnit:'Choose a matching reference table.',missingReference:'Enter this value in the reference table and publish a version.',tooFewAthletes:'Choose another period.',mixedActivities:'Choose one activity or a comparable period.'}[reason]??'Choose another reference or period.');
+export function referenceChartModel(input,widget={}) {
+ const data=input?{...input,axes:referenceDisplayAxes(input)}:input;
  if(!data?.axes?.length)return null;
  const precision=2,showLegend=widget.display_config?.legend?.visible!==false;
  if(data.mode==='overlay'){

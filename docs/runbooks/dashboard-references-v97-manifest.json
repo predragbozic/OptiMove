@@ -1,6 +1,6 @@
 {
   "file": "migrations_v2/202611291000_training_load_v97_references.sql",
-  "sha256": "a4d588d1947d483250407620eb7218bde745fec714f209edd99a10bf1b59abd6",
+  "sha256": "2855f8f49b342456b28dea79b7298dd88e42dceb0f867873ce71eb8bd9c9eb22",
   "functions": [
     {
       "signature": "training_load.cleanup_dashboard_reference_requests(integer)",
@@ -56,11 +56,11 @@
     },
     {
       "signature": "training_load.mutate_dashboard_reference(uuid,uuid,uuid,text,uuid,integer,text,jsonb)",
-      "md5": "ba92c16beca27a8479204667182b071f"
+      "md5": "4f1cf2472e9673a09a096e929ac8c4c2"
     },
     {
       "signature": "training_load.save_dashboard_reference_binding(uuid,uuid,uuid,uuid,text,uuid,uuid,integer,text,jsonb)",
-      "md5": "8d6a5b0118619cfb12c36dbaaf790fae"
+      "md5": "b3ee6804636124abeec6b683a06f2721"
     }
   ],
   "tables": [

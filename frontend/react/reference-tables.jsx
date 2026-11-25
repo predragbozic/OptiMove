@@ -1,12 +1,12 @@
 import {formatReferenceValue} from '../dashboard-reference-model.js';
 // Presentation only: the bridge supplies authorized labels and capabilities.
 // No permission inference, network request, or separate application state.
-export function ReferenceTables({ tables = [], canCreate = false, onCreate, onOpen }) {
+export function ReferenceTables({ tables = [], canCreate = false, selectedKey, onCreate, onOpen }) {
   return <section aria-label="Reference tables">
-    <h2>Reference tables</h2>
-    {canCreate && <button type="button" onClick={onCreate}>Add reference table</button>}
+    <h3>Tables</h3>
+    {canCreate && <button type="button" className="plain-button" onClick={onCreate}>Add reference table</button>}
     {tables.length === 0 ? <p>No reference tables yet.</p> : <ul>{tables.map((table) =>
-      <li key={table.key}><button type="button" onClick={() => onOpen?.(table.key)}>{table.name}</button>
+      <li key={table.key}><button type="button" className="plain-button" aria-current={selectedKey===table.key?'true':undefined} onClick={() => onOpen?.(table.key)}>{table.name}</button>
         <span>{table.published ? "Published" : "Draft"}</span></li>)}</ul>}
   </section>;
 }

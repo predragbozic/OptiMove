@@ -542,7 +542,7 @@ function renderWidgetHtml(widget, position) {
       ${renderWidgetMenuHtml(widget)}
       <header class="tl-analysis-widget-head ${layoutMode ? "is-draggable" : ""} ${canEdit() ? "has-menu" : ""}" data-analysis-drag-handle="${layoutMode ? "true" : "false"}">
         <div>
-          <p class="eyebrow">${escapeHtml(widget.widget_type.replace("_", " "))}</p>
+          <p class="eyebrow">${escapeHtml(widget.presentation_config?.referenceConfig?.mode === "radar" ? "Radar" : widget.widget_type.replace("_", " "))}</p>
           <h3>${escapeHtml(widget.title)}</h3>
         </div>
       </header>

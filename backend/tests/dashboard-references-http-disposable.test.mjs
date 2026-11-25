@@ -1,3 +1,4 @@
+import pg from 'pg';
 import { before,after,test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -88,4 +89,22 @@ test('team reference averages imported athlete period values only and shell sele
  const measured=await post(coach,queryPath,period);assert.equal(measured.status,200,measured.text);const point=measured.body.widgets[0].references.axes[0].points[0];assert.equal(point.references[0].value,40,JSON.stringify(measured.body));assert.equal(point.includedAthletes,3);
  const selected=await post(coach,queryPath,{...period,shellFilter:{clubIds:[],teamIds:[],athleteIds:athletes.slice(0,2)}});assert.equal(selected.status,200,selected.text);assert.equal(selected.body.widgets[0].references.axes[0].reason,'tooFewAthletes');
  const empty=await post(coach,queryPath,{...period,shellFilter:{clubIds:[],teamIds:[],athleteIds:[crypto.randomUUID()]}});assert.equal(empty.status,200,empty.text);assert.deepEqual(empty.body.widgets[0].series[0].data.current,[]);
+});
+
+test('P3 route inventory covers every mounted read and write endpoint',async()=>{
+ const {createReferenceRouter}=await import('../src/dashboardReferences/router.js');const {createReferenceBindingRouter}=await import('../src/dashboardReferences/bindingRouter.js');
+ const routes=router=>router.stack.filter(layer=>layer.route).flatMap(layer=>Object.keys(layer.route.methods).map(method=>method.toUpperCase()+' '+layer.route.path)).sort();
+ assert.deepEqual(routes(createReferenceRouter()),['GET /','GET /options','GET /:id','GET /:id/versions/:versionId','POST /','PATCH /:id/draft','POST /:id/publish','POST /:id/archive'].sort());
+ assert.deepEqual(routes(createReferenceBindingRouter()),['GET /:dashboardId/widgets/:widgetId','PUT /:dashboardId/widgets/:widgetId']);
+});
+
+test('binding request advisory lock precedes the dashboard row lock',async()=>{
+ const widget=(await q.query("select * from training_load.dashboard_widgets where title='Team distance'")).rows[0];const request=crypto.randomUUID();const writer=new pg.Client({connectionString:db.url});await writer.connect();let pending;
+ try{
+  await q.query('begin');await q.query("select pg_advisory_xact_lock(hashtextextended('dashboard-reference:'||$1::text||':'||$2::text,0))",[coach.id,request]);
+  const pid=(await writer.query('select pg_backend_pid() pid')).rows[0].pid;await writer.query("set statement_timeout='10000ms'");
+  pending=writer.query("select training_load.save_dashboard_reference_binding($1,$2,$3,$4,repeat('a',64),$5,$6,$7,'cohort',null)",[coach.id,A,team,request,widget.dashboard_id,widget.id,widget.revision]).then(result=>({result}),error=>({error}));
+  let waiting=false;for(let attempt=0;attempt<100;attempt++){waiting=(await q.query("select wait_event_type='Lock' and wait_event='advisory' waiting from pg_stat_activity where pid=$1",[pid])).rows[0]?.waiting;if(waiting)break;await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(waiting,true,'writer is waiting for the same request advisory lock');
+  await q.query('select id from training_load.dashboards where id=$1 for update nowait',[widget.dashboard_id]);await q.query('commit');const outcome=await pending;if(outcome.error)throw outcome.error;
+ }finally{await q.query('rollback');if(pending)await pending;await writer.end();}
 });

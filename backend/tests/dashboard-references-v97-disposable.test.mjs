@@ -28,7 +28,7 @@ test('no role cannot write and a stale revision cannot archive',async()=>{
  const user=(await q.query("insert into public.users(email,first_name,last_name,full_name) values('outsider@test.invalid','Outside','Tester','Outsider') returning id")).rows[0].id;
  await assert.rejects(write('create',{user,payload:{name:'Unauthorized'}}),/notFound/);
  const table=await write('create',{payload:{name:'Return to play'}});
- await assert.rejects(write('archive',{id:table.id,revision:0}),/staleRevision/);
+ await assert.rejects(write('archive',{id:table.id,revision:2}),/staleRevision/);
  const archived=await write('archive',{id:table.id,revision:1});assert.equal(archived.revision,2);
 });
 test('raw writes and receipt edits are refused outside the sanctioned function',async()=>{
@@ -70,4 +70,36 @@ test('JS and SQL accept the team-average binding and reject malformed or ambiguo
   assert.equal(sql,validReferenceConfig(value),'JS/SQL parity for case '+i);
   assert.equal(sql,i===0,'only the complete team-average binding is allowed: '+i);
  }
+});
+
+test('installed SQL mutations are killed by functional checks, not migration checksums',async()=>{
+ const replaceBody=async(signature,transform,verify)=>{
+  const definition=(await q.query('select pg_get_functiondef($1::regprocedure) body',[signature])).rows[0].body;
+  const changed=transform(definition);assert.notEqual(changed,definition,'mutation changes the installed body');
+  await q.query('begin');try{await q.query(changed);await assert.rejects(verify(),error=>error.code==='ERR_ASSERTION');}finally{await q.query('rollback');}
+ };
+ const input={schemaVersion:1,source:'teamAverage',mode:'overlay',clubId:club,teamId:crypto.randomUUID(),axes:[{seriesId:crypto.randomUUID(),valueKeys:['teamAverage']}]};
+ const verifyTeam=async()=>assert.equal((await q.query('select training_load.dashboard_reference_config_valid($1) valid',[input])).rows[0].valid,true);
+ await verifyTeam();await replaceBody('training_load.dashboard_reference_config_valid(jsonb)',body=>body.replace("and not (v->>'source'='teamAverage' and k#>>'{}'='teamAverage')",'and true'),verifyTeam);
+ const published=(await q.query('select version_id from training_load.dashboard_reference_cells c join training_load.dashboard_reference_versions v on v.id=c.version_id where v.published limit 1')).rows[0].version_id;
+ await replaceBody('training_load.dashboard_reference_guard()',body=>body.replace("if is_published then raise exception using errcode='23514',message='referenceVersionImmutable'; end if;",''),async()=>{
+  await q.query("select set_config('optimove.reference_writer',txid_current()::text,true)");await assert.rejects(q.query('update training_load.dashboard_reference_cells set value=value+1 where version_id=$1',[published]),/referenceVersionImmutable/);
+ });
+ const d=(await q.query("select id from training_load.metric_definitions where key='p3_distance'")).rows[0].id;
+ const verifyScope=async()=>assert.equal((await q.query("select training_load.dashboard_reference_column_available($1,$2,'m','sum','day') available",[club,d])).rows[0].available,false);
+ await verifyScope();await replaceBody('training_load.dashboard_reference_column_available(uuid,uuid,text,text,text)',body=>body.replace('and exists(select 1 from training_load.metric_definition_scope_capabilities c where c.metric_definition_id=d.id and c.scope_level=p_level)','and true'),verifyScope);
+});
+
+test('sanctioned SQL refuses null revision or hash before a receipt can replay',async()=>{
+ const request=crypto.randomUUID(),t=await write('create',{request,payload:{name:'Null argument guards'}});
+ await assert.rejects(write('create',{request,hash:null,payload:{name:'Null argument guards'}}),/invalidRequest/);
+ await assert.rejects(write('archive',{id:t.id,revision:null}),/invalidRequest/);
+ assert.equal((await q.query('select revision from training_load.dashboard_reference_tables where id=$1',[t.id])).rows[0].revision,1);
+});
+
+test('receipt retention deletes only expired rows and preserves append-only and use evidence',async()=>{
+ const table=(await q.query('select id from training_load.dashboard_reference_tables where club_id=$1 limit 1',[club])).rows[0].id;const expired=crypto.randomUUID(),young=crypto.randomUUID();
+ await q.query('begin');await q.query("select set_config('optimove.reference_writer',txid_current()::text,true)");await q.query("insert into training_load.dashboard_reference_requests(actor_id,request_id,table_id,club_id,request_hash,receipt,created_at) values($1,$2,$3,$4,repeat('a',64),'{}',now()-interval '15 days'),($1,$5,$3,$4,repeat('b',64),'{}',now())",[actor,expired,table,club,young]);await q.query('commit');
+ await assert.rejects(q.query("update training_load.dashboard_reference_requests set receipt='{\"changed\":true}' where request_id=$1",[young]),/referenceWriterRequired/);await assert.rejects(q.query('delete from training_load.dashboard_reference_requests where request_id=$1',[young]),/referenceWriterRequired/);await assert.rejects(q.query('truncate training_load.dashboard_reference_requests'),/referenceTruncateForbidden/);
+ assert.equal((await q.query('select training_load.cleanup_dashboard_reference_requests(1) n')).rows[0].n,1);assert.equal((await q.query('select count(*)::int n from training_load.dashboard_reference_requests where request_id=$1',[expired])).rows[0].n,0);assert.equal((await q.query('select count(*)::int n from training_load.dashboard_reference_requests where request_id=$1',[young])).rows[0].n,1);assert.ok((await q.query('select count(*)::int n from training_load.dashboard_reference_usage')).rows[0].n>0);
 });

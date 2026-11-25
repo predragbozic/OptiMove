@@ -42,3 +42,10 @@ test("a band requires two ordered finite values; zero is a valid endpoint", () =
   assert.equal(referenceBand(null, 4).status, "unavailable");
   assert.equal(referenceBand(5, 4).reason, "invalidBand");
 });
+
+test('reference receipt purge is bounded and optional before the migration',async()=>{
+ const {purgeDashboardReferenceRequests}=await import('../src/dashboardReferences/retention.js');
+ let calls=[];await purgeDashboardReferenceRequests({query:async sql=>{calls.push(sql);return{rows:[{installed:false}]};}});assert.equal(calls.length,1);
+ calls=[];await purgeDashboardReferenceRequests({query:async sql=>{calls.push(sql);return{rows:[sql.includes('to_regprocedure')?{installed:true}:{deleted:100}]};}});assert.equal(calls.length,6);assert.ok(calls.slice(1).every(sql=>sql.includes('cleanup_dashboard_reference_requests(100)')));
+ calls=[];await purgeDashboardReferenceRequests({query:async sql=>{calls.push(sql);return{rows:[sql.includes('to_regprocedure')?{installed:true}:{deleted:0}]};}});assert.equal(calls.length,2);
+});
