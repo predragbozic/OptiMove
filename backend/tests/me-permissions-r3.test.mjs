@@ -30,10 +30,10 @@ after(async () => {
 const ok = (res, status = 200) => { assert.equal(res.status, status, res.text); return res.body; };
 const hex = () => crypto.randomBytes(3).toString("hex");
 const sorted = (list) => [...list].sort();
-// Roles V-1: variables.view and presets.use are checked words, held by both basic roles (v92's seed); roles V-3 adds
-// calendar.view, roles V-4 tests.view and tests.results.view.
-const CLUB_ADMIN = ["athletes.manage", "athletes.remove", "calendar.view", "org.club.edit", "org.teams.manage", "org.view", "presets.use", "roles.manage", "staff.assign", "tests.results.view", "tests.view", "variables.view"];
-const TEAM_COACH = ["athletes.manage", "athletes.remove", "calendar.view", "org.view", "presets.use", "tests.results.view", "tests.view", "variables.view"];
+// Roles V-1: variables.view and presets.use are checked words, held by both basic roles (v92's seed); roles V-2 adds
+// athletes.view, roles V-3 calendar.view, roles V-4 tests.view and tests.results.view.
+const CLUB_ADMIN = ["athletes.manage", "athletes.remove", "athletes.view", "calendar.view", "org.club.edit", "org.teams.manage", "org.view", "presets.use", "roles.manage", "staff.assign", "tests.results.view", "tests.view", "variables.view"];
+const TEAM_COACH = ["athletes.manage", "athletes.remove", "athletes.view", "calendar.view", "org.view", "presets.use", "tests.results.view", "tests.view", "variables.view"];
 
 async function person(label, setup = async () => {}) {
   const id = await F.user(label);

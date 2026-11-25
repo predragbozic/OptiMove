@@ -36,7 +36,7 @@ test("1. the module keys, words and open list are the backend's (moduleView.js)"
   assert.deepEqual(vm.MODULE_VIEW_WORDS, words);
   const open = src.match(/OPEN_VIEW_MODULES = Object\.freeze\(\[([^\]]*)\]\)/)[1].split(",").map((s) => s.trim().replace(/"/g, "")).filter(Boolean);
   assert.deepEqual([...vm.OPEN_VIEW_MODULES], open);
-  assert.deepEqual(open, ["data_configuration", "presets", "calendar", "tests", "tests_results"], "V-1 opens Data configuration and Tags & Presets, V-3 the calendar, V-4 Tests");
+  assert.deepEqual(open, ["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results"], "V-1 opens Data configuration and Tags & Presets, V-2 Athletes, V-3 the calendar, V-4 Tests");
   for (const place of vm.VIEW_NAV_PLACES) for (const m of place.modules) assert.ok(Object.hasOwn(vm.MODULE_VIEW_WORDS, m), m);
 });
 
@@ -45,15 +45,15 @@ test("2. the places cover exactly the menu R4-4 hides in a view workspace", () =
   assert.deepEqual([...vm.VIEW_BASE_TABS], [...nav.VIEW_WORKSPACE_TABS]);
 });
 
-test("3. V-1, V-3, V-4: a view workspace holding every view word sees Home, Settings (Overview, Clubs, Teams, Tags & Presets), the Calendar, Tests, Training Load and Account; nothing else", () => {
+test("3. V-1, V-2, V-3, V-4: a view workspace holding every view word sees Home, the athlete list, Settings (Overview, Clubs, Teams, Tags & Presets, Athletes), the Calendar, Tests, Training Load and Account; nothing else", () => {
   as(CLUB_VIEW, ["org.view", ...Object.values(vm.MODULE_VIEW_WORDS)]);
   for (const module of Object.keys(vm.MODULE_VIEW_WORDS)) {
-    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets", "calendar", "tests", "tests_results"].includes(module), module);
+    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results"].includes(module), module);
   }
-  const shown = ['[data-library-tab="training-load"]', "#calendarToggle", '[data-library-tab="tests"]'];
+  const shown = ['[data-library-tab="training-load"]', "#athletesToggle", "#athleteSearch", "#athleteList", "#calendarToggle", '[data-library-tab="tests"]'];
   assert.deepEqual(vm.viewHiddenMenuSelectors().sort(), nav.VIEW_WORKSPACE_MENU_HIDDEN.filter((s) => !shown.includes(s)).sort());
   assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "central-calendar", "tests", "training-load"]);
-  assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams", "presets"]);
+  assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams", "presets", "athletes"]);
   assert.deepEqual(vm.viewTrainingLoadSections(), ["variables"]);
   nav.renderAccessNav();
   for (const selector of nav.VIEW_WORKSPACE_MENU_HIDDEN) {

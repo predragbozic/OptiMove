@@ -50,7 +50,7 @@ async function scheduleReadScope(req, word) {
     all: isPlatformAdministrator(req.authz),
   };
 }
-// P-1: a view workspace names athletes only with athletes.view (not open yet: never, today).
+// P-1: a view workspace names athletes only with athletes.view (open since roles V-2).
 const viewHidesNames = (req) => Boolean(req.moduleView) && !canView(req.authz, req.moduleView.workspace, "athletes");
 // Results and the per-athlete group: a view workspace also needs tests.results.view.
 const viewMissesResults = (req) => Boolean(req.moduleView) && !canView(req.authz, req.moduleView.workspace, "tests_results");
