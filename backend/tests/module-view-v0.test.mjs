@@ -219,4 +219,34 @@ test("12. roles V-3, the calendar's write guards behind the gate: a view context
     assert.equal(eventWriteBasis(view, { ...owner, clubActive: true }), null, "no write basis in a view context");
   }
 });
+test('central handoff: every module and both view scopes lose all legacy authority without changing identity or stored roles',async()=>{
+ const { resolveActiveWorkspace,resolveActiveWorkspaceReadOnly }=await import('../src/workspace.js');
+ for(const module of Object.keys(MODULE_VIEW_WORDS))for(const workspace of [clubView,teamView]){
+  const authz={...authzWith(Object.values(MODULE_VIEW_WORDS)),platformRoles:['platform_admin'],clubRoles:[{clubId:OTHER,role:'club_admin'}],teamRoles:[{teamId:OTHER,role:'team_coach'}],managedTeamIds:[OTHER],isIndependentCoach:true,isAthlete:true,athleteId:OTHER,capabilities:{coachWorkspace:true,platformAdministration:true,athleteWorkspace:true}};
+  const original=structuredClone(authz),user={id:'u1'},req={user,authz,method:'POST',path:'/unlisted',moduleView:{module:'stale'}};
+  let handed=false;await runGate(viewEntryGate(module,READS,{open:[module],resolve:resolver(workspace),refuse:(_req,_res,next)=>{handed=true;next();}}),req);
+  assert.equal(handed,true,module);assert.equal(req.user,user);assert.deepEqual(authz,original,'original context is unchanged');assert.equal(req.moduleView,undefined);
+  for(const key of ['platformRoles','clubRoles','teamRoles','managedTeamIds','rolePermissions','roleAssignments'])assert.deepEqual(req.authz[key],[],module+' '+key);
+  assert.equal(req.authz.isIndependentCoach,false);
+  assert.equal(req.authz.isAthlete,true);
+  assert.equal(req.authz.athleteId,OTHER);
+  assert.deepEqual(req.authz.capabilities,{coachWorkspace:false,athleteWorkspace:true,organizationManagement:false,platformAdministration:false,canCreateAthlete:false,canCreatePlan:false});
+  assert.equal((await resolveActiveWorkspace(user.id,req.authz)).workspace,workspace,'writing resolver reuses the exact snapshot with no database call');
+  assert.equal((await resolveActiveWorkspaceReadOnly(user.id,req.authz)).workspace,workspace,'read resolver reuses it too');
+ }
+});
+
+test('central handoff also covers listed reads denied by missing word or closed licence; cache is actor/request bound',async()=>{
+ const { resolveActiveWorkspace,resolveActiveWorkspaceReadOnly }=await import('../src/workspace.js');
+ for(const options of [{words:[],closed:[]},{words:['calendar.view'],closed:['calendar']}]){
+  const authz={...authzWith(options.words,{closed:options.closed}),clubRoles:[{clubId:OTHER,role:'club_admin'}],teamRoles:[{teamId:OTHER,role:'team_coach'}],managedTeamIds:[OTHER],isIndependentCoach:true,isAthlete:true,athleteId:OTHER,capabilities:{coachWorkspace:true}};
+  const req={user:{id:'u1'},authz,method:'GET',path:'/',moduleView:{module:'stale'}};
+  let handed=false;await runGate(viewEntryGate('calendar',READS,{open:['calendar'],resolve:resolver(clubView),refuse:(_req,_res,next)=>{handed=true;next();}}),req);
+  assert.equal(handed,true);assert.equal(req.moduleView,undefined);assert.deepEqual(req.authz.clubRoles,[]);assert.deepEqual(req.authz.rolePermissions,[]);assert.equal(req.authz.capabilities.coachWorkspace,false);
+  assert.equal((await resolveActiveWorkspace('u1',req.authz)).workspace,clubView);
+  await assert.rejects(resolveActiveWorkspaceReadOnly('other-actor',req.authz),/no database in this test/,'another actor cannot borrow the snapshot');
+  await assert.rejects(resolveActiveWorkspace('u1',{...req.authz}),/no database in this test/,'another request/context cannot borrow the snapshot');
+ }
+});
+
 }

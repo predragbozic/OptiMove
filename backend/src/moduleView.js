@@ -1,3 +1,4 @@
+import { rolelessViewHandoff } from './viewWorkspaceHandoff.js';
 // Roles V-0 (docs/ai/roles-v-steps-plan.md section 3): the one question every module asks before it shows its data to a
 // role holder - "may this account VIEW this module in its active workspace?" - and the one entry gate that keeps a view
 // workspace (club_view / team_view, roles R4-2) away from everything but a module's listed reads.
@@ -136,8 +137,10 @@ export function viewEntryGate(module, readRoutes, {
       const { workspace, availableWorkspaces } = await resolve(req.user.id, req.authz);
       const active = workspace || pickFallbackWorkspace(availableWorkspaces);
       if (!active || !VIEW_WORKSPACE_TYPES.has(active.type)) return next();
-      if (!routes.some((matches) => matches(req))) return refuse(req, res, next);
-      if (!canView(req.authz, active, module, { open })) return refuse(req, res, next);
+      if (!routes.some((matches) => matches(req)) || !canView(req.authz, active, module, { open })) {
+        rolelessViewHandoff(req, { workspace: active, availableWorkspaces });
+        return refuse(req, res, next);
+      }
       req.moduleView = Object.freeze({ module, workspace: active, scope: viewReadScope(active) });
       return next();
     } catch (error) {

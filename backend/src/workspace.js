@@ -131,7 +131,20 @@ function findPreferredWorkspace(workspaces, storedType, scopeId) {
   return null;
 }
 
+// Keys are fresh request authorization objects, never user ids or persisted state.
+const readOnlyWorkspaceSnapshots = new WeakMap();
+export function rememberReadOnlyWorkspace(userId, authz, resolution) {
+ if (!VIEW_WORKSPACE_TYPES.has(resolution.workspace?.type)) throw new Error('A resolved view workspace is required.');
+ readOnlyWorkspaceSnapshots.set(authz, { userId: String(userId), resolution });
+}
+function rememberedWorkspace(userId, authz) {
+ const known = authz && readOnlyWorkspaceSnapshots.get(authz);
+ return known?.userId === String(userId) ? known.resolution : null;
+}
+
 export async function resolveActiveWorkspaceReadOnly(userId, authz, queryRunner = query) {
+  const known = rememberedWorkspace(userId, authz);
+  if (known) return known;
   const availableWorkspaces = await loadAvailableWorkspaces(authz, queryRunner);
   const preference = (await queryRunner(
     'select workspace_type, scope_id from public.user_workspace_preferences where user_id = $1 limit 1', [userId],
@@ -180,6 +193,8 @@ export async function saveWorkspacePreference(userId, type, scopeId) {
 // finds a matching, valid preference rather than recomputing the fallback
 // every time.
 export async function resolveActiveWorkspace(userId, authz) {
+  const known = rememberedWorkspace(userId, authz);
+  if (known) return known;
   const availableWorkspaces = await loadAvailableWorkspaces(authz);
   const preferenceResult = await query(
     `select workspace_type, scope_id from public.user_workspace_preferences where user_id = $1 limit 1`,
