@@ -106,6 +106,8 @@ test("Manage account opens role assignment for that person at phone and desktop 
       await page.locator(".organization-user-row").filter({ hasText: "Coach Example" })
         .getByRole("button", { name: "Manage account", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Manage account" });
+      const frame = await dialog.boundingBox();
+      assert.ok(frame.x >= 0 && frame.x + frame.width <= width + 0.5, `${width}: account dialog fits in the viewport`);
       const entry = dialog.getByRole("button", { name: "Give a role", exact: true });
       assert.ok((await entry.boundingBox()).height >= 43.5, `${width}: role action is a full-size touch target`);
       await entry.click();

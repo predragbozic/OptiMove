@@ -6145,6 +6145,8 @@ body.specific-program-open {
 .organization-manage-account-modal {
   display: grid;
   gap: 0;
+  /* The overlay has 18px of padding on each side. */
+  max-width: calc(100vw - 36px);
 }
 
 .manage-account-section {
