@@ -671,3 +671,95 @@ athletes never", which test 7 makes for every read.
   what an account without a role gets, instead of `next()`; a manager's decision.
 - A view-workspace read the gate hands on unchanged (`/today`, `/training-days`) still resolves the workspace with the
   preference-writing resolver, as before V-2.
+
+## 11. V-3 as built (Calendar)
+
+Branch `feature/roles-v3-calendar-view` from `f45ee0f`. No migration. (Numbered 10 so it does not collide with the
+parallel V-2 section.)
+
+**The gate.**
+- `routes/calendar.js` (`GET /`), `routes/calendarEvents.js` (`GET /types`, `GET /:eventId`) and
+  `routes/calendarSettings.js` (no read) mount `viewEntryGate("calendar", …)`.
+- Its refusal (`calendarViewRefused`, `calendarModuleContext.js`) does not answer by itself. It marks the request and
+  passes it on without `req.moduleView`, and the route then answers what it answered a view workspace before V-3,
+  without resolving the workspace again:
+  - `GET /api/calendar`: 403 `Forbidden`;
+  - an event read or write that names an id: the 404;
+  - a create: 403;
+  - the questions and the settings: their own answers.
+- `viewEntryGate` now passes `next` to `refuse` (one line in `moduleView.js`; `module-view-v0` test 7 pins it).
+
+**The view context** (`calendarModuleContext.js` `resolveCalendarModuleContext`, used by every calendar router).
+- A listed read of a view workspace gets `{ type: "coach", workspace: <the club_view / team_view one>, view: { type,
+  id, clubId }, readOnly: true, activityScope: { club | team } (no owner context) }`.
+- The workspace stays the view one, so `eventWriteBasis`, `eventOwnerForWorkspace` and the settings' club recognize
+  nothing. Both write helpers also return null for a `readOnly` / `view` context.
+- The read scopes of `calendarAccess.js` (`calendarAthleteScopeSql`, `calendarScheduleStructuralSql`,
+  `calendarScheduleCandidateSql`, `loadWorkspaceTeams`) and the reduced event view read the `view` through
+  `calendarReadWorkspace(ctx)`.
+- The catalog of `GET /types` (`eventCatalogOwner`) is the view's club or team's.
+- The context lives in its own file so that `calendarAccess.js`, which other modules import, does not load
+  `moduleView.js` (two unit suites mock `workspace.js`).
+
+**The coach paths (checked word).** A club or team workspace keeps today's context only with
+`can(calendar.view)` at its scope; the platform and a private coach keep theirs (R4 Q10). Without the word, or with the
+club's licence closed, every calendar route (reads, events, settings) answers as for no context, as R4 section 6
+decided.
+
+**P-1 (names).**
+- A view workspace names athletes only with `canView(athletes)`, which stays false until V-2 opens the Athletes
+  module.
+- Without it:
+  - `?include=athletes` is left out of the answer (no `athletes` key);
+  - every card's `athleteIds` is empty and its `athleteCount` stays (counts only; the security review's MEDIUM);
+  - the reduced event view lists no athlete target and counts them in `hiddenAthleteTargets`.
+- With it, the reduced view is the non-manager view a team coach gets today.
+- **For V-2:** when `athletes.view` is enforced, the calendar's name gate is `canView(athletes)` in
+  `calendarModuleContext.js`, a call through `canView`, not a literal `can()`.
+
+- **The athlete's own questions** (`routes/calendarQuestions.js`, `/questions/mine` and *Later*) keep the plain
+  calendar context, with no gate and no word: they have no coach side (the code review's LOW).
+
+**Word lists.**
+- `ENFORCED_PERMISSIONS` gets `"calendar.view": ["calendarModuleContext.js"]`.
+- `VIEW_WORKSPACE_USABLE_WORDS` gets `calendar.view`.
+- `OPEN_VIEW_MODULES` gets `calendar` on both sides.
+- `roles-r4-checked-gates` B1: `calendarModuleContext.js` 2 and `calendarEventService.js` 5. `calendarAccess.js`
+  stays 17, the same branches renamed to the read workspace's type.
+
+**Frontend.**
+- `OPEN_VIEW_MODULES` opens the Calendar place (`#calendarToggle`, tab `central-calendar`).
+- The calendar already offers New event only to club, team and private-coach workspaces, and an event's write
+  controls only on `canManage`, so a view workspace sees the calendar read only. Its panel says "No athlete names
+  were returned."
+- No notification opener is mapped to `calendar`; the coach side has none.
+
+**Tests.**
+- `roles-v-sweep` test 7:
+  - club_view and team_view read club A's calendar, types and the reduced event view: no club B id, no name, no
+    notes, never `canManage`;
+  - the reduced view equals the team coach's reduced view of the same event, without its athlete targets;
+  - another club's event and a missing id give the identical 404;
+  - the questions, the settings and nine writes give the same status and body as an account with no role, and land
+    nothing;
+  - no read writes anything;
+  - a forged `club` preference;
+  - a mixed account (club B's admin in club_view A);
+  - old-vs-new for the club admin and the team coach;
+  - the word taken away;
+  - the licence closing reads and writes for role holders and the club's old roles.
+- Mutations killed: the coach path's `calendar.view` check dropped; the name gate forced open.
+- e2e: `roles-v3-view-calendar.test.mjs` at 1280, 390 and 360 px.
+- The suites that list the checked words take `calendar.view`, as V-1 did for its words: `me-permissions-r3` (both
+  basic roles), `roles-r4-2-view-workspace` test 11 (/me; the calendar reads leave its list), `roles-r4-api` tests 1
+  and 2, `roles-r4-3-api` tests 1, 2 and 6 (`dashboards.view` is now their unchecked word), `permission-roles-v84` 2b
+  (`LATER`).
+- **Older suites:** `startCalendarApp` (`backend/tests/support/calendar-fixture.mjs`) builds its database with
+  `roleRead: true`. `central-calendar-k2b-settings` builds only up to v51, so a coach's `can(calendar.view)` failed
+  closed there (`503 permissions_unavailable`). It is a no-op for the suites whose list has v84 and v92.
+
+**Review notes, recorded (not built).**
+- LOW (security): non-event cards keep their `links` (session, activity and schedule ids), as a coach's reader sees
+  them. They are not usable: the target routes refuse a view workspace.
+- LOW (security): on the non-view path the workspace is resolved twice (the gate read-only, then the route), as in
+  V-1. It can only fail closed.

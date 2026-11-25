@@ -42,8 +42,8 @@ test("1. every module's view word is a known, storable (VIEW package) word, scop
   assert.throws(() => viewEntryGate("nope", []), /Unknown view module/);
 });
 
-test("2. only the open modules (V-1: data_configuration, presets; V-2: athletes): a view workspace holding every view word is refused every other module", () => {
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "data_configuration", "presets"]);
+test("2. only the open modules (V-1: data_configuration, presets; V-2: athletes; V-3: calendar): a view workspace holding every view word is refused every other module", () => {
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "data_configuration", "presets"]);
   const all = authzWith(Object.values(MODULE_VIEW_WORDS));
   for (const module of Object.keys(MODULE_VIEW_WORDS)) {
     const open = OPEN_VIEW_MODULES.includes(module);
@@ -133,6 +133,11 @@ test("7. the gate: a view workspace reaches only the listed reads, of an open mo
   const notFound = viewEntryGate("calendar", READS, { open: ["calendar"], resolve: resolver(clubView), refuse: (_q, res) => res.status(404).json({ error: "notFound" }) });
   const nf = await runGate(notFound, { user: { id: "u1" }, authz: holder, method: "POST", path: "/" });
   assert.deepEqual([nf.status, nf.body], [404, { error: "notFound" }], "the router's own refusal");
+  // V-3: a refusal that passes the request on (marked, WITHOUT req.moduleView), so each route gives its own answer.
+  const passOn = viewEntryGate("calendar", READS, { open: ["calendar"], resolve: resolver(clubView), refuse: (q, _res, next) => { q.marked = true; next(); } });
+  const pq = { user: { id: "u1" }, authz: holder, method: "POST", path: "/" };
+  const p = await runGate(passOn, pq);
+  assert.deepEqual([p.next, p.status, pq.marked, pq.moduleView], [true, null, true, undefined], "passed on, marked, never as a view read");
 });
 
 test("8. the gate: the fallback workspace counts; a resolver error goes to the error handler; no user goes on (requireAuth answers first)", async () => {
