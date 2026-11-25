@@ -20,9 +20,10 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 
 // The modules a view workspace may read (the same list as the backend's OPEN_VIEW_MODULES). V-1: Data configuration
 // (Training Load -> Data configuration, the Variables list, read only) and Tags, presets and session types (Settings ->
-// Tags & Presets, read only). V-3: the calendar (the central calendar, read only: no New event, events in their reduced
-// view, no athlete names without athletes.view).
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "calendar"]);
+// Tags & Presets, read only).
+// V-2: Athletes (the sidebar's athlete list and Settings -> Athletes, read only). V-3: the calendar (the central
+// calendar, read only: no New event, events in their reduced view, no athlete names without athletes.view).
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar"]);
 
 // The menu places of a view workspace: each opens when ANY of its modules is open and its word is held. A place with
 // no module (Coaches) never opens there.

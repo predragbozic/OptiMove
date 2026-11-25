@@ -88,7 +88,9 @@ export const WORKSPACE_BRANCH = new RegExp([
 // read the dashboard's data workspace (one of the five existing types, anything else refused).
 const REVIEWED = Object.freeze({
   "activityRoster.js": 3,
-  "athleteRosterScope.js": 4,
+  // V-2: the view branch reads only the athletes gate's scope (req.moduleView, can(athletes.view)), never an offered
+  // workspace; a view workspace without the gate's pass stays `and false` (+3).
+  "athleteRosterScope.js": 7,
   // V-3: the read scopes branch on the type of the workspace a READ shows (calendarReadWorkspace: the active one, or the
   // club or team a view workspace names, from the entry gate only); the same 17 branches as before, renamed.
   "calendarAccess.js": 17,
@@ -120,7 +122,9 @@ const REVIEWED = Object.freeze({
   // + the acting user's team rows locked for a team-scope custom (the custom's own scope, as lock_permission_actor).
   "permissionLayersService.js": 3,
   "permissions.js": 8, // R4-2: closedModulesForWorkspace maps a workspace to its scope, /me narrows a view workspace's words (+4, never an offer)
-  "positionService.js": 8,
+  // V-2 (+3): the view scope of the athletes gate (club or team, never an offered workspace), and the club or team the
+  // coach path asks athletes.view at (its own resolved club / team workspace).
+  "positionService.js": 11,
   "routes/auth.js": 1,
   "routes/builder.js": 4,
   "routes/calendar.js": 1,
@@ -165,7 +169,7 @@ test("B0. the branch pattern finds a branch whatever the variable is called", ()
 // (can() next to the workspace match, never instead of it). permissions.js maps them to a scope by object keys.
 // V-0 (the code review): the pattern also sees an unquoted object key (club_view: …), so permissions.js (the scope map of
 // /me) and moduleView.js (canView / the entry gate, reviewed in V-0) are listed.
-const VIEW_TYPE_FILES = ["moduleView.js", "permissions.js", "routes/organization.js", "workspace.js"];
+const VIEW_TYPE_FILES = ["athleteRosterScope.js", "moduleView.js", "permissions.js", "routes/organization.js", "workspace.js"];
 test("B3. the R4-2 workspace types (club_view, team_view) are named only where R4-2 opened them (a tripwire for the next helper)", () => {
   const named = SOURCES.filter((s) => /(?:["'](?:club_view|team_view)["']|\b(?:club_view|team_view)\s*:)/.test(s.text)).map((s) => s.rel).sort();
   assert.deepEqual(named, VIEW_TYPE_FILES);

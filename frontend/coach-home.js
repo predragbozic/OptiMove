@@ -388,8 +388,8 @@ function renderPlatformClubsHtml(clubs) {
 }
 
 // The short Home of a view workspace (club_view / team_view, roles R4 contract 5.2): the club's or team's name, one
-// sentence, and a button for each Settings section /me lets it open. Nothing is read: the coach's cards (athletes,
-// exercises, programs) belong to modules a view workspace does not reach yet.
+// sentence, and a button for each Settings section /me lets it open (V-2: Athletes with athletes.view). Nothing is read:
+// the coach's cards (a day's plans, exercises, programs) belong to modules a view workspace does not reach yet.
 // Roles V-1: one label map for every section a view workspace can open (view-modules.js).
 const VIEW_SECTION_LABELS = VIEW_SETTINGS_LABELS;
 export function renderViewHomeHtml(user, sections = []) {
