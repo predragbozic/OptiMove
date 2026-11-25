@@ -3974,7 +3974,9 @@ async function renderOrganizationPanel({ refresh = true } = {}) {
     }
     // v87: positions for Tags & Presets and for an athlete's Edit window; read once, then after every write.
     // (Not in a view workspace: positions are the Athletes module's, closed there; the panel shows none.)
-    if (((state.organization.section === "presets" && !taxonomyReadOnly()) || (state.organizationEditor.open && state.organizationEditor.type === "athlete"))
+    // Roles V-2: a view workspace with athletes.view reads them for its read-only athlete list (its club's positions).
+    if (((state.organization.section === "presets" && !taxonomyReadOnly()) || (state.organizationEditor.open && state.organizationEditor.type === "athlete")
+        || (["athletes", "clubs", "teams"].includes(state.organization.section) && isViewWorkspace() && viewModuleOpen("athletes")))
         && !state.positions.loaded && !state.positions.loading && !state.positions.error) {
       void loadPositions().then(() => renderOrganizationPanel({ refresh: false }));
     }
@@ -4204,11 +4206,12 @@ function renderAthleteList() {
   const filteredAthletes = state.athletes.filter((athlete) => athleteMatches(athlete, search));
   const athletes = filteredAthletes;
 
-  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId, { searching: Boolean(search), pending: athleteRosterPending });
+  // Roles V-2: a view workspace's list is read only (no plans to open there).
+  els.athleteList.innerHTML = renderAthleteListHtml(athletes, state.selectedAthleteId, { searching: Boolean(search), pending: athleteRosterPending, readOnly: isViewWorkspace() });
 
   renderAthleteListState();
 
-  els.athleteList.querySelectorAll(".athlete-button").forEach((button) => {
+  els.athleteList.querySelectorAll("button.athlete-button").forEach((button) => {
     button.addEventListener("click", () => {
       if (!confirmLeaveTrainingLoad("weekly")) return;
       state.selectedAthleteId = button.dataset.athleteId;

@@ -13,7 +13,10 @@ function avatarMarkup(athlete) {
 // An empty list says why, in the shared empty state: a search that matched nothing, or a
 // workspace with no athletes (a platform administrator's own workspace, a new team). A count of
 // zero is shown quieter than a real count, so the plans an athlete has stand out.
-export function renderAthleteListHtml(athletes, selectedAthleteId, { searching = false, pending = false } = {}) {
+// Roles V-2: `readOnly` (a view workspace with athletes.view) draws each athlete as a plain row, never a button: the
+// athlete's plans and programs are programs.view, not athletes.view, so there is nothing to open, and the list carries
+// no plan counts.
+export function renderAthleteListHtml(athletes, selectedAthleteId, { searching = false, pending = false, readOnly = false } = {}) {
   if (!athletes.length && pending) return "";
   if (!athletes.length) {
     return searching
@@ -24,6 +27,17 @@ export function renderAthleteListHtml(athletes, selectedAthleteId, { searching =
     const n = Number(value) || 0;
     return `<span${n ? "" : ' class="is-zero"'}>${n} ${word}</span>`;
   };
+  if (readOnly) {
+    return sortAthletes(athletes).map((athlete) => `
+    <div class="athlete-button athlete-button-readonly">
+      ${avatarMarkup(athlete)}
+      <span>
+        <span class="athlete-name">${escapeHtml(athlete.athlete)}</span>
+        <span class="athlete-meta">ID ${escapeHtml(athlete.athlete_id)}</span>
+      </span>
+    </div>
+  `).join("");
+  }
   return sortAthletes(athletes).map((athlete) => `
     <button class="athlete-button ${athlete.athlete_id === selectedAthleteId ? "is-active" : ""}" data-athlete-id="${escapeAttr(athlete.athlete_id)}">
       ${avatarMarkup(athlete)}

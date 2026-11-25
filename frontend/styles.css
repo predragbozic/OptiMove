@@ -2787,6 +2787,29 @@ input:focus {
   background: var(--surface);
 }
 
+/* Roles V-2: a view workspace's athlete list is read only - a row, not a control. */
+.athlete-button.athlete-button-readonly,
+.athlete-button.athlete-button-readonly:hover {
+  border-color: transparent;
+  background: transparent;
+  cursor: default;
+}
+
+.organization-view-athletes-note {
+  margin: 0 0 12px;
+}
+
+.athlete-position-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .avatar,
 .avatar-fallback {
   width: 42px;

@@ -22,6 +22,7 @@ import { renderFilterableSelect } from "./organization-select.js";
 import { renderTaxonomyPanelHtml } from "./taxonomy-view.js";
 import { renderSessionTypesPanelHtml } from "./session-types-view.js";
 import { renderAthletePositionFormHtml } from "./positions-view.js";
+import { viewModuleOpen } from "./view-modules.js";
 import { state } from "./state.js";
 import { escapeAttr, escapeHtml, programInitials } from "./utils.js";
 
@@ -404,14 +405,18 @@ export function renderOrganizationBrowser(data) {
   // S2 (the Settings plan): one section, one list. Each section draws its own list under one heading with its count;
   // Overview is the summary that links to them. A selected club or team still opens its detail (its teams, its roster).
   const coach = isCoachSettings();
-  // A view workspace (roles R4): athletes open only with the Athletes VIEW step, so a chosen club or team shows no
-  // roster here (the server sends none; "No athletes" would be untrue).
+  // A view workspace (roles R4): athletes open only with the Athletes VIEW step (V-2, athletes.view), so without it a
+  // chosen club or team shows no roster here (the server sends none; "No athletes" would be untrue). With it the
+  // roster is the read-only list (renderViewAthleteListHtml): no add, edit, archive, invite, login or access control.
   const viewOnly = isViewWorkspace();
+  const viewAthletes = viewOnly && viewModuleOpen("athletes");
   const showAll = state.organization.selectedClubId || state.organization.selectedTeamId ? `<button class="text-action" type="button" data-action="organization-clear-selection">Show all</button>` : "";
   const addToggle = renderOrganizationAddToggle(data);
   const addForm = renderOrganizationAddForm(data);
   const head = (title, count, actions = "", eyebrow = "") => `${renderSectionHead(title, count, `${actions}${addToggle}`, eyebrow)}${addForm}`;
-  const athletesBlock = () => (selectedTeam
+  const athletesBlock = () => (viewOnly
+    ? renderViewAthleteListHtml(visibleAthletes)
+    : selectedTeam
     ? renderTeamAthleteTable(selectedTeam, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
     : selectedClub
       ? renderClubAthleteList(selectedClub, visibleAthletes, allReturnedAthletes, isPlatformAdmin)
@@ -441,19 +446,19 @@ export function renderOrganizationBrowser(data) {
         ${renderOrganizationSelectableList("Clubs", clubs, "club", state.organization.selectedClubId, { bare: true })}
         ${selectedClub && !selectedTeam && isPlatformAdmin ? renderClubLicenceHost(selectedClub) : ""}
         ${selectedClub ? renderOrganizationSelectableList(`Teams - ${selectedClub.name}`, visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team) }) : ""}
-        ${selectedClub && !viewOnly ? athletesBlock() : ""}
+        ${selectedClub && (!viewOnly || viewAthletes) ? athletesBlock() : ""}
       </section>`;
   } else if (section === "teams") {
     const archived = archivedTeamsOffered(data, isPlatformAdmin) ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-teams">${state.organization.showArchivedTeams ? "Hide archived" : `Show archived (${data.archivedTeams.length})`}</button>` : "";
     body = `${head(selectedTeam?.name || (selectedClub ? `Teams - ${selectedClub.name}` : "Teams"), selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : countLabel(visibleTeams.length, "team"), `${archived}${showAll}`)}
       <section class="organization-lists organization-lists-browser">
         ${renderOrganizationSelectableList(selectedClub ? `Teams - ${selectedClub.name}` : "Teams", visibleTeams, "team", state.organization.selectedTeamId, { canArchive: (team) => canArchiveTeam(data, team), bare: !selectedTeam })}
-        ${selectedTeam && !viewOnly ? athletesBlock() : ""}
+        ${selectedTeam && (!viewOnly || viewAthletes) ? athletesBlock() : ""}
       </section>`;
   } else {
     // Athletes (the coach's only list): the whole list, or the selected club's or team's roster.
-    const access = section === "athletes" && visibleAthletes.length ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : "";
-    const archived = section === "athletes" && !selectedClub && !selectedTeam ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-athletes">${state.organization.showArchivedAthletes ? "Hide archived" : `Show archived (${myArchivedCoachRelationships.length + archivedProfiles.length})`}</button>` : "";
+    const access = section === "athletes" && visibleAthletes.length && !viewOnly ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-athlete-access">Access control</button>` : "";
+    const archived = section === "athletes" && !selectedClub && !selectedTeam && !viewOnly ? `<button class="plain-button compact-button" type="button" data-action="organization-toggle-archived-athletes">${state.organization.showArchivedAthletes ? "Hide archived" : `Show archived (${myArchivedCoachRelationships.length + archivedProfiles.length})`}</button>` : "";
     body = `${head(coach ? "Athletes" : selectedTeam ? `Athletes - ${selectedTeam.name}` : selectedClub ? `Athletes - ${selectedClub.name}` : "Athletes", coach ? countLabel(visibleAthletes.length, "athlete") : selectedTeam ? `${countLabel(visibleAthletes.length, "athlete")} in team` : selectedClub ? `${countLabel(visibleTeams.length, "team")} - ${countLabel(visibleAthletes.length, "athlete")}` : countLabel(activeAthletes.length, "athlete"), `${access}${archived}${coach ? "" : showAll}`)}
       <section class="organization-lists organization-lists-browser">${athletesBlock()}</section>`;
   }
@@ -1798,6 +1803,33 @@ function formatExpiryLabel(expiresAt) {
   } catch {
     return "soon";
   }
+}
+
+// Roles V-2: the athletes of a view workspace (athletes.view), read only. Name, ID, team and club, and the athlete's
+// position when the club's positions were read; no control of any kind (the server refuses every write anyway).
+export function renderViewAthleteListHtml(rows) {
+  const p = state.positions;
+  const positionOf = (athlete) => {
+    if (!p?.assignmentsLoaded) return "";
+    const id = p.assignments[athlete.id];
+    return id ? p.list.find((x) => x.id === id)?.name || "" : "";
+  };
+  return `
+    <section class="panel organization-list-card organization-view-athletes" data-athlete-filter-scope aria-label="Athletes (read only)">
+      <p class="muted organization-view-athletes-note">You can look at the athletes here. Changes are made by the club's administrators.</p>
+      ${renderAthleteFilter("settings-athletes", rows)}
+      <div class="organization-list">
+        ${rows.length ? rows.map((athlete) => {
+    const position = positionOf(athlete);
+    return `
+          <article class="organization-row" ${athleteFilterAttrs(athlete, "settings-athletes")}>
+            ${renderOrganizationRowContent(athlete, "athlete")}
+            ${position ? `<span class="organization-row-actions"><span class="athlete-position-badge">${escapeHtml(position)}</span></span>` : ""}
+          </article>`;
+  }).join("") : `<p class="muted organization-empty-row">No athletes here yet.</p>`}
+      </div>
+    </section>
+  `;
 }
 
 function renderOrganizationList(title, rows, type, { isPlatformAdmin = false, bare = false } = {}) {
