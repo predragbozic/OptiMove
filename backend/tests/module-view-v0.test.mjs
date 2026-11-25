@@ -243,8 +243,10 @@ test('central handoff: every module and both view scopes lose all legacy authori
   let handed=false;await runGate(viewEntryGate(module,READS,{open:[module],resolve:resolver(workspace),refuse:(_req,_res,next)=>{handed=true;next();}}),req);
   assert.equal(handed,true,module);assert.equal(req.user,user);assert.deepEqual(authz,original,'original context is unchanged');assert.equal(req.moduleView,undefined);
   for(const key of ['platformRoles','clubRoles','teamRoles','managedTeamIds','rolePermissions','roleAssignments'])assert.deepEqual(req.authz[key],[],module+' '+key);
-  for(const key of ['isIndependentCoach','isAthlete'])assert.equal(req.authz[key],false);
-  assert.ok(Object.values(req.authz.capabilities).every(v=>v===false));assert.equal(req.authz.athleteId,null);
+  assert.equal(req.authz.isIndependentCoach,false);
+  assert.equal(req.authz.isAthlete,true);
+  assert.equal(req.authz.athleteId,OTHER);
+  assert.deepEqual(req.authz.capabilities,{coachWorkspace:false,athleteWorkspace:true,organizationManagement:false,platformAdministration:false,canCreateAthlete:false,canCreatePlan:false});
   assert.equal((await resolveActiveWorkspace(user.id,req.authz)).workspace,workspace,'writing resolver reuses the exact snapshot with no database call');
   assert.equal((await resolveActiveWorkspaceReadOnly(user.id,req.authz)).workspace,workspace,'read resolver reuses it too');
  }

@@ -910,8 +910,11 @@ test('10. mixed-account central handoff: both view workspaces answer like the SA
  const athlete=ok(await srv.api(w.adminB.cookie,'/api/organization/athletes',{method:'POST',body:{fullName:'Boundary Beta',clubId:w.B,teamId:w.TB1}}),201).athlete;
  const personal=ok(await srv.api(w.adminB.cookie,'/api/organization/athletes',{method:'POST',body:{fullName:'Boundary Personal',clubId:w.B}}),201).athlete;
  await k.query("insert into public.user_athletes(user_id,athlete_id,relationship_type,is_active) values($1,$2,'coach',true)",[who.id,personal.id]);
+ await k.query('update public.athletes set user_id=$1 where id=$2',[who.id,personal.id]);
  const routes=[
   ['GET','/api/athletes/'+personal.id+'/plans'],
+  ['GET','/api/tests/athlete/upcoming'],
+  ['GET','/api/tests/athlete/history'],
   ['GET','/api/athletes/'+athlete.id+'/plans'],['GET','/api/admin/athletes/'+athlete.id+'/program-data'],
   ['GET','/api/athletes/today'],['GET','/api/athletes/training-days?from=2026-11-01&to=2026-11-30'],
   ['POST','/api/organization/athletes',{fullName:'Must not exist',clubId:w.B}],
@@ -927,7 +930,7 @@ test('10. mixed-account central handoff: both view workspaces answer like the SA
  for(const [type,scope]of [['club',w.A],['team',w.TA1]]){
   await setPref(who,type,scope);assert.equal((await me(who)).activeWorkspace.type,type+'_view');
   const before=await snapshot(),beforeRows=await handoffRowState(),pref=(await k.query('select * from public.user_workspace_preferences where user_id=$1',[who.id])).rows;
-  const mixed=await replies();assert.equal(mixed[0].status,200,'actor-owned relationship remains as for the same actor without old roles');assert.ok(mixed.every(r=>r.status!==500),'no exception masquerades as refusal');assert.deepEqual(changed(before,await snapshot()),[],'no inserted/deleted row across schemas');assert.deepEqual(await handoffRowState(),beforeRows,'no existing row changed across application schemas');
+  const mixed=await replies();assert.equal(mixed[0].status,200,'actor-owned relationship remains as for the same actor without old roles');assert.deepEqual(mixed.slice(1,3).map(r=>r.status),[200,200],'own Tests routes retain verified athlete identity');assert.ok(mixed.every(r=>r.status!==500),'no exception masquerades as refusal');assert.deepEqual(changed(before,await snapshot()),[],'no inserted/deleted row across schemas');assert.deepEqual(await handoffRowState(),beforeRows,'no existing row changed across application schemas');
   assert.equal((await k.query('select full_name from public.athletes where id=$1',[athlete.id])).rows[0].full_name,'Boundary Beta','no existing athlete update');
   assert.deepEqual((await k.query('select * from public.user_workspace_preferences where user_id=$1',[who.id])).rows,pref,'no workspace preference write');
   try{

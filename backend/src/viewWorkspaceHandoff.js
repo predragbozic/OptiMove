@@ -11,8 +11,9 @@ export function rolelessViewHandoff(req, resolution) {
     teamRoles: [],
     managedTeamIds: [],
     isIndependentCoach: false,
-    isAthlete: false,
-    athleteId: null,
+    // A verified athlete profile is personal identity, independent of staff roles.
+    isAthlete: req.authz?.isAthlete === true,
+    athleteId: req.authz?.isAthlete === true ? req.authz.athleteId : null,
     rolePermissions: Object.freeze([]),
     roleAssignments: Object.freeze([]),
   };
