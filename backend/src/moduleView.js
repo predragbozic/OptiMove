@@ -50,7 +50,8 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 });
 
 // The modules a view workspace may read. A module enters here only in its own V pull request, with its entry gate.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results"]);
+// V-6 opens Dashboards read-only.
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards"]);
 
 // The base scope of each view workspace type (the club or team it names).
 const VIEW_SCOPE_TYPES = Object.freeze({ club_view: "club", team_view: "team" });
@@ -84,15 +85,19 @@ export function canView(authz, workspace, module, { open = OPEN_VIEW_MODULES } =
 }
 
 // "GET /", "GET /:id", "GET /:id/history": the path of one READ route, matched segment by segment against req.path
-// (relative to the router's mount). Only GET can be listed (a view workspace never writes). A ":name" segment matches a
+// (relative to the router's mount). Only GET can be listed (a view workspace never writes), and a POST read marked
+// `postRead` whose path ends in "/query" (V-6, below). A ":name" segment matches a
 // canonical UUID unless the route gives that parameter its own CLOSED pattern (`params: { name: /^…$/ }`), so a listed
 // "GET /:id" can never also admit a literal sibling route of the router ("GET /active", "GET /export"); nothing else is
 // a wildcard. Each module's V step still proves its list against its router's GET routes (the plan's section 4).
 const UUID_SEGMENT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// V-6: a POST that only reads (a dashboard's batch query, which takes its period and filters in the body) may be
+// listed with `postRead: true`, and only when its last segment is the literal "query": no other POST can be listed.
 function compileRoute(route) {
   const method = String(route?.method || "").toUpperCase();
   const path = String(route?.path || "");
-  if (method !== "GET" || !path.startsWith("/")) throw new Error(`Bad view route: ${JSON.stringify(route)}`);
+  const postRead = method === "POST" && route?.postRead === true && path.split("/").filter(Boolean).at(-1) === "query";
+  if ((method !== "GET" && !postRead) || !path.startsWith("/")) throw new Error(`Bad view route: ${JSON.stringify(route)}`);
   const params = route.params || {};
   const parts = path.split("/").filter(Boolean).map((p) => {
     if (!p.startsWith(":")) return (segment) => segment === p;

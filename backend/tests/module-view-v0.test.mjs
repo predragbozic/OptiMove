@@ -43,7 +43,7 @@ test("1. every module's view word is a known, storable (VIEW package) word, scop
 });
 
 test("2. only the open modules (V-1: data_configuration, presets; V-2: athletes; V-3: calendar; V-4: tests, tests_results): a view workspace holding every view word is refused every other module", () => {
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "data_configuration", "presets", "tests", "tests_results"]);
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "dashboards", "data_configuration", "presets", "tests", "tests_results"]);
   const all = authzWith(Object.values(MODULE_VIEW_WORDS));
   for (const module of Object.keys(MODULE_VIEW_WORDS)) {
     const open = OPEN_VIEW_MODULES.includes(module);
@@ -202,6 +202,22 @@ test("11. a custom parameter pattern is matched whole: an alternation /^a|b$/ ad
   }
   assert.doesNotThrow(() => viewEntryGate("calendar", [{ method: "GET", path: "/:key", params: { key: /^[a-z]+$/i } }]), "the i flag is harmless");
 });
+test("12. V-6: a POST read is listed only with postRead and a last segment \"query\"; it then admits that POST and nothing else", async () => {
+  assert.throws(() => viewEntryGate("dashboards", [{ method: "POST", path: "/:id/query" }]), /Bad view route/, "postRead is required");
+  for (const path of ["/:id", "/:id/query/x", "/:id/queries", "/query-all"]) assert.throws(() => viewEntryGate("dashboards", [{ method: "POST", path, postRead: true }]), /Bad view route/, path);
+  for (const method of ["PUT", "PATCH", "DELETE"]) assert.throws(() => viewEntryGate("dashboards", [{ method, path: "/:id/query", postRead: true }]), /Bad view route/, method);
+  const ID = "33333333-0000-4000-8000-000000000001";
+  const holder = authzWith(["dashboards.view"]);
+  const gate = viewEntryGate("dashboards", [{ method: "POST", path: "/:id/query", postRead: true }], { resolve: resolver(clubView), open: ["dashboards"] });
+  const yes = await runGate(gate, { user: { id: "u1" }, authz: holder, method: "POST", path: `/${ID}/query` });
+  assert.equal(yes.next, true);
+  assert.equal(yes.status, null);
+  for (const [method, path] of [["GET", `/${ID}/query`], ["POST", `/${ID}`], ["POST", `/${ID}/clone`], ["DELETE", `/${ID}/query`]]) {
+    const no = await runGate(gate, { user: { id: "u1" }, authz: holder, method, path });
+    assert.equal(no.status, 403, `${method} ${path}`);
+  }
+});
+
 
 test("12. roles V-3, the calendar's write guards behind the gate: a view context (readOnly, view) has no event owner and no write basis, even with a platform admin's authz; the same coach context without them keeps both", async () => {
   const { eventOwnerForWorkspace, eventWriteBasis } = await import("../src/calendarEventAccess.js");

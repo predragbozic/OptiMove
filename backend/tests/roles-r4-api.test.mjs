@@ -88,7 +88,7 @@ test("1. every club-scope write takes the club's ceiling lock, shared, right aft
   // R2's copy keeps only checked words: the seeded view words not checked yet are dropped and named "not available yet"
   // (roles V-1 checks variables.view and presets.use, roles V-2 athletes.view, roles V-3 calendar.view, roles V-4
   // tests.view and tests.results.view, so the copy keeps them).
-  const CHECKED_VIEW = ["athletes.view", "calendar.view", "presets.use", "tests.results.view", "tests.view", "variables.view"];
+  const CHECKED_VIEW = ["athletes.view", "calendar.view", "dashboards.view", "presets.use", "tests.results.view", "tests.view", "variables.view"];
   assert.deepEqual([...copy.items].sort(), ["athletes.manage", "athletes.remove", "org.view", ...CHECKED_VIEW].sort());
   const dropped = ok(c3.res).dropped;
   assert.deepEqual(dropped.filter((d) => d.reason === "not_available_yet").map((d) => d.word).sort(), VIEW.filter((v) => !CHECKED_VIEW.includes(v)));
@@ -105,7 +105,7 @@ test("2. O6: an unchecked word is never added or taken away - a club role, a cop
   ok(await change(w.adminA, copy.id, { expectedRevision: copy.revision, items: copy.items.filter((x) => x !== "athletes.remove") }));
   code(await change(w.pa, ROLE_IDS.club_admin, { expectedRevision: await revision(ROLE_IDS.club_admin), items: ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign"] }), 409, "permission_not_available_yet");
   const sys = ok(await createRole(w.pa, { name: `System ${hex()}`, scopeTypes: ["club"], items: ["org.view"] })).role;
-  code(await change(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "dashboards.view"] }), 409, "permission_not_available_yet");
+  code(await change(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "exercises.use"] }), 409, "permission_not_available_yet");
   // A word that is not storable keeps R2's code.
   code(await change(w.pa, sys.id, { expectedRevision: 1, items: ["org.view", "import.check"] }), 409, "permission_not_honoured");
   // The catalog read tells the screen which words are checked.

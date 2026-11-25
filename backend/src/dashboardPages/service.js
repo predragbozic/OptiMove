@@ -4,14 +4,15 @@ import { resolveReferenceContext } from "../dashboardReferences/access.js";
 import {attachGalleryResult,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { isMetricVisibleToDashboard, isSourceConnectionVisibleToDashboard } from '../trainingLoadDashboardAccess.js';
 import { assertDashboardAggregation } from '../dashboardRatios.js';
-import { queryDashboard } from '../trainingLoadDashboardQuery.js';
+import { queryDashboardForViewer } from '../trainingLoadDashboardQuery.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { resolvePeriod } from '../dashboardSimple/compiler.js';
 import { validateContract } from '../dashboardSimple/schema.js';
 import {createHash} from 'node:crypto';
 import {loadAuthorizationContext} from '../authz.js';
-import {resolveActiveWorkspaceReadOnly} from '../workspace.js';
-import {canViewDashboardRow,canManageDashboardRow,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches} from '../trainingLoadDashboardAccess.js';
+import {pickFallbackWorkspace,resolveActiveWorkspaceReadOnly} from '../workspace.js';
+import {viewReadScope} from '../moduleView.js';
+import {canViewDashboardRow,canManageDashboardRow,dashboardWidgetsForViewer,dashboardNamedAthletesAllowed,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches,redactDashboardAthleteFilters} from '../trainingLoadDashboardAccess.js';
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
@@ -31,7 +32,7 @@ async function lockActor(q,req){
  for(const table of ['user_global_roles','user_club_roles','user_team_roles','user_workspace_preferences'])await q(`select user_id from public.${table} where user_id=$1 for share`,[req.user.id]);
 }
 export async function pageTarget(q,req,dashboardId,{write=false,manage=false}={}){
- if(!isUuid(req.user?.id)||!isUuid(dashboardId))throw pageError();
+ if(req.dashboardsViewRefused||!isUuid(req.user?.id)||!isUuid(dashboardId))throw pageError();
  const args=[req.user.id];
  let sessionSql='';
  if(req.sessionToken){args.push(createHash('sha256').update(String(req.sessionToken)).digest('base64url'));sessionSql='and exists(select 1 from public.auth_sessions s where s.user_id=u.id and s.token_hash=$2 and s.expires_at>now())';}
@@ -39,8 +40,17 @@ export async function pageTarget(q,req,dashboardId,{write=false,manage=false}={}
  if(!user)throw pageError();
  const authz=await loadAuthorizationContext(user,q);
  const resolved=await resolveActiveWorkspaceReadOnly(user.id,authz,q);
- if(!resolved.workspace)throw pageError();
- const actor={user,authz};const workspace=dataWorkspaceForActiveWorkspace(resolved.workspace,actor);
+ // Roles V-6: a view workspace reads a page only on a read the dashboards gate admitted (req.moduleView), in the workspace
+ // the gate resolved (its fallback included); anything else of a view workspace, and any workspace without a data
+ // workspace (no dashboards.view there, as the legacy routes' requireDataWorkspace), answers the 404. A view actor never
+ // manages (canManageDashboardRow).
+ const admitted=req.moduleView?.module==='dashboards'&&!write&&!manage;
+ const active=resolved.workspace||(admitted?pickFallbackWorkspace(resolved.availableWorkspaces):null);
+ if(!active || (admitted && (active.type!==req.moduleView.workspace.type || String(active.scopeId)!==String(req.moduleView.workspace.scopeId))))throw pageError();
+ const actor={user,authz};
+ if(viewReadScope(active)){if(admitted)actor.moduleView=req.moduleView;else actor.dashboardsViewRefused=true;}
+ const workspace=dataWorkspaceForActiveWorkspace(active,actor);
+ if(actor.dashboardsViewRefused||!workspace.dataWorkspaceType)throw pageError();
  const dashboard=(await q('select * from training_load.dashboards where id=$1',[dashboardId])).rows[0];
  if(!dashboard||!((write||manage)?canManageDashboardRow(actor,dashboard):canViewDashboardRow(actor,dashboard,workspace)))throw pageError();
  if(write&&dashboard.status!=='active')throw pageError('dashboardArchived',409);
@@ -57,7 +67,8 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
   return transaction(async q=>{const target=await pageTarget(q,req,dashboardId);if(!(await pageDatabaseEnabled(q)))throw pageError();
    const pages=(await q('select * from training_load.dashboard_pages where dashboard_id=$1 order by position,id',[dashboardId])).rows;
    if(pageId&&!pages.some(p=>p.id.toLowerCase()===pageId.toLowerCase()))throw pageError();
-   return {requestIssuedAt:new Date(now()).toISOString(),pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard)};
+   const shown=dashboardNamedAthletesAllowed(target.req,target.workspace)?{pages}:redactDashboardAthleteFilters({pages});
+   return {requestIssuedAt:new Date(now()).toISOString(),pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard)};
   });
  }
  async function mutate({req,dashboardId,pageId=null,operation,body}){
@@ -86,7 +97,10 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
    const pages=(await q('select * from training_load.dashboard_pages where dashboard_id=$1 order by position,id',[dashboardId])).rows;
-   return {requestIssuedAt:new Date(now()).toISOString(),dashboard:target.dashboard,page,resolvedPeriod:page.period_config?resolvePeriod(page.period_config,new Date(now()).toISOString()):null,pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard),widgets:widgets.map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}))};
+   const full={dashboard:target.dashboard,page,pages,widgets:dashboardWidgetsForViewer(target.req,widgets).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}))};
+   // Roles V-6: without load.view.athlete the filters' athletes are not returned (dashboard, pages, widgets).
+   const shown=dashboardNamedAthletesAllowed(target.req,target.workspace)?full:redactDashboardAthleteFilters(full);
+   return {requestIssuedAt:new Date(now()).toISOString(),dashboard:shown.dashboard,page:shown.page,resolvedPeriod:page.period_config?resolvePeriod(page.period_config,new Date(now()).toISOString()):null,pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard),widgets:shown.widgets};
   });
  }
  async function queryPage({req,dashboardId,pageId,body}){
@@ -103,7 +117,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    let shellFilter;try{shellFilter=normalizeShellFilter(body.shellFilter)}catch{throw pageError('invalidRequest',400)}
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
-   let selected=widgets.filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
+   let selected=dashboardWidgetsForViewer(target.req,widgets).filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
    const referenceRequest={...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)};
    if(body.referencePreview!==undefined){
     if(!validReferencePreview(body.referencePreview))throw pageError('invalidRequest',400);
@@ -111,7 +125,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
     const ctx=await resolveReferenceContext(referenceRequest);
     selected=referencePreviewWidgets(selected,body.referencePreview,ctx?.owner.clubId);await assertReferenceSource(q,body.referencePreview.referenceConfig,ctx.owner.clubId,ctx.workspace,widgets.find(w=>w.id===body.referencePreview.widgetId)?.presentation_config?.referenceConfig);
    }
-   const result=await queryDashboard(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q});
+   const result=await queryDashboardForViewer(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
    const galleryWidgets=await hydrateGalleryWidgets(q,selected);
    const referenceEnabled=process.env.DASHBOARD_REFERENCES_ENABLED==='true';
    const referenceContext=referenceEnabled&&selected.some(w=>w.presentation_config?.referenceConfig)?await resolveReferenceContext(referenceRequest):null;

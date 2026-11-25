@@ -1103,3 +1103,137 @@ The resolved read-only workspace snapshot is associated with the fresh authoriza
 **Boundary:** this does not open any V-6/V-7/V-5b read, add a permission word, change MANAGE rights or add a migration. Currently mounted module entry gates inherit it; future V steps inherit it when their gates are mounted. Ungated legacy routers are not claimed to have been converted by this slice. Router-specific refusal statuses/bodies and unknown-route behavior remain their existing no-old-role answers, not a new blanket 403. Personal/self relationships that the same authenticated actor can read without old roles remain unchanged; there is no invented actor id or claim that roleless always means an empty answer.
 
 **Evidence contract:** the unit sweep applies the shared gate to every MODULE_VIEW_WORDS entry and both view types, including listed GET refusal for a missing word/closed licence, cleared cached capabilities, stale context and actor/request isolation. One real HTTP sweep covers every currently mounted gate (data configuration, presets, athletes, calendar, tests/results, plus organization), both view types, and a mixed actor with platform/independent/club/team roles elsewhere. It compares the SAME actor with those old rows temporarily disabled in the disposable fixture, checks a legitimate personal relationship, snapshots all application row counts/digests and preferences, and leaves auth/workspace selection intact. Temporary source/body mutations are run separately from the clean full gate.
+
+## 15. V-6 design (Dashboards)
+
+No migration. The licence hierarchy
+(closing `training_load` closes `dashboards`) is V-5's and is not built here; V-6 reads it through `can()`.
+
+**What the code showed (beyond 2.7).**
+- Two routers serve `/api/training-load/dashboards`: the legacy one (`routes/trainingLoadDashboard.js`) and, when
+  pages are on, the pages router (`dashboardPages/router.js`). Its service (`pageTarget`) loads its own authz and
+  resolves the workspace again inside its transaction. A third, the Simple runtime (`/:dashboardId/simple`), is
+  platform-pilot only and resolves the workspace with the writing resolver.
+- **Writes do not depend on the workspace.** `canManageDashboardRow` and the create context use old role rows only, so
+  today an account that is club B's admin can create, edit or delete club B's dashboards while a `club_view` of club A
+  is active. A pass-through refusal (V-3's pattern) would keep that. V-6 closes it in `canManageDashboardRow` itself.
+- **Every `groupBy` except `cohort` answers one row per athlete** (`reduceRows` keys every bucket by `athleteId`;
+  `cohort` drops it). `analyticalAggregation: "none"` keeps the athlete under `cohort` too. The frontend draws these
+  rows with athlete names. So "an athlete-grouped widget" is, in this code, every widget that is not a cohort total.
+- The answer carries athlete ids, never names. Names come from the organization athletes (P-1, V-2's word).
+
+**Choices (the executor's, for the manager's review).**
+1. **One gate for the module**, `viewEntryGate("dashboards", …)`, mounted once in `server.js` in front of both
+   routers. Its reads: `GET /`, `GET /active`, `GET /:dashboardId`, `POST /:dashboardId/query`, and the pages reads
+   `GET /:dashboardId/pages`, `GET /:dashboardId/pages/:pageId`, `POST /:dashboardId/pages/:pageId/query`. Closed:
+   every write, `POST`/`DELETE /active` (decided), the page request status, the preview and save of Simple.
+2. **`POST …/query` is a read.** `moduleView.js` takes a listed POST only with `postRead: true` and a last segment
+   `query` (a tripwire: no other POST can be listed). A plain POST stays refused at compile time.
+3. **The refusal passes on** (V-3's pattern): the request is marked and goes to the route, which answers what it
+   answers an account with no workspace (`403 forbidden "No active workspace."`; the pages router its `404`). The
+   route does not resolve the workspace again for a marked request (no preference write).
+4. **A view workspace never manages a dashboard.** `canManageDashboardRow` and `dashboardManageBasis` answer no for
+   any request whose active workspace is a view one (admitted or refused), and the create context refuses `club` and
+   `team` owners there with the answer an account without that club gets. A mixed account in `club_view` A cannot
+   write club B's dashboards any more (a behaviour change for such accounts, closing the hole above). The Simple
+   runtime gets the gate with no read, so a view workspace answers its 404 without the writing resolve.
+5. **The view data workspace** is the gate's scope: `club_view` A reads data workspace `club` A, `team_view` T reads
+   `team` T (ADR-002: the workspace stays the data context). A `club_view` does not see its teams' dashboards: a coach
+   in club workspace A cannot query them either (the data workspace does not match).
+6. **What a view workspace sees:** the system templates and the shared (club- or team-owned) dashboards whose data
+   workspace is its own. Never a private dashboard, its own included, and never through manage rights or the platform
+   admin's shortcut (a platform admin in a view workspace is limited like anyone there, as in V-1). Another club's id
+   gives the identical 404. `GET /active` answers the selection only when that dashboard is visible by these rules,
+   else `null`. A template's query stays `409 templateRequiresClone`.
+7. **Named athletes (`load.view.athlete`).** A widget is *athlete-level* when its `groupBy` is not `cohort`, or a series
+   aggregates with `none`, or its effective filter (default, request, widget override, or the shell's athletes)
+   names athletes. Without the word an athlete-level widget answers, per series,
+   `{ status: "restricted", error: "namedAthletesRequired", data: null }`, and nothing of it is queried. A cohort total
+   loses its `conflictCandidates` (they carry athlete ids). The word is asked through `canView(…, "load_athlete")`:
+   - in a view workspace it stays no until V-5 opens `load_athlete` (so until then a view holder sees cohort totals
+     only);
+   - in a club or team workspace it is `can(load.view.athlete)`; the word is unchecked until V-5, and an unchecked word
+     cannot be taken from a role (O6), so nothing changes for a coach before V-5;
+   - the platform, a private coach and an athlete's own workspace are not limited.
+8. **No `load.view.team` check.** `dashboards.view` is the module's word; team totals need nothing more. The licence
+   hierarchy (V-5) closes dashboards when Training Load is closed.
+9. **The coach paths (checked word).** A club or team workspace keeps its data workspace only with
+   `can(dashboards.view)` at its scope (in `trainingLoadDashboardAccess.js`); without it, or with the licence closed,
+   every route (reads and writes) answers as for no workspace. The pages service applies the same rule. The platform,
+   a private coach and the athlete workspace are unchanged.
+10. **Frontend.** `OPEN_VIEW_MODULES` gets `dashboards`; Training Load in a view workspace shows Data & Analysis with
+    the Dashboards view only, read only: no New dashboard, no menu writes (Rename, Set as active, Edit layout, Archive,
+    Delete), no Add metric, no clone. A restricted widget shows one sentence ("This widget shows each athlete's
+    values, which you can't see here."). Athlete names stay "Athlete name unavailable" without `athletes.view` (today's
+    fallback).
+
+**As built** (branch `claude/roles-v6-dashboards` from `cf48c11e`; no migration).
+- **Gate.** `routes/trainingLoadDashboard.js` exports `DASHBOARDS_VIEW_READS` and `dashboardsViewGate` (refusal:
+  `req.dashboardsViewRefused = true`, then `next()`). `server.js` mounts it once, before the pages router and the
+  legacy router, and mounts `viewEntryGate("dashboards", [])` with the 404 in front of the Simple runtime.
+  `moduleView.js` accepts `{ method: "POST", path: "…/query", postRead: true }` (`module-view-v0` test 12).
+- **Access** (`trainingLoadDashboardAccess.js`):
+  - `describeDataWorkspace` asks `can(dashboards.view)` for a club or team workspace and maps an admitted view
+    workspace to `{ type, dataWorkspaceType, dataWorkspaceScopeId, view: true }`;
+  - `resolveActiveDataWorkspace` resolves nothing again for a view request;
+  - `isDashboardsViewRequest` closes `canManageDashboardRow`, `dashboardManageBasis` and the create context;
+  - `canViewDashboardRow` and `dashboardVisibilitySql` have a view branch;
+  - `dashboardNamedAthletesAllowed` keeps the resolved workspace in a `WeakMap`, so the descriptor (stored with a page
+    request) keeps its shape.
+- **Query** (`trainingLoadDashboardQuery.js`): `athleteLevelWidget` and `queryDashboardForViewer`, used by
+  `POST /:id/query` and by the page query.
+- **Pages service** (`pageTarget`):
+  - An admitted view read takes the gate's fallback workspace; the service's read-only resolve has no fallback, and a
+    view holder has no stored preference.
+  - A refused view request, and **any workspace without a data workspace**, answers the 404. This is the legacy
+    routes' `requireDataWorkspace`, now also for the pages router: a club or team coach without `dashboards.view`,
+    or an athlete workspace without an athlete row, no longer reads system templates' pages.
+- **`GET /active`** answers a view workspace's selection only when that dashboard is visible to it.
+- **Word lists.** `ENFORCED_PERMISSIONS["dashboards.view"] = ["trainingLoadDashboardAccess.js"]`.
+  `VIEW_WORKSPACE_USABLE_WORDS` gets the word, and `OPEN_VIEW_MODULES` gets `dashboards` on both sides.
+  `roles-r4-checked-gates` B1: `trainingLoadDashboardAccess.js` 9 (+2).
+- **Frontend.**
+  - `VIEW_TRAINING_LOAD_SECTIONS.dashboards = ["analysis"]` (it comes first, so a holder of both words lands on
+    Dashboards).
+  - `training-load-view.js` shows Data & Analysis with only the open views.
+  - `training-load-analysis-view.js` `readOnlyView()` hides every write control.
+  - The display model turns a restricted widget into one status line.
+- **Found and fixed on the way (phones, every workspace).** The compact top bar is a layer of its own (z-index 5), so
+  the dashboard picker's and the dashboard menu's bottom sheets sat under the bottom bar. The last rows and the coach's
+  New dashboard footer were hidden; a view workspace's only dashboard row could not be tapped. `styles.css` raises the
+  bar while one of its sheets is open, as it already did for the widget menu.
+- **Tests.**
+  - `roles-v-sweep` test 9 (pages on in that suite; numbered 9 after V-2's test 8), with:
+    - only the listed reads, club A's or team TA1's data only (the coach's cohort total), and athlete-level widgets
+      `restricted` (also with an athlete filter or a shell athlete);
+    - the identical 404 for another club's, a private or a missing dashboard and page;
+    - eleven writes (POST/DELETE `/active` and a page create included), each the same answer as an account with no
+      role, and nothing written;
+    - a forged preference and a mixed account (no write to its own club's dashboard from club A's view);
+    - old-vs-new for the coaches, the word taken away, and the licence for role holders and the club's old roles.
+  - Tests 1 and 2 take `dashboards` as open.
+  - Frontend: `roles-v6-view.test.mjs` and `view-modules.test.mjs` (1, 3, 3c).
+  - e2e: `roles-v6-view-dashboards.test.mjs` at 1280, 390 and 360 px.
+  - `dashboard-simple-presentation-writers` mocks the two new exports.
+
+**Review round (code, security, mobile-qa) and what changed.**
+- **Security HIGH, fixed.** A filter's athletes are athlete-level data too. Without `load.view.athlete`,
+  `redactDashboardAthleteFilters` sets `athleteIds` to null in these config reads (the rest of each filter stays):
+  - the dashboard's `default_filter` and the widgets' `local_filter_override` in `GET /:dashboardId`;
+  - every page's `default_filter` in the pages list;
+  - the dashboard, page, pages and widgets of the page detail.
+  Sweep test 9 checks the redaction for the view holders, and that the coach keeps the filter.
+- **Security MEDIUM, accepted limit (recorded, not built).** A cohort total stays a single athlete's value when only
+  one athlete is in it. That happens with a one-athlete activity or component filter, a shell team or club of one
+  athlete, or `min`/`max` (the value is one athlete's). It carries no id or name. A size threshold (as 7e's OD3: min /
+  max only from 3 athletes) is a possible follow-up. Sweep test 9 scans each answer for athlete ids, so a series type
+  that starts emitting `athleteId` under `cohort` fails it.
+- **Security LOW, route table.** Every route a view workspace is refused at either answers as for no workspace or
+  never manages:
+  - Legacy router: every route but `POST /` calls `requireDataWorkspace`, which gives `{type:null}` for a refused view
+    request, so 403. Its layout, widget and series writes also need `requireManageableDashboard`, which is false for a
+    view request. `POST /` goes through the create context, which refuses every owner for a view request.
+  - Pages router: every route goes through `pageTarget`, which answers the 404 for a refused view request.
+  - Simple runtime: the gate with no read answers its 404.
+- **Mobile-qa LOWs, applied.** The restricted sentence is now "This widget shows each athlete's values, which you
+  can't see here." The empty state names "the people who manage this club or team".

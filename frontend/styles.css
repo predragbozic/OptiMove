@@ -30601,6 +30601,10 @@ body.athlete-questions-prompt-open {
   /* A widget's "⋯" menu: its anchor is positioned with a z-index (a layer of its own), so the anchor itself goes
      above the bar while the menu is open - the popover's own z-index only counts inside it. */
   body.has-bottom-nav:not(.login-mode) .tl-popover-anchor.tl-widget-menu-anchor.is-open { z-index: 1190 !important; }
+  /* The compact top bar (the dashboard picker and the dashboard menu) is a layer of its own too (position relative,
+     z-index 5): while one of its sheets is open the bar goes above the bottom bar, so the sheet's last rows and its
+     footer are not hidden behind it (found in roles V-6: a view workspace's only dashboard row sat under the bar). */
+  body.has-bottom-nav:not(.login-mode) .tl-analysis-topbar:has(.tl-popover) { z-index: 1190 !important; }
 
   body.has-bottom-nav:not(.login-mode) .tl-layout-bar { bottom: var(--om-bottom-nav-space) !important; }
   body.has-bottom-nav:not(.login-mode) .exercise-selection-bar { bottom: calc(var(--om-bottom-nav-space) + 12px) !important; }

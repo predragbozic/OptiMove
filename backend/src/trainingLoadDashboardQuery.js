@@ -903,3 +903,38 @@ export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dat
   }
   return widgetsWithSeries.map((widget) => ({ widgetId: widget.id, series: byWidget.get(widget.id) || [] }));
 }
+
+// ------------------------------------------------------------
+// Roles V-6 (docs/ai/roles-v-steps-plan.md section 13, choice 7): named athletes. Every groupBy but 'cohort' answers
+// one row per athlete (reduceRows keys its buckets by athleteId), and so does a series aggregated with 'none'; a
+// widget whose effective filter names athletes (or a shell filter that names them) answers about those athletes.
+// Without load.view.athlete such a widget is never queried: each of its series answers a fixed 'restricted' result.
+// A cohort total that is answered loses its conflict candidates (facts that carry athlete ids).
+// ------------------------------------------------------------
+export const NAMED_ATHLETES_REQUIRED = "namedAthletesRequired";
+
+export function athleteLevelWidget(widget, { defaultFilter, requestFilter, shellFilter } = {}) {
+  if (widget.group_by !== "cohort") return true;
+  if ((widget.series || []).some((series) => series.analytical_aggregation === "none")) return true;
+  if (shellFilter?.athleteIds?.length) return true;
+  const effective = mergeFilters(defaultFilter, requestFilter, widget.local_filter_override);
+  return Array.isArray(effective.athleteIds) && effective.athleteIds.length > 0;
+}
+
+function withoutConflictCandidates(rows) {
+  return Array.isArray(rows) ? rows.map(({ conflictCandidates, ...row }) => row) : rows;
+}
+
+export async function queryDashboardForViewer(dataWorkspaceArgs, widgetsWithSeries, period, options = {}, { namedAthletes }) {
+  if (namedAthletes === true) return queryDashboard(dataWorkspaceArgs, widgetsWithSeries, period, options);
+  const restricted = new Set(widgetsWithSeries.filter((widget) => athleteLevelWidget(widget, options)).map((widget) => widget.id));
+  const answered = await queryDashboard(dataWorkspaceArgs, widgetsWithSeries.filter((widget) => !restricted.has(widget.id)), period, options);
+  const byWidget = new Map(answered.map((item) => [item.widgetId, item]));
+  return widgetsWithSeries.map((widget) => {
+    if (restricted.has(widget.id)) {
+      return { widgetId: widget.id, series: (widget.series || []).map((series) => ({ widgetId: widget.id, seriesId: series.id, status: "restricted", error: NAMED_ATHLETES_REQUIRED, data: null })) };
+    }
+    const item = byWidget.get(widget.id) || { widgetId: widget.id, series: [] };
+    return { ...item, series: item.series.map((series) => (series.data ? { ...series, data: { ...series.data, current: withoutConflictCandidates(series.data.current), comparison: withoutConflictCandidates(series.data.comparison) } } : series)) };
+  });
+}

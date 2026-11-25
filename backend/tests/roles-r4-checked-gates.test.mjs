@@ -105,6 +105,7 @@ const REVIEWED = Object.freeze({
   "canonicalVariableAdminService.js": 2,
   "clubCeilingLock.js": 2,
   // P3 owner contract: both helpers explicitly close every workspace except club/team.
+  "dashboardPages/service.js": 1, // refuse when the admitted workspace changes before the Page read
   "dashboardReferences/access.js": 1,
   "dashboardReferences/bindingRouter.js": 1, // athlete/cohort groupBy validation, not a workspace authority
   "dashboardReferences/query.js": 1,
@@ -150,7 +151,9 @@ const REVIEWED = Object.freeze({
   "trainingActivityMaterialize.js": 4,
   "trainingActivityResults.js": 1,
   "trainingLoadAccess.js": 24,
-  "trainingLoadDashboardAccess.js": 7,
+  // V-6: dashboards.view at a coach workspace's own club or team (an old role row), and the club / team data workspace
+  // that load.view.athlete is asked for (+2); a view workspace is read through viewReadScope (the gate's), never offered.
+  "trainingLoadDashboardAccess.js": 9,
   "trainingLoadDashboardCatalog.js": 3,
   "trainingLoadDashboardQuery.js": 13,
   "trainingLoadDashboardWidgets.js": 1,

@@ -20,8 +20,9 @@ import { normalizeShellFilter } from '../dashboardShellFilter.js';
 // AC/CH, no ML — this router is the backend surface only, per this
 // delivery's own explicit scope boundary.
 import { Router } from "express";
+import { viewEntryGate } from "../moduleView.js";
 import { canUseSimplePlatformPilot } from "../dashboardSimple/platformPilot.js";
-import { resolveActiveDataWorkspace, canManageDashboardRow, dataWorkspaceMatches } from "../trainingLoadDashboardAccess.js";
+import { resolveActiveDataWorkspace, canManageDashboardRow, dashboardWidgetsForViewer, dashboardNamedAthletesAllowed, dataWorkspaceMatches, redactDashboardAthleteFilters } from "../trainingLoadDashboardAccess.js";
 import {
   listDashboards, getDashboardDetail, createDashboard, updateDashboardMetadata, archiveDashboard, deleteDashboard, cloneDashboard,
   getActiveDashboard, setActiveDashboard, clearActiveDashboard, httpError, validFilterShape,
@@ -30,11 +31,31 @@ import {
   replaceLayout, updateWidgetLayout, createWidget, updateWidgetContent, deleteWidget,
   addSeries, updateSeries, deleteSeries, reorderSeries, resolveSeriesBinding,
 } from "../trainingLoadDashboardWidgets.js";
-import { queryDashboard } from "../trainingLoadDashboardQuery.js";
+import { queryDashboardForViewer } from "../trainingLoadDashboardQuery.js";
 import { query } from "../db.js";
 import { validateContract } from "../dashboardSimple/schema.js";
 
 const router = Router();
+
+// Roles V-6 (docs/ai/roles-v-steps-plan.md sections 2.7 and 13): the dashboards module's entry gate, mounted in
+// server.js in front of this router and the pages router. A view workspace (club_view / team_view) reaches only these
+// reads, with dashboards.view at its club or team; POST /active and DELETE /active (a personal selection) stay closed.
+// Every other request of a view workspace is marked and passed on: it answers what it answers an account with no
+// workspace (trainingLoadDashboardAccess.js resolves nothing again for it), and it never manages a dashboard.
+export const DASHBOARDS_VIEW_READS = Object.freeze([
+  { method: "GET", path: "/" },
+  { method: "GET", path: "/active" },
+  { method: "GET", path: "/:dashboardId" },
+  { method: "POST", path: "/:dashboardId/query", postRead: true },
+  { method: "GET", path: "/:dashboardId/pages" },
+  { method: "GET", path: "/:dashboardId/pages/:pageId" },
+  { method: "POST", path: "/:dashboardId/pages/:pageId/query", postRead: true },
+]);
+function passOnRefused(req, _res, next) {
+  req.dashboardsViewRefused = true;
+  return next();
+}
+export const dashboardsViewGate = viewEntryGate("dashboards", DASHBOARDS_VIEW_READS, { refuse: passOnRefused });
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -320,7 +341,10 @@ router.get("/:dashboardId", async (req, res, next) => {
     if (!validUuid(req.params.dashboardId)) return res.status(400).json({ error: "invalidRequest", message: "Invalid dashboardId." });
     const dataWorkspace = await requireDataWorkspace(req, res);
     if (!dataWorkspace) return;
-    const detail = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
+    const found = await getDashboardDetail(req, dataWorkspace, req.params.dashboardId);
+    // Roles V-6: without load.view.athlete the filters' athletes are not returned either.
+    found.widgets = dashboardWidgetsForViewer(req, found.widgets);
+    const detail = dashboardNamedAthletesAllowed(req, dataWorkspace) ? found : { ...found, ...redactDashboardAthleteFilters({ dashboard: found.dashboard, widgets: found.widgets }) };
     if (req.app?.locals?.dashboardPagesEnabled && await pageDatabaseEnabled(query)) detail.pagesAvailable = true;
     const simplePreview = ['preview', 'enabled'].includes(req.app?.locals?.dashboardSimpleMode)
       && canUseSimplePlatformPilot(req, dataWorkspace);
@@ -837,7 +861,8 @@ router.post("/:dashboardId/query", async (req, res, next) => {
       if(process.env.DASHBOARD_REFERENCES_ENABLED!=='true'||!canManageDashboardRow(req,dashboard))return res.status(404).json({error:'notFound'});
       const ctx=await resolveReferenceContext(req);targetWidgets=referencePreviewWidgets(targetWidgets,b.referencePreview,ctx?.owner.clubId);await assertReferenceSource(query,b.referencePreview.referenceConfig,ctx.owner.clubId,ctx.workspace,widgets.find(w=>w.id===b.referencePreview.widgetId)?.presentation_config?.referenceConfig);
     }
-    const result = await queryDashboard(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter });
+    targetWidgets = dashboardWidgetsForViewer(req, targetWidgets);
+    const result = await queryDashboardForViewer(dataWorkspaceQueryArgs(dataWorkspace), targetWidgets, { dateFrom: b.dateFrom, dateTo: b.dateTo }, { defaultFilter: dashboard.default_filter, requestFilter, shellFilter }, { namedAthletes: dashboardNamedAthletesAllowed(req, dataWorkspace) });
     const galleryWidgets=await hydrateGalleryWidgets(query,targetWidgets);
     const presentationByWidgetId = new Map(targetWidgets.map((widget) => [widget.id, widget.presentation_config]));
     const referenceEnabled=process.env.DASHBOARD_REFERENCES_ENABLED==='true';
