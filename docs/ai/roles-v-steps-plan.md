@@ -369,6 +369,39 @@ show names if P-1 is answered "names need `athletes.view`".
   athletes, the public program library and the system exercise library, all read-only.
 - **P-3:** the order of section 5 (the manager).
 
+**Decided (the owner, 2026-11-25, relayed by the manager): P-4, a licence hierarchy. Not built yet; it is built in
+V-5.**
+- Training Load is a parent module. Closing `training_load` in a club's licence closes every module under it. Each child
+  can still be closed on its own, as today.
+- The rule is server-side: the ceiling check of `can()` and of `public.user_has_permission` treats a closed parent as
+  closing its children. It is not only a UI rule.
+- The Club licence screen shows the children of a closed parent as closed, with the note "closed because Training Load
+  is closed".
+- Production already holds one club with `training_load`, `dashboards`, `data_configuration` and `imports` closed (the
+  owner's own test). Nothing there needs to change.
+
+For V-5 to settle (from the code at this branch, not yet a contract):
+- **The children.** The R4 modules of `permissions.js` are flat: `training_load` holds only the `load.*` words (team and
+  athlete load views, schedule, roster decisions, estimates, activities). The owner names `dashboards`, `imports` and
+  `data_configuration` as children. V-5 lists the final set and asks the owner about the edge cases. `data_configuration`
+  also serves the variables of other modules. `calendar` and `tests` are separate modules today and are not named.
+- **Where the ceiling lives.** In two places:
+  - SQL: `public.permission_club_closed_modules(club)` (v92), read by `public.user_has_permission` and by
+    `loadAuthorizationContext` (`authz.js`, `closedModules` per held entry);
+  - code: `can()`'s `closedModules.includes(entry.module)` (`permissions.js`), `closedModulesForWorkspace` and the
+    frontend.
+
+  The simplest single place is `permission_club_closed_modules` returning the children of a closed parent too. Every
+  reader would then follow, and the screen still needs to tell "closed by itself" from "closed because Training Load is
+  closed". That is a migration (v96 is reserved for roles), with md5 preconditions on the bodies it replaces.
+- **v95's closed-module dominance** (`permission_club_role_version_items_guard`, `permission_custom_role_items_guard`
+  and their completeness checks) decides which words a club version or custom role may hold or drop while a module is
+  closed. With the hierarchy, a word of a child module counts as closed whenever `training_load` is closed. V-5
+  re-states and re-tests those guards with the derived set.
+- **The view steps.** `canView` and the module gate read the same `closedModules` through `can()`, so they follow
+  without their own change once the derived set is in place. `roles-v95-closed-module-dominance` and the sweep's licence
+  checks gain a "closed by the parent" case.
+
 The questions as they were asked:
 
 **P-1. Imena sportista u modulima.** Kada osoba ima pravo da gleda neki modul (npr. kalendar, testove ili trenažno
@@ -605,6 +638,11 @@ decided.
   - the licence closing reads and writes for role holders and the club's old roles.
 - Mutations killed: the coach path's `calendar.view` check dropped; the name gate forced open.
 - e2e: `roles-v3-view-calendar.test.mjs` at 1280, 390 and 360 px.
+- After the independent review of #768 (LOW, carried into V-4): without the athletes' names the calendar read also
+  ignores `athleteIds` (`routes/calendar.js`), so filtering by an athlete id cannot tell whether that athlete has events.
+  `roles-v-sweep` test 7 compares the filtered answer, for a real and a random id, with the unfiltered one (mutation
+  killed). `module-view-v0` test 12 calls `eventOwnerForWorkspace` and `eventWriteBasis` directly with a view context and
+  a platform admin's authz (mutation killed).
 - The suites that list the checked words take `calendar.view`, as V-1 did for its words: `me-permissions-r3` (both
   basic roles), `roles-r4-2-view-workspace` test 11 (/me; the calendar reads leave its list), `roles-r4-api` tests 1
   and 2, `roles-r4-3-api` tests 1, 2 and 6 (`dashboards.view` is now their unchecked word), `permission-roles-v84` 2b
