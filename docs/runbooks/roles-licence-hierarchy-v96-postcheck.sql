@@ -22,7 +22,20 @@ select (select array_agg(m.word order by m.word) from public.permission_modules 
          = array['dashboards', 'data_configuration', 'imports'] as three_children,
        not exists (select 1 from public.permission_modules m where public.permission_module_parent(m.word) is not null
                      and public.permission_module_parent(m.word) <> 'training_load') as one_parent,
-       public.permission_module_parent('training_load') is null as parent_has_no_parent;
+       public.permission_module_parent('training_load') is null as parent_has_no_parent,
+       not public.permission_club_module_closed(gen_random_uuid(), 'dashboards') as unknown_club_open,
+       not public.permission_club_module_closed(null, 'imports') as null_club_open;
+
+-- 3a. The five functions' attributes as v96 creates them: a pinned search_path, never SECURITY DEFINER, the volatility
+--     of each; and the two new functions not executable by PUBLIC, anon, authenticated or service_role.
+select (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace
+          and p.proname in ('user_has_permission', 'permission_club_rule7_ok', 'permission_actor_holds_in_club', 'permission_club_module_closed', 'permission_module_parent')
+          and p.proconfig = array['search_path=pg_catalog, public'] and not p.prosecdef) = 5 as search_path_pinned_not_definer,
+       (select string_agg(p.proname || '=' || p.provolatile::text, ',' order by p.proname) from pg_proc p where p.pronamespace = 'public'::regnamespace
+          and p.proname in ('user_has_permission', 'permission_club_rule7_ok', 'permission_actor_holds_in_club', 'permission_club_module_closed', 'permission_module_parent'))
+         = 'permission_actor_holds_in_club=s,permission_club_module_closed=s,permission_club_rule7_ok=s,permission_module_parent=i,user_has_permission=s' as volatility_as_created,
+       not exists (select 1 from pg_roles r cross join unnest(array['public.permission_module_parent(text)', 'public.permission_club_module_closed(uuid, text)']) f(sig)
+                    where r.rolname in ('anon', 'authenticated', 'service_role') and has_function_privilege(r.oid, f.sig, 'execute')) as not_api_roles;
 
 -- 4. Every club whose training_load row is stored reads its three children as closed; the stored rows are unchanged
 --    (compare closed_rows with preflight block 3).

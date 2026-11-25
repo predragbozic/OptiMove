@@ -318,3 +318,23 @@ test("5. the API: the licence view names each child's parent and whether it is c
   assert.equal(reopened.status, 200, reopened.text);
   assert.equal((await app.api(admin, variables)).status, 200, "reopened: Data configuration is back");
 });
+
+test("5b. putting Training Load back is refused cleanly (409 club_admin_would_lack, nothing changed) when the club's Club admin version dropped a child word while only the parent was closed", async () => {
+  const w = await world();
+  const pa = await app.cookieFor(w.pa);
+  const base = `/api/organization/roles/clubs/${w.club}/ceiling`;
+  const close = await app.api(pa, base, { method: "POST", body: { requestKey: key(), close: ["training_load"], reason: "Licence test" } });
+  assert.equal(close.status, 200, close.text);
+  // Rule 7 leaves Data configuration out while it is closed through its parent: the version passes.
+  const version = await app.api(pa, `/api/organization/roles/${ROLE_IDS.club_admin}/clubs/${w.club}/version`, {
+    method: "POST", body: { requestKey: key(), expectedRevision: null, remove: ["variables.view"], reason: "Licence test" },
+  });
+  assert.equal(version.status, 200, version.text);
+  // Putting Training Load back makes variables.view live again while Team coach (default) carries it: refused at the
+  // deferred rule 7, before the COMMIT, as a stable 409 - never a 500 or "outcome unknown".
+  const reopen = await app.api(pa, base, { method: "POST", body: { requestKey: key(), open: ["training_load"], reason: "Licence test" } });
+  assert.equal(reopen.status, 409, reopen.text);
+  assert.equal(reopen.body.error, "club_admin_would_lack");
+  assert.deepEqual([...(await one(`select public.permission_club_closed_modules($1) as m`, [w.club])).m], ["training_load"], "nothing changed");
+  assert.equal((await one(`select count(*)::int as n from public.club_permission_ceiling_changes where club_id = $1`, [w.club])).n, 1, "no change row written");
+});
