@@ -766,8 +766,10 @@ decided.
 
 ## 12. V-5 design (Training Load, and the licence hierarchy P-4)
 
-Status: **Proposed** (the executor, 2026-11-25, base `cf48c11e`). Numbered 12 so it does not collide with the parallel
-V-2 and V-4 sections. Nothing below is built before the manager's GO.
+Status: **Accepted** (the manager's GO, 2026-11-25: the split into V-5a and V-5b; choices 1–6 accepted, choice 3
+matching the owner's "close part by part"; choice 7 put to the owner, V-5b built without gating the athlete workspace
+and keeping that change isolated). Written by the executor on base `cf48c11e`. Numbered 12 so it does not collide
+with the parallel V-2 and V-4 sections; P-4's own text is in the plan on the V-4 branch (PR #769).
 
 ### 12.1 P-4, the licence hierarchy (the owner's decision of 2026-11-25, as relayed by the manager)
 
@@ -899,3 +901,34 @@ held). The licence screen as in 12.1. `ux-design-reviewer` and `mobile-qa` for b
 7. The athlete workspace is not licence-gated in V-5.
 8. **Split recommended:** V-5a = the hierarchy (v96, JS, licence screen; small, reviewable with `db-reviewer`, one
    production rehearsal); V-5b = the Training Load view reads (no migration). One PR if the manager prefers.
+
+### 12.5 V-5a as built (the licence hierarchy)
+
+Branch `feature/roles-v5-training-load` from `cf48c11e`, with `main` merged in at `2aada5d` (V-2). Migration v96;
+runbook `docs/runbooks/roles-licence-hierarchy-v96.md`.
+
+- **SQL (v96)**, as 12.1 says, with one change of name: the effective test is
+  `public.permission_club_module_closed(club, module)` (one module at a time, what the three bodies need), not a list
+  function. `public.permission_module_parent(module)` is the fixed hierarchy. The three bodies are md5-gated; the
+  rollback restores them verbatim and refuses after a later migration or over a changed body.
+- **JavaScript.** The hierarchy is `backend/src/permissionModules.js` (`MODULE_PARENTS`, `effectiveClosedModules`),
+  its own file so that `authz.js` and `permissions.js` do not import each other (`permissions.js` re-exports it).
+  `authz.js` turns each holding's stored rows into the effective set, so `can()` and `/me` need no change and the
+  older role-read suites (built to v84 and v92 only) are unaffected: authz reads no v96 function.
+- **`permissionLayersService.js`:** `closedModulesOf` is now the effective set (the role and custom-role checks, the
+  club roles read, a user's holdings); `storedClosedModulesOf` is the stored rows (only `setCeiling` reads them, so the
+  writer closes and opens exactly the rows asked for and answers `ceiling_unchanged` for a child with no row of its
+  own). `ceilingView` adds `parent`, `closedByParent` and `effectivelyClosed` per module.
+- **The licence screen** (`frontend/react/club-licence.jsx`, `club-licence-data.js`): a child of a part that is not
+  included in the draft shows "Not included", its switch disabled (`aria-describedby` the note), and "Closed because
+  Training Load is closed."; when the child is also taken out on its own, the note adds "It is also taken out on its
+  own, so it stays out when you put it back." The count of included parts follows the effective state. The data side
+  ignores a toggle of a greyed child.
+- **Older suites and tools.** v96 replaces bodies of v92 and v95, so the v92 suite leaves v96 out with v95
+  (`V92_DEPENDENTS`), the v95 suite and the v95 rehearsal stop at v95 (the rehearsal had a second bug of the same
+  kind fixed here: its re-apply now reads a folder named `migrations_v2` that ends at v95). `permissions-r1` c1 lists
+  the v96 rehearsal among the files that plant `club_admin` / `team_coach` rows in their own database.
+- **Tests:** `roles-v96-licence-hierarchy` (8), `roles-v96-rehearsal-guards` (6), frontend
+  `club-licence-hierarchy.actions` (3), e2e `roles-v5a-licence-hierarchy` (3, at 1280, 390 and 360 px). Mutations
+  killed: `authz.js` without the effective set (tests 2 and 5); `closedModulesOf` reading the stored rows (test 5).
+  The rehearsal passed every step on PostgreSQL 16; PostgreSQL 17 is the owner's run.
