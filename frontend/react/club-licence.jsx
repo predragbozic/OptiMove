@@ -8,25 +8,35 @@ const dateText = (value) => {
   return Number.isNaN(t.getTime()) ? "" : t.toLocaleDateString("en-GB");
 };
 
-function ModuleRow({ module, closed, disabled, onToggle }) {
+// The licence hierarchy (v96): a part whose parent is not included (in the draft) is closed with it. Its own switch is
+// off and cannot be changed until the parent is put back; its own choice is kept and shown.
+function ModuleRow({ module, closed, parentLabel = "", parentClosed = false, disabled, onToggle }) {
   const always = module.module === "organization";
-  const included = always || !closed;
+  const included = always || (!closed && !parentClosed);
+  const noteId = useId();
   return (
     <li className={`club-licence-row${included ? "" : " is-closed"}`}>
       <label className="club-licence-switch">
         <input
           type="checkbox"
           checked={included}
-          disabled={always || disabled}
+          disabled={always || disabled || parentClosed}
           onChange={() => onToggle(module.module)}
           data-licence-module={module.module}
+          aria-describedby={parentClosed ? noteId : undefined}
         />
         <span className="club-licence-name">{module.label || module.module}</span>
         <span className={`club-licence-state ${included ? "is-in" : "is-out"}`}>
           <span aria-hidden="true">{included ? "✓" : "–"}</span> {always ? "Always included" : included ? "Included" : "Not included"}
         </span>
       </label>
-      {module.ceilingEffective === false && !always ? (
+      {parentClosed ? (
+        <small className="club-licence-note" id={noteId} data-licence-closed-by-parent={module.module}>
+          {`Closed because ${parentLabel || "its parent"} is closed.`}
+          {closed ? " It is also taken out on its own, so it stays out when you put it back." : ""}
+        </small>
+      ) : null}
+      {module.ceilingEffective === false && !always && !parentClosed ? (
         <small className="club-licence-note">This part does not follow the licence yet.</small>
       ) : null}
     </li>
@@ -42,7 +52,8 @@ export function ClubLicence({
   const reasonId = useId();
   const modules = view?.modules || [];
   const closedSet = new Set(draftClosed);
-  const included = modules.filter((m) => m.module === "organization" || !closedSet.has(m.module)).length;
+  const parentClosed = (m) => Boolean(m.parent) && closedSet.has(m.parent);
+  const included = modules.filter((m) => m.module === "organization" || (!closedSet.has(m.module) && !parentClosed(m))).length;
   const changed = changes.close.length + changes.open.length;
   const busy = Boolean(command?.busy);
   const unconfirmed = Boolean(command?.unconfirmed);
@@ -89,7 +100,10 @@ export function ClubLicence({
             <>
               <p className="muted">A part that is not included is closed for everyone in this club, its administrators too. You are never limited.</p>
               <ul className="club-licence-list">
-                {modules.map((m) => <ModuleRow key={m.module} module={m} closed={closedSet.has(m.module)} disabled={Boolean(command)} onToggle={onToggle} />)}
+                {modules.map((m) => (
+                  <ModuleRow key={m.module} module={m} closed={closedSet.has(m.module)} parentClosed={parentClosed(m)}
+                    parentLabel={m.parent ? label(m.parent) : ""} disabled={Boolean(command)} onToggle={onToggle} />
+                ))}
               </ul>
               {changed ? (
                 <div className="club-licence-save" data-licence-save>

@@ -17,7 +17,7 @@
 //     versions), then the clubs row FOR SHARE (a club archive waits), the request record last;
 //   * a custom's holding_row_version is never carried through JavaScript: the insert copies it from the row in SQL
 //     (a JavaScript Date loses the microseconds an equality compare needs); reads return it as text.
-import { can, clubScope, ENFORCED_PERMISSIONS, PERMISSION_GROUPS, PERMISSIONS } from "./permissions.js";
+import { can, clubScope, ENFORCED_PERMISSIONS, MODULE_PARENTS, PERMISSION_GROUPS, PERMISSIONS, effectiveClosedModules } from "./permissions.js";
 import { lockClubCeiling } from "./clubCeilingLock.js";
 import { customAliveSql, customsStillHolding, rolesInternals } from "./permissionRolesService.js";
 import { pool } from "./db.js";
@@ -75,7 +75,11 @@ async function lockClubRow(client, clubId) {
   const row = (await client.query(CLUB_ROW_SQL, [clubId])).rows[0];
   if (!row || !row.active) throw NOT_FOUND();
 }
-const closedModulesOf = async (client, clubId) => (await client.query(`select public.permission_club_closed_modules($1) as m`, [clubId])).rows[0].m;
+// The club's STORED ceiling rows (what a platform admin closed or opened): the licence's own writer reads these.
+const storedClosedModulesOf = async (client, clubId) => (await client.query(`select public.permission_club_closed_modules($1) as m`, [clubId])).rows[0].m;
+// The EFFECTIVE closed modules (v96, the licence hierarchy: the stored rows plus the children of a closed parent), the
+// set can() and the database's rule 7 and dominance (v96) apply: every role and custom-role check reads these.
+const closedModulesOf = async (client, clubId) => effectiveClosedModules(await storedClosedModulesOf(client, clubId));
 // v95's dominance test: the word is held now, or its module is closed for the club and the actor would hold it there.
 const holdsInClub = async (client, userId, word, clubId) => (await client.query(`select public.permission_actor_holds_in_club($1, $2, $3) as ok`, [userId, word, clubId])).rows[0].ok;
 const optionalWords = (value, field) => (value === undefined || value === null ? [] : requireWords(value, field));
@@ -119,12 +123,20 @@ async function ceilingView(client, clubId, platform) {
   const rows = (await client.query(`select m.word, m.label, c.closed_at, c.reason, c.closed_by_user_id
       from public.permission_modules m left join public.club_permission_ceiling c on c.club_id = $1 and c.module_word = m.word
      order by m.sort_order`, [clubId])).rows;
+  // v96, the licence hierarchy: `closed` is the module's own stored row; `closedByParent` says its parent's row is
+  // stored; `effectivelyClosed` is what can() applies (either of them).
+  const stored = new Set(rows.filter((r) => r.closed_at != null).map((r) => r.word));
   const view = {
     clubId,
-    modules: rows.map((r) => ({
-      module: r.word, label: r.label, closed: r.closed_at != null, closedAt: r.closed_at, ceilingEffective: moduleEffective(r.word),
-      ...(platform ? { reason: r.reason, closedBy: r.closed_by_user_id } : {}),
-    })),
+    modules: rows.map((r) => {
+      const parent = MODULE_PARENTS[r.word] ?? null;
+      const closedByParent = parent != null && stored.has(parent);
+      return {
+        module: r.word, label: r.label, closed: r.closed_at != null, closedAt: r.closed_at, ceilingEffective: moduleEffective(r.word),
+        parent, closedByParent, effectivelyClosed: r.closed_at != null || closedByParent,
+        ...(platform ? { reason: r.reason, closedBy: r.closed_by_user_id } : {}),
+      };
+    }),
   };
   // The history of the licence: who and why is a platform admin's (as a system role's history, R2's S1).
   if (platform) {
@@ -167,7 +179,7 @@ export async function setCeiling(ctx, clubIdRaw, body) {
       await lockActor(client, ctx, { scopeType: "club", scopeId: clubId });
       const basis = await lockedBasis(client, ctx, "staff.assign", clubId, { platformOnly: true });
       await lockClubRow(client, clubId);
-      const closedNow = await closedModulesOf(client, clubId);
+      const closedNow = await storedClosedModulesOf(client, clubId);
       const toClose = close.filter((m) => !closedNow.includes(m));
       const toOpen = open.filter((m) => closedNow.includes(m));
       if (!toClose.length && !toOpen.length) throw refuse("ceiling_unchanged", { current: await ceilingView(client, clubId, true) });
