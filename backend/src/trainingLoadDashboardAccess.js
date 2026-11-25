@@ -136,7 +136,8 @@ export function dashboardNamedAthletesAllowed(req, dataWorkspace) {
   if (!dataWorkspace || dataWorkspace.type === null) return false;
   if (dataWorkspace.dataWorkspaceType !== "club" && dataWorkspace.dataWorkspaceType !== "team") return true;
   const workspace = RESOLVED_WORKSPACE.get(dataWorkspace);
-  return Boolean(workspace) && canView(req.authz, workspace, "load_athlete");
+  return Boolean(workspace) && canView(req.authz, workspace, "load_athlete")
+    && (!viewReadScope(workspace) || canView(req.authz, workspace, "athletes"));
 }
 
 // Resolves the CALLER's own currently active workspace as a data-

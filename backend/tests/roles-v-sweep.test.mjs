@@ -86,10 +86,10 @@ function rows() {
       writes: [["POST", "/api/tests/schedules", { name: "x" }]] },
     { module: "tests_results", open: true,
       reads: ["/api/tests/results"], writes: [] },
-    { module: "load_team", open: false,
+    { module: "load_team", open: true,
       reads: [`/api/training-load/calendar?${q}`, "/api/training-load/external-schedules"],
       writes: [["POST", "/api/training-load/external-schedules", { name: "x" }]] },
-    { module: "load_athlete", open: false,
+    { module: "load_athlete", open: true,
       reads: ["/api/training-load/weekly", `/api/training-activity?${q}`, `/api/training-load/metrics/results?${q}`],
       writes: [["POST", "/api/training-load/metrics/events", {}]] },
     { module: "dashboards", open: true,
@@ -144,13 +144,13 @@ test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows a
   const table = rows();
   assert.deepEqual(table.map((r) => r.module).sort(), Object.keys(MODULE_VIEW_WORDS).sort());
   assert.deepEqual(table.filter((r) => r.open).map((r) => r.module).sort(), [...OPEN_VIEW_MODULES].sort());
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "dashboards", "data_configuration", "exercises", "presets", "programs", "tests", "tests_results"]);
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "dashboards", "data_configuration", "exercises", "load_athlete", "load_team", "presets", "programs", "tests", "tests_results"]);
 });
 
 test("2. closed rows: every view word in club_view (and with a forged club preference) = an account with no role; no write lands; no preference is written", async () => {
   const hm = await me(w.all);
   assert.equal(hm.activeWorkspace.type, "club_view");
-  assert.deepEqual([...hm.permissions].sort(), ["athletes.view", "calendar.view", "dashboards.view", "exercises.use", "org.view", "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"], "/me offers only the words of open modules");
+  assert.deepEqual([...hm.permissions].sort(), ["athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team", "org.view", "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"], "/me offers only the words of open modules");
   const norm = (who, text) => text.split(who.id).join("<me>");
   for (const forged of [false, true]) {
     if (forged) await setPref(w.all, "club", w.A);
@@ -988,7 +988,7 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
 
   const clubHolder = await holderOf("dbClubV6", ["dashboards.view"]);
   const teamHolder = await holderOf("dbTeamV6", ["dashboards.view"], "team", w.TA1);
-  // load.view.athlete is not open in a view workspace until Training Load's V step: still restricted here.
+  // V-5b opens named results when both the Training Load and Athletes words are held.
   const athleteWordHolder = await holderOf("dbNamesV6", ["dashboards.view", "load.view.athlete", "athletes.view"]);
   const before = await snapshot();
   for (const [who, label, own, others] of [
@@ -1018,7 +1018,7 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
     assert.deepEqual([pageForeign.status, pageForeign.text], [pageMissing.status, pageMissing.text], `${label}: another club's page is the identical 404`);
     assert.equal((await srv.api(who.cookie, `${D}/${tSys.id}/query`, { method: "POST", body })).status, 409, `${label}: a template answers templateRequiresClone`);
   }
-  for (const who of [clubHolder, athleteWordHolder]) {
+  for (const who of [clubHolder]) {
     const raw = await srv.api(who.cookie, `${D}/${dA.id}/query`, { method: "POST", body });
     const answer = ok(raw);
     assert.equal(seriesOf(answer, cohortW)[0].status, "ok", "the cohort total is answered");
@@ -1039,6 +1039,7 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
   }
   assert.deepEqual(changed(before, await snapshot()), [], "no read wrote anything (no preference, no row)");
 
+  assert.equal(seriesOf(ok(await srv.api(athleteWordHolder.cookie, `${D}/${dA.id}/query`, { method: "POST", body })), athleteW)[0].status, "ok");
   // The athletes a filter names are athlete-level data too (the security review's HIGH): a dashboard default filter
   // and a widget override that name athA are returned without them by every config read, to the coach with them.
   const dF = await board(w.adminA, "Alpha filtered board", { ownerScope: "club", ownerClubId: w.A, defaultFilter: { athleteIds: [w.athA.id] } });
@@ -1048,7 +1049,7 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
     groupBy: "cohort", localFilterOverride: { athleteIds: [w.athA.id] } } }), 201);
   const pageF = await pageOf(dF);
   const configReads = [`${D}/${dF.id}`, `${D}/${dF.id}/pages`, `${D}/${dF.id}/pages/${pageF}`];
-  for (const who of [clubHolder, athleteWordHolder]) {
+  for (const who of [clubHolder]) {
     for (const p of configReads) {
       const r = await srv.api(who.cookie, p);
       assert.equal(r.status, 200, `${p}: ${r.text.slice(0, 160)}`);
@@ -1349,4 +1350,84 @@ test("10. an athlete account's GET /api/templates is today's answer: 200 with ex
     assert.ok(a.body.templates.every((t) => Object.hasOwn(t, "creator_email")), `${q}: the athlete's rows are unchanged (no view reduction)`);
     assert.deepEqual(a.body.allowedScopes, ["my_programs", "optimove"], `${q}: its scopes`);
   }
+});
+
+test("V-5b: closing a club's Training Load licence hides an athlete's load and RPE prompts and refuses entries", async () => {
+  const pa = await person("v5bLicenceOwner", id => F.grantPlatform(id));
+  const who = await person("v5bAthlete");
+  const athlete = ok(await srv.api(w.adminA.cookie, "/api/organization/athletes", {
+    method: "POST", body: { fullName: "Licence Test Athlete", clubId: w.A, teamId: w.TA1 }
+  }), 201).athlete;
+  await k.query("update public.athletes set user_id=$1 where id=$2", [who.id, athlete.id]);
+  assert.equal((await me(who)).activeWorkspace.type, "athlete");
+  await k.query(`insert into public.app_notifications (recipient_user_id,type,title,body)
+    values ($1,'training_load_manual_reminder','Training load reminder','Log RPE'),
+           ($1,'tests_reminder','Test reminder','Complete your test')`, [who.id]);
+
+  const prefix = "/api/training-load";
+  const period = "dateFrom=2026-11-23&dateTo=2026-11-29";
+  const reads = [prefix + "/weekly?weekStart=2026-11-23", prefix + "/calendar?" + period,
+    "/api/training-activity?" + period, prefix + "/metrics/results?" + period];
+  for (const path of reads) ok(await srv.api(who.cookie, path));
+  const openInbox = ok(await srv.api(who.cookie, "/api/notifications"));
+  assert.equal(openInbox.unreadCount, 2);
+  assert.ok(openInbox.notifications.some(item => item.type === "training_load_manual_reminder"));
+  const today = prefix + "/athlete/today";
+  const openDate = ok(await srv.api(who.cookie, today)).date;
+
+  await ceiling(pa, ["training_load"], []);
+  try {
+    const before = await snapshot();
+    for (const path of reads) assert.equal((await srv.api(who.cookie, path)).status, 403, path);
+    assert.deepEqual(ok(await srv.api(who.cookie, today)), { date: openDate, sessions: [] });
+    const closedInbox = ok(await srv.api(who.cookie, "/api/notifications"));
+    assert.deepEqual(closedInbox.notifications.map(item => item.type), ["tests_reminder"]);
+    assert.equal(closedInbox.unreadCount, 1);
+    for (const route of ["/sessions/" + key() + "/rpe", "/external-assignments/" + key() + "/rpe",
+      "/external-assignments/" + key() + "/rpe/change"]) {
+      assert.equal((await srv.api(who.cookie, prefix + route, { method: "POST", body: {} })).status, 404, route);
+    }
+    assert.deepEqual(changed(before, await snapshot()), []);
+  } finally {
+    await ceiling(pa, [], ["training_load"]);
+  }
+  ok(await srv.api(who.cookie, reads[0]));
+});
+
+test("V-5b: the read-only coach workspace reads scoped schedules and weekly data without creating occurrences", async () => {
+  const named = await holderOf("v5bNamed", ["load.view.team", "load.view.athlete", "athletes.view"]);
+  const counts = await holderOf("v5bCounts", ["load.view.team"]);
+  await setPref(named, "club", w.A);
+  await setPref(counts, "club", w.A);
+  const path = "/api/training-load/external-schedules";
+  const date = new Date().toISOString().slice(0, 10);
+  const schedule = async (owner, clubId, title) => ok(await srv.api(owner.cookie, path, {
+    method: "POST", body: {
+      eventName: title, scheduleKind: "one_time", timezone: "UTC", startDate: date,
+      opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "club", id: clubId }],
+    },
+  }), 201).schedules[0];
+  const own = await schedule(w.adminA, w.A, "Alpha practice");
+  const foreign = await schedule(w.adminB, w.B, "Beta practice");
+  const snapshotOccurrences = async () => (await k.query("select id from training_load.external_schedule_occurrences order by id")).rows;
+  const before = await snapshotOccurrences();
+  for (const viewer of [named, counts]) {
+    const list = ok(await srv.api(viewer.cookie, path));
+    assert.ok(list.schedules.some(item => item.id === own.id));
+    assert.ok(list.schedules.every(item => item.id !== foreign.id));
+    const denied = await srv.api(viewer.cookie, path + "/" + foreign.id);
+    const missing = await srv.api(viewer.cookie, path + "/" + key());
+    assert.deepEqual([denied.status, denied.text], [missing.status, missing.text]);
+    assert.equal(denied.status, 404);
+    const detail = ok(await srv.api(viewer.cookie, path + "/" + own.id));
+    assert.equal(detail.schedule.targetCount, 1);
+    assert.equal(detail.targets.length, viewer === named ? 1 : 0);
+    assert.equal(Object.hasOwn(detail.schedule, "ownerUserId"), false);
+    const calendar = ok(await srv.api(viewer.cookie, "/api/training-load/calendar?dateFrom=" + date + "&dateTo=" + date));
+    if (viewer === counts) assert.ok(calendar.days.flatMap(day => day.items).every(item => item.kind === "activity"));
+  }
+  const weekly = "/api/training-load/weekly?weekStart=" + date;
+  ok(await srv.api(named.cookie, weekly));
+  assert.equal((await srv.api(counts.cookie, weekly)).status, 403);
+  assert.deepEqual(await snapshotOccurrences(), before);
 });

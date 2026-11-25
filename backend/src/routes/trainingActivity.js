@@ -15,6 +15,9 @@
 // functions resolves and checks workspace authorization before doing
 // anything, exactly like the rest of this app's write paths.
 import { Router } from "express";
+import { athleteTrainingLoadAllowed } from "../athleteTrainingLoadLicence.js";
+import { coachModuleGate, viewEntryGate } from "../moduleView.js";
+import { can } from "../permissions.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import { isPoolCheckoutTimeout, POOL_CHECKOUT_TIMEOUT } from "../db.js";
 import { resolveActivityWorkspaceScope, activityScopeForWorkspace } from "../trainingActivityAccess.js";
@@ -34,6 +37,28 @@ import {
 import { changeSessionType, setAthleteSessionType } from "../activityTypeChangeService.js";
 
 const router = Router();
+const activityTeamViewGate = viewEntryGate("load_team", [
+  { method: "GET", path: "/:activityId/roster" },
+], { refuse: (_req, _res, next) => next() });
+const activityNamedViewGate = viewEntryGate("load_athlete", [
+  { method: "GET", path: "/" },
+  { method: "GET", path: "/:activityId" },
+], { refuse: (_req, _res, next) => next() });
+const activityCoachGate = coachModuleGate("load_team", { allowed: (authz, scope) => can(authz, "load.view.team", scope) });
+
+function activityNamesAllowed(req, scope) {
+  return can(req.authz, "load.view.athlete", scope) && can(req.authz, "athletes.view", scope);
+}
+
+router.use((req, res, next) => {
+  const gate = req.method === "GET" && req.path.split("/").filter(Boolean)[1] === "roster"
+    ? activityTeamViewGate : activityNamedViewGate;
+  return gate(req, res, error => {
+    if (error) return next(error);
+    if (req.moduleView || req.path.split("/").filter(Boolean)[1] === "roster") return next();
+    return activityCoachGate(req, res, next);
+  });
+});
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -145,10 +170,28 @@ function respondToServiceError(res, next, error) {
 // resolveReadContext — resolves the active workspace ONCE per request and
 // reuses it for both read-authorization branches.
 async function resolveActivityReadContext(req, res) {
-  const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
+  const view = req.moduleView?.module === "load_athlete" ? req.moduleView : null;
+  const { workspace } = view || await resolveActiveWorkspace(req.user.id, req.authz);
+  if (view) {
+    if (!activityNamesAllowed(req, view.scope)) {
+      res.status(403).json({ error: "Forbidden" });
+      return null;
+    }
+    const scope = view.scope.type === "club" ? { type: "club", clubId: view.scope.id } : { type: "team", teamId: view.scope.id };
+    return { isAthleteSelf: false, athleteId: null, scope, workspace, viewScope: view.scope };
+  }
+  if (["club", "team"].includes(workspace?.type)
+      && !can(req.authz, "load.view.athlete", { type: workspace.type, id: String(workspace.scopeId) })) {
+    res.status(403).json({ error: "Forbidden" });
+    return null;
+  }
   if (workspace?.type === "athlete") {
     if (!req.authz.athleteId) {
       res.status(403).json({ error: "This account has no athlete profile." });
+      return null;
+    }
+    if (!(await athleteTrainingLoadAllowed(req.authz.athleteId))) {
+      res.status(403).json({ error: "Forbidden" });
       return null;
     }
     return { isAthleteSelf: true, athleteId: req.authz.athleteId, scope: { type: null } };
@@ -218,7 +261,7 @@ router.get("/self", async (req, res, next) => {
   try {
     const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
     if (workspace?.type !== "athlete" || !req.authz.athleteId) return res.status(404).json({ error: "Not found", path: req.originalUrl.split("?")[0] }); // the unknown route's own answer (server.js)
-    res.json({ hasRecordedSessions: await athleteHasRecordedSessions(req.authz.athleteId) });
+    res.json({ hasRecordedSessions: await athleteTrainingLoadAllowed(req.authz.athleteId) && await athleteHasRecordedSessions(req.authz.athleteId) });
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -230,7 +273,10 @@ router.get("/:activityId", async (req, res, next) => {
     const readContext = await resolveActivityReadContext(req, res);
     if (!readContext) return;
     const result = await getCanonicalActivityResults(readContext, req.params.activityId, {
-      clubVariableNamesAllowed: readContext.isAthleteSelf ? undefined : clubVariableNamesAllowedFor(req, readContext.workspace),
+      clubVariableNamesAllowed: readContext.isAthleteSelf ? undefined : readContext.viewScope
+        ? async ({ clubId }) => can(req.authz, "variables.view", readContext.viewScope)
+          && (readContext.viewScope.type !== "club" || String(clubId) === readContext.viewScope.id)
+        : clubVariableNamesAllowedFor(req, readContext.workspace),
     });
     res.json(result);
   } catch (error) {
@@ -250,8 +296,16 @@ router.get("/:activityId", async (req, res, next) => {
 router.get("/:activityId/roster", async (req, res, next) => {
   try {
     if (!validUuid(req.params.activityId)) return res.status(404).json({ error: "notFound" });
-    const { workspace } = await resolveActiveWorkspace(req.user.id, req.authz);
-    const roster = await getActivityRoster({ userId: req.user.id, authz: req.authz, workspace }, req.params.activityId.toLowerCase());
+    const view = req.moduleView?.module === "load_team" ? req.moduleView : null;
+    const { workspace } = view || await resolveActiveWorkspace(req.user.id, req.authz);
+    if (!view && ["club", "team"].includes(workspace?.type)) {
+      const scope = { type: workspace.type, id: String(workspace.scopeId) };
+      if (!can(req.authz, "load.view.team", scope) || !can(req.authz, "load.view.athlete", scope)) return res.status(404).json({ error: "notFound" });
+    }
+    const roster = await getActivityRoster({
+      userId: req.user.id, authz: req.authz, workspace,
+      viewScope: view?.scope, named: view ? activityNamesAllowed(req, view.scope) : false,
+    }, req.params.activityId.toLowerCase());
     res.json(roster);
   } catch (error) {
     if (error instanceof RosterError) {

@@ -1649,7 +1649,7 @@ function renderDataAnalysisSubNavHtml(section, viewSections = null) {
   return `
     <div class="training-load-subnav" role="tablist" aria-label="Data & Analysis views">
       ${views.map((v) => `
-        <button type="button" class="training-load-subnav-tab ${section === v.section ? "is-active" : ""}" role="tab" aria-selected="${section === v.section ? "true" : "false"}" data-action="training-load-section" data-section="${v.section}">${v.label}</button>
+        <button type="button" class="training-load-subnav-tab ${section === v.section ? "is-active" : ""}" role="tab" aria-selected="${section === v.section ? "true" : "false"}" data-action="training-load-section" data-section="${v.section}">${v.section === "today" && viewSections ? "Calendar" : v.label}</button>
       `).join("")}
     </div>
   `;
@@ -1676,8 +1676,8 @@ export function renderTrainingLoadCoachHtml() {
     <div class="training-load-root">
       <div class="training-load-toolbar">
         <div class="training-load-tabs" role="tablist" aria-label="Training Load spaces">
-          ${viewOnly ? (viewAnalysisSections.length ? dataAnalysisTab : "") : `<button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>Schedule</span></button>
-          ${dataAnalysisTab}`}
+          ${!viewOnly || viewSections.includes("schedule") ? `<button type="button" class="training-load-tab ${space === "schedule" ? "is-active" : ""}" role="tab" aria-selected="${space === "schedule" ? "true" : "false"}" data-action="training-load-section" data-section="schedule">${renderTrainingLoadTabIcon("schedule")}<span>${viewOnly ? "External schedules" : "Schedule"}</span></button>` : ""}
+          ${!viewOnly || viewAnalysisSections.length ? dataAnalysisTab : ""}
           ${variablesContext()
             // C80: an administrator's item in the platform or a club workspace;
             // R2 (C99): also a team workspace of a club, for its coach - the
@@ -1694,7 +1694,7 @@ export function renderTrainingLoadCoachHtml() {
       ${space === "dataAnalysis" ? renderDataAnalysisSubNavHtml(section, viewAnalysisSections) : ""}
       ${section === "overview" ? renderTrainingLoadOverviewHtml() : ""}
       ${section === "today" ? renderTrainingLoadCalendarHtml() : ""}
-      ${section === "schedule" ? renderTrainingLoadScheduleHtml() : ""}
+      ${section === "schedule" ? (viewOnly ? '<section data-training-load-view-schedules></section>' : renderTrainingLoadScheduleHtml()) : ""}
       ${section === "results" ? renderTrainingLoadResultsHtml() : ""}
       ${section === "analysis" ? renderTrainingLoadAnalysisHtml() : ""}
       ${section === "imports" ? renderGpexeImportsHtml() : ""}

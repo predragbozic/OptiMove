@@ -1,4 +1,5 @@
 import { mountReferenceIslands, disposeReferenceIslands } from "./dashboard-references.js";
+import { mountTrainingLoadViewSchedules } from "./training-load-view-schedules.js";
 import { mountDashboardControls, disposeDashboardControls, closeDashboardControlPanel } from "./dashboard-controls.js";
 import { captureChangedFields, restoreChangedFields } from "./form-keep.js";
 import { api } from "./api.js";
@@ -3096,6 +3097,7 @@ function renderTrainingLoad() {
   els.content.innerHTML = renderTrainingLoadCoachHtml();
   void mountDashboardControls(els.content, renderTrainingLoad);
   void mountReferenceIslands(els.content, renderTrainingLoad);
+  void mountTrainingLoadViewSchedules(els.content);
   renderImportsBackBand();
   if (state.trainingLoad.section === "imports") keepImportsTabRow(importsRowLeft);
   if (state.trainingLoad.section === "analysis") {

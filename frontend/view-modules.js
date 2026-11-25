@@ -25,7 +25,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 // calendar, read only: no New event, events in their reduced view, no athlete names without athletes.view).
 // V-4: Tests (the Schedule, Results and Test Library sections, read only; no Today, which writes occurrences).
 // V-6 opens Dashboards read-only.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises"]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises", "load_team", "load_athlete"]);
 
 // The menu places of a view workspace: each opens when ANY of its modules is open and its word is held. A place with
 // no module (Coaches) never opens there.
@@ -83,6 +83,7 @@ export function viewWorkspaceTabs(user = state.currentUser, open = OPEN_VIEW_MOD
 // which is one section, "variables"; V-6: Dashboards, the "analysis" view of Data & Analysis). Schedule and the other
 // Data & Analysis views open with their own modules in later V steps.
 export const VIEW_TRAINING_LOAD_SECTIONS = Object.freeze({
+  load_team: Object.freeze(["today", "schedule"]),
   dashboards: Object.freeze(["analysis"]),
   data_configuration: Object.freeze(["variables"]),
 });

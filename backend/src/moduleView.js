@@ -51,7 +51,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 
 // The modules a view workspace may read. A module enters here only in its own V pull request, with its entry gate.
 // V-6 opens Dashboards read-only.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises"]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises", "load_team", "load_athlete"]);
 
 // The base scope of each view workspace type (the club or team it names).
 const VIEW_SCOPE_TYPES = Object.freeze({ club_view: "club", team_view: "team" });

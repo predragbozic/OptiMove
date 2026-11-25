@@ -21,6 +21,7 @@
 //    type into a request body.
 import { canManageClub, canManageTeamById, isPlatformAdministrator } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
+import { can } from "./permissions.js";
 import { isAthleteInWorkspaceScope } from "./trainingLoadAccess.js";
 
 export { isAthleteInWorkspaceScope };
@@ -114,6 +115,19 @@ export function resolveCatalogOwnerScope(req, body) {
 // "d" for metric_domains). Appends its own bind params to the caller's
 // `params` array, same convention as externalScheduleScopeSqlForWorkspace.
 export function catalogVisibilitySql(req, alias, params) {
+  const view = ["load_team", "load_athlete"].includes(req.moduleView?.module) ? req.moduleView : null;
+  if (view) {
+    params.push(view.scope.id);
+    const id = `$${params.length}::uuid`;
+    const scopeSql = view.scope.type === "club"
+      ? `(${alias}.owner_scope = 'club' and ${alias}.owner_club_id = ${id})
+         or (${alias}.owner_scope = 'team' and exists (select 1 from public.teams t
+           where t.id = ${alias}.owner_team_id and t.club_id = ${id} and coalesce(t.is_active, true)))`
+      : `(${alias}.owner_scope = 'team' and ${alias}.owner_team_id = ${id})
+         or (${alias}.owner_scope = 'club' and exists (select 1 from public.teams t
+           where t.id = ${id} and t.club_id = ${alias}.owner_club_id and coalesce(t.is_active, true)))`;
+    return `(${alias}.owner_scope = 'system' or ${scopeSql})`;
+  }
   if (isPlatformAdministrator(req.authz)) return "true";
   const clubIds = (req.authz.clubRoles || []).filter((r) => r.role === "club_admin").map((r) => r.clubId);
   const teamIds = new Set([
@@ -122,9 +136,9 @@ export function catalogVisibilitySql(req, alias, params) {
   ]);
   params.push(req.user.id);
   const userIdx = params.length;
-  params.push(clubIds.length ? clubIds : null);
+  params.push(clubIds.filter(id => can(req.authz, "load.view.team", { type: "club", id: String(id) })));
   const clubIdx = params.length;
-  params.push(teamIds.size ? [...teamIds] : null);
+  params.push([...teamIds].filter(id => can(req.authz, "load.view.team", { type: "team", id: String(id) })));
   const teamIdx = params.length;
   return `(
     ${alias}.owner_scope = 'system'

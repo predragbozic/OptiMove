@@ -218,13 +218,13 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "staff.assign": Object.freeze(["routes/organization.js", "permissionRolesService.js", "permissionLayersService.js"]),
   "roles.manage": Object.freeze(["permissionRolesService.js", "permissionLayersService.js"]),
   // Roles V-1 (docs/ai/roles-v-steps-plan.md sections 2.1 and 2.2): Data configuration and Tags, presets and session types.
-  "variables.view": Object.freeze(["sourceMetricAccess.js", "canonicalVariableAdminService.js"]),
+  "variables.view": Object.freeze(["sourceMetricAccess.js", "canonicalVariableAdminService.js", "routes/trainingActivity.js"]),
   "presets.use": Object.freeze(["routes/taxonomy.js", "sessionTypeService.js"]),
   // Roles V-2 (the plan's sections 2.3 and 9): Athletes. access.js holds its gates: athleteViewScopes, the arrays of the
   // access predicate's readers (Builder, templates, plans, tests, exercise media, the athlete list, the organization
   // read of a coach), and canViewAthletesAt (the organization read of a view workspace); the athletes' positions check
   // it at their workspace.
-  "athletes.view": Object.freeze(["access.js", "positionService.js"]),
+  "athletes.view": Object.freeze(["access.js", "positionService.js", "routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js"]),
   // Roles V-3 (docs/ai/roles-v-steps-plan.md section 2.4): the calendar (reads, events, Settings -> Calendar).
   "calendar.view": Object.freeze(["calendarModuleContext.js"]),
   // Roles V-4 (docs/ai/roles-v-steps-plan.md section 2.5): the Tests module (schedules; results and the per-athlete group).
@@ -238,6 +238,8 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   // Program Library and the plan reads); routes/exercises.js holds the exercise library's coach gate.
   "programs.view": Object.freeze(["access.js"]),
   "exercises.use": Object.freeze(["routes/exercises.js"]),
+  "load.view.team": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js", "trainingLoadMetricsAccess.js"]),
+  "load.view.athlete": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js"]),
 });
 
 // The checked words as a list (R2's name, kept for its callers): the words /me may offer and the only words a role
@@ -249,7 +251,6 @@ export const HONOURED_PERMISSIONS = Object.freeze(Object.keys(ENFORCED_PERMISSIO
 // is not checked acts nowhere: no route asks for it.
 export const STORABLE_PERMISSIONS = Object.freeze([
   ...HONOURED_PERMISSIONS,
-  "load.view.team", "load.view.athlete",
 ]);
 
 // The licence hierarchy (v96) lives in permissionModules.js, which authz.js reads without importing this file.
@@ -363,8 +364,8 @@ const WORKSPACE_SCOPE_TYPES = Object.freeze({
 // through on GET / only, which is org.view; a module's VIEW pull request (or R4-3/R4-4 for Settings) adds its words here
 // together with the route that lets them through.
 export const VIEW_WORKSPACE_USABLE_WORDS = Object.freeze({
-  club_view: Object.freeze(["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view", "programs.view", "exercises.use"]),
-  team_view: Object.freeze(["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view", "programs.view", "exercises.use"]),
+  club_view: Object.freeze(["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view", "programs.view", "exercises.use", "load.view.team", "load.view.athlete"]),
+  team_view: Object.freeze(["org.view", "variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view", "programs.view", "exercises.use", "load.view.team", "load.view.athlete"]),
 });
 
 // The closed modules (the club's ceiling, contract 7.1) of the ACTIVE workspace's club, for /me's navigation (5.1):

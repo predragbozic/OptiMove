@@ -97,7 +97,7 @@ import {
 } from "./training-load-calendar-data.js";
 import { isHiddenInClub } from "./metric-picker-visibility.js";
 import { athleteQuestionsAnswered } from "./athlete-questions-data.js";
-import { viewSafeTrainingLoadSection } from "./view-modules.js";
+import { viewSafeTrainingLoadSection, viewTrainingLoadSections } from "./view-modules.js";
 import { athleteLoadPreviewHtml, externalCalendarMode, externalScheduleSubmitDisabled, externalScheduleSubmitLabel, isRpeFormValid, renderRpeSliderInnerHtml, trainingLoadFilterVisibleAthletes } from "./training-load-view.js";
 
 let analysisLayoutPointer = null;
@@ -138,6 +138,7 @@ function analysisIsMobileLayoutViewport() {
 // loadTrainingLoadWeekly.
 export function loadTrainingLoadSectionData(section, render) {
   if (section === "today") return loadTrainingLoadCalendarWeek(render);
+  if (section === "schedule" && viewTrainingLoadSections() !== null) return Promise.resolve();
   if (section === "analysis") return loadTrainingLoadAnalysis(render);
   if (section === "imports") return loadGpexeImports(render);
   if (section === "references") return loadReferenceSection(render);

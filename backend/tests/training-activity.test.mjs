@@ -218,6 +218,8 @@ async function readMigrationFiles(names) {
   return Object.fromEntries(names.map((name, i) => [name, contents[i]]));
 }
 
+import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
+
 let db, adminClient, migrationsDir;
 let server, apiBaseUrl;
 let query, pool, createSession, hashPassword;
@@ -233,6 +235,7 @@ before(async () => {
   await adminClient.query(LEGACY_FIXTURE_SQL);
   migrationsDir = await writeMigrationsDir("primary", await readMigrationFiles(MIGRATIONS));
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  await applyRoleReadMigrations(db.url);
   // v53's club hides table, empty (the definitions list reads it): see the helper.
   await createClubHidesStandIn(adminClient);
 
