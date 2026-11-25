@@ -126,7 +126,7 @@ const roster = async (cookie) => {
 const titles = (res) => cards(res).map((card) => card.title);
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calendar_k6", migrations: MIGRATIONS });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calendar_k6", roleRead: true, migrations: MIGRATIONS });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

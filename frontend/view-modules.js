@@ -64,7 +64,8 @@ function held(user) {
 // unknown module, for a module not open yet, and without the word.
 export function viewModuleOpen(module, user = state.currentUser, open = OPEN_VIEW_MODULES) {
   if (!isView(user) || !Object.hasOwn(MODULE_VIEW_WORDS, module) || !open.includes(module)) return false;
-  return held(user).has(MODULE_VIEW_WORDS[module]);
+  const words = held(user);
+  return words.has(MODULE_VIEW_WORDS[module]) && (module !== "load_athlete" || words.has("athletes.view"));
 }
 
 const placeOpen = (place, user, open) => place.modules.some((module) => viewModuleOpen(module, user, open));
@@ -84,6 +85,7 @@ export function viewWorkspaceTabs(user = state.currentUser, open = OPEN_VIEW_MOD
 // Data & Analysis views open with their own modules in later V steps.
 export const VIEW_TRAINING_LOAD_SECTIONS = Object.freeze({
   load_team: Object.freeze(["today", "schedule"]),
+  load_athlete: Object.freeze(["results"]),
   dashboards: Object.freeze(["analysis"]),
   data_configuration: Object.freeze(["variables"]),
 });

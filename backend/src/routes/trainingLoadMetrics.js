@@ -11,7 +11,7 @@
 // as tested service code only, ready for a future connector to call.
 import { Router } from "express";
 import { athleteTrainingLoadAllowed } from "../athleteTrainingLoadLicence.js";
-import { coachModuleGate, viewEntryGate } from "../moduleView.js";
+import { coachModuleGate, handOnReadsRefuseWrites, viewEntryGate } from "../moduleView.js";
 import { can } from "../permissions.js";
 import { resolveActiveWorkspace } from "../workspace.js";
 import {
@@ -32,16 +32,14 @@ import {
 } from "../trainingLoadMetricsMeasurements.js";
 
 const router = Router();
-const refuseView = (req, res, next) => req.path.replace(/\/$/, "") === "/occasions"
-  ? next() : res.status(403).json({ error: "Forbidden" });
 const catalogViewGate = viewEntryGate("load_team", [
   { method: "GET", path: "/domains" }, { method: "GET", path: "/categories" },
   { method: "GET", path: "/definitions" }, { method: "GET", path: "/definitions/:id" },
   { method: "GET", path: "/structure-links" },
-], { refuse: refuseView });
+], { refuse: handOnReadsRefuseWrites });
 const measurementsViewGate = viewEntryGate("load_athlete", [
   { method: "GET", path: "/results" }, { method: "GET", path: "/occasions/:id" },
-], { refuse: refuseView });
+], { refuse: handOnReadsRefuseWrites });
 const metricsCoachGate = coachModuleGate("load_team", { allowed: (authz, scope) => can(authz, "load.view.team", scope) });
 
 router.use((req, res, next) => {

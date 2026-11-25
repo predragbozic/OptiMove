@@ -9,6 +9,7 @@
 // (schema.sql / test-harness.mjs / DASHBOARD_MODEL_REPORT.md /
 // DASHBOARD_UX_SPEC.md) — every invariant asserted below is a real
 // production behavior, not a re-run of that disposable-DB PoC.
+import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
@@ -250,6 +251,7 @@ before(async () => {
   await adminClient.query(LEGACY_FIXTURE_SQL);
   migrationsDir = await writeMigrationsDir("primary", await readMigrationFiles(MIGRATIONS));
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
+  await applyRoleReadMigrations(db.url);
   // v53's club hides table, empty (the template resolver reads it): see the helper.
   await createClubHidesStandIn(adminClient);
 

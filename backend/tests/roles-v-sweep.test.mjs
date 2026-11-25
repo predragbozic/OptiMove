@@ -1483,6 +1483,10 @@ test("V-5b: closing a club's Training Load licence hides an athlete's load and R
 test("V-5b: the read-only coach workspace reads scoped schedules and weekly data without creating occurrences", async () => {
   const named = await holderOf("v5bNamed", ["load.view.team", "load.view.athlete", "athletes.view"]);
   const counts = await holderOf("v5bCounts", ["load.view.team"]);
+  const teamCounts = await holderOf("v5bTeamCounts", ["load.view.team"], "team", w.TA1);
+  const namesWithoutAthletes = await holderOf("v5bMissingAthletes", ["load.view.athlete"], "team", w.TA1);
+  await setPref(teamCounts, "team", w.TA1);
+  await setPref(namesWithoutAthletes, "team", w.TA1);
   await setPref(named, "club", w.A);
   await setPref(counts, "club", w.A);
   const path = "/api/training-load/external-schedules";
@@ -1504,7 +1508,7 @@ test("V-5b: the read-only coach workspace reads scoped schedules and weekly data
   const metric = async (clubId, label) => {
     const { id } = (await k.query(`insert into training_load.metric_definitions
       (key,label,owner_scope,owner_club_id,state,created_by_user_id)
-      values($1,$2,'club',$3,'active',$4) returning id`, [label.toLowerCase().replaceAll(" ", "_"), label, clubId, w.adminA.id])).rows[0];
+      values($1,$2,$5,$3,'active',$4) returning id`, [label.toLowerCase().replaceAll(" ", "_"), label, clubId, w.adminA.id, clubId ? "club" : "system"])).rows[0];
     const version = (await k.query(`insert into training_load.metric_definition_versions
       (metric_definition_id,version_number,unit,value_type,daily_aggregation_method,created_by_user_id)
       values($1,1,'m','numeric','sum',$2) returning id`, [id, w.adminA.id])).rows[0];
@@ -1513,6 +1517,7 @@ test("V-5b: the read-only coach workspace reads scoped schedules and weekly data
   };
   const alphaMetric = await metric(w.A, "Alpha load");
   const betaMetric = await metric(w.B, "Beta load");
+  const systemMetric = await metric(null, "Shared load");
   const catalog = "/api/training-load/metrics/definitions";
   const activityPath = "/api/training-activity/";
   const before = await snapshotOccurrences();
@@ -1544,7 +1549,20 @@ test("V-5b: the read-only coach workspace reads scoped schedules and weekly data
     assert.ok(definitions.some(row => row.id === alphaMetric));
     assert.ok(definitions.every(row => row.id !== betaMetric));
   }
+  const catalogViews = ok(await srv.api(teamCounts.cookie, catalog)).rows;
+  assert.ok(catalogViews.some(row => row.id === alphaMetric));
+  assert.ok(!catalogViews.some(row => row.id === betaMetric));
+  assert.deepEqual(ok(await srv.api(teamCounts.cookie, activityPath + ownActivity + "/roster")).athletes, []);
+  for (const metricId of [systemMetric, betaMetric, key()]) {
+    const path = catalog + "/" + metricId + "/versions";
+    const roleless = await srv.api(w.nobody.cookie, path);
+    const scoped = await srv.api(counts.cookie, path);
+    assert.deepEqual([scoped.status, scoped.text], [roleless.status, roleless.text], "unlisted reads preserve roleless answers");
+  }
+  const hiddenWrite = await srv.api(counts.cookie, catalog + "/" + systemMetric + "/hide", { method: "POST" });
+  assert.equal(hiddenWrite.status, 403);
   const weekly = "/api/training-load/weekly?weekStart=" + date;
+  assert.equal((await srv.api(namesWithoutAthletes.cookie, weekly)).status, 403);
   ok(await srv.api(named.cookie, weekly));
   assert.equal((await srv.api(counts.cookie, weekly)).status, 403);
   assert.deepEqual(await snapshotOccurrences(), before);

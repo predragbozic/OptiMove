@@ -54,7 +54,7 @@ test("3. V-1, V-2, V-3, V-4, V-6: a view workspace holding every view word sees 
   assert.deepEqual(vm.viewHiddenMenuSelectors().sort(), nav.VIEW_WORKSPACE_MENU_HIDDEN.filter((s) => !shown.includes(s)).sort());
   assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "central-calendar", "templates", "weekly", "programs", "exercises", "tests", "training-load"]);
   assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams", "presets", "athletes"]);
-  assert.deepEqual(vm.viewTrainingLoadSections(), ["today", "schedule", "analysis", "variables"]);
+  assert.deepEqual(vm.viewTrainingLoadSections(), ["today", "schedule", "results", "analysis", "variables"]);
   nav.renderAccessNav();
   for (const selector of nav.VIEW_WORKSPACE_MENU_HIDDEN) {
     const el = document.querySelector(selector);
@@ -89,6 +89,16 @@ test("3c. V-6: dashboards.view alone opens Training Load on Data & Analysis -> D
   as(CLUB_VIEW, ["org.view", "dashboards.view", "variables.view"]);
   assert.equal(vm.viewSafeTrainingLoadSection("variables"), "variables");
   assert.equal(vm.viewSafeTrainingLoadSection("today"), "analysis", "the first open section");
+});
+
+test("V-5b: a named-only role lands on Athletes, and the load word alone does not expose names", () => {
+  as(CLUB_VIEW, ["org.view", "load.view.athlete", "athletes.view"]);
+  assert.deepEqual(vm.viewTrainingLoadSections(), ["results"]);
+  assert.ok(vm.viewWorkspaceTabs().includes("training-load"));
+  assert.equal(vm.viewSafeTrainingLoadSection("today"), "results");
+  as(CLUB_VIEW, ["org.view", "load.view.athlete"]);
+  assert.deepEqual(vm.viewTrainingLoadSections(), []);
+  assert.ok(!vm.viewWorkspaceTabs().includes("training-load"));
 });
 
 test("4. an opened module (inside the test): its place, tab and Settings section open only with its word; other places stay hidden", () => {
