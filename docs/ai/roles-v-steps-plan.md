@@ -526,3 +526,77 @@ Branch `feature/roles-v1-config-presets` from `1e83d9c6`. No migration.
 **Follow-ups (not built).**
 - A Home entry for Training Load's Data configuration in a view workspace (today the menu opens it).
 - A Positions read for the Athletes step (V-2).
+
+## 9. V-2 design notes (Athletes; the executor's discovery, before code)
+
+Branch `feature/roles-v2-athletes` from `f45ee0f9`. Nothing is built yet. This section is what the code will follow, and
+what another executor can pick up from.
+
+### Where the gates are (checked at `f45ee0f9`)
+
+- **A, the predicate:** `athleteAccessPredicate(alias, userParam)` (`access.js:213`) is SQL. An athlete is readable
+  through four branches:
+  - the athlete's own login;
+  - an active `user_athletes` link (a private coach);
+  - an active team membership matching a `user_team_roles` row;
+  - an active club membership matching a `user_club_roles` row.
+
+  Its callers:
+  - inside `access.js`: `athleteListAccessFilter(req, …)`, `canAccessAthlete(query, req, id)` and
+    `canAccessPlan(query, req, id)`;
+  - the raw predicate is called directly in two places, `routes/builder.js:353` and `:3853`;
+  - through those wrappers: `routes/builder.js` (5), `routes/templates.js` (3), `routes/plans.js` (3),
+    `routes/athletes.js` (3), `routes/tests.js` (2), `linkedSessionTimes.js` (2), `exerciseMedia.js` (2),
+    `athleteRosterScope.js` (2) and `routes/organization.js` (1).
+- **B, the roster scope:** `athleteRosterScope` (`athleteRosterScope.js`) is A's filter plus the workspace's own
+  membership. A view workspace gets `and false` today.
+- **D, the organization read:** `viewWorkspaceOrganization` (`routes/organization.js`, R4-2) returns `athletes: []`.
+  The coach path of `GET /api/organization` reads its athletes through A.
+
+### Mechanism (the executor's choice)
+
+- **The id arrays.** The role branches of A stop reading `user_club_roles` / `user_team_roles` in SQL. Instead they take
+  two id arrays computed in JS for the request:
+  - the clubs of the account's old `club_admin` rows where `can(authz, "athletes.view", clubScope(id))`;
+  - the teams of its old `team_coach` rows where `can(authz, "athletes.view", teamScope(id))`.
+
+  The SQL becomes `tm.team_id = any($teams)` and `cm.club_id = any($clubs)`. The membership rule stays the same
+  (active rows only).
+- **The signature.** `athleteAccessPredicate` takes the parameter positions of the two arrays. The `access.js` wrappers
+  and the two raw calls in `builder.js` pass them, and every gate file calls `can()` through one helper,
+  `athleteViewScopes(req)`.
+- **Why not the SQL twin `public.user_has_permission` per row:** it would run once per athlete and role, and it costs
+  a `permission_user_holdings` read each time. On a pre-v84 test database it fails as a missing function (a 500, not a
+  503).
+- **Consequences:**
+  - The word now limits every reader of A: Builder, templates, plans, tests, linked session times, exercise media and
+    organization. A club whose own version of a role, or whose licence, takes `athletes.view` away removes its
+    athletes from all of them for that role. This is R4 section 6, decided.
+  - Every suite whose database stops before v84 and whose coach paths reach A needs `roleRead: true`. The full
+    disposable kind finds them; a filter does not.
+
+### What a view workspace gets (plan section 2.3, P-1)
+
+- **`GET /api/athletes` (the list):** the club's or team's athletes, by active membership of the day, in the roster
+  shape.
+  - **Open question for the manager:** the list carries `weekly_plan_count` and `program_count`, which are program
+    data (`programs.view`).
+  - **Proposal:** a view workspace gets them as `null`, and the screen shows no count.
+- **`GET /api/organization`, athletes of its club or team:** with `athletes.view`; otherwise `[]`, as today.
+- **`GET /api/positions` and `GET /api/positions/athletes` (reads):** the club's positions and its athletes' positions.
+- **Stay closed** (not `athletes.view`): `/today` and `/training-days` (plan data), `/:id/plans` and `/:id/program-data`
+  (`programs.view`), every write, and `athlete-profile` (the athlete's own).
+
+### Tests to write
+
+- **The sweep row `athletes`:**
+  - the listed reads, club A only;
+  - a mixed account;
+  - a minor's data only in its own club;
+  - every write lands nothing;
+  - the word taken away;
+  - the licence closes it for role holders and old roles alike.
+- **Old-vs-new on every gate A, B and D:** for a club admin, a team coach, a private coach, an athlete and a platform
+  admin.
+- **The rule's own tests:** checked-gates A1/A2 with the new gate files, and `enforced_word_covers_all_gates`.
+- **Frontend:** the menu place `athletes`; Settings → Athletes, read only; e2e at 1280, 390 and 360 px.
