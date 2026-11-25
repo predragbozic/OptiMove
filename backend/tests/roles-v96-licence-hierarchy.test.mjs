@@ -40,7 +40,10 @@ const FAMILY = ["training_load", "dashboards", "imports", "data_configuration"];
 
 let db, k, F, app;
 before(async () => {
-  db = await buildDatabase({ label: "v96", upTo: "all" });
+  // Production's order: every other migration first (v97 included, already applied there), v96 last. On a fresh
+  // database v96 (202611281000) applies before v97 (202611291000); test 1c covers that order.
+  db = await buildDatabase({ label: "v96", upTo: "all", skip: [V96_FILE] });
+  await runMigrations({ databaseUrl: db.url, migrationsRoot: MIGRATIONS });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);
@@ -176,6 +179,36 @@ test("1b. the migration refuses, changing nothing, when a body it replaces is no
   } finally {
     await c.end().catch(() => {});
     await pre.drop();
+  }
+});
+
+test("1c. the fresh order (v96 before v97, by file name): both apply; the effective ceiling is the same; the v96 rollback then refuses (v97 was applied after it), changing nothing", async () => {
+  const fresh = await buildDatabase({ label: "v96_fresh", upTo: "all" });
+  const c = new pg.Client({ connectionString: fresh.url });
+  await c.connect();
+  try {
+    const order = (await c.query(`select migration_name from public.schema_migrations
+        where migration_name in ($1, 'migrations_v2/202611291000_training_load_v97_references.sql') order by applied_at, migration_name`, [V96_NAME])).rows.map((r) => r.migration_name);
+    assert.deepEqual(order, [V96_NAME, "migrations_v2/202611291000_training_load_v97_references.sql"], "v96 then v97");
+    const md5 = Object.fromEntries((await c.query(`select proname, md5(prosrc) as m from pg_proc where pronamespace = 'public'::regnamespace and proname = any($1)`,
+      [Object.keys(V96_MD5)])).rows.map((r) => [r.proname, r.m]));
+    assert.deepEqual(md5, V96_MD5, "the same v96 bodies in either order");
+    const G = fixtures(c);
+    const club = await G.club();
+    const pa = await G.user("pa"); await G.grantPlatform(pa);
+    await asActor(fresh.url, pa, async (x) => {
+      await x.query(`select public.lock_club_ceiling($1::uuid[], 'exclusive')`, [[club]]);
+      await x.query(`insert into public.club_permission_ceiling (club_id, module_word, closed_by_user_id, reason) values ($1, 'training_load', $2, 'licence')`, [club, pa]);
+      await x.query(`insert into public.club_permission_ceiling_changes (club_id, module_word, action, performed_by_user_id, reason) values ($1, 'training_load', 'close', $2, 'licence')`, [club, pa]);
+    });
+    const closed = (await c.query(`select word from public.permission_modules where public.permission_club_module_closed($1, word) order by word`, [club])).rows.map((r) => r.word);
+    assert.deepEqual(closed, ["dashboards", "data_configuration", "imports", "training_load"]);
+    const rollback = fs.readFileSync(path.join(RUNBOOKS, "roles-licence-hierarchy-v96-rollback.sql"), "utf8");
+    await assert.rejects(c.query(rollback), (e) => e.code === "23514" && /a later migration is recorded/.test(e.message));
+    await c.query("rollback").catch(() => {});
+  } finally {
+    await c.end().catch(() => {});
+    await fresh.drop();
   }
 });
 

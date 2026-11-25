@@ -56,6 +56,16 @@ close on its own. The preflight's block 3 counts those (club, child) pairs (`chi
   closes it for the club's admin and role holders. Dashboards and Imports follow the licence once their own words are
   checked (their row keeps "This part does not follow the licence yet"). Training Load's own words are checked in V-5b.
 
+## Order against v97
+
+v97 (`202611291000_training_load_v97_references.sql`, P3 references) touches none of v96's functions, and v96 touches none
+of v97's.
+- **Production:** v97 is already applied, and v96 (`202611281000`, an earlier name) is applied after it. The runner
+  applies a file it has not recorded, whatever its name. The rehearsal and the v96 test suite build in this order.
+- **A fresh database:** v96 applies before v97, with the same bodies (test 1c). The v96 rollback there refuses, because a
+  later migration is recorded; that is the intended conservative rule. v97's own rollback compares by name and is not
+  affected by v96.
+
 ## Deploy
 
 1. **Before the merge, at a quiet moment:** the read-only preflight, each block as

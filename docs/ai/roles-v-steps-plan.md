@@ -1085,3 +1085,6 @@ runbook `docs/runbooks/roles-licence-hierarchy-v96.md`.
     licence" since closing it closes Data configuration); the rollback refuses when a club would break v92's rule 7
     (test 4);
   - code LOW: the v92 rehearsal leaves out v95 and v96 (it had been broken since v95); it passes again.
+- **After `main` took v97 (P3 references, `202611291000`):** production applies v96 after v97. The v96 suite and the
+  rehearsal now build in that order; test 1c covers the fresh order (v96 first, the same bodies, and the v96 rollback
+  refusing after the later v97). v97 touches none of v96's functions.

@@ -3,8 +3,8 @@
 // server you point it at - written so that it runs unchanged on PostgreSQL 17 (production) as on 16. The shape of the
 // earlier rehearsals (v95):
 //
-//   1. a disposable database built from the legacy snapshot and the real runner, every migration before v96; a club, a
-//      team, its club admin and coach, a platform admin; the club's licence closes Training Load only (its children
+//   1. a disposable database built from the legacy snapshot and the real runner, every migration but v96 (v97
+//      included: production's order); a club, a team, its club admin and coach, a platform admin; the club's licence closes Training Load only (its children
 //      Dashboards, Imports and Data configuration keep no row of their own);
 //   2. the read-only preflight (every ok column true); before v96 the club admin still holds variables.view (Data
 //      configuration, a child) - the gap v96 closes;
@@ -143,23 +143,20 @@ export async function rehearse(args, password) {
     const restoreMajor = Number(((await run(tool(args.pgBin, "pg_restore"), ["--version"], { env: toolEnv(password), windowsHide: true })).stdout.match(/(\d+)(\.\d+)?/) || [])[1]);
     report("tools: pg_dump and pg_restore of the server's major version", dumpMajor === Math.floor(version.n / 10000) && restoreMajor === dumpMajor, `server ${Math.floor(version.n / 10000)}, pg_dump ${dumpMajor}, pg_restore ${restoreMajor}`);
 
-    // 1. Build to every migration before v96; v96 itself from a folder that ends with it (never a later file).
+    // 1. Build to every migration but v96 (production order: v97 first), then v96 last.
     const name = await created();
     const url = urlFor(args, name, password);
     const snapshotSql = fs.readFileSync(path.join(REPO, "backend", "tests", "support", "legacy-schema.sql"), "utf8");
     const last = snapshotSql.match(/^-- Last migration contained in the dump: (\S+)\.$/m)[1];
     await bootstrapLegacySnapshot({ databaseUrl: url, snapshotSql, migrationsRoot: MIGRATIONS, lastMigration: last });
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "optimove-v96-rehearsal-"));
-    // The runner records a migration by its folder's name, so both folders are called migrations_v2.
+    // Production's order: every other migration first - v97 (202611291000, already applied in production) included -
+    // then v96 last, as the deploy will apply it. No later migration depends on v96. The runner records a migration by
+    // its folder's name, so the folder is called migrations_v2.
     const before = path.join(tmp, "before", "migrations_v2");
-    const upToV96 = path.join(tmp, "up-to-v96", "migrations_v2");
+    const upToV96 = MIGRATIONS;
     fs.mkdirSync(before, { recursive: true });
-    fs.mkdirSync(upToV96, { recursive: true });
-    for (const f of fs.readdirSync(MIGRATIONS)) {
-      if (!f.endsWith(".sql")) continue;
-      if (f < V96_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
-      if (f <= V96_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(upToV96, f));
-    }
+    for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql") && f !== V96_FILE) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(before, f));
     await runMigrations({ databaseUrl: url, migrationsRoot: before });
     const c = new pg.Client({ connectionString: url });
     await c.connect();
@@ -181,7 +178,7 @@ export async function rehearse(args, password) {
       await c.query(`insert into public.club_permission_ceiling (club_id, module_word, closed_by_user_id, reason) values ($1, 'training_load', $2, 'licence')`, [club, pa]);
       await c.query(`insert into public.club_permission_ceiling_changes (club_id, module_word, action, performed_by_user_id, reason) values ($1, 'training_load', 'close', $2, 'licence')`, [club, pa]);
       await c.query("commit");
-      report("1. a disposable database through every migration before v96; a club with its admin and a team coach, its licence closing Training Load", true, name);
+      report("1. a disposable database through every migration but v96 (v97 first, production order); a club with its admin and a team coach, its licence closing Training Load", true, name);
 
       const twin = async (u, w, t, id) => (await c.query(`select public.user_has_permission($1, $2, $3, $4) as ok`, [u, w, t, id])).rows[0].ok;
       const childClosed = async () => (await twin(clubAdmin, "variables.view", "club", club)) === false
