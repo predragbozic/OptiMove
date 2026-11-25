@@ -31011,6 +31011,49 @@ body.athlete-questions-prompt-open {
   .tl-analysis-topbar-compact, .tl-compact-page-row { display: none !important; }
 }
 
+/* P3 reference tables and Radar: React islands, bounded matrix and settings panel. */
+.tl-reference-workspace { padding: 8px 0; min-width: 0; }
+.tl-reference-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tl-reference-layout { display: grid; grid-template-columns: 230px minmax(0,1fr); gap: 20px; }
+.tl-reference-layout aside { border-right: 1px solid var(--line,#dce2e7); padding-right: 12px; }
+.tl-reference-layout aside ul { list-style: none; padding: 0; display: grid; gap: 8px; }
+.tl-reference-layout aside li { display: grid; gap: 4px; }
+.tl-reference-layout aside li button { text-align: left; }
+.tl-reference-layout main { min-width: 0; }
+.tl-reference-layout form, .tl-reference-setup { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 12px 0; }
+.tl-reference-workspace label, .tl-reference-dialog label { display: grid; gap: 4px; min-width: 0; }
+.tl-reference-workspace input,.tl-reference-workspace select,.tl-reference-dialog input,.tl-reference-dialog select { font-size: 16px; min-height: 44px; max-width: 100%; box-sizing: border-box; }
+.tl-reference-workspace button,.tl-reference-dialog button { min-height: 44px; }
+.tl-reference-workspace table { border-collapse: collapse; min-width: 100%; }
+.tl-reference-workspace th,.tl-reference-workspace td { padding: 10px; border-bottom: 1px solid var(--line,#dce2e7); text-align: left; vertical-align: top; min-width: 130px; }
+.tl-reference-workspace td input { width: 140px; }
+.tl-reference-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; }
+.tl-reference-dialog-backdrop { position: fixed; inset: 0; z-index: 1240; background: #122c3455; display: flex; justify-content: flex-end; }
+.tl-reference-dialog { width: min(620px,100%); height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 20px; box-sizing: border-box; background: var(--surface,#fff); }
+.tl-reference-dialog fieldset { border: 1px solid var(--line,#dce2e7); border-radius: 8px; padding: 12px; margin: 12px 0; }
+.tl-reference-dialog input[type="checkbox"] { min-width: 20px; min-height: 20px; width: 20px; }
+.tl-reference-value-choices { display: flex; gap: 12px; flex-wrap: wrap; padding: 10px 0; }
+.tl-reference-value-choices label { display: flex; align-items: center; min-height: 44px; }
+.tl-reference-chart .tl-analysis-echarts { min-height: 340px; }
+.tl-reference-chart td span { display: block; }
+.tl-reference-chart small { display: block; }
+@media (max-width:720px) {
+ .tl-reference-layout { grid-template-columns: minmax(0,1fr); gap: 12px; }
+ .tl-reference-layout aside { border-right: 0; padding: 0; }
+ .tl-reference-layout aside ul { display: flex; overflow-x: auto; max-width: 100%; padding-bottom: 6px; }
+ .tl-reference-layout aside li { flex: 0 0 160px; }
+ .tl-reference-setup form { width: 100%; }
+ .tl-reference-setup label { flex: 1; }
+ .tl-reference-dialog { padding: 14px; }
+}
+
+/* Keep P3 saving actions clear of the phone navigation and the scrollable matrix. */
+.tl-reference-binding-fields { min-width: 0; }
+@media (max-width:720px) {
+ .tl-reference-workspace { padding-bottom: calc(var(--om-bottom-nav-space,64px) + 24px); }
+ .tl-reference-workspace .tl-reference-footer { position: sticky; bottom: var(--om-bottom-nav-space,64px); z-index: 5; background: var(--surface,#fff); padding: 12px 8px; border-top: 1px solid var(--line,#dce2e7); }
+ .tl-reference-setup > label { flex: 1 1 100%; }
+}
 /* Roles R4-4, PR B: the role word list (shared), Club roles and Access in this club (React islands). */
 .club-roles, .person-access { min-width: 0; }
 .club-roles-head h3, .person-access-head h3 { margin: 0; overflow-wrap: anywhere; }
@@ -31058,3 +31101,10 @@ body.athlete-questions-prompt-open {
 .person-access-holding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .person-access-diff { margin: 8px 0 0; padding-left: 18px; }
 .person-access-blocked { margin: 8px 0 0; }
+
+.tl-reference-layout aside h3 { margin-top: 0; }
+.tl-reference-layout aside li .plain-button { width: 100%; }
+.tl-reference-layout aside [aria-current="true"] { border-color: var(--accent,#137d70); background: var(--accent-soft,#e7f4f1); font-weight: 700; }
+.tl-reference-layout aside li > span { color: var(--muted,#607080); font-size: 12px; padding-inline: 10px; }
+.tl-reference-workspace table th:first-child { position: sticky; left: 0; z-index: 2; background: var(--surface,#fff); }
+.tl-reference-workspace table thead th { font-size: 13px; }

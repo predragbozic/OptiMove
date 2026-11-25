@@ -124,3 +124,8 @@ docs/runbooks/roles-licence-hierarchy-v96.md text eol=lf
 backend/scripts/roles-licence-hierarchy-v96-rehearsal.sh text eol=lf
 backend/scripts/roles-licence-hierarchy-v96-rehearsal.ps1 text eol=lf
 backend/scripts/roles-licence-hierarchy-v96-rehearsal.mjs text eol=lf
+
+# P3 references: byte-stable migration and owner rehearsal artifacts
+migrations_v2/202611291000_training_load_v97_references.sql text eol=lf
+docs/runbooks/dashboard-references-v97* text eol=lf
+backend/scripts/dashboard-references-* text eol=lf

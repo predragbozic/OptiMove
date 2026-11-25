@@ -58,7 +58,7 @@ function requireWorkspaceType(dataWorkspaceType) {
 // The authorized activity id set for one date range + workspace +
 // (optional) athlete filter — mirrors the real, already-shipped
 // GET /api/training-activity list-query's own workspace scoping.
-async function fetchAuthorizedActivityIds({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds }, queryRunner) {
+export async function fetchAuthorizedActivityIds({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds }, queryRunner) {
   requireWorkspaceType(dataWorkspaceType);
   const params = [dateFrom, dateTo];
   let scopeSql = "true";
@@ -668,7 +668,7 @@ function queryBuiltInSeriesFromContext(ctx, { key, athleteIds }) {
 // athleteIds/activityId/componentId — the date period is a query-level
 // concept, not a per-widget filter.
 // ------------------------------------------------------------
-function mergeFilters(...layers) {
+export function mergeFilters(...layers) {
   const result = {};
   for (const layer of layers) {
     if (!layer || typeof layer !== "object") continue;
@@ -695,7 +695,7 @@ function mergeFilters(...layers) {
 // the number of widgets), while two widgets with genuinely different
 // local_filter_override values never leak each other's rows.
 // ------------------------------------------------------------
-export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs, { queryRunner = query } = {}) {
+export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs, { queryRunner = query, referenceMeasurementsOnly = false } = {}) {
   const rangeCache = new Map();
   const ratioCache = new Map();
 
@@ -731,7 +731,11 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
         dayScopeMetricIds,
         builtinCatalog,
         queryRunner,
-      ));
+      ).then(ctx => {
+        if (!referenceMeasurementsOnly) return ctx;
+        const measured = map => new Map([...map].map(([id,facts]) => [id,facts.filter(f => ["api_import","csv_import"].includes(f.entryMethod) && !f.isDerived && !f.calculated)]));
+        return { ...ctx, metricFactsByDefinition: measured(ctx.metricFactsByDefinition), dayLevelFactsByDefinition: measured(ctx.dayLevelFactsByDefinition) };
+      }));
     }
     return rangeCache.get(cacheKey);
   }

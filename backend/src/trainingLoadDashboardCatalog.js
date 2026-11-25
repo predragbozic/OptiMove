@@ -450,11 +450,11 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       );
       cloneReport.push({ sourceSeriesId: s.id, resolution: "copied" });
     }
-    const clonedSeries = widgets.rows.some(w=>w.presentation_config?.schemaVersion===1&&w.presentation_config?.chartShape)
+    const clonedSeries = widgets.rows.some(w=>w.presentation_config?.schemaVersion===1&&(w.presentation_config?.chartShape||w.presentation_config?.referenceConfig))
       ? (await c.query('select id,widget_id,series_order from training_load.dashboard_widget_series where widget_id=any($1::uuid[])',[[...widgetIdMap.values()]])).rows : [];
     for (const sourceWidget of widgets.rows) {
       if (pagesInstalled) await c.query("select set_config('optimove.dashboard_page',pg_current_xact_id()::text||':'||$1,true)", [widgetPageMap.get(sourceWidget.id)]);
-      if(sourceWidget.presentation_config?.schemaVersion!==1||!sourceWidget.presentation_config.chartShape){
+      if(sourceWidget.presentation_config?.schemaVersion!==1||(!sourceWidget.presentation_config.chartShape&&!sourceWidget.presentation_config.referenceConfig)){
         // Preserve unknown/opaque JSON in PostgreSQL, including numeric precision.
         await c.query(`update training_load.dashboard_widgets as cloned_widget
           set presentation_config = source_widget.presentation_config
