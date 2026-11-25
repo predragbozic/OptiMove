@@ -1,3 +1,4 @@
+import { validReferenceConfig } from "../dashboardReferences/contract.js";
 import {validGalleryShape} from '../dashboardGallery/contract.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 // S1.1 26162ae: isolated JSON contracts. No routes, database or evaluator.
@@ -31,7 +32,8 @@ const style = obj({ tone: en('neutral', 'positive', 'caution', 'negative'), mark
 const baseRule = { id: str(64), priority: integer, enabled: bool, name: str(200), target, operand: en('value', 'referenceDifference', 'referencePercent'), operator: en('gt', 'gte', 'lt', 'lte', 'between', 'outside'), threshold: obj({ value: num, unit }), range: obj({ lower: num, upper: num, lowerInclusive: bool, upperInclusive: bool, unit }), reference: referenceSchema, formulaVersion: { const: 'signed-relative-abs-v1' }, style };
 export const ruleSchema = obj(baseRule, ['id', 'priority', 'enabled', 'name', 'target', 'operand', 'operator', 'style']);
 export const galleryShapeSchema = obj({schemaVersion:{const:1},kind:en('area','horizontal_bar','combined','heatmap','scatter','stacked','boxplot'),seriesIds:{type:'array',items:uuid,minItems:1,maxItems:20},bindings:{type:'array',minItems:2,maxItems:20,items:obj({seriesId:uuid,mark:en('bar','line'),axis:en(0,1)})},additive:bool},['schemaVersion','kind','seriesIds']);
-export const presentationV1Schema = obj({ chartShape: galleryShapeSchema, schemaVersion: { const: 1 }, chartComposition: { const: 'athletes-v1' }, chartInteractions: chartInteractionsSchema, tableFormatting: obj({ evaluationVersion: { const: 1 }, rules: { type: 'array', items: ruleSchema, maxItems: 20 } }) }, ['schemaVersion']);
+export const referenceConfigSchema = obj({schemaVersion:{const:1},source:en('preset','teamAverage'),mode:en('overlay','radar'),clubId:uuid,tableId:uuid,versionId:uuid,teamId:uuid,axes:{type:'array',minItems:1,maxItems:20,items:obj({seriesId:uuid,anchorKey:str(40),valueKeys:{type:'array',minItems:1,maxItems:20,items:str(40),uniqueItems:true},band:obj({lowerKey:str(40),upperKey:str(40)})},['seriesId','valueKeys'])}},['schemaVersion','source','mode','clubId','axes']);
+export const presentationV1Schema = obj({ referenceConfig: referenceConfigSchema, chartShape: galleryShapeSchema, schemaVersion: { const: 1 }, chartComposition: { const: 'athletes-v1' }, chartInteractions: chartInteractionsSchema, tableFormatting: obj({ evaluationVersion: { const: 1 }, rules: { type: 'array', items: ruleSchema, maxItems: 20 } }) }, ['schemaVersion']);
 export const displayModeSchema = union(tagged('mode', 'preserve'), tagged('mode', 'replace', { value: displayV2Schema }));
 export const presentationModeSchema = union(tagged('mode', 'preserve'), tagged('mode', 'clear'), tagged('mode', 'replace', { value: presentationV1Schema }));
 export const editorDraftSchema = obj({ contractVersion: { const: 1 }, draftId: uuid, draftVersion: integer, title: str(200), metricRef: metricRefSchema, athleteSelection: athleteSelectionSchema, advancedFilter: obj({ activity: filterSelectionSchema, component: filterSelectionSchema }, []), periodIntent: periodIntentSchema, view: viewSchema, display: displayModeSchema, presentation: presentationModeSchema }, ['contractVersion', 'draftId', 'draftVersion', 'title', 'metricRef', 'athleteSelection', 'periodIntent', 'view']);
@@ -108,6 +110,7 @@ export function validateContract(name, value) {
     const pres = name === 'editorDraft' ? value.presentation?.value : name === 'presentationMode' ? value.value : name === 'presentationV1' ? value : null;
     const axis = name === 'yAxis' ? value : name === 'chartInteractions' ? value.yAxis : pres?.chartInteractions?.yAxis;
     if (axis?.mode === 'fixed' && axis.min >= axis.max) add('axisBounds', '$.yAxis');
+    if (pres?.referenceConfig && !validReferenceConfig(pres.referenceConfig)) add('invalidReferenceConfig', '$.referenceConfig');
     if (pres?.chartShape && !validGalleryShape(pres.chartShape)) add('invalidChartShape', '$.chartShape');
     if ((pres?.chartInteractions || pres?.chartComposition || pres?.chartShape) && pres.tableFormatting) add('incompatiblePresentation', '$');
     const rules = name === 'rule' ? [value] : pres?.tableFormatting?.rules ?? [];

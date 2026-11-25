@@ -116,7 +116,7 @@ function boardCard() {
 }
 
 export function renderDataConfigHomeHtml(s, ctx) {
-  return `
+  return `<div data-reference-island="entry"></div>
     <div class="metric-variables-head">
       <div>
         <h2 id="metric-variables-title" tabindex="-1">Data configuration</h2>

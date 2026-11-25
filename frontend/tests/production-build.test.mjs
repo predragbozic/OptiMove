@@ -162,8 +162,11 @@ test("6. no source map is emitted in the production build", () => {
 });
 
 test("7. JS and CSS assets are minified (no large blocks of readable indentation/comments)", () => {
-  const jsFile = readdirSync(distAssetsDir).find((name) => name.endsWith(".js"));
-  const cssFile = readdirSync(distAssetsDir).find((name) => name.endsWith(".css"));
+  // A small shared split chunk may sort first; inspect the main payload.
+  const largest = extension => readdirSync(distAssetsDir).filter(name => name.endsWith(extension))
+    .sort((a,b) => readFileSync(path.join(distAssetsDir,b)).length - readFileSync(path.join(distAssetsDir,a)).length)[0];
+  const jsFile = largest('.js');
+  const cssFile = largest('.css');
   assert.ok(jsFile, "a built JS asset must exist");
   assert.ok(cssFile, "a built CSS asset must exist");
   const js = readFileSync(path.join(distAssetsDir, jsFile), "utf8");

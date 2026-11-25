@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import pg from "pg";
 import { runMigrations } from "../src/migrate.js";
-import { asActor, buildDatabase, fixtures, MIGRATIONS, RUNBOOKS, ROLE_IDS } from "./support/permission-roles-world.mjs";
+import { asActor, buildDatabase, fixtures, migrationsWithout, MIGRATIONS, RUNBOOKS, ROLE_IDS } from "./support/permission-roles-world.mjs";
 
 const V95_FILE = "202611271000_roles_v95_closed_module_dominance.sql";
 const V95_NAME = `migrations_v2/${V95_FILE}`;
@@ -30,7 +30,7 @@ const V95_MD5 = {
 
 let db, k, F;
 before(async () => {
-  db = await buildDatabase({ label: "v95", upTo: "all" });
+  db = await buildDatabase({ label: "v95", upTo: V95_FILE });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);
@@ -120,7 +120,9 @@ test("1. the migration: v95 recorded with the file's sha256, the bodies v95's; t
   assert.equal((await one(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V95_NAME])).n, 0);
   // Under v92's bodies the club's admin cannot version Team coach while Tests is closed (it carries tests.view).
   await refused(makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] }), "42501");
-  await runMigrations({ databaseUrl: db.url, migrationsRoot: MIGRATIONS });
+  // A rollback rehearsal must stop at its own migration; later migrations are tested below.
+  const stage = migrationsWithout([], V95_FILE);
+  try { await runMigrations({ databaseUrl: db.url, migrationsRoot: stage.dir }); } finally { stage.cleanup(); }
   assert.deepEqual(await md5s(), V95_MD5);
   await makeVersion(w.admin, w.club, ROLE_IDS.team_coach, { remove: ["athletes.remove"] });
   // A later migration recorded: refused, nothing changed.

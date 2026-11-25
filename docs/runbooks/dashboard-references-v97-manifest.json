@@ -1,0 +1,77 @@
+{
+  "file": "migrations_v2/202611291000_training_load_v97_references.sql",
+  "sha256": "a3058df8188d443f0a416b4fe322ece21fb40606bd262fc66a31d83a0680531e",
+  "functions": [
+    {
+      "signature": "training_load.cleanup_dashboard_reference_requests(integer)",
+      "md5": "77e80133356e6849701126d56fc062f5"
+    },
+    {
+      "signature": "training_load.dashboard_chart_shape_remap(jsonb,jsonb)",
+      "md5": "b6d4fb39b640111f59d740c3e2c3dbd7"
+    },
+    {
+      "signature": "training_load.dashboard_presentation_assert_compatible(jsonb,text,text)",
+      "md5": "8aed9e3acc0c1b2000d270b3901676d8"
+    },
+    {
+      "signature": "training_load.dashboard_presentation_valid(jsonb)",
+      "md5": "70c92eae1e81f961e058d115c6ccc244"
+    },
+    {
+      "signature": "training_load.dashboard_reference_assert_widget(uuid)",
+      "md5": "a606b609c6ee5c5a8efdb0a720359b7b"
+    },
+    {
+      "signature": "training_load.dashboard_reference_column_available(uuid,uuid,text,text,text)",
+      "md5": "390a7d265ae9e06661f2a6276c19212d"
+    },
+    {
+      "signature": "training_load.dashboard_reference_config_valid(jsonb)",
+      "md5": "b176f2e543e616f19151dba97dfbdf66"
+    },
+    {
+      "signature": "training_load.dashboard_reference_deferred()",
+      "md5": "ab09e8eff67572adbd642b0b90ac66cf"
+    },
+    {
+      "signature": "training_load.dashboard_reference_guard()",
+      "md5": "452c37d00dc1f149fb918e4e7686fca2"
+    },
+    {
+      "signature": "training_load.dashboard_reference_legacy_compatible(jsonb,text,text)",
+      "md5": "439d80f9e60bbf32479afdf58f102f4b"
+    },
+    {
+      "signature": "training_load.dashboard_reference_legacy_remap(jsonb,jsonb)",
+      "md5": "ac6d865af34dcbfa510c66b0f1feb2da"
+    },
+    {
+      "signature": "training_load.dashboard_reference_legacy_valid(jsonb)",
+      "md5": "9ce11aa017244998674f357eac2d8c89"
+    },
+    {
+      "signature": "training_load.dashboard_reference_no_truncate()",
+      "md5": "9643b3cd89d443cba945182bc53f3bce"
+    },
+    {
+      "signature": "training_load.mutate_dashboard_reference(uuid,uuid,uuid,text,uuid,integer,text,jsonb)",
+      "md5": "4f1cf2472e9673a09a096e929ac8c4c2"
+    },
+    {
+      "signature": "training_load.save_dashboard_reference_binding(uuid,uuid,uuid,uuid,text,uuid,uuid,integer,text,jsonb)",
+      "md5": "1758d323925f64a09eaaeb30b1884d5b"
+    }
+  ],
+  "tables": [
+    "dashboard_reference_cells",
+    "dashboard_reference_columns",
+    "dashboard_reference_requests",
+    "dashboard_reference_rows",
+    "dashboard_reference_tables",
+    "dashboard_reference_usage",
+    "dashboard_reference_value_kinds",
+    "dashboard_reference_versions",
+    "dashboard_reference_widget_usage"
+  ]
+}

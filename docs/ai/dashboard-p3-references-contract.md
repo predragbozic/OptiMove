@@ -5,6 +5,24 @@ Verified base: `963e1c0fc0a4a2ba27c45539a5f8fc28ae5856db` (2026-11-24).
 No implementation, migration, activation, merge or deployment is authorized by this document.
 P2 #742 is under review and is not changed here.
 
+## Implementation authorization update (owner, 2026-11-24)
+
+The owner supersedes the section 2 wait for R4 module steps: P3 proceeds using
+TODAY's shared dashboard/widget access checks for bindings and existing
+canonical-variable administration checks for reference tables, with identical-404
+info hiding. Do not add variables.* or dashboards.* to ENFORCED_PERMISSIONS and
+do not partially activate an R4 permission word. R4 Training Load / Dashboards /
+Data configuration VIEW and MANAGE steps, owned by the manager stream after
+R4-4, will move P3 gates together with every other gate of those modules.
+The club-owned-only first delivery remains unchanged.
+
+React foundation is main fd555885d334d2b7cf12d8f6d97fab8d778bb22c (#753).
+Components use frontend/react/*.jsx and the shared mountIsland/unmountIsland
+bridge; compiled frontend/react-build output is committed and drift-tested.
+Migration v97 / 202611291000 is reserved for P3, based on v94 and independent
+of v95/v96. Confirm the exact registry again at freeze. This allocation does not
+authorize applying it to any persistent database.
+
 ## 1. Outcome and boundaries
 
 A coach chooses a named reference table, such as **Game targets by position** or
@@ -353,3 +371,17 @@ commit. This docs-only update starts no code and allocates no migration.
 Unknown until implementation planning: React foundation commit/helper API, then-current
 R4 module gate completion, migration slot/checksums/live md5 manifest and final
 resource limits. None is inferred from production or blocks reviewing this document.
+
+## As-built implementation boundary (P3 v97)
+
+The owner directed P3 to use today's canonical-variable admin/read predicates for tables and existing dashboard manage/data-workspace predicates for bindings, without partially enabling R4 words. Training Load / dashboards / Data configuration VIEW and MANAGE will move to R4 together in the manager stream. P3 explicitly accepts club/team workspaces only; club_view/team_view and platform/private/athlete contexts are closed. A platform admin uses the relevant club workspace. DASHBOARD_REFERENCES_ENABLED defaults false.
+
+React screens use the merged foundation and committed islands build. Limits: 100 live tables per club, 20 columns, 100 position rows, 20 extensible named values, 300 filled cells and a 60000-byte write envelope. Manual and future import feed the same normalized draft payload. Published references are immutable; missing values remain absent. Overlay supports one variable with multiple named lines and a band; Radar supports at least three variables with multiple named reference lines, with no shaded band control. Reference rows currently use position identities; team/athlete preset rows remain a later storage extension.
+
+A team reference uses only authorized roster athletes of the selected team's own activities in the existing data_workspace fact set. In a club workspace, club-owned activities cannot borrow a team workspace's facts or roster: if no eligible team activities are present the comparison is unavailable. No widening is performed. Mixed activity types are unavailable; choose one activity/type-compatible period. Calculated metrics remain unavailable for the computed team reference. Preset comparisons keep actual ratio math unchanged.
+
+Current-position assignments are evaluated at query time. Historical positions and file import remain open follow-ups; neither gets a fabricated fallback.
+
+Read-only preview is an optional referencePreview object on the existing dashboard/Page query, with the same period, saved filters, shell narrowing and existing fact authorization. It requires manage rights in addition to the normal query gates and the P3 reference context. It clones only the selected widget in memory; no saved row/default changes. The response fingerprint covers the full binding/version, runtime context and result. Editing the selection invalidates the React preview; a failed preview clears the earlier result. Simple opens a reference-bound widget as Advanced required, preserving the sidecar; the React reference drawer owns its editing and preview in this delivery. A Simple multi-variable/reference authoring flow is not introduced.
+
+Non-Home binding reads/writes require both the mounted server Pages capability and the DB activation. The sanctioned reference writer locks dashboard -> Page -> widget -> series and enters the existing transaction-bound Page context before its content write. Preview does not mount a new route or bypass the Simple pilot/Page activation gates.
