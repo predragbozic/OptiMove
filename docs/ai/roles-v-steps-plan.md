@@ -605,6 +605,10 @@ decided.
   - the licence closing reads and writes for role holders and the club's old roles.
 - Mutations killed: the coach path's `calendar.view` check dropped; the name gate forced open.
 - e2e: `roles-v3-view-calendar.test.mjs` at 1280, 390 and 360 px.
+- The suites that list the checked words take `calendar.view`, as V-1 did for its words: `me-permissions-r3` (both
+  basic roles), `roles-r4-2-view-workspace` test 11 (/me; the calendar reads leave its list), `roles-r4-api` tests 1
+  and 2, `roles-r4-3-api` tests 1, 2 and 6 (`dashboards.view` is now their unchecked word), `permission-roles-v84` 2b
+  (`LATER`).
 - **Older suites:** `startCalendarApp` (`backend/tests/support/calendar-fixture.mjs`) builds its database with
   `roleRead: true`. `central-calendar-k2b-settings` builds only up to v51, so a coach's `can(calendar.view)` failed
   closed there (`503 permissions_unavailable`). It is a no-op for the suites whose list has v84 and v92.
@@ -627,7 +631,9 @@ Its refusal depends on the route:
 - **The athlete's own routes** (`/athlete/*`, `/assignments/*`) go on as before. They decide by the athlete profile, not
   the workspace.
 - **Every other route** answers `403 {error:"Forbidden"}`, what `requireCoachWorkspace` answers an account without a
-  coach role. That includes `GET /today` (plan choice 2: it writes the day's occurrences) and every write.
+  coach role. That includes `GET /today` (plan choice 2: it writes the day's occurrences) and every write. The gate
+  marks the request (`req.testsViewRefused`) and `requireCoachWorkspace` answers, so a path the router does not have
+  still gets the app's 404, as for an account with no role (`roles-r4-2-view-workspace` test 11 reads `/api/tests`).
 - **A mixed account** (an old role row elsewhere) in a view workspace is refused too. Before V-4 it passed
   `requireCoachWorkspace` and read every club it administers.
 
@@ -702,6 +708,8 @@ Its refusal depends on the route:
   also checks the club admin's link, names and scores, and the team coach's list, results and Today. No full-body
   comparison against `main` is made.
 - e2e: `roles-v4-view-tests.test.mjs` at 1280, 390 and 360 px.
+- The suites that list the checked words take `tests.view` and `tests.results.view` (as for V-3 in section 10);
+  `roles-r4-2-view-workspace` test 11's /me list gets both.
 
 **Follow-ups (not built).**
 - A coach whose club version keeps `tests.view` but drops `tests.results.view` is not set up in a test (no fixture

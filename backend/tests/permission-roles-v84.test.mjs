@@ -248,8 +248,8 @@ test("2b. the text rule is a byte-for-byte copy of v40's; the honoured list of t
   const { HONOURED_PERMISSIONS } = await import("../src/permissions.js");
   const honoured = (await k.query(`select word from public.permissions where public.permission_word_honoured(word) order by word`)).rows.map((r) => r.word);
   // v84's twin is the list R2 checked. A word checked later (roles V-1: variables.view, presets.use) is storable since
-  // v92 (roles-r4-v92 compares that twin with STORABLE_PERMISSIONS), so it is not in v84's list.
-  const LATER = ["variables.view", "presets.use"];
+  // v92 (roles-r4-v92 compares that twin with STORABLE_PERMISSIONS), so it is not in v84's list (roles V-3 adds calendar.view, roles V-4 tests.view and tests.results.view).
+  const LATER = ["variables.view", "presets.use", "calendar.view", "tests.view", "tests.results.view"];
   assert.deepEqual(honoured, HONOURED_PERMISSIONS.filter((w) => !LATER.includes(w)).sort());
 });
 

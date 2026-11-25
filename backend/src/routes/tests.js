@@ -30,8 +30,14 @@ const TESTS_VIEW_READS = Object.freeze([
   { method: "GET", path: "/results/:assessmentId" },
 ]);
 const ATHLETE_SIDE = /^\/(athlete|assignments)(\/|$)/;
+// A refused request goes on to the router's own answer: the athlete side as today, a coach route refused by
+// requireCoachWorkspace (403, also for an account that coaches elsewhere: a view workspace is active), an unknown path
+// the app's 404 - the same answers an account with no role gets.
 router.use(viewEntryGate("tests", TESTS_VIEW_READS, {
-  refuse: (req, res, next) => (ATHLETE_SIDE.test(String(req.path || "")) ? next() : res.status(403).json({ error: "Forbidden" })),
+  refuse: (req, _res, next) => {
+    if (!ATHLETE_SIDE.test(String(req.path || ""))) req.testsViewRefused = true;
+    return next();
+  },
 }));
 
 // The schedules a read may show: a view workspace's club or team (the gate's scope; never a person's own, never every
@@ -202,7 +208,7 @@ function requireAthlete(req, res) {
 function requireCoachWorkspace(req, res) {
   // Roles V-4: a view workspace's listed read (the entry gate checked tests.view); never a write (the gate lists none).
   if (req.moduleView && req.method === "GET" && req.moduleView.module === "tests") return true;
-  if (!req.authz?.capabilities?.coachWorkspace) {
+  if (req.testsViewRefused || !req.authz?.capabilities?.coachWorkspace) {
     res.status(403).json({ error: "Forbidden" });
     return false;
   }
