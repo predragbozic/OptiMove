@@ -7,8 +7,8 @@ import assert from "node:assert/strict";
 // e2e/tests/settings-add-forms.test.mjs.
 globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 const { renderOrganizationPanelHtml } = await import("../organization-view.js");
-const { handleOrganizationAction } = await import("../organization-actions.js");
-const { state } = await import("../state.js");
+const { closeManageAccountModal, handleOrganizationAction } = await import("../organization-actions.js");
+const { emptyRolesState, state } = await import("../state.js");
 
 function reset(section, extra = {}) {
   state.organization = { data: null, error: "", selectedClubId: "", selectedTeamId: "", section, addFormOpen: false, assignOpen: false, accessOpen: false, showArchivedAthletes: false, showArchivedTeams: false, userFormTab: "", ...extra };
@@ -92,4 +92,32 @@ test("Cancel closes the form", async () => {
   await handleOrganizationAction({ dataset: { action: "organization-toggle-add-form" } }, { renderOrganizationPanel: async () => {} });
   assert.equal(state.organization.addFormOpen, false);
   assert.ok(!panel().includes('data-organization-form="club"'));
+});
+
+test("profile role assignment keeps its own draft and leaves an unconfirmed command open", async () => {
+  reset("users", { data, addFormOpen: true, userFormTab: "access" });
+  state.roles = emptyRolesState();
+  state.organizationUserManage = { open: true, userId: "u1", pending: false, error: "" };
+  const previous = { ...state.roles.assign.draft, userId: "previous", scope: "team:t1", reason: "Earlier draft" };
+  state.roles.assign.draft = previous;
+  const render = async () => {};
+
+  await handleOrganizationAction({ dataset: { action: "organization-manage-account-give-role" } }, { renderOrganizationPanel: render });
+  const html = panel();
+  assert.equal(state.roles.assign.draft.userId, "u1");
+  assert.equal(state.roles.assign.draft.scope, "");
+  assert.equal((html.match(/data-roles-form="assign"/g) || []).length, 1);
+  assert.match(html, /<input type="hidden" name="userId" value="u1">/);
+
+  const unconfirmed = { busy: false, unconfirmed: true };
+  state.roles.assign.command = unconfirmed;
+  closeManageAccountModal(render);
+  assert.equal(state.organizationUserManage.open, true);
+  assert.equal(state.roles.assign.command, unconfirmed);
+  assert.match(panel(), /Check result/);
+
+  state.roles.assign.command = null;
+  closeManageAccountModal(render);
+  assert.equal(state.organizationUserManage.open, false);
+  assert.deepEqual(state.roles.assign.draft, previous);
 });

@@ -26911,6 +26911,11 @@ body:not(.athlete-mode):not(.login-mode) .organization-edit-modal .organization-
 
 
 /* Manage account: each group is a card; a row is "name, state" on the left and the action on the right. */
+.organization-account-give-role {
+  align-self: flex-start;
+  min-height: 44px;
+}
+
 body:not(.athlete-mode):not(.login-mode) .organization-manage-account-modal .manage-account-section {
   padding: var(--om-space-3) var(--om-space-4);
   border: 1px solid var(--om-border-subtle, var(--line));
