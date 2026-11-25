@@ -1,4 +1,4 @@
-// Roles V-5a (the licence hierarchy, v96; docs/ai/roles-v-steps-plan.md 12.1): in Settings > Clubs > a club's licence,
+// Roles V-5a (the licence hierarchy, v96; docs/ai/roles-v-steps-plan.md 13.1): in Settings > Clubs > a club's licence,
 // a platform administrator takes Training Load out; its three children (Dashboards, Imports, Data configuration) turn
 // "Not included" with their switches disabled and the note "Closed because Training Load is closed"; the save sends
 // only Training Load; the server stores only that row and reads the children as closed through it; putting it back

@@ -1,4 +1,4 @@
-// Roles V-5a (the licence hierarchy, v96; docs/ai/roles-v-steps-plan.md 12.1): Settings > Clubs > a club's licence shows
+// Roles V-5a (the licence hierarchy, v96; docs/ai/roles-v-steps-plan.md 13.1): Settings > Clubs > a club's licence shows
 // a child of a part that is not included as closed with it - "Not included", its switch disabled, the note "Closed
 // because Training Load is closed" - in the saved licence and in the draft alike; a child also taken out on its own says
 // it stays out; putting the parent back draws the child's own state again. Through the real plain side and the COMPILED

@@ -1,4 +1,4 @@
-// The licence hierarchy (P-4, the owner's decision of 2026-11-25; migration v96; docs/ai/roles-v-steps-plan.md 12.1).
+// The licence hierarchy (P-4, the owner's decision of 2026-11-25; migration v96; docs/ai/roles-v-steps-plan.md 13.1).
 // A closed parent module closes its children for the club as well; a child can still be closed on its own. One level
 // only. Its own file so that authz.js (which builds each holding's closed modules) and permissions.js (can()) share it
 // without importing each other. The database twin is public.permission_module_parent (v96), pinned equal by

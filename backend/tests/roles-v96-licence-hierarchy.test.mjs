@@ -1,5 +1,5 @@
 // Roles v96, the licence hierarchy (P-4; docs/runbooks/roles-licence-hierarchy-v96.md; docs/ai/roles-v-steps-plan.md
-// 12.1): Training Load is the parent of Dashboards, Imports and Data configuration. A closed parent closes its children
+// 13.1): Training Load is the parent of Dashboards, Imports and Data configuration. A closed parent closes its children
 // for the club; a child can still be closed on its own; the stored ceiling rows are never rewritten.
 //   0. the JavaScript twin (MODULE_PARENTS, effectiveClosedModules) equals the database's for every module and every
 //      combination of the four stored rows;

@@ -86,8 +86,9 @@ test("1. every club-scope write takes the club's ceiling lock, shared, right aft
   assert.ok(!s1.seen.some((s) => /lock_club_ceiling/.test(s.t)));
   ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), name: "Team coach" }));
   // R2's copy keeps only checked words: the seeded view words not checked yet are dropped and named "not available yet"
-  // (roles V-1 checks variables.view and presets.use, roles V-2 athletes.view, roles V-3 calendar.view, so the copy keeps them).
-  const CHECKED_VIEW = ["athletes.view", "calendar.view", "presets.use", "variables.view"];
+  // (roles V-1 checks variables.view and presets.use, roles V-2 athletes.view, roles V-3 calendar.view, roles V-4
+  // tests.view and tests.results.view, so the copy keeps them).
+  const CHECKED_VIEW = ["athletes.view", "calendar.view", "presets.use", "tests.results.view", "tests.view", "variables.view"];
   assert.deepEqual([...copy.items].sort(), ["athletes.manage", "athletes.remove", "org.view", ...CHECKED_VIEW].sort());
   const dropped = ok(c3.res).dropped;
   assert.deepEqual(dropped.filter((d) => d.reason === "not_available_yet").map((d) => d.word).sort(), VIEW.filter((v) => !CHECKED_VIEW.includes(v)));

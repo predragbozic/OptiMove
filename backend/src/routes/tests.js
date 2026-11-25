@@ -5,12 +5,74 @@ import { Router } from "express";
 import { pool, query } from "../db.js";
 import { canAccessAthlete } from "../access.js";
 import { canManageClub, canManageTeamById, isPlatformAdministrator } from "../authz.js";
-import { canManageSchedule, manageableClubIds, manageableTeamIds, resolveScheduleOwnerContext } from "../testsAccess.js";
+import {
+  canManageSchedule, manageableClubIds, manageableTeamIds, resolveScheduleOwnerContext, TESTS_RESULTS_VIEW, viewScheduleScope,
+  viewScopeReadsSchedule,
+} from "../testsAccess.js";
+import { canView, viewEntryGate } from "../moduleView.js";
 import { ensureCurrentOccurrence, assignmentIsOpen, loadAthleteTodayTestAssignments } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 import { emitRealtimeEvent } from "../realtime.js";
 
 const router = Router();
+
+// Roles V-4 (docs/ai/roles-v-steps-plan.md section 2.5): a view workspace (club_view / team_view) reaches only these
+// reads, with tests.view (results and the per-athlete group also need tests.results.view, checked in the route). The
+// athlete's own routes (/athlete/*, /assignments/*) go on as before; every other coach route (GET /today, which writes
+// occurrences, and every write) answers what requireCoachWorkspace answers an account without a coach role.
+const TESTS_VIEW_READS = Object.freeze([
+  { method: "GET", path: "/library" },
+  { method: "GET", path: "/schedules" },
+  { method: "GET", path: "/weekly" },
+  { method: "GET", path: "/schedules/:scheduleId" },
+  { method: "GET", path: "/schedules/:scheduleId/group" },
+  { method: "GET", path: "/results" },
+  { method: "GET", path: "/results/:assessmentId" },
+]);
+const ATHLETE_SIDE = /^\/(athlete|assignments)(\/|$)/;
+// A refused request goes on to the router's own answer: the athlete side as today, a coach route refused by
+// requireCoachWorkspace (403, also for an account that coaches elsewhere: a view workspace is active), an unknown path
+// the app's 404 - the same answers an account with no role gets.
+router.use(viewEntryGate("tests", TESTS_VIEW_READS, {
+  refuse: (req, _res, next) => {
+    if (!ATHLETE_SIDE.test(String(req.path || ""))) req.testsViewRefused = true;
+    return next();
+  },
+}));
+
+// The schedules a read may show: a view workspace's club or team (the gate's scope; never a person's own, never every
+// schedule), or a coach's own and those of the clubs and teams where it holds `word` (tests.view, or tests.results.view
+// for results). Null: a view workspace whose club or team is no longer active.
+async function scheduleReadScope(req, word) {
+  if (req.moduleView) return viewScheduleScope(req.moduleView);
+  return {
+    userId: req.user.id, clubIds: manageableClubIds(req.authz, word) || [], teamIds: manageableTeamIds(req.authz, word) || [],
+    all: isPlatformAdministrator(req.authz),
+  };
+}
+// P-1: a view workspace names athletes only with athletes.view (open since roles V-2).
+const viewHidesNames = (req) => Boolean(req.moduleView) && !canView(req.authz, req.moduleView.workspace, "athletes");
+// Results and the per-athlete group: a view workspace also needs tests.results.view.
+const viewMissesResults = (req) => Boolean(req.moduleView) && !canView(req.authz, req.moduleView.workspace, "tests_results");
+// May this read show the results of this schedule (scores, injuries, completed counts)? A view workspace with
+// tests.results.view; a coach with tests.results.view at the schedule's club or team (its own schedule and a platform
+// admin as before).
+const mayReadResults = (req, schedule) => (req.moduleView ? !viewMissesResults(req) : canManageSchedule(req, schedule, { word: TESTS_RESULTS_VIEW }));
+// A group without its results (roles V-4): the athletes' states stay, their scores and injuries do not.
+function withoutResults(group) {
+  const athletes = group.athletes.map((a) => ({ ...a, wellnessScore: null, injury: null }));
+  return { ...group, athletes, counts: { ...group.counts, injuries: null }, resultsHidden: true };
+}
+// A view answer without names (P-1): no athlete id or name, no assignment id, and an order that is not the names'.
+function withoutNames(group) {
+  // Ties (one state, one window) are broken by a hash of the assignment id, never by the SQL order (which is by name).
+  const tie = (id) => crypto.createHash("sha256").update(String(id)).digest("hex");
+  const athletes = group.athletes
+    .map((a) => ({ a, key: tie(a.assignmentId) }))
+    .sort((x, y) => String(x.a.status).localeCompare(String(y.a.status)) || new Date(x.a.closesAt) - new Date(y.a.closesAt) || x.key.localeCompare(y.key))
+    .map(({ a: { assignmentId: _a, ...a } }) => ({ ...a, athleteId: null, athleteName: null }));
+  return { ...group, athletes };
+}
 
 // WELLNESS's real, seeded UUIDs (migrations_v2/202608221000_tests_v42_seed_
 // wellness_fms.sql) - the only test this phase's scheduling/execution UI
@@ -144,7 +206,9 @@ function requireAthlete(req, res) {
 }
 
 function requireCoachWorkspace(req, res) {
-  if (!req.authz?.capabilities?.coachWorkspace) {
+  // Roles V-4: a view workspace's listed read (the entry gate checked tests.view); never a write (the gate lists none).
+  if (req.moduleView && req.method === "GET" && req.moduleView.module === "tests") return true;
+  if (req.testsViewRefused || !req.authz?.capabilities?.coachWorkspace) {
     res.status(403).json({ error: "Forbidden" });
     return false;
   }
@@ -667,8 +731,11 @@ async function writeAssessmentValues(client, assessmentId, testVersionId, parame
 router.get("/library", async (req, res, next) => {
   try {
     if (!requireCoachWorkspace(req, res)) return;
-    const clubIds = manageableClubIds(req.authz);
-    const teamIds = manageableTeamIds(req.authz);
+    const read = await scheduleReadScope(req);
+    if (!read) return res.status(403).json({ error: "Forbidden" });
+    // Roles V-4: a platform admin's null means every club and team (as before); a view workspace never a person's own.
+    const clubIds = read.all ? null : read.clubIds;
+    const teamIds = read.all ? null : read.teamIds;
     const scopeSql = `(t.owner_scope = 'system' or (t.owner_scope = 'user' and t.owner_user_id = $1) or ($2::uuid[] is null or (t.owner_scope = 'club' and t.owner_club_id = any($2))) or ($3::uuid[] is null or (t.owner_scope = 'team' and t.owner_team_id = any($3))))`;
     const [testsResult, batteriesResult] = await Promise.all([
       query(
@@ -677,7 +744,7 @@ router.get("/library", async (req, res, next) => {
          join tests.test_versions tv on tv.test_id = t.id and tv.status = 'active'
          where ${scopeSql}
          order by tv.name`,
-        [req.user.id, clubIds, teamIds],
+        [read.userId, clubIds, teamIds],
       ),
       query(
         `select t.id as battery_id, tv.id as battery_version_id, tv.name, tv.description
@@ -685,7 +752,7 @@ router.get("/library", async (req, res, next) => {
          join tests.test_battery_versions tv on tv.test_battery_id = t.id and tv.status = 'active'
          where ${scopeSql}
          order by tv.name`,
-        [req.user.id, clubIds, teamIds],
+        [read.userId, clubIds, teamIds],
       ),
     ]);
     res.json({
@@ -702,8 +769,8 @@ router.get("/library", async (req, res, next) => {
 router.get("/schedules", async (req, res, next) => {
   try {
     if (!requireCoachWorkspace(req, res)) return;
-    const clubIds = manageableClubIds(req.authz);
-    const teamIds = manageableTeamIds(req.authz);
+    const read = await scheduleReadScope(req);
+    if (!read) return res.status(403).json({ error: "Forbidden" });
     const includeCancelled = text(req.query?.includeCancelled) === "true";
     const result = await query(
       `select sch.*, tv.name as test_name,
@@ -721,7 +788,7 @@ router.get("/schedules", async (req, res, next) => {
            or (sch.owner_scope = 'team' and sch.owner_team_id = any($3::uuid[]))
          )
        order by sch.created_at desc`,
-      [req.user.id, clubIds || [], teamIds || [], isPlatformAdministrator(req.authz), includeCancelled],
+      [read.userId, read.clubIds, read.teamIds, read.all, includeCancelled],
     );
     res.json({ schedules: result.rows.map(formatScheduleRow) });
   } catch (error) { next(error); }
@@ -776,6 +843,9 @@ router.post("/schedules", async (req, res, next) => {
     if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
     const owner = await resolveScheduleOwnerContext(req);
+    // Roles V-4: a new schedule of a club or team needs tests.view there too (the word taken away, or the licence closed,
+    // closes the module, writes included).
+    if (!canManageSchedule(req, ownerRowOf(owner))) return res.status(403).json({ error: "Forbidden" });
     const skipRefusal = await skipDaysOffRefusal(client, { skipDaysOff: body.skipDaysOff, scheduleKind, owner });
     if (skipRefusal) return res.status(400).json(skipRefusal);
     await client.query("begin");
@@ -855,6 +925,9 @@ router.post("/schedules/bulk", async (req, res, next) => {
     if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
     const owner = await resolveScheduleOwnerContext(req);
+    // Roles V-4: a new schedule of a club or team needs tests.view there too (the word taken away, or the licence closed,
+    // closes the module, writes included).
+    if (!canManageSchedule(req, ownerRowOf(owner))) return res.status(403).json({ error: "Forbidden" });
     await client.query("begin");
     const created = [];
     for (const date of dates) {
@@ -880,6 +953,11 @@ router.post("/schedules/bulk", async (req, res, next) => {
     client.release();
   }
 });
+
+// The owner columns of a new schedule, as canManageSchedule reads a row.
+function ownerRowOf(owner) {
+  return { owner_scope: owner.ownerScope, owner_user_id: owner.ownerUserId, owner_club_id: owner.ownerClubId, owner_team_id: owner.ownerTeamId };
+}
 
 async function validateTarget(req, target) {
   if (!target || !target.id) return false;
@@ -1003,8 +1081,8 @@ router.get("/weekly", async (req, res, next) => {
     if (!isValidGregorianDateString(weekStart)) return res.status(400).json({ error: "weekStart must be a valid YYYY-MM-DD date." });
     const weekEnd = addDaysIso(weekStart, 6);
     const includeCancelled = text(req.query?.includeCancelled) === "true";
-    const clubIds = manageableClubIds(req.authz);
-    const teamIds = manageableTeamIds(req.authz);
+    const read = await scheduleReadScope(req);
+    if (!read) return res.status(403).json({ error: "Forbidden" });
 
     // Pre-filtered to schedules that COULD occupy this week at all
     // (start_date <= weekEnd and (open-ended or end_date >= weekStart)) -
@@ -1032,7 +1110,7 @@ router.get("/weekly", async (req, res, next) => {
            or (sch.owner_scope = 'club' and sch.owner_club_id = any($2::uuid[]))
            or (sch.owner_scope = 'team' and sch.owner_team_id = any($3::uuid[]))
          )`,
-      [req.user.id, clubIds || [], teamIds || [], isPlatformAdministrator(req.authz), weekEnd, includeCancelled, weekStart],
+      [read.userId, read.clubIds, read.teamIds, read.all, weekEnd, includeCancelled, weekStart],
     );
 
     // { "<scheduleId>": [ "date", ... ] } - kept only for schedules that
@@ -1103,6 +1181,8 @@ router.get("/weekly", async (req, res, next) => {
       }
     }
 
+    // Roles V-4: which schedules' results this read may count.
+    const resultsReadable = new Map(schedulesResult.rows.map((schedule) => [schedule.id, mayReadResults(req, schedule)]));
     const byDate = new Map();
     for (let d = weekStart; d <= weekEnd; d = addDaysIso(d, 1)) byDate.set(d, []);
     for (const schedule of schedulesResult.rows) {
@@ -1118,8 +1198,10 @@ router.get("/weekly", async (req, res, next) => {
           opensTime: schedule.opens_time,
           closesTime: schedule.closes_time,
           occurrenceExists: countsByKey.has(key),
+          // The day's completion counts are the schedule's state (tests.view); its results count needs
+          // tests.results.view (roles V-4).
           counts: countsByKey.get(key) || null,
-          resultsCount: resultsByKey.get(key) || 0,
+          resultsCount: resultsReadable.get(schedule.id) ? (resultsByKey.get(key) || 0) : 0,
           // Item 1 correction: structured, not pre-formatted - each tab
           // builds its own compact recipient line from these same three
           // fields (identical shape to formatScheduleRow's own athlete
@@ -1175,11 +1257,17 @@ async function loadScheduleActivity(executor, scheduleId, { forUpdate = false } 
   return { hasOccurrence: true, hasActivity: hasAssignmentActivity || hasAssessment };
 }
 
-async function loadManageableSchedule(req, scheduleId) {
+// Roles V-4: a view workspace's read (a GET the gate let through) reads a schedule of its club or team; a coach a schedule
+// it may manage with `word` there. A write never takes the view branch (the gate lets no write through).
+async function loadManageableSchedule(req, scheduleId, { word } = {}) {
   const result = await query(`select sch.*, tv.name as test_name from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1`, [scheduleId]);
   const schedule = result.rows[0];
   if (!schedule) return null;
-  if (!canManageSchedule(req, schedule)) return null;
+  if (req.moduleView) {
+    if (req.method !== "GET") return null;
+    return viewScopeReadsSchedule(await viewScheduleScope(req.moduleView), schedule) ? schedule : null;
+  }
+  if (!canManageSchedule(req, schedule, word ? { word } : undefined)) return null;
   return schedule;
 }
 
@@ -1199,17 +1287,29 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
          where t.schedule_id = $1`,
         [schedule.id],
       ),
-      query(`select id, public_token, status, created_at from tests.test_access_links where schedule_id = $1 and link_kind = 'schedule' and status = 'active'`, [schedule.id]),
+      // Roles V-4: a view workspace's read never reads the link (its token is never in a view answer).
+      req.moduleView ? Promise.resolve({ rows: [] }) : query(`select id, public_token, status, created_at from tests.test_access_links where schedule_id = $1 and link_kind = 'schedule' and status = 'active'`, [schedule.id]),
       loadScheduleActivity(query, schedule.id),
       loadNotificationRules(query, schedule.id),
     ]);
+    let targets = targetsResult.rows.map((row) => ({
+      kind: row.target_kind,
+      id: row.target_athlete_id || row.target_team_id || row.target_club_id,
+      name: row.athlete_name || row.team_name || row.club_name,
+    }));
+    if (req.moduleView) {
+      // Roles V-4: a view workspace never gets the group link (its token is a secret, and every link action is a manager's)
+      // and, without athletes.view (P-1), no athlete target: they are counted instead.
+      const hidden = viewHidesNames(req) ? targets.filter((t) => t.kind === "athlete").length : 0;
+      if (hidden) targets = targets.filter((t) => t.kind !== "athlete");
+      return res.json({
+        schedule: formatScheduleRow({ ...schedule, has_occurrences: activity.hasOccurrence, has_activity: activity.hasActivity }),
+        targets, ...(hidden ? { hiddenAthleteTargets: hidden } : {}), notificationRules, readOnly: true,
+      });
+    }
     res.json({
       schedule: formatScheduleRow({ ...schedule, has_occurrences: activity.hasOccurrence, has_activity: activity.hasActivity }),
-      targets: targetsResult.rows.map((row) => ({
-        kind: row.target_kind,
-        id: row.target_athlete_id || row.target_team_id || row.target_club_id,
-        name: row.athlete_name || row.team_name || row.club_name,
-      })),
+      targets,
       link: linkResult.rows[0] ? { id: linkResult.rows[0].id, publicToken: linkResult.rows[0].public_token, createdAt: linkResult.rows[0].created_at } : null,
       // Empty array means "never configured" (not "all disabled") - the
       // frontend uses this exact distinction to show the unconfigured state
@@ -1230,10 +1330,16 @@ router.get("/schedules/:scheduleId/group", async (req, res, next) => {
   try {
     if (!requireCoachWorkspace(req, res)) return;
     const date = text(req.query?.date);
+    if (viewMissesResults(req)) return res.status(403).json({ error: "Forbidden" });
     if (!isValidGregorianDateString(date)) return res.status(400).json({ error: "date must be a valid YYYY-MM-DD date." });
+    // Roles V-4: a coach reads the group of a schedule it manages with tests.view (the Today detail and its reminder);
+    // the scores and injuries only with tests.results.view there. A view workspace needs tests.results.view (above).
     const schedule = await loadManageableSchedule(req, req.params.scheduleId);
     if (!schedule) return res.status(404).json({ error: "Schedule not found." });
-    res.json({ group: await loadScheduleGroupForDate(schedule, date) });
+    let group = await loadScheduleGroupForDate(schedule, date);
+    if (!mayReadResults(req, schedule)) group = withoutResults(group);
+    if (viewHidesNames(req)) group = withoutNames(group);
+    res.json({ group, ...(req.moduleView ? { readOnly: true } : {}) });
   } catch (error) { next(error); }
 });
 
@@ -1643,7 +1749,9 @@ router.get("/today", async (req, res, next) => {
       // below reads assignments directly, never a single "the" occurrence
       // id, so there is nothing to gate on here anymore.
       await ensureCurrentOccurrence(pool, schedule);
-      groups.push(await loadScheduleGroup(schedule));
+      const group = await loadScheduleGroup(schedule);
+      // Roles V-4: the scores and injuries only with tests.results.view at the schedule's club or team.
+      groups.push(mayReadResults(req, schedule) ? group : withoutResults(group));
     }
     res.json({ groups });
   } catch (error) { next(error); }
@@ -1773,8 +1881,10 @@ async function loadScheduleGroupForDate(schedule, dateIso) {
 router.get("/results", async (req, res, next) => {
   try {
     if (!requireCoachWorkspace(req, res)) return;
-    const clubIds = manageableClubIds(req.authz);
-    const teamIds = manageableTeamIds(req.authz);
+    if (viewMissesResults(req)) return res.status(403).json({ error: "Forbidden" });
+    // Roles V-4: results need tests.results.view at the schedule's club or team.
+    const read = await scheduleReadScope(req, TESTS_RESULTS_VIEW);
+    if (!read) return res.status(403).json({ error: "Forbidden" });
     const scheduleId = text(req.query?.scheduleId) || null;
     // Weekly calendar correction: an optional exact-date filter, additive -
     // omitted, this endpoint's existing behavior (every result, any date)
@@ -1814,14 +1924,18 @@ router.get("/results", async (req, res, next) => {
       // A previous version of this query merged both into one array and
       // reused it for both branches - a real authorization bug, not just a
       // style issue.
-      [WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID, WELLNESS_TEST_VERSION_ID, req.user.id, clubIds || [], teamIds || [], isPlatformAdministrator(req.authz), scheduleId, date],
+      [WELLNESS_TOTAL_DERIVED_PARAMETER_ID, WELLNESS_INJURY_PARAMETER_ID, WELLNESS_TEST_VERSION_ID, read.userId, read.clubIds, read.teamIds, read.all, scheduleId, date],
     );
+    const hideNames = viewHidesNames(req);
+    // P-1: without names, an order that is not the names' (the newest first).
+    const ordered = hideNames ? [...result.rows].sort((a, b) => new Date(b.completed_at) - new Date(a.completed_at)) : result.rows;
     res.json({
-      results: result.rows.map((row) => ({
+      results: ordered.map((row) => ({
         assessmentId: row.assessment_id,
         completedAt: row.completed_at,
-        athleteId: row.athlete_id,
-        athleteName: row.athlete_name,
+        // P-1: a view workspace without athletes.view gets neither the name nor the id.
+        athleteId: hideNames ? null : row.athlete_id,
+        athleteName: hideNames ? null : row.athlete_name,
         wellnessScore: row.wellness_score != null ? Number(row.wellness_score) : null,
         injury: row.injury,
         scheduledDate: row.scheduled_date,
@@ -1844,6 +1958,7 @@ router.get("/results", async (req, res, next) => {
 router.get("/results/:assessmentId", async (req, res, next) => {
   try {
     if (!requireCoachWorkspace(req, res)) return;
+    if (viewMissesResults(req)) return res.status(403).json({ error: "Forbidden" });
     const assessmentResult = await query(
       `select ta.*, ${athleteDisplayNameSql} as athlete_name, sch.id as schedule_id, sch.owner_scope, sch.owner_user_id, sch.owner_club_id, sch.owner_team_id
        from tests.test_assessments ta
@@ -1856,9 +1971,14 @@ router.get("/results/:assessmentId", async (req, res, next) => {
     );
     const row = assessmentResult.rows[0];
     if (!row) return res.status(404).json({ error: "Result not found." });
-    if (!row.schedule_id || !canManageSchedule(req, row)) return res.status(404).json({ error: "Result not found." });
+    // Roles V-4: a view workspace reads a result of its club's or team's schedule (with tests.results.view, checked
+    // above); a coach one it may manage with tests.results.view there.
+    const readable = req.moduleView
+      ? viewScopeReadsSchedule(await viewScheduleScope(req.moduleView), row)
+      : canManageSchedule(req, row, { word: TESTS_RESULTS_VIEW });
+    if (!row.schedule_id || !readable) return res.status(404).json({ error: "Result not found." });
     const { values, wellnessScore } = await loadAssessmentValuesAndResult(query, row.id);
-    res.json({ assessmentId: row.id, athleteName: row.athlete_name, completedAt: row.completed_at, status: row.status, values, wellnessScore, scheduleId: row.schedule_id });
+    res.json({ assessmentId: row.id, athleteName: viewHidesNames(req) ? null : row.athlete_name, completedAt: row.completed_at, status: row.status, values, wellnessScore, scheduleId: row.schedule_id });
   } catch (error) { next(error); }
 });
 

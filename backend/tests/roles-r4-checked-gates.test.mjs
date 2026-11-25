@@ -139,7 +139,7 @@ const REVIEWED = Object.freeze({
   "sessionTypeService.js": 6, // V-1: the club of the gate's view scope (club or team) (+1)
   "sourceConnectionService.js": 5,
   "sourceMetricAccess.js": 3,
-  "testsAccess.js": 2,
+  "testsAccess.js": 3, // V-4: viewScheduleScope reads the gate's view scope (club or team), never an offered workspace
   "trainingActivityAccess.js": 17,
   "trainingActivityMaterialize.js": 4,
   "trainingActivityResults.js": 1,

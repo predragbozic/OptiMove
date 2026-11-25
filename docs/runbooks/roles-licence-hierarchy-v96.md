@@ -1,7 +1,7 @@
 # v96: the licence hierarchy (Training Load and its children)
 
 Migration `migrations_v2/202611281000_roles_v96_licence_hierarchy.sql`. The owner's decision P-4 of 2026-11-25, as
-relayed by the *Rukovodilac* of OptiMove; design and the manager's GO in `docs/ai/roles-v-steps-plan.md` section 12.1
+relayed by the *Rukovodilac* of OptiMove; design and the manager's GO in `docs/ai/roles-v-steps-plan.md` section 13.1
 (V-5a). The files beside this one are:
 - `roles-licence-hierarchy-v96-preflight.sql`;
 - `roles-licence-hierarchy-v96-postcheck.sql`;

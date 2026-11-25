@@ -32,7 +32,8 @@ test("one noun, check-ins; an empty Results day says when results come and offer
   for (const now of ["New check-in schedule", "Edit check-in schedule", "No check-ins scheduled for this day.", "No check-in results yet.",
     "No results for this day. Results appear here once athletes complete a check-in."]) assert.ok(view.includes(now), now);
   assert.ok(!/wellness schedule|wellness check-ins|wellness results/i.test(view), "no second noun left");
-  assert.ok(view.includes('emptyAgendaAction: `<button class="om-btn" type="button" data-action="tests-section" data-section="today">See today\'s check-ins</button>`'));
+  // Roles V-4: a view workspace has no Today, so the offer is left out there.
+  assert.ok(view.includes('emptyAgendaAction: testsReadOnly() ? "" : `<button class="om-btn" type="button" data-action="tests-section" data-section="today">See today\'s check-ins</button>`'));
 });
 
 test("the pickers' round Cancel / Confirm stay 44 x 44, and the reminder list has no capped inner scroll", () => {

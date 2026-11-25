@@ -1,4 +1,4 @@
--- Roles v96: the licence hierarchy (P-4, the owner's decision of 2026-11-25; docs/ai/roles-v-steps-plan.md section 12.1;
+-- Roles v96: the licence hierarchy (P-4, the owner's decision of 2026-11-25; docs/ai/roles-v-steps-plan.md section 13.1;
 -- docs/runbooks/roles-licence-hierarchy-v96.md).
 --
 -- Training Load is a parent module: closing it in a club's licence closes its children - Dashboards, Imports and Data
