@@ -1222,7 +1222,13 @@ test("12. programs (programs.view) and exercises (exercises.use): a view workspa
      values ('program', $1, $2, true, 'optimove', $3, $4, true) returning id`, [by, name, visibility, status])).id;
   const tplPublic = await template(w.coachA.id, "Vseven public template", "public", "active");
   const tplPrivate = await template(w.adminB.id, "Vseven private template", "private", "active");
-  const tplDraft = await template(w.coachA.id, "Vseven public draft template", "public", "draft");
+  const tplDraft = await template(w.adminB.id, "Vseven public draft template", "public", "draft");
+  const tplWorkspace = await template(w.adminB.id, "Vseven workspace template", "public", "active");
+  await k.query("update plans.plans set library_scope='workspace', library_category='Workspace-only category' where id=$1", [tplWorkspace]);
+  await k.query("update plans.plans set library_category='Draft-only category' where id=$1", [tplDraft]);
+  const { id: draftTag } = await one(`insert into library.program_tag_definitions
+    (name, owner_scope, owner_user_id) values ('Draft-only tag','user',$1) returning id`, [w.adminB.id]);
+  await k.query("insert into library.program_tags (plan_id, tag_id) values ($1,$2)", [tplDraft, draftTag]);
   const exercise = async (name, scope, owner, active) => (await one(
     `insert into library.exercises (name, owner_scope, owner_user_id, is_active) values ($1, $2, $3, $4) returning id`,
     [name, scope, owner, active])).id;
@@ -1265,6 +1271,11 @@ test("12. programs (programs.view) and exercises (exercises.use): a view workspa
     for (const t of list.templates) for (const hidden of VIEW_TEMPLATE_HIDDEN_KEYS) assert.ok(!Object.hasOwn(t, hidden), `${label}: no ${hidden}`);
     const options = ok(await srv.api(who.cookie, "/api/templates/options"));
     assert.ok(!JSON.stringify(options).includes("@"), `${label}: no e-mail in the options`);
+    assert.deepEqual(has(JSON.stringify(options), ["Draft-only", "Workspace-only", w.adminB.id, w.B]), [], `${label}: options only from visible templates`);
+    const visibleTags = ok(await srv.api(who.cookie, `/api/templates/${tplPublic}/tags`));
+    assert.deepEqual(has(JSON.stringify(visibleTags), [draftTag, "Draft-only"]), []);
+    assert.equal((await srv.api(who.cookie, `/api/templates/${tplDraft}/tags`)).status, 404);
+    assert.deepEqual(await programIds(who, w.athA.id), [String(progActive)], `${label}: UUID resolves the same athlete`);
     assert.equal((await srv.api(who.cookie, `/api/plans/${tplPublic}/program`)).status, 200, `${label}: the public template's program`);
     assert.equal((await srv.api(who.cookie, `/api/templates/${tplPublic}/reviews`)).status, 200);
     const privateAnswer = await srv.api(who.cookie, `/api/plans/${tplPrivate}/program`);
@@ -1304,6 +1315,22 @@ test("12. programs (programs.view) and exercises (exercises.use): a view workspa
       ["POST", "/api/exercise-collections", { name: "Nope" }],
     ], 403);
   }
+  const sources = (await k.query("select id, source_external_id from public.athletes where id=any($1::uuid[])", [[w.athA.id, athB.id]])).rows;
+  await k.query("update public.athletes set source_external_id=null where id=$1", [w.athA.id]);
+  await k.query("update public.athletes set source_external_id=$1 where id=$2", [codeA, athB.id]);
+  try {
+    for (const who of [clubHolder, teamHolder]) {
+      const ambiguous = await srv.api(who.cookie, `/api/athletes/${codeA}/program-data?program=__all_programs__`);
+      assert.equal(ambiguous.status, 403);
+      assert.deepEqual(await programIds(who, w.athA.id), [String(progActive)]);
+    }
+  } finally {
+    await k.query("update public.athletes set source_external_id=null where id=$1", [athB.id]);
+    for (const { id, source_external_id } of sources) {
+      await k.query("update public.athletes set source_external_id=$2 where id=$1", [id, source_external_id]);
+    }
+  }
+
   // programs.view without athletes.view (P-1): the library, never an athlete's page.
   const libraryOnly = await holderOf("pgLibrary", ["programs.view"]);
   assert.deepEqual(await templateIds(libraryOnly), [String(tplPublic)]);

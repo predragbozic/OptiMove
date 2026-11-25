@@ -11,6 +11,7 @@ import {
   canEditTemplate,
   canUseTemplate,
   isPublicLibraryTemplate,
+  PUBLIC_LIBRARY_TEMPLATE_SQL,
   licenseSnapshot,
   loadAthleteLibraryAccess,
   requireUsedProgramAccess,
@@ -25,7 +26,8 @@ const router = Router();
 // handed on as before; every write is 403 and never runs. In a club or team workspace the module needs programs.view
 // there (coachModuleGate, R4 section 6).
 router.use(viewEntryGate("programs", [
-  { method: "GET", path: "/" }, { method: "GET", path: "/options" }, { method: "GET", path: "/:planId/reviews" },
+  { method: "GET", path: "/" }, { method: "GET", path: "/options" },
+  { method: "GET", path: "/:planId/reviews" }, { method: "GET", path: "/:planId/tags" },
 ], { refuse: handOnReadsRefuseWrites }));
 router.use(coachModuleGate("programs", { allowed: canViewProgramsAt }));
 const isProgramsView = (req) => req.moduleView?.module === "programs";
@@ -219,11 +221,7 @@ router.get("/", async (req, res, next) => {
           )
         )
         -- Roles V-7: a view workspace reads published public templates only (never a workspace-scope one).
-        and (not $16::boolean or (
-          p.visibility = 'public'
-          and coalesce(ps.status, 'active') not in ('draft', 'archived')
-          and coalesce(p.library_scope, 'my') <> 'workspace'
-        ))
+        and (not $16::boolean or (${PUBLIC_LIBRARY_TEMPLATE_SQL}))
         and (
           $3 = 'all'
           or coalesce(p.library_scope, 'my') = $3
@@ -272,6 +270,7 @@ router.get("/options", async (req, res, next) => {
     const viewer = isProgramsView(req);
     // A view workspace: the public templates' options only (NO_VIEWER_ID), with no creator e-mail.
     const libraryParams = viewer ? [NO_VIEWER_ID, false] : [req.user.id, canAccessAllAthletes(req)];
+    const visibilitySql = viewer ? `(${PUBLIC_LIBRARY_TEMPLATE_SQL})` : "true";
     const [categories, tags, creators, clubs] = await Promise.all([
       query(
         `
@@ -282,6 +281,7 @@ router.get("/options", async (req, res, next) => {
           and coalesce(p.is_active, true)
           and nullif(trim(p.library_category), '') is not null
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+          and ${visibilitySql}
         order by library_category
         `,
         libraryParams,
@@ -297,6 +297,7 @@ router.get("/options", async (req, res, next) => {
           and p.is_template = true
           and coalesce(p.is_active, true)
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+          and ${visibilitySql}
         order by t.name
         `,
         libraryParams,
@@ -313,6 +314,7 @@ router.get("/options", async (req, res, next) => {
           and p.is_template = true
           and coalesce(p.is_active, true)
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+          and ${visibilitySql}
         order by name, u.email
         `,
         libraryParams,
@@ -327,6 +329,7 @@ router.get("/options", async (req, res, next) => {
           and p.is_template = true
           and coalesce(p.is_active, true)
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+          and ${visibilitySql}
         order by c.name
         `,
         libraryParams,
@@ -433,7 +436,9 @@ router.patch("/:planId/metadata", async (req, res, next) => {
 
 router.get("/:planId/tags", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(query, req, req.params.planId))) {
+    const viewer = isProgramsView(req);
+    const allowed = viewer ? await isPublicLibraryTemplate(query, req.params.planId) : await canUseTemplate(query, req, req.params.planId);
+    if (!allowed) {
       return res.status(404).json({ error: "Template not found." });
     }
     const [allTags, programTags] = await Promise.all([
@@ -451,6 +456,7 @@ router.get("/:planId/tags", async (req, res, next) => {
                  and p.is_template = true
                  and coalesce(p.is_active, true)
                  and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+                 and ${viewer ? PUBLIC_LIBRARY_TEMPLATE_SQL : "true"}
              )
              or (
                (owner_scope = 'system' and not exists (select 1 from library.program_tag_hidden h where h.tag_id = library.program_tag_definitions.id and h.user_id = $1))
@@ -460,7 +466,7 @@ router.get("/:planId/tags", async (req, res, next) => {
              )
            )
          order by name`,
-        [req.user.id, canAccessAllAthletes(req)],
+        viewer ? [NO_VIEWER_ID, false] : [req.user.id, canAccessAllAthletes(req)],
       ),
       query(
         `select t.id, t.name
