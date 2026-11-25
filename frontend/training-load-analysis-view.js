@@ -318,7 +318,7 @@ function renderEmptyHtml() {
     <section class="panel tl-analysis-empty">
       <p class="eyebrow">Dashboards</p>
       <h3>No dashboard selected</h3>
-      <p class="muted">Choose one of the dashboards shared here. You can look at them; changes are made by the club's staff.</p>
+      <p class="muted">Choose one of the dashboards shared here. You can look at them; changes are made by the people who manage this club or team.</p>
       <div class="tl-analysis-empty-actions">
         <button type="button" class="plain-button tl-analysis-primary" data-action="training-load-analysis-open-picker">Choose dashboard</button>
       </div>
@@ -435,7 +435,7 @@ function displayStatusLabel(status, reasons = []) {
     return reasons.filter(reason => names[reason]).map(reason => names[reason]).join(" / ") || "Conflict";
   }
   // Roles V-6: a per-athlete widget in a workspace without load.view.athlete (the server never queried it).
-  if (reasons.includes("namedAthletesRequired")) return "This shows each athlete's values. You can see team totals only.";
+  if (reasons.includes("namedAthletesRequired")) return "This widget shows each athlete's values, which you can't see here.";
   if (reasons.includes("seriesQueryFailed")) return "This series could not be loaded. Try refreshing the dashboard.";
   if (reasons.includes("duplicateBucket")) return "Multiple values for this group. Use a table.";
   return "Invalid or unavailable result";

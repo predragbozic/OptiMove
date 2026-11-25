@@ -110,6 +110,6 @@ test("3. a widget the server restricted (namedAthletesRequired) reads as one sen
   const box = render(renderTrainingLoadAnalysisHtml);
   const status = box.querySelector(`[data-analysis-widget-id="${WIDGET}"] [role="status"]`);
   assert.ok(status, "a status line");
-  assert.equal(status.textContent.trim(), "This shows each athlete's values. You can see team totals only.");
+  assert.equal(status.textContent.trim(), "This widget shows each athlete's values, which you can't see here.");
   assert.equal(box.querySelector(`[data-analysis-widget-id="${WIDGET}"] table`), null, "no table");
 });

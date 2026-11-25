@@ -3,7 +3,7 @@
 //  - Training Load opens on Data & Analysis with the Dashboards view only (no Schedule, no Filter);
 //  - the club's shared dashboard is listed and opens read only: no New dashboard, no Add widget, no Rename, Set as
 //    active, Edit layout, Archive or Delete;
-//  - a per-athlete widget reads "This shows each athlete's values. You can see team totals only." (load.view.athlete is
+//  - a per-athlete widget reads "This widget shows each athlete's values, which you can't see here." (load.view.athlete is
 //    not open in a view workspace yet), and no athlete's name appears anywhere;
 //  - no horizontal scroll at 1280, 390 and 360 px, and no page error.
 // Every name is invented.
@@ -94,7 +94,7 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
       assert.equal(await page.locator('[data-action="training-load-filter-open"]').count(), 0, "no Filter");
       await page.locator('[data-action="training-load-analysis-open-picker"]').first().click();
       await page.locator(`[data-dashboard-id="${dashboardId}"]`).first().click();
-      await page.getByText("This shows each athlete's values. You can see team totals only.").first().waitFor({ timeout: 20_000 });
+      await page.getByText("This widget shows each athlete's values, which you can't see here.").first().waitFor({ timeout: 20_000 });
       await page.locator('[data-action="training-load-analysis-open-menu"][data-menu="dashboard"]').click();
       await page.waitForTimeout(300);
       if (process.env.E2E_SHOTS) await page.screenshot({ path: `${process.env.E2E_SHOTS}/v6-dashboard-${width}.png`, fullPage: true }).catch(() => {});

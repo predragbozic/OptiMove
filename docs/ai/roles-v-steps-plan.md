@@ -678,8 +678,8 @@ Numbered 13 so it does not collide with the parallel V-2, V-4 and V-5 sections. 
    a private coach and the athlete workspace are unchanged.
 10. **Frontend.** `OPEN_VIEW_MODULES` gets `dashboards`; Training Load in a view workspace shows Data & Analysis with
     the Dashboards view only, read only: no New dashboard, no menu writes (Rename, Set as active, Edit layout, Archive,
-    Delete), no Add metric, no clone. A restricted widget shows one sentence ("This shows each athlete's values. You
-    can see team totals only."). Athlete names stay "Athlete name unavailable" without `athletes.view` (today's
+    Delete), no Add metric, no clone. A restricted widget shows one sentence ("This widget shows each athlete's
+    values, which you can't see here."). Athlete names stay "Athlete name unavailable" without `athletes.view` (today's
     fallback).
 
 **As built** (branch `claude/roles-v6-dashboards` from `cf48c11e`; no migration).
