@@ -1,5 +1,24 @@
 import { canAccessAllAthletes } from "./access.js";
 
+export const PUBLIC_LIBRARY_TEMPLATE_SQL = `p.visibility = 'public'
+  and coalesce(p.status, 'active') not in ('draft', 'archived')
+  and not coalesce(p.is_edit_draft, false)
+  and coalesce(p.library_scope, 'my') <> 'workspace'`;
+
+// Is this a published, public Program Library template - the only plan a view workspace may open (roles V-7,
+// docs/ai/roles-v-steps-plan.md "V-7 design")? A malformed id is simply not one.
+export async function isPublicLibraryTemplate(query, planId) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(planId || ""))) return false;
+  const result = await query(
+    `select 1 from plans.plans p
+      where p.id = $1 and p.plan_type = 'program' and p.is_template = true and coalesce(p.is_active, true)
+        and ${PUBLIC_LIBRARY_TEMPLATE_SQL}
+      limit 1`,
+    [planId],
+  );
+  return result.rowCount > 0;
+}
+
 export async function loadAthleteLibraryAccess(query, req) {
   if (!req?.authz?.isAthlete) return null;
   const result = await query(

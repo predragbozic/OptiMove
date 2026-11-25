@@ -20,6 +20,7 @@
 // to look up and update-in-place a previously-sent notification row.
 import { ensureCurrentExternalOccurrence } from "./trainingLoadOccurrenceService.js";
 import { emitRealtimeEvent } from "./realtime.js";
+import { athleteTrainingLoadAllowed } from "./athleteTrainingLoadLicence.js";
 
 const DEDUPE_KEY_VERSION = "v1";
 
@@ -65,7 +66,7 @@ async function runOccurrenceGenerationPhase(pool, summary) {
 
 async function runAthleteInvitationPhase(pool, now, summary) {
   const result = await pool.query(
-    `select asg.id as assignment_id, a.user_id as recipient_user_id,
+    `select asg.id as assignment_id, asg.athlete_id, a.user_id as recipient_user_id,
             o.id as occurrence_id, asg.closes_at, asg.due_at, asg.timezone,
             sch.id as schedule_id, sch.event_name
      from training_load.external_assignments asg
@@ -96,6 +97,7 @@ async function runAthleteInvitationPhase(pool, now, summary) {
       summary.invitations.noRecipient += 1;
       continue;
     }
+    if (!(await athleteTrainingLoadAllowed(row.athlete_id, pool.query.bind(pool)))) continue;
     const dedupeKey = buildDedupeKey({ kind: "invitation", occurrenceId: row.occurrence_id, assignmentId: row.assignment_id, recipientUserId: row.recipient_user_id });
     const effectiveDue = row.due_at || row.closes_at;
     try {
@@ -127,7 +129,7 @@ const DEFAULT_REMINDER_OFFSET_MINUTES = 60;
 
 async function runAthleteReminderPhase(pool, now, summary) {
   const result = await pool.query(
-    `select asg.id as assignment_id, a.user_id as recipient_user_id,
+    `select asg.id as assignment_id, asg.athlete_id, a.user_id as recipient_user_id,
             o.id as occurrence_id, asg.closes_at, asg.due_at, asg.timezone,
             sch.id as schedule_id, sch.event_name
      from training_load.external_assignments asg
@@ -157,6 +159,7 @@ async function runAthleteReminderPhase(pool, now, summary) {
       summary.reminders.noRecipient += 1;
       continue;
     }
+    if (!(await athleteTrainingLoadAllowed(row.athlete_id, pool.query.bind(pool)))) continue;
     const dedupeKey = buildDedupeKey({ kind: "reminder", occurrenceId: row.occurrence_id, assignmentId: row.assignment_id, recipientUserId: row.recipient_user_id });
     const effectiveDue = row.due_at || row.closes_at;
     try {

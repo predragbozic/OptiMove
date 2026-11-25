@@ -276,7 +276,7 @@ async function readInSnapshot(fn) {
 // `deferGate`: a command asks for the v44 gate's answer instead of the 409,
 // because its requestKey replay must come first (a saved answer wins over the
 // present state); the read lets the 409 be thrown here.
-export async function resolveRosterTarget(client, ctx, activityId, { deferGate = false } = {}) {
+export async function resolveRosterTarget(client, ctx, activityId, { deferGate = false, viewScope = null } = {}) {
   const one = async (sql, params) => (await client.query(sql, params)).rows;
   const found = (await one(
     `select training.resolve_canonical_activity_id(id) as canonical_id from training.activities where id = $1`,
@@ -293,6 +293,7 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
   if (!activity) throw notFound();
 
   if (activity.owner_scope !== "team") {
+    if (viewScope) throw notFound();
     const scope = activityScopeForWorkspace(ctx.workspace, { user: { id: ctx.userId } });
     if (scope.type !== null && canManageActivityInScope(scope, activity)) {
       throw new RosterError(409, "roster_not_applicable", "Only a team session has a roster.");
@@ -306,7 +307,10 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
       where t.id = $1 and coalesce(t.is_active, true) and coalesce(c.is_active, true)`,
     [activity.owner_team_id],
   ))[0];
-  const basis = rosterBasisForWorkspace(ctx.workspace, ctx.authz, team);
+  const basis = viewScope
+    ? (team && ((viewScope.type === "team" && String(team.id) === viewScope.id)
+      || (viewScope.type === "club" && String(team.club_id) === viewScope.id)) ? "view" : null)
+    : rosterBasisForWorkspace(ctx.workspace, ctx.authz, team);
   if (!basis) throw notFound();
   // A self-report activity (v44): the caller may decide on this team's
   // sessions, but this one holds one athlete's own result and has no roster.
@@ -541,8 +545,27 @@ export function publicAthlete({ decisionIds, currentDecisions, occasionIds, meas
 // ctx = { userId, authz, workspace } — the workspace resolved once for the request.
 export async function getActivityRoster(ctx, activityId) {
   return readInSnapshot(async (client) => {
-    const { canonicalId, activity, basis } = await resolveRosterTarget(client, ctx, activityId);
+    const { canonicalId, activity, basis } = await resolveRosterTarget(client, ctx, activityId, { viewScope: ctx.viewScope });
     const snap = await loadRosterSnapshot(client, canonicalId);
+    if (ctx.viewScope) {
+      const athletes = ctx.named ? snap.athletes.map(({ athleteId, name, state, stateLabel, group }) => ({ athleteId, name, state, stateLabel, group })) : [];
+      return {
+        activity: {
+          id: String(activityId),
+          name: activity.name ?? null,
+          activityTypeKey: activity.activity_type_key ?? null,
+          occurredLocalDate: activity.occurred_local_date,
+          startedAt: iso(activity.started_at),
+          timezone: activity.timezone_snapshot,
+          ownerTeamId: String(activity.owner_team_id),
+        },
+        canonicalActivityId: canonicalId,
+        viewer: { readOnly: true },
+        counts: snap.counts,
+        athletes,
+        canComplete: false,
+      };
+    }
     return {
       activity: {
         id: String(activityId),

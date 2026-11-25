@@ -36,7 +36,7 @@ test("1. the module keys, words and open list are the backend's (moduleView.js)"
   assert.deepEqual(vm.MODULE_VIEW_WORDS, words);
   const open = src.match(/OPEN_VIEW_MODULES = Object\.freeze\(\[([^\]]*)\]\)/)[1].split(",").map((s) => s.trim().replace(/"/g, "")).filter(Boolean);
   assert.deepEqual([...vm.OPEN_VIEW_MODULES], open);
-  assert.deepEqual(open, ["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards"], "V-1 opens Data configuration and Tags & Presets, V-2 Athletes, V-3 the calendar, V-4 Tests, V-6 Dashboards");
+  assert.deepEqual(open, ["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises", "load_team", "load_athlete"], "V-1 opens Data configuration and Tags & Presets, V-2 Athletes, V-3 the calendar, V-4 Tests, V-6 Dashboards");
   for (const place of vm.VIEW_NAV_PLACES) for (const m of place.modules) assert.ok(Object.hasOwn(vm.MODULE_VIEW_WORDS, m), m);
 });
 
@@ -48,13 +48,13 @@ test("2. the places cover exactly the menu R4-4 hides in a view workspace", () =
 test("3. V-1, V-2, V-3, V-4, V-6: a view workspace holding every view word sees Home, the athlete list, Settings (Overview, Clubs, Teams, Tags & Presets, Athletes), the Calendar, Tests, Training Load and Account; nothing else", () => {
   as(CLUB_VIEW, ["org.view", ...Object.values(vm.MODULE_VIEW_WORDS)]);
   for (const module of Object.keys(vm.MODULE_VIEW_WORDS)) {
-    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards"].includes(module), module);
+    assert.equal(vm.viewModuleOpen(module), ["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises", "load_team", "load_athlete"].includes(module), module);
   }
-  const shown = ['[data-library-tab="training-load"]', "#athletesToggle", "#athleteSearch", "#athleteList", "#calendarToggle", '[data-library-tab="tests"]'];
+  const shown = ['[data-library-tab="training-load"]', "#athletesToggle", "#athleteSearch", "#athleteList", "#calendarToggle", '[data-library-tab="tests"]', '[data-sidebar-submenu="program-library"]', '[data-library-tab="exercises"]'];
   assert.deepEqual(vm.viewHiddenMenuSelectors().sort(), nav.VIEW_WORKSPACE_MENU_HIDDEN.filter((s) => !shown.includes(s)).sort());
-  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "central-calendar", "tests", "training-load"]);
+  assert.deepEqual(vm.viewWorkspaceTabs(), [...nav.VIEW_WORKSPACE_TABS, "central-calendar", "templates", "weekly", "programs", "exercises", "tests", "training-load"]);
   assert.deepEqual(permissionNav.viewSettingsSections(), ["overview", "clubs", "teams", "presets", "athletes"]);
-  assert.deepEqual(vm.viewTrainingLoadSections(), ["analysis", "variables"]);
+  assert.deepEqual(vm.viewTrainingLoadSections(), ["today", "schedule", "results", "analysis", "variables"]);
   nav.renderAccessNav();
   for (const selector of nav.VIEW_WORKSPACE_MENU_HIDDEN) {
     const el = document.querySelector(selector);
@@ -89,6 +89,16 @@ test("3c. V-6: dashboards.view alone opens Training Load on Data & Analysis -> D
   as(CLUB_VIEW, ["org.view", "dashboards.view", "variables.view"]);
   assert.equal(vm.viewSafeTrainingLoadSection("variables"), "variables");
   assert.equal(vm.viewSafeTrainingLoadSection("today"), "analysis", "the first open section");
+});
+
+test("V-5b: a named-only role lands on Athletes, and the load word alone does not expose names", () => {
+  as(CLUB_VIEW, ["org.view", "load.view.athlete", "athletes.view"]);
+  assert.deepEqual(vm.viewTrainingLoadSections(), ["results"]);
+  assert.ok(vm.viewWorkspaceTabs().includes("training-load"));
+  assert.equal(vm.viewSafeTrainingLoadSection("today"), "results");
+  as(CLUB_VIEW, ["org.view", "load.view.athlete"]);
+  assert.deepEqual(vm.viewTrainingLoadSections(), []);
+  assert.ok(!vm.viewWorkspaceTabs().includes("training-load"));
 });
 
 test("4. an opened module (inside the test): its place, tab and Settings section open only with its word; other places stay hidden", () => {

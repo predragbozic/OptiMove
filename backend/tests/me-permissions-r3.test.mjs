@@ -32,8 +32,9 @@ const hex = () => crypto.randomBytes(3).toString("hex");
 const sorted = (list) => [...list].sort();
 // Roles V-1: variables.view and presets.use are checked words, held by both basic roles (v92's seed); roles V-2 adds
 // athletes.view, roles V-3 calendar.view, roles V-4 tests.view and tests.results.view.
-const CLUB_ADMIN = ["athletes.manage", "athletes.remove", "athletes.view", "calendar.view", "dashboards.view", "org.club.edit", "org.teams.manage", "org.view", "presets.use", "roles.manage", "staff.assign", "tests.results.view", "tests.view", "variables.view"];
-const TEAM_COACH = ["athletes.manage", "athletes.remove", "athletes.view", "calendar.view", "dashboards.view", "org.view", "presets.use", "tests.results.view", "tests.view", "variables.view"];
+const CLUB_ADMIN = ["athletes.manage", "athletes.remove", "athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team", "org.club.edit", "org.teams.manage", "org.view", "presets.use", "programs.view", "roles.manage", "staff.assign", "tests.results.view", "tests.view", "variables.view"];
+const TEAM_COACH = ["athletes.manage", "athletes.remove", "athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team", "org.view", "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"];
+
 
 async function person(label, setup = async () => {}) {
   const id = await F.user(label);
@@ -234,7 +235,7 @@ test("8. permissionsForWorkspace (pure): a forged platform workspace for a non-a
   assert.deepEqual(P.permissionsForWorkspace(base, { type: "galaxy", scopeId: "x" }), { permissions: [], unavailable: false });
   assert.deepEqual(P.permissionsForWorkspace(base, null), { permissions: [], unavailable: false });
   const clubId = crypto.randomUUID();
-  const forged = { ...base, rolePermissions: [{ scopeType: "club", scopeId: clubId, teamIds: [], words: ["org.view", "programs.view"] }] };
+  const forged = { ...base, rolePermissions: [{ scopeType: "club", scopeId: clubId, teamIds: [], words: ["org.view", "import.check"] }] }; // a word outside the checked catalog
   assert.deepEqual(P.permissionsForWorkspace(forged, { type: "athlete", scopeId: null }).permissions, []);
   assert.deepEqual(P.permissionsForWorkspace(forged, { type: "club", scopeId: clubId }).permissions, ["org.view"]);
   const privateForged = { ...base, rolePermissions: [{ scopeType: "private", scopeId: "u", teamIds: [], words: ["org.view"] }] };

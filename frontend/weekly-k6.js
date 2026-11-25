@@ -1,3 +1,4 @@
+import { isViewWorkspace } from "./access.js";
 // K6-2 / K6-3 (docs/ai/central-calendar-k6-contract.md, sections 3 and 4): the Weekly plan's athlete switcher.
 // Pure functions: finding the same place in another athlete's plan, and the header's markup. The state it needs
 // lives in `state.centralCalendar.weeklyFlow` (the calendar's slice: replaced on a workspace change), the loading
@@ -196,7 +197,8 @@ export function renderWeeklySwitcherHtml({ flow, items, currentKey, groupsHtml =
   const summary = current ? `<p class="weekly-k6-summary"><strong>${escapeHtml(current.name)}</strong>${teamLabel ? ` · ${escapeHtml(teamLabel)}` : ""}${position ? ` · <span>${escapeHtml(position)}</span>` : ""}</p>` : "";
   const notice = flow.line ? `<p class="weekly-k6-line" role="status">${escapeHtml(flow.line)}</p>` : flow.kept ? `<p class="weekly-k6-kept">${escapeHtml(flow.kept)}</p>` : "";
   const notIn = flow.notInKeys?.includes(currentKey) && flow.eventKey ? `<p class="weekly-k6-line" role="status"><strong>Not in this session</strong> · ${escapeHtml(flow.notInLine || "")}</p>` : "";
-  const plan = noPlan ? `<p class="weekly-k6-line" role="status">No plan this week</p><button type="button" class="plain-button cc-primary" data-action="weekly-create-plan" aria-label="Plan it in the Builder">Plan it in the Builder</button>` : "";
+  // Roles V-7: a view workspace plans nothing (no Builder there).
+  const plan = noPlan ? `<p class="weekly-k6-line" role="status">No plan this week</p>${isViewWorkspace() ? "" : `<button type="button" class="plain-button cc-primary" data-action="weekly-create-plan" aria-label="Plan it in the Builder">Plan it in the Builder</button>`}` : "";
   // K6 follow-up: the strip can be hidden (remembered per user); who is chosen and the one control to show it stay.
   const toggle = `<button type="button" class="plain-button weekly-k6-strip-toggle" data-action="weekly-k6-strip-toggle" aria-expanded="${stripHidden ? "false" : "true"}">${stripHidden ? "Show athletes" : "Hide athletes"}</button>`;
   return `<section class="weekly-k6${stripHidden ? " is-collapsed" : ""}" aria-label="Athletes">

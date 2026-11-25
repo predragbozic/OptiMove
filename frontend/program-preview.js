@@ -17,6 +17,7 @@ export function renderTemplatePreviewModalHtml(data) {
     renderProgramDayCard,
     selected,
     templateOptions,
+    readOnly = false,
   } = data;
   if (!preview?.open) return "";
   const selectedMeta = selected ? [templateCategoryLabel(selected), programPriceLabel(selected)].filter(Boolean).join(" - ") : "Program template";
@@ -46,22 +47,22 @@ export function renderTemplatePreviewModalHtml(data) {
           <div class="builder-source-actions">
             ${preview.loading ? `<span class="item-badge">Loading</span>` : ""}
             ${selected ? `<span class="item-badge">${escapeHtml(ratingLabel(selected))}</span>` : ""}
-            ${selected && currentUserRole !== "athlete" && selected.can_assign_to_athlete !== false
+            ${selected && !readOnly && currentUserRole !== "athlete" && selected.can_assign_to_athlete !== false
               // A weekly program is assigned from a date into the athletes'
               // weekly plans, in the Builder (never as library access).
               ? (selected.template_kind === "weekly"
                 ? `<button class="plain-button compact-button" type="button" data-action="builder-edit-plan" data-plan-id="${escapeAttr(selected.plan_id)}" data-open-weekly-assign="true"><span>Assign to athletes</span></button>`
                 : `<button class="plain-button compact-button" type="button" data-action="template-assign" data-template-id="${escapeAttr(selected.plan_id)}">${preview.assignOpen ? "Hide assign" : "Assign"}</button>`)
               : ""}
-            ${selected && currentUserRole !== "athlete" ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${preview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
-            ${selected && currentUserRole !== "athlete" ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
+            ${selected && !readOnly && currentUserRole !== "athlete" ? `<button class="plain-button compact-button" type="button" data-action="template-settings-toggle">${preview.settingsOpen ? "Hide settings" : "Library settings"}</button>` : ""}
+            ${selected && !readOnly && currentUserRole !== "athlete" ? renderPlanMoreMenu(selected.plan_id, "template") : ""}
             <button class="plain-button icon-button" type="button" data-action="template-close" aria-label="Close"><span class="button-icon">x</span></button>
           </div>
         </div>
         <div class="program-preview-scroll" data-program-preview-scroll data-plan-id="${escapeAttr(selected?.plan_id || "")}" data-preview-panels="${preview.settingsOpen ? "settings" : ""}|${preview.assignOpen ? "assign" : ""}">
-          ${selected && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor, currentUserRole) : ""}
-          ${selected && preview.assignOpen && currentUserRole !== "athlete" ? renderTemplateAssignmentPanel(selected, preview, athletes || []) : ""}
-          ${selected && !preview.loading ? renderTemplateReviewPanel(selected, preview, currentUserRole) : ""}
+          ${selected && !readOnly && preview.settingsOpen ? renderTemplateMetadataForm(selected, templateOptions, programTagEditor, currentUserRole) : ""}
+          ${selected && !readOnly && preview.assignOpen && currentUserRole !== "athlete" ? renderTemplateAssignmentPanel(selected, preview, athletes || []) : ""}
+          ${selected && !preview.loading ? (readOnly ? renderReadOnlyReviewPanel(preview) : renderTemplateReviewPanel(selected, preview, currentUserRole)) : ""}
           <div class="program-preview-body">
             ${preview.loading ? `<div class="empty-state">Loading program...</div>` : preview.error ? `<div class="empty-state">${escapeHtml(preview.error)}</div>` : isMicrocycle
               ? `<div class="node-grid">${groups.map(renderNodeButton).join("")}</div>`
@@ -156,6 +157,25 @@ function renderTemplateReviewPanel(template, review, currentUserRole) {
           <button class="plain-button compact-button" type="submit" ${review.submittingReview ? "disabled" : ""}>${review.submittingReview ? "Saving..." : "Save review"}</button>
         </form>
       ` : ""}
+      ${review.reviewsOpen ? renderTemplateReviewList(reviews) : ""}
+    </section>
+  `;
+}
+
+// Roles V-7: a view workspace reads a template's published reviews and changes nothing.
+function renderReadOnlyReviewPanel(review) {
+  const reviews = review.reviews || [];
+  return `
+    <section class="program-review-panel">
+      <div class="program-review-summary">
+        <div>
+          <span class="eyebrow">Reviews</span>
+          <p class="muted">You can look at this program here. It cannot be changed or assigned from this workspace.</p>
+        </div>
+        <div class="program-review-actions">
+          <button class="plain-button compact-button" type="button" data-action="template-reviews-toggle">${review.reviewsOpen ? "Hide reviews" : `Reviews (${reviews.length})`}</button>
+        </div>
+      </div>
       ${review.reviewsOpen ? renderTemplateReviewList(reviews) : ""}
     </section>
   `;

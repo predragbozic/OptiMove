@@ -300,8 +300,8 @@ export const GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE = GPEXE_TEST_MIGRATI
 // Roles V-1: the server's role read (authz.js ROLE_PERMISSIONS_SQL) needs the objects of v84 and v92. Since V-1 a club
 // admin's and a team coach's Data configuration and Tags & Presets paths ask can(), which fails closed (503
 // permissions_unavailable) on a database without them. A suite that pins an earlier migration as its last one passes
-// `roleRead: true`: the runner applies v84 and v92 after the suite's own list (their seed guards need the runner's own
-// record in the same transaction), and their two records are then deleted, so every assertion about the database's
+// `roleRead: true`: the runner applies the role-read prerequisites after the suite's list (the gates require the
+// runner's record in the same transaction), and their extra records are then deleted, so every assertion about the database's
 // migration record (the last migration, "later migrations are applied", the list of names) sees the suite's own list
 // only. A state production never has (role objects without their record); for the server's role read only. When such a
 // suite later brings its database up to date (applyGpexeTestMigrations), the migrations between its own list and v84
@@ -310,6 +310,8 @@ const FORGOTTEN_TABLE = "public.optimove_disposable_forgotten_migrations";
 export const ROLE_READ_MIGRATIONS = Object.freeze([
   "202611201300_roles_v84_permission_roles.sql",
   "202611241000_roles_v92_layers_foundation.sql",
+  "202611271000_roles_v95_closed_module_dominance.sql",
+  "202611281000_roles_v96_licence_hierarchy.sql",
 ]);
 
 // Roles V-2: the same role read for a suite that builds its own database outside this helper (the Tests module's

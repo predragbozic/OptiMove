@@ -1,3 +1,4 @@
+import { viewModuleOpen } from "./view-modules.js";
 import { normalizeExerciseView, renderExerciseThumb, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
 import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes } from "./media.js";
 import { EXERCISE_FILTERS } from "./state.js";
@@ -12,6 +13,12 @@ const ICON_MORE = `<svg viewBox="0 0 24 24" class="exercise-toggle-icon" aria-hi
 // Blocks: a package. Manage: a gear (application block administration).
 export const ICON_BLOCKS = `<svg viewBox="0 0 24 24" class="exercise-view-icon-svg" aria-hidden="true"><path d="M3.5 7.5 12 3l8.5 4.5L12 12z"></path><path d="M3.5 7.5v9L12 21l8.5-4.5v-9"></path><path d="M12 12v9"></path></svg>`;
 export const ICON_SETTINGS = `<svg viewBox="0 0 24 24" class="exercise-view-icon-svg" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>`;
+
+// Roles V-7: a view workspace (club_view / team_view) with exercises.use reads the system library only: no add, edit,
+// copy, favourite, mark, tag, classification, hide or block control (the server answers every such write 403).
+export function exerciseLibraryReadOnly() {
+  return viewModuleOpen("exercises");
+}
 
 export function filterIconSvg() {
   return `
@@ -71,9 +78,10 @@ export function activeExerciseFilterLabels(filters, options = {}) {
 // (the gear) is only in the Blocks view, never in the library list - also
 // not inside a block (owner, 2026-10-17).
 function renderExerciseBrowseControls(search, view) {
+  // Roles V-7: a view workspace has no blocks to open (the system library only).
   return `
     <div class="exercise-browse-controls">
-      <button class="exercise-browse-button" type="button" data-action="exercise-blocks-open" aria-label="Exercise blocks" title="Exercise blocks">${ICON_BLOCKS}<span aria-hidden="true">Blocks</span></button>
+      ${exerciseLibraryReadOnly() ? "" : `<button class="exercise-browse-button" type="button" data-action="exercise-blocks-open" aria-label="Exercise blocks" title="Exercise blocks">${ICON_BLOCKS}<span aria-hidden="true">Blocks</span></button>`}
       ${renderExerciseViewSwitcher("library", view, "exercise-library-view")}
     </div>
   `;
@@ -142,7 +150,7 @@ function renderExerciseLibraryEmptyHtml(filtered, hasTerm = false) {
     : `<div class="om-empty exercise-library-empty" role="status">
         <p class="om-empty__title">Your exercise library is empty</p>
         <p class="om-empty__text">Add your first exercise with its video or picture; it will appear here and in the Builder.</p>
-        <div class="om-empty__actions"><button class="om-btn om-btn--primary" type="button" data-action="exercise-add-open">+ Add exercise</button></div>
+        ${exerciseLibraryReadOnly() ? "" : `<div class="om-empty__actions"><button class="om-btn om-btn--primary" type="button" data-action="exercise-add-open">+ Add exercise</button></div>`}
       </div>`;
 }
 
@@ -163,7 +171,7 @@ export function renderExerciseLibraryHtml(data) {
       ${filterBadges ? `<div class="exercise-results-filters">${filterBadges}</div>` : ""}
       <div class="exercise-results-actions">
         ${search.canManageCollections ? `<button class="plain-button compact-button exercise-select-button" type="button" data-action="exercise-select-mode" title="${selection ? "Stop selecting" : "Select exercises to move them into a block"}">${selection ? "Done" : "Select"}</button>` : ""}
-        <button class="plain-button compact-button exercise-add-button" type="button" data-action="exercise-add-open">+ Add exercise</button>
+        ${exerciseLibraryReadOnly() ? "" : `<button class="plain-button compact-button exercise-add-button" type="button" data-action="exercise-add-open">+ Add exercise</button>`}
         ${renderExerciseBrowseControls(search, view)}
       </div>
     </div>
@@ -259,7 +267,7 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
         <span class="muted">${escapeHtml(exercise.aim || "")}</span>
         <span class="item-description">${escapeHtml(exerciseCardDescription(exercise))}</span>
       </button>
-      <div class="exercise-card-actions">
+      ${exerciseLibraryReadOnly() ? "" : `<div class="exercise-card-actions">
         <button class="text-action" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${exercise.is_favorite ? "true" : "false"}">${exercise.is_favorite ? "Unfavorite" : "Favorite"}</button>
         <button class="text-action" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}">${marked ? "Unmark" : "Mark"}</button>
         <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
@@ -270,7 +278,7 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
           ${exercise.is_active !== false ? `<button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
           <button class="text-action" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
         ${exercise.owner_scope === "user" && exercise.can_edit === true ? `<button class="text-action" type="button" data-action="exercise-delete" data-exercise-id="${escapeAttr(exercise.id)}">Delete permanently</button>` : ""}
-      </div>
+      </div>`}
       ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}
     </article>
   `;
@@ -300,7 +308,7 @@ function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdm
         <span class="exercise-view-title">${escapeHtml(name)}</span>
         ${exercise.aim ? `<span class="exercise-view-meta">${escapeHtml(exercise.aim)}</span>` : ""}
       </button>
-      <div class="exercise-view-actions">
+      ${exerciseLibraryReadOnly() ? "" : `<div class="exercise-view-actions">
         <button class="exercise-view-icon ${favorite ? "is-favorite" : ""}" type="button" data-action="exercise-toggle-favorite" data-exercise-id="${escapeAttr(exercise.id)}" data-favorite="${favorite ? "true" : "false"}" aria-pressed="${favorite ? "true" : "false"}" aria-label="${favorite ? "Remove favorite" : "Mark as favorite"}" title="Favorite">${ICON_STAR}</button>
         <button class="exercise-view-icon ${marked ? "is-marked" : ""}" type="button" data-action="exercise-toggle-mark" data-exercise-id="${escapeAttr(exercise.id)}" aria-pressed="${marked ? "true" : "false"}" aria-label="${marked ? "Unmark" : "Mark"}" title="Marked">${ICON_BOOKMARK}</button>
         <details class="exercise-view-menu">
@@ -316,7 +324,7 @@ function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdm
             ${exercise.owner_scope === "user" && exercise.can_edit === true ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-delete" data-exercise-id="${escapeAttr(exercise.id)}">Delete permanently</button>` : ""}
           </div>
         </details>
-      </div>
+      </div>`}
     </article>
   `;
 }

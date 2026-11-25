@@ -3,11 +3,19 @@ import { decoratePlanItemEnglish } from '../planItemEnglish.js';
 import { Router } from "express";
 import { query } from "../db.js";
 import { buildProgramData, buildWeeks } from "../utils/grouping.js";
-import { canAccessPlan } from "../access.js";
-import { hasTemplateAccessRecord, needsTemplateApproval } from "../programAccessPolicy.js";
+import { canAccessPlan, canViewProgramsAt } from "../access.js";
+import { hasTemplateAccessRecord, isPublicLibraryTemplate, needsTemplateApproval } from "../programAccessPolicy.js";
 import { linkedSessionTimes } from "../linkedSessionTimes.js";
+import { coachModuleGate, handOnReadsRefuseWrites, viewEntryGate } from "../moduleView.js";
 
 const router = Router();
+
+// Roles V-7 (docs/ai/roles-v-steps-plan.md, "V-7 design"): a view workspace with programs.view opens a public Program
+// Library template's program (GET /:planId/program) and nothing else here; a missing id and one it may not open answer
+// the same 403. An unlisted read (/:planId/weekly) is handed on and answers as before. In a club or team workspace the
+// module needs programs.view there (coachModuleGate, R4 section 6).
+router.use(viewEntryGate("programs", [{ method: "GET", path: "/:planId/program" }], { refuse: handOnReadsRefuseWrites }));
+router.use(coachModuleGate("programs", { allowed: canViewProgramsAt }));
 
 router.get("/:planId/weekly", async (req, res, next) => {
   try {
@@ -43,6 +51,12 @@ router.get("/:planId/weekly", async (req, res, next) => {
 
 router.get("/:planId/program", async (req, res, next) => {
   try {
+    if (req.moduleView?.module === "programs") {
+      if (!(await isPublicLibraryTemplate(query, req.params.planId))) return res.status(403).json({ error: "Forbidden" });
+      const viewSummary = await query("select * from plans.v_plan_summary where plan_id = $1", [req.params.planId]);
+      if (!viewSummary.rows.length) return res.status(403).json({ error: "Forbidden" });
+      return res.json(await programAnswer(viewSummary.rows[0], req.params.planId));
+    }
     const summary = await query("select * from plans.v_plan_summary where plan_id = $1", [req.params.planId]);
     if (!summary.rows.length) return res.status(404).json({ error: "Plan not found" });
     const canReadPlan = await canAccessPlan(query, req, req.params.planId);
@@ -52,21 +66,25 @@ router.get("/:planId/program", async (req, res, next) => {
       return res.status(403).json({ error: "Program access requires coach approval." });
     }
 
-    const items = await query(
-      `
-      select *
-      from plans.v_program_plan_items
-      where plan_id = $1
-      order by block_index, session_order, item_order
-      `,
-      [req.params.planId],
-    );
-    await decorateMediaRows(items.rows,'plan_item',query);
-    await decoratePlanItemEnglish(items.rows, query);
-    res.json(buildProgramData(summary.rows[0], items.rows));
+    res.json(await programAnswer(summary.rows[0], req.params.planId));
   } catch (error) {
     next(error);
   }
 });
+
+async function programAnswer(summaryRow, planId) {
+  const items = await query(
+    `
+    select *
+    from plans.v_program_plan_items
+    where plan_id = $1
+    order by block_index, session_order, item_order
+    `,
+    [planId],
+  );
+  await decorateMediaRows(items.rows,'plan_item',query);
+  await decoratePlanItemEnglish(items.rows, query);
+  return buildProgramData(summaryRow, items.rows);
+}
 
 export default router;

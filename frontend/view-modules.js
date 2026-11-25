@@ -25,7 +25,7 @@ export const MODULE_VIEW_WORDS = Object.freeze({
 // calendar, read only: no New event, events in their reduced view, no athlete names without athletes.view).
 // V-4: Tests (the Schedule, Results and Test Library sections, read only; no Today, which writes occurrences).
 // V-6 opens Dashboards read-only.
-export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards"]);
+export const OPEN_VIEW_MODULES = Object.freeze(["data_configuration", "presets", "athletes", "calendar", "tests", "tests_results", "dashboards", "programs", "exercises", "load_team", "load_athlete"]);
 
 // The menu places of a view workspace: each opens when ANY of its modules is open and its word is held. A place with
 // no module (Coaches) never opens there.
@@ -33,7 +33,10 @@ export const VIEW_NAV_PLACES = Object.freeze([
   { key: "athletes", selectors: ["#athletesToggle", "#athleteSearch", "#athleteList"], tabs: [], modules: ["athletes"] },
   { key: "calendar", selectors: ["#calendarToggle"], tabs: ["central-calendar"], modules: ["calendar"] },
   { key: "coaches", selectors: ['[data-library-tab="coaches"]'], tabs: [], modules: [] },
-  { key: "programs", selectors: ['[data-library-tab="builder"]', '[data-sidebar-submenu="program-library"]'], tabs: ["builder", "templates"], modules: ["programs"] },
+  // The Builder never opens in a view workspace (a view workspace writes nothing); the Program Library does, and an
+  // athlete's two plan pages (weekly, programs) with it.
+  { key: "builder", selectors: ['[data-library-tab="builder"]'], tabs: [], modules: [] },
+  { key: "programs", selectors: ['[data-sidebar-submenu="program-library"]'], tabs: ["templates", "weekly", "programs"], modules: ["programs"] },
   { key: "exercises", selectors: ['[data-library-tab="exercises"]'], tabs: ["exercises"], modules: ["exercises"] },
   // V-4: results alone open nothing (every Tests read needs tests.view first, routes/tests.js).
   { key: "tests", selectors: ['[data-library-tab="tests"]'], tabs: ["tests"], modules: ["tests"] },
@@ -61,7 +64,8 @@ function held(user) {
 // unknown module, for a module not open yet, and without the word.
 export function viewModuleOpen(module, user = state.currentUser, open = OPEN_VIEW_MODULES) {
   if (!isView(user) || !Object.hasOwn(MODULE_VIEW_WORDS, module) || !open.includes(module)) return false;
-  return held(user).has(MODULE_VIEW_WORDS[module]);
+  const words = held(user);
+  return words.has(MODULE_VIEW_WORDS[module]) && (module !== "load_athlete" || words.has("athletes.view"));
 }
 
 const placeOpen = (place, user, open) => place.modules.some((module) => viewModuleOpen(module, user, open));
@@ -80,6 +84,8 @@ export function viewWorkspaceTabs(user = state.currentUser, open = OPEN_VIEW_MOD
 // which is one section, "variables"; V-6: Dashboards, the "analysis" view of Data & Analysis). Schedule and the other
 // Data & Analysis views open with their own modules in later V steps.
 export const VIEW_TRAINING_LOAD_SECTIONS = Object.freeze({
+  load_team: Object.freeze(["today", "schedule"]),
+  load_athlete: Object.freeze(["results"]),
   dashboards: Object.freeze(["analysis"]),
   data_configuration: Object.freeze(["variables"]),
 });

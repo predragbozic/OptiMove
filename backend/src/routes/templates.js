@@ -1,14 +1,17 @@
 import { Router } from "express";
 import { pool, query } from "../db.js";
 import { assertExerciseReuseAllowed, withExerciseReuseTransaction } from "../exerciseAccess.js";
-import { canAccessAllAthletes, canAccessAthlete } from "../access.js";
+import { canAccessAllAthletes, canAccessAthlete, canViewProgramsAt } from "../access.js";
 import { isPlatformAdministrator } from "../authz.js";
 import { createNotification } from "../notifications.js";
+import { NO_VIEWER_ID, coachModuleGate, handOnReadsRefuseWrites, viewEntryGate } from "../moduleView.js";
 import {
   accessExpiresAt,
   accessTypeForLicense,
   canEditTemplate,
   canUseTemplate,
+  isPublicLibraryTemplate,
+  PUBLIC_LIBRARY_TEMPLATE_SQL,
   licenseSnapshot,
   loadAthleteLibraryAccess,
   requireUsedProgramAccess,
@@ -17,19 +20,45 @@ import {
 
 const router = Router();
 
+// Roles V-7 (docs/ai/roles-v-steps-plan.md, "V-7 design"): a view workspace (club_view / team_view) with programs.view
+// reads the PUBLIC Program Library only - the list, its filter options and a template's reviews - bound to NO_VIEWER_ID,
+// so nothing of its own (templates, access, requests) and no management count is in the answer. An unlisted read is
+// handed on as before; every write is 403 and never runs. In a club or team workspace the module needs programs.view
+// there (coachModuleGate, R4 section 6).
+router.use(viewEntryGate("programs", [
+  { method: "GET", path: "/" }, { method: "GET", path: "/options" },
+  { method: "GET", path: "/:planId/reviews" }, { method: "GET", path: "/:planId/tags" },
+], { refuse: handOnReadsRefuseWrites }));
+router.use(coachModuleGate("programs", { allowed: canViewProgramsAt }));
+const isProgramsView = (req) => req.moduleView?.module === "programs";
+
+// The keys of a template row a view workspace never receives: the author's e-mail, the account's own access and request
+// state, and the author's management counts (pending requests, assigned athletes).
+export const VIEW_TEMPLATE_HIDDEN_KEYS = Object.freeze([
+  "creator_email", "user_access_status", "user_access_type", "user_access_used_at", "user_access_expires_at",
+  "pending_access_count", "assigned_count",
+]);
+function viewTemplateRow(row) {
+  const out = { ...row };
+  for (const keyName of VIEW_TEMPLATE_HIDDEN_KEYS) delete out[keyName];
+  if (out.creator_name && out.creator_name === row.creator_email) out.creator_name = "Coach";
+  return out;
+}
+
 router.get("/", async (req, res, next) => {
   try {
+    const viewer = isProgramsView(req);
     const allowedScopes = new Set(["all", "my_programs", "workspace", "my", "team", "club", "optimove", "marketplace"]);
     const requestedScope = allowedScopes.has(String(req.query.scope || "")) ? String(req.query.scope) : "my_programs";
     const search = text(req.query.search);
     const category = text(req.query.category);
     const tag = text(req.query.tag);
     const pricing = normalizeChoice(req.query.pricing, ["all", "free", "paid"], "all");
-    const athleteAccess = await loadAthleteLibraryAccess(query, req);
+    const athleteAccess = viewer ? null : await loadAthleteLibraryAccess(query, req);
     const visibleScopes = templateScopesForUser(athleteAccess);
     const params = [
-      req.user.id,
-      canAccessAllAthletes(req),
+      viewer ? NO_VIEWER_ID : req.user.id,
+      viewer ? false : canAccessAllAthletes(req),
       requestedScope,
       search,
       category,
@@ -43,6 +72,7 @@ router.get("/", async (req, res, next) => {
       athleteAccess?.can_view_optimove_library === true,
       athleteAccess?.can_view_marketplace === true,
       athleteAccess?.free_only !== false,
+      viewer,
     ];
     const result = await query(
       `
@@ -190,6 +220,8 @@ router.get("/", async (req, res, next) => {
             and user_access.status in ('requested', 'rejected', 'accessed', 'used', 'completed')
           )
         )
+        -- Roles V-7: a view workspace reads published public templates only (never a workspace-scope one).
+        and (not $16::boolean or (${PUBLIC_LIBRARY_TEMPLATE_SQL}))
         and (
           $3 = 'all'
           or coalesce(p.library_scope, 'my') = $3
@@ -225,7 +257,8 @@ router.get("/", async (req, res, next) => {
     const templates = result.rows.map(({ template_day_count: total, template_week_day_count: weekly, template_last_index: lastIndex, ...row }) => {
       const isWeekly = Number(total) > 0 && Number(weekly) === Number(total);
       return { ...row, template_kind: isWeekly ? "weekly" : "blocks", week_count: isWeekly ? Math.ceil(Number(lastIndex) / 7) : 0 };
-    }).filter((row) => kind === "all" || row.template_kind === kind);
+    }).filter((row) => kind === "all" || row.template_kind === kind)
+      .map((row) => (viewer ? viewTemplateRow(row) : row));
     res.json({ scope: requestedScope, allowedScopes: visibleScopes, templates });
   } catch (error) {
     next(error);
@@ -234,6 +267,10 @@ router.get("/", async (req, res, next) => {
 
 router.get("/options", async (req, res, next) => {
   try {
+    const viewer = isProgramsView(req);
+    // A view workspace: the public templates' options only (NO_VIEWER_ID), with no creator e-mail.
+    const libraryParams = viewer ? [NO_VIEWER_ID, false] : [req.user.id, canAccessAllAthletes(req)];
+    const visibilitySql = viewer ? `(${PUBLIC_LIBRARY_TEMPLATE_SQL})` : "true";
     const [categories, tags, creators, clubs] = await Promise.all([
       query(
         `
@@ -244,9 +281,10 @@ router.get("/options", async (req, res, next) => {
           and coalesce(p.is_active, true)
           and nullif(trim(p.library_category), '') is not null
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+          and ${visibilitySql}
         order by library_category
         `,
-        [req.user.id, canAccessAllAthletes(req)],
+        libraryParams,
       ),
       query(
         `
@@ -259,9 +297,10 @@ router.get("/options", async (req, res, next) => {
           and p.is_template = true
           and coalesce(p.is_active, true)
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+          and ${visibilitySql}
         order by t.name
         `,
-        [req.user.id, canAccessAllAthletes(req)],
+        libraryParams,
       ),
       query(
         `
@@ -275,9 +314,10 @@ router.get("/options", async (req, res, next) => {
           and p.is_template = true
           and coalesce(p.is_active, true)
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+          and ${visibilitySql}
         order by name, u.email
         `,
-        [req.user.id, canAccessAllAthletes(req)],
+        libraryParams,
       ),
       query(
         `
@@ -289,15 +329,16 @@ router.get("/options", async (req, res, next) => {
           and p.is_template = true
           and coalesce(p.is_active, true)
           and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+          and ${visibilitySql}
         order by c.name
         `,
-        [req.user.id, canAccessAllAthletes(req)],
+        libraryParams,
       ),
     ]);
     res.json({
       categories: categories.rows.map((row) => row.name).filter(Boolean),
       tags: tags.rows.map((row) => row.name).filter(Boolean),
-      creators: creators.rows,
+      creators: viewer ? creators.rows.map(({ id, name, email }) => ({ id, name: name && name !== email ? name : "Coach" })) : creators.rows,
       clubs: clubs.rows,
     });
   } catch (error) {
@@ -395,7 +436,9 @@ router.patch("/:planId/metadata", async (req, res, next) => {
 
 router.get("/:planId/tags", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(query, req, req.params.planId))) {
+    const viewer = isProgramsView(req);
+    const allowed = viewer ? await isPublicLibraryTemplate(query, req.params.planId) : await canUseTemplate(query, req, req.params.planId);
+    if (!allowed) {
       return res.status(404).json({ error: "Template not found." });
     }
     const [allTags, programTags] = await Promise.all([
@@ -413,6 +456,7 @@ router.get("/:planId/tags", async (req, res, next) => {
                  and p.is_template = true
                  and coalesce(p.is_active, true)
                  and ($2::boolean or p.created_by_user_id = $1 or p.visibility = 'public')
+                 and ${viewer ? PUBLIC_LIBRARY_TEMPLATE_SQL : "true"}
              )
              or (
                (owner_scope = 'system' and not exists (select 1 from library.program_tag_hidden h where h.tag_id = library.program_tag_definitions.id and h.user_id = $1))
@@ -422,7 +466,7 @@ router.get("/:planId/tags", async (req, res, next) => {
              )
            )
          order by name`,
-        [req.user.id, canAccessAllAthletes(req)],
+        viewer ? [NO_VIEWER_ID, false] : [req.user.id, canAccessAllAthletes(req)],
       ),
       query(
         `select t.id, t.name
@@ -442,7 +486,9 @@ router.get("/:planId/tags", async (req, res, next) => {
 
 router.get("/:planId/reviews", async (req, res, next) => {
   try {
-    if (!(await canUseTemplate(query, req, req.params.planId))) {
+    const viewer = isProgramsView(req);
+    const allowed = viewer ? await isPublicLibraryTemplate(query, req.params.planId) : await canUseTemplate(query, req, req.params.planId);
+    if (!allowed) {
       return res.status(404).json({ error: "Template not found." });
     }
     const result = await query(
@@ -453,14 +499,14 @@ router.get("/:planId/reviews", async (req, res, next) => {
               pr.verification_type,
               pr.updated_at,
               pr.created_at,
-              coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), u.email, 'User') as reviewer_name
+              coalesce(nullif(u.display_name, ''), nullif(u.full_name, ''), case when $2::boolean then null else u.email end, 'User') as reviewer_name
        from library.program_reviews pr
        left join public.users u on u.id = pr.reviewer_user_id
        where pr.plan_id = $1
          and pr.status = 'published'
        order by pr.updated_at desc, pr.created_at desc
        limit 30`,
-      [req.params.planId],
+      [req.params.planId, viewer],
     );
     res.json({ reviews: result.rows });
   } catch (error) {

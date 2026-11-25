@@ -311,7 +311,7 @@ async function rowCounts(tables = NEW_TABLES) {
 // ---------------------------------------------------------------------------
 before(async () => {
   db = await createGpexeDisposableDb({
-    baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "roster", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V25)),
+    baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "roster", roleRead: true, migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf(V25)),
   });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();

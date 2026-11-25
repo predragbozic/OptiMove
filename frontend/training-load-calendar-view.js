@@ -1,5 +1,6 @@
 import { estimateLabelText } from "./activity-estimate.js";
 import { state } from "./state.js";
+import { viewModuleOpen } from "./view-modules.js";
 import { escapeAttr, escapeHtml, formatDate, formatWeekday, monthLabel } from "./utils.js";
 import { renderMetricIconHtml } from "./icon-render.js";
 import { renderOpenInCalendarHtml } from "./open-in-calendar.js";
@@ -162,7 +163,7 @@ function renderContextBarHtml(nav, selectedActivity) {
   // The hand-off transfers ONLY the runtime activity/component filter
   // (training-load-analysis-open-in-analysis in training-load-actions.js) -
   // never a dashboard's persisted default_filter.
-  const canOpenInAnalysis = nav.selectedActivityId
+  const canOpenInAnalysis = (!viewModuleOpen("load_team") || viewModuleOpen("dashboards")) && nav.selectedActivityId
     && nav.activityDetail.data
     && nav.activityDetail.activityId === nav.selectedActivityId;
   return `
@@ -195,15 +196,18 @@ function renderAgendaCardHtml(item) {
     if (item.conflictCount > 0) badges.push(`<span class="tl-agenda-badge tl-agenda-badge-warn">${item.conflictCount} conflict${item.conflictCount === 1 ? "" : "s"}</span>`);
     if (item.openSuggestionCount > 0) badges.push(`<span class="tl-agenda-badge tl-agenda-badge-warn">${item.openSuggestionCount} to review</span>`);
     if (!badges.length) badges.push(`<span class="tl-agenda-badge tl-agenda-badge-muted">No data yet</span>`);
+    const countsOnly = viewModuleOpen("load_team") && !(viewModuleOpen("load_athlete") && viewModuleOpen("athletes"));
+    const openingTag = countsOnly ? '<div class="tl-agenda-card tl-agenda-card-static">'
+      : `<button type="button" class="tl-agenda-card" data-action="training-load-calendar-select-activity" data-activity-id="${escapeAttr(item.activityId)}">`;
     return `
-      <button type="button" class="tl-agenda-card" data-action="training-load-calendar-select-activity" data-activity-id="${escapeAttr(item.activityId)}">
+      ${openingTag}
         <span class="tl-agenda-time">${escapeHtml(time)}</span>
         <span class="tl-agenda-main">
           <span class="tl-agenda-name">${escapeHtml(item.name || "Activity")}${item.lifecycleState === "provisional" ? ` <span class="tl-agenda-provisional-tag">Needs review</span>` : ""}</span>
           <span class="tl-agenda-subtitle">${item.participantCount} athlete${item.participantCount === 1 ? "" : "s"}${item.activityTypeKey ? ` &middot; ${escapeHtml(item.activityTypeKey.replace(/_/g, " "))}` : ""}</span>
         </span>
         <span class="tl-agenda-badges">${badges.join("")}</span>
-      </button>
+      ${countsOnly ? "</div>" : "</button>"}
     `;
   }
   if (item.kind === "planned") {

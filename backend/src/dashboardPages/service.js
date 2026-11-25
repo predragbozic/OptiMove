@@ -12,6 +12,7 @@ import {createHash} from 'node:crypto';
 import {loadAuthorizationContext} from '../authz.js';
 import {pickFallbackWorkspace,resolveActiveWorkspaceReadOnly} from '../workspace.js';
 import {viewReadScope} from '../moduleView.js';
+import {athleteTrainingLoadAllowed} from '../athleteTrainingLoadLicence.js';
 import {canViewDashboardRow,canManageDashboardRow,dashboardWidgetsForViewer,dashboardNamedAthletesAllowed,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches,redactDashboardAthleteFilters} from '../trainingLoadDashboardAccess.js';
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
@@ -47,6 +48,7 @@ export async function pageTarget(q,req,dashboardId,{write=false,manage=false}={}
  const admitted=req.moduleView?.module==='dashboards'&&!write&&!manage;
  const active=resolved.workspace||(admitted?pickFallbackWorkspace(resolved.availableWorkspaces):null);
  if(!active || (admitted && (active.type!==req.moduleView.workspace.type || String(active.scopeId)!==String(req.moduleView.workspace.scopeId))))throw pageError();
+ if(active.type==="athlete"&&!(await athleteTrainingLoadAllowed(authz.athleteId,q)))throw pageError();
  const actor={user,authz};
  if(viewReadScope(active)){if(admitted)actor.moduleView=req.moduleView;else actor.dashboardsViewRefused=true;}
  const workspace=dataWorkspaceForActiveWorkspace(active,actor);

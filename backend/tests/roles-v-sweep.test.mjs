@@ -86,19 +86,19 @@ function rows() {
       writes: [["POST", "/api/tests/schedules", { name: "x" }]] },
     { module: "tests_results", open: true,
       reads: ["/api/tests/results"], writes: [] },
-    { module: "load_team", open: false,
+    { module: "load_team", open: true,
       reads: [`/api/training-load/calendar?${q}`, "/api/training-load/external-schedules"],
       writes: [["POST", "/api/training-load/external-schedules", { name: "x" }]] },
-    { module: "load_athlete", open: false,
+    { module: "load_athlete", open: true,
       reads: ["/api/training-load/weekly", `/api/training-activity?${q}`, `/api/training-load/metrics/results?${q}`],
       writes: [["POST", "/api/training-load/metrics/events", {}]] },
     { module: "dashboards", open: true,
       reads: ["/api/training-load/dashboards", "/api/training-load/dashboards/active"],
       writes: [["POST", "/api/training-load/dashboards", { name: "x" }]] },
-    { module: "programs", open: false,
+    { module: "programs", open: true,
       reads: ["/api/templates", "/api/builder/drafts", "/api/builder/weekly-plans"],
       writes: [["POST", "/api/builder/plans", { name: "x" }]] },
-    { module: "exercises", open: false,
+    { module: "exercises", open: true,
       reads: ["/api/exercises", "/api/exercise-collections"],
       writes: [["POST", "/api/exercises", { name: "x" }]] },
   ];
@@ -148,19 +148,20 @@ test("1. the table covers every module of MODULE_VIEW_WORDS, and the open rows a
   const table = rows();
   assert.deepEqual(table.map((r) => r.module).sort(), Object.keys(MODULE_VIEW_WORDS).sort());
   assert.deepEqual(table.filter((r) => r.open).map((r) => r.module).sort(), [...OPEN_VIEW_MODULES].sort());
-  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "dashboards", "data_configuration", "presets", "tests", "tests_results"]);
+  assert.deepEqual([...OPEN_VIEW_MODULES].sort(), ["athletes", "calendar", "dashboards", "data_configuration", "exercises", "load_athlete", "load_team", "presets", "programs", "tests", "tests_results"]);
 });
 
 test("2. closed rows: every view word in club_view (and with a forged club preference) = an account with no role; no write lands; no preference is written", async () => {
   const hm = await me(w.all);
   assert.equal(hm.activeWorkspace.type, "club_view");
-  assert.deepEqual([...hm.permissions].sort(), ["athletes.view", "calendar.view", "dashboards.view", "org.view", "presets.use", "tests.results.view", "tests.view", "variables.view"], "/me offers only the words of open modules");
+  assert.deepEqual([...hm.permissions].sort(), ["athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team", "org.view", "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"], "/me offers only the words of open modules");
   const norm = (who, text) => text.split(who.id).join("<me>");
   for (const forged of [false, true]) {
     if (forged) await setPref(w.all, "club", w.A);
     const prefBefore = (await k.query(`select workspace_type, scope_id, updated_at from public.user_workspace_preferences where user_id = $1`, [w.all.id])).rows;
-    for (const row of rows().filter((r) => !r.open)) {
-      for (const p of [...row.reads, ...ALWAYS_CLOSED()]) {
+    const closed = [...rows().filter((r) => !r.open), { module: "imports", reads: ALWAYS_CLOSED(), writes: [] }];
+    for (const row of closed) {
+      for (const p of row.reads) {
         const a = await srv.api(w.all.cookie, p);
         const b = await srv.api(w.nobody.cookie, p);
         assert.equal(a.status, b.status, `${row.module} ${p}: ${a.status} ${a.text.slice(0, 160)} vs ${b.status} ${b.text.slice(0, 160)}`);
@@ -992,7 +993,7 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
 
   const clubHolder = await holderOf("dbClubV6", ["dashboards.view"]);
   const teamHolder = await holderOf("dbTeamV6", ["dashboards.view"], "team", w.TA1);
-  // load.view.athlete is not open in a view workspace until Training Load's V step: still restricted here.
+  // V-5b opens named results when both the Training Load and Athletes words are held.
   const athleteWordHolder = await holderOf("dbNamesV6", ["dashboards.view", "load.view.athlete", "athletes.view"]);
   const before = await snapshot();
   for (const [who, label, own, others] of [
@@ -1022,7 +1023,7 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
     assert.deepEqual([pageForeign.status, pageForeign.text], [pageMissing.status, pageMissing.text], `${label}: another club's page is the identical 404`);
     assert.equal((await srv.api(who.cookie, `${D}/${tSys.id}/query`, { method: "POST", body })).status, 409, `${label}: a template answers templateRequiresClone`);
   }
-  for (const who of [clubHolder, athleteWordHolder]) {
+  for (const who of [clubHolder]) {
     const raw = await srv.api(who.cookie, `${D}/${dA.id}/query`, { method: "POST", body });
     const answer = ok(raw);
     assert.equal(seriesOf(answer, cohortW)[0].status, "ok", "the cohort total is answered");
@@ -1043,6 +1044,7 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
   }
   assert.deepEqual(changed(before, await snapshot()), [], "no read wrote anything (no preference, no row)");
 
+  assert.equal(seriesOf(ok(await srv.api(athleteWordHolder.cookie, `${D}/${dA.id}/query`, { method: "POST", body })), athleteW)[0].status, "ok");
   // The athletes a filter names are athlete-level data too (the security review's HIGH): a dashboard default filter
   // and a widget override that name athA are returned without them by every config read, to the coach with them.
   const dF = await board(w.adminA, "Alpha filtered board", { ownerScope: "club", ownerClubId: w.A, defaultFilter: { athleteIds: [w.athA.id] } });
@@ -1052,7 +1054,7 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
     groupBy: "cohort", localFilterOverride: { athleteIds: [w.athA.id] } } }), 201);
   const pageF = await pageOf(dF);
   const configReads = [`${D}/${dF.id}`, `${D}/${dF.id}/pages`, `${D}/${dF.id}/pages/${pageF}`];
-  for (const who of [clubHolder, athleteWordHolder]) {
+  for (const who of [clubHolder]) {
     for (const p of configReads) {
       const r = await srv.api(who.cookie, p);
       assert.equal(r.status, 200, `${p}: ${r.text.slice(0, 160)}`);
@@ -1198,4 +1200,381 @@ test("11. dashboards (dashboards.view): club_view and team_view list, open and q
     await ceiling(pa, [], ["dashboards"]);
   }
   for (const who of [clubHolder, w.adminA, w.coachA]) assert.equal((await srv.api(who.cookie, D)).status, 200, "reopened");
+});
+
+// V-7: Programs and Exercises (the plan's "V-7 design"; P-1, P-2).
+// ---------------------------------------------------------------------------------------------------------------------
+test("12. programs (programs.view) and exercises (exercises.use): a view workspace reads its club's or team's athletes' published programs (with athletes.view too), the public Program Library and the system exercise library, read only; never a draft, another club, its own items or a write; the word and the licence close both modules for role holders and coaches alike", async () => {
+  const pa = await person("paV7", (id) => F.grantPlatform(id));
+  const one = async (sql, params) => (await k.query(sql, params)).rows[0];
+  const mk = async (who, body) => ok(await srv.api(who.cookie, "/api/organization/athletes", { method: "POST", body }), 201).athlete;
+  const athB = await mk(w.adminB, { fullName: "Ivo Vsevenbeta", clubId: w.B, teamId: w.TB1 });
+  const codeOf = async (id) => (await one(`select athlete_id from public.athletes where id = $1`, [id])).athlete_id;
+  const codeA = await codeOf(w.athA.id);
+  const codeB = await codeOf(athB.id);
+  const program = async (by, athleteId, name, status) => (await one(
+    `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, is_template, is_active, status)
+     values ('program', $1, $2, $3, false, true, $4) returning id`, [by, athleteId, name, status])).id;
+  const progActive = await program(w.adminA.id, w.athA.id, "Vseven active block", "active");
+  const progDraft = await program(w.adminA.id, w.athA.id, "Vseven draft block", "draft");
+  const progArchived = await program(w.adminA.id, w.athA.id, "Vseven archived block", "archived");
+  const progB = await program(w.adminB.id, athB.id, "Vseven beta block", "active");
+  const template = async (by, name, visibility, status) => (await one(
+    `insert into plans.plans (plan_type, created_by_user_id, name, is_template, library_scope, visibility, status, is_active)
+     values ('program', $1, $2, true, 'optimove', $3, $4, true) returning id`, [by, name, visibility, status])).id;
+  const tplPublic = await template(w.coachA.id, "Vseven public template", "public", "active");
+  const tplPrivate = await template(w.adminB.id, "Vseven private template", "private", "active");
+  const tplDraft = await template(w.adminB.id, "Vseven public draft template", "public", "draft");
+  const tplWorkspace = await template(w.adminB.id, "Vseven workspace template", "public", "active");
+  await k.query("update plans.plans set library_scope='workspace', library_category='Workspace-only category' where id=$1", [tplWorkspace]);
+  await k.query("update plans.plans set library_category='Draft-only category' where id=$1", [tplDraft]);
+  const { id: draftTag } = await one(`insert into library.program_tag_definitions
+    (name, owner_scope, owner_user_id) values ('Draft-only tag','user',$1) returning id`, [w.adminB.id]);
+  await k.query("insert into library.program_tags (plan_id, tag_id) values ($1,$2)", [tplDraft, draftTag]);
+  const exercise = async (name, scope, owner, active) => (await one(
+    `insert into library.exercises (name, owner_scope, owner_user_id, is_active) values ($1, $2, $3, $4) returning id`,
+    [name, scope, owner, active])).id;
+  const exSystem = await exercise("Vseven system squat", "system", null, true);
+  const exArchived = await exercise("Vseven archived lunge", "system", null, false);
+  const exOwn = await exercise("Vseven own drill", "user", w.adminB.id, true);
+  const hiddenForeign = [String(progDraft), String(progArchived), String(progB), "Vseven draft", "Vseven archived", "Vsevenbeta",
+    String(tplPrivate), String(tplDraft), String(exArchived), String(exOwn), "Vseven own drill"];
+  const programIds = async (who, code) => ok(await srv.api(who.cookie, `/api/athletes/${code}/program-data?program=__all_programs__`))
+    .programs.map((p) => String(p.id)).sort();
+  const templateIds = async (who) => ok(await srv.api(who.cookie, "/api/templates?scope=all")).templates.map((t) => String(t.plan_id));
+  const exerciseIds = async (who, q = "") => ok(await srv.api(who.cookie, `/api/exercises?limit=500${q}`)).exercises.map((e) => String(e.id));
+  const { VIEW_TEMPLATE_HIDDEN_KEYS } = await import("../src/routes/templates.js");
+  const MISSING = "6f0e8a52-8d0b-4a8e-9b51-3a3c0e0c0b12";
+
+  // Old-vs-new: the basic roles (they hold both words) keep every program, the Builder and the library.
+  assert.deepEqual(await programIds(w.adminA, codeA), [progActive, progArchived, progDraft].map(String).sort(), "club admin: every program, drafts too");
+  assert.equal((await srv.api(w.adminA.cookie, "/api/builder/drafts")).status, 200);
+  assert.equal((await srv.api(w.coachA.cookie, "/api/builder/drafts")).status, 200);
+  assert.ok((await exerciseIds(w.adminA)).includes(String(exSystem)));
+  assert.ok((await exerciseIds(w.adminB)).includes(String(exOwn)), "a coach keeps its own exercises");
+  assert.equal((await srv.api(w.adminA.cookie, `/api/athletes/${codeB}/program-data`)).status, 403, "never another club's athlete");
+
+  const clubHolder = await holderOf("pgClub", ["programs.view", "athletes.view", "exercises.use"]);
+  const teamHolder = await holderOf("pgTeam", ["programs.view", "athletes.view", "exercises.use"], "team", w.TA1);
+  for (const [who, label] of [[clubHolder, "club_view"], [teamHolder, "team_view"]]) {
+    const words = (await me(who)).permissions;
+    assert.ok(words.includes("programs.view") && words.includes("exercises.use"), `${label}: /me offers both words`);
+    const prefBefore = (await k.query(`select * from public.user_workspace_preferences where user_id = $1`, [who.id])).rows;
+    // An athlete's programs: published only, its club's or team's athlete only.
+    const data = ok(await srv.api(who.cookie, `/api/athletes/${codeA}/program-data?program=__all_programs__`));
+    assert.deepEqual(data.programs.map((p) => String(p.id)), [String(progActive)], `${label}: the published program only`);
+    const chooser = data.adminRows.map((r) => r.athlete_id);
+    assert.ok(chooser.includes(codeA) && !chooser.includes(codeB), `${label}: the chooser lists its own athletes only (${chooser})`);
+    assert.deepEqual(has(JSON.stringify(data), hiddenForeign), [], `${label}: no draft, archived or foreign program`);
+    for (const code of [codeB, "NOPE-404"]) await sameAsNobody(who, `/api/athletes/${code}/program-data`, `${label} another club / missing`);
+    // The public Program Library only.
+    const list = ok(await srv.api(who.cookie, "/api/templates?scope=all"));
+    assert.deepEqual(list.templates.map((t) => String(t.plan_id)), [String(tplPublic)], `${label}: the public template only`);
+    for (const t of list.templates) for (const hidden of VIEW_TEMPLATE_HIDDEN_KEYS) assert.ok(!Object.hasOwn(t, hidden), `${label}: no ${hidden}`);
+    const options = ok(await srv.api(who.cookie, "/api/templates/options"));
+    assert.ok(!JSON.stringify(options).includes("@"), `${label}: no e-mail in the options`);
+    assert.deepEqual(has(JSON.stringify(options), ["Draft-only", "Workspace-only", w.adminB.id, w.B]), [], `${label}: options only from visible templates`);
+    const visibleTags = ok(await srv.api(who.cookie, `/api/templates/${tplPublic}/tags`));
+    assert.deepEqual(has(JSON.stringify(visibleTags), [draftTag, "Draft-only"]), []);
+    assert.equal((await srv.api(who.cookie, `/api/templates/${tplDraft}/tags`)).status, 404);
+    assert.deepEqual(await programIds(who, w.athA.id), [String(progActive)], `${label}: UUID resolves the same athlete`);
+    assert.equal((await srv.api(who.cookie, `/api/plans/${tplPublic}/program`)).status, 200, `${label}: the public template's program`);
+    assert.equal((await srv.api(who.cookie, `/api/templates/${tplPublic}/reviews`)).status, 200);
+    const privateAnswer = await srv.api(who.cookie, `/api/plans/${tplPrivate}/program`);
+    const missingAnswer = await srv.api(who.cookie, `/api/plans/${MISSING}/program`);
+    assert.deepEqual([privateAnswer.status, privateAnswer.text], [403, JSON.stringify({ error: "Forbidden" })], `${label}: a private template`);
+    assert.deepEqual([missingAnswer.status, missingAnswer.text], [privateAnswer.status, privateAnswer.text], `${label}: missing = not allowed`);
+    assert.equal((await srv.api(who.cookie, `/api/plans/${tplDraft}/program`)).status, 403, `${label}: a draft template`);
+    assert.equal((await srv.api(who.cookie, `/api/templates/${tplPrivate}/reviews`)).status, 404, `${label}: a private template's reviews`);
+    // The system exercise library only, read only.
+    const exList = ok(await srv.api(who.cookie, "/api/exercises?limit=500&kind=mine&visibility=all&lockedPreviews=1"));
+    assert.ok(exList.exercises.some((e) => String(e.id) === String(exSystem)), `${label}: the system exercise`);
+    assert.ok(exList.exercises.every((e) => e.owner_scope === "system" && e.is_active && !e.can_edit && !e.can_copy && !e.is_favorite && !e.is_hidden), `${label}: system, active, read only`);
+    assert.deepEqual([exList.canManageCollections, exList.lockedPreviews], [false, []]);
+    assert.deepEqual(has(JSON.stringify(exList), hiddenForeign), [], `${label}: no archived or own exercise`);
+    const detail = ok(await srv.api(who.cookie, `/api/exercises/${exSystem}`));
+    assert.deepEqual([detail.canEdit, detail.canCopy], [false, false], `${label}: nothing to edit or copy`);
+    const ownAnswer = await srv.api(who.cookie, `/api/exercises/${exOwn}`);
+    const missingEx = await srv.api(who.cookie, `/api/exercises/${MISSING}`);
+    assert.deepEqual([ownAnswer.status, ownAnswer.text], [missingEx.status, missingEx.text], `${label}: someone's own exercise = a missing one`);
+    assert.equal(ownAnswer.status, 404);
+    assert.equal((await srv.api(who.cookie, "/api/exercises/options")).status, 200);
+    // Not listed: what it answered before, or requireCoach's 403.
+    for (const p of [`/api/athletes/${codeA}/plans`, `/api/plans/${progActive}/weekly`, `/api/templates/${tplPublic}/access-requests`]) {
+      await sameAsNobody(who, p, `${label} unlisted`);
+    }
+    for (const p of ["/api/builder/drafts", "/api/builder/weekly-plans", "/api/exercise-collections", "/api/exercise-collections/catalog", "/api/exercises/owners"]) {
+      const a = await srv.api(who.cookie, p);
+      assert.deepEqual([a.status, a.text], [403, JSON.stringify({ error: "Forbidden" })], `${label} ${p}`);
+    }
+    const prefAfter = (await k.query(`select * from public.user_workspace_preferences where user_id = $1`, [who.id])).rows;
+    assert.deepEqual(prefAfter, prefBefore, `${label}: no preference written by a read`);
+    await writesLandNothing(who, [
+      ["POST", `/api/templates/${tplPublic}/use`, {}], ["POST", `/api/templates/${tplPublic}/reviews`, { rating: 5 }],
+      ["PATCH", `/api/templates/${tplPublic}/metadata`, { name: "Nope" }], ["POST", `/api/templates/${tplPublic}/assignments`, { athleteIds: [w.athA.id] }],
+      ["POST", "/api/builder/plans", { name: "Nope" }], ["POST", "/api/exercises", { name: "Nope" }],
+      ["POST", `/api/exercises/${exSystem}/favorite`, {}], ["POST", `/api/exercises/${exSystem}/hidden`, { hidden: true }],
+      ["POST", "/api/exercise-collections", { name: "Nope" }],
+    ], 403);
+  }
+  const sources = (await k.query("select id, source_external_id from public.athletes where id=any($1::uuid[])", [[w.athA.id, athB.id]])).rows;
+  await k.query("update public.athletes set source_external_id=null where id=$1", [w.athA.id]);
+  await k.query("update public.athletes set source_external_id=$1 where id=$2", [codeA, athB.id]);
+  try {
+    for (const who of [clubHolder, teamHolder]) {
+      const ambiguous = await srv.api(who.cookie, `/api/athletes/${codeA}/program-data?program=__all_programs__`);
+      assert.equal(ambiguous.status, 403);
+      assert.deepEqual(await programIds(who, w.athA.id), [String(progActive)]);
+    }
+  } finally {
+    await k.query("update public.athletes set source_external_id=null where id=$1", [athB.id]);
+    for (const { id, source_external_id } of sources) {
+      await k.query("update public.athletes set source_external_id=$2 where id=$1", [id, source_external_id]);
+    }
+  }
+
+  // programs.view without athletes.view (P-1): the library, never an athlete's page.
+  const libraryOnly = await holderOf("pgLibrary", ["programs.view"]);
+  assert.deepEqual(await templateIds(libraryOnly), [String(tplPublic)]);
+  await sameAsNobody(libraryOnly, `/api/athletes/${codeA}/program-data`, "no athletes.view");
+  // The word taken away: an account holding only athletes.view gets today's answers.
+  const athletesOnly = await holderOf("pgNoWord", ["athletes.view"]);
+  for (const p of [`/api/athletes/${codeA}/program-data`, "/api/templates?scope=all", `/api/plans/${tplPublic}/program`]) await sameAsNobody(athletesOnly, p, "no word");
+  for (const p of ["/api/exercises", `/api/exercises/${exSystem}`]) assert.equal((await srv.api(athletesOnly.cookie, p)).status, 403, `no word ${p}`);
+  // A mixed account: club B's admin with a view role in club A, in club_view A: nothing of its own or of club B.
+  const roleA = await roleOf(["programs.view", "athletes.view", "exercises.use"]);
+  await grant(w.adminA, w.adminB.id, roleA.id, "club", w.A);
+  await setPref(w.adminB, "club", w.A);
+  try {
+    assert.equal((await me(w.adminB)).activeWorkspace.type, "club_view");
+    assert.deepEqual(await templateIds(w.adminB), [String(tplPublic)], "mixed: never its own private template");
+    assert.ok(!(await exerciseIds(w.adminB)).includes(String(exOwn)), "mixed: never its own exercise");
+    assert.equal((await srv.api(w.adminB.cookie, `/api/exercises/${exOwn}`)).status, 404, "mixed: its own exercise's detail is not a view read");
+    assert.ok(!JSON.stringify(ok(await srv.api(w.adminB.cookie, "/api/templates/options"))).includes("Vseven private"), "mixed: no option of its own private template");
+    assert.equal((await srv.api(w.adminB.cookie, `/api/athletes/${codeB}/program-data`)).status, 403, "mixed: never club B's athlete through the view");
+    assert.deepEqual(await programIds(w.adminB, codeA), [String(progActive)], "mixed: club A's published program");
+    await writesLandNothing(w.adminB, [["POST", "/api/builder/plans", { name: "Nope" }], ["POST", "/api/exercises", { name: "Nope" }],
+      ["PATCH", `/api/templates/${tplPrivate}/metadata`, { name: "Nope" }]], 403);
+  } finally {
+    await setPref(w.adminB, "club", w.B);
+  }
+  assert.ok((await templateIds(w.adminB)).includes(String(tplPrivate)), "back in club B: its own template");
+  // An independent coach who is also club A's admin, in its private workspace: the module gate does not apply there, so
+  // the athlete branch of the plan reads (programViewScopes) is what the licence narrows; its own work is untouched.
+  const dual = await person("pgDual", async (id) => { await F.grantClub(id, w.A); await F.grantIndependent(id); });
+  await setPref(dual, "private_coach", null);
+  assert.equal((await me(dual)).activeWorkspace.type, "private_coach");
+  assert.equal((await srv.api(dual.cookie, `/api/athletes/${codeA}/plans`)).status, 200, "dual: club A's athlete through its club role");
+  // The licence closes Programs and Exercises for club A: role holders AND the club's coaches lose them; another club and a
+  // platform admin keep them.
+  await ceiling(pa, ["programs", "exercises"], []);
+  try {
+    assert.equal((await srv.api(dual.cookie, `/api/athletes/${codeA}/plans`)).status, 403, "licence: the club branch of the plan reads closes outside a club workspace too");
+    assert.equal((await srv.api(dual.cookie, `/api/plans/${progActive}/weekly`)).status, 403, "licence: canAccessPlan's athlete branch closes");
+    assert.equal((await srv.api(dual.cookie, "/api/builder/drafts")).status, 200, "licence: its own Builder stays (private workspace)");
+    await sameAsNobody(clubHolder, `/api/athletes/${codeA}/program-data`, "licence");
+    await sameAsNobody(clubHolder, "/api/templates?scope=all", "licence");
+    assert.equal((await srv.api(clubHolder.cookie, "/api/exercises")).status, 403, "licence: no exercise library");
+    for (const who of [w.adminA, w.coachA]) {
+      for (const p of ["/api/builder/drafts", "/api/templates", "/api/exercises", "/api/exercise-collections", `/api/athletes/${codeA}/plans`, `/api/plans/${tplPublic}/program`]) {
+        const a = await srv.api(who.cookie, p);
+        assert.equal(a.status, 403, `licence: ${p} closed for a coach of club A`);
+      }
+    }
+    await writesLandNothing(w.adminA, [["POST", "/api/builder/plans", { name: "Nope" }], ["POST", "/api/exercises", { name: "Nope" }]], 403);
+    assert.equal((await srv.api(w.adminB.cookie, "/api/builder/drafts")).status, 200, "another club keeps it");
+    assert.equal((await srv.api(pa.cookie, "/api/builder/drafts")).status, 200, "a platform admin is never limited");
+    assert.ok((await programIds(pa, codeA)).includes(String(progActive)), "a platform admin reads the plans");
+  } finally {
+    await ceiling(pa, [], ["programs", "exercises"]);
+  }
+  assert.equal((await srv.api(w.adminA.cookie, "/api/builder/drafts")).status, 200, "reopened");
+  assert.deepEqual(await programIds(clubHolder, codeA), [String(progActive)], "reopened for the holder");
+});
+
+// The manager's request (2026-11-25): /api/templates has no requireCoach, so an athlete account reads the public Program
+// Library today. Pinned, so a V step cannot change it by accident.
+test("10. an athlete account's GET /api/templates is today's answer: 200 with exactly the templates its athlete library access opens", async () => {
+  const one = async (sql, params) => (await k.query(sql, params)).rows[0];
+  const ath = await one(`insert into public.athletes (athlete_id, first_name, last_name, full_name) values ('V7-ATH', 'Nina', 'Vsevenath', 'Nina Vsevenath') returning id`, []);
+  const athleteUser = await person("v7Athlete");
+  await k.query(`update public.athletes set user_id = $1 where id = $2`, [athleteUser.id, ath.id]);
+  await k.query(`insert into public.athlete_library_access (athlete_id, can_view_optimove_library, free_only, require_approval) values ($1, true, true, false)`, [ath.id]);
+  const template = async (name, direct) => (await one(
+    `insert into plans.plans (plan_type, created_by_user_id, name, is_template, library_scope, visibility, status, is_active, is_free, athlete_can_view_directly)
+     values ('program', $1, $2, true, 'optimove', 'public', 'active', true, true, $3) returning id`, [w.coachA.id, name, direct])).id;
+  const open = await template("V10 athlete open template", true);
+  const coachOnly = await template("V10 coach only template", false);
+  for (const q of ["", "?scope=all", "?scope=optimove"]) {
+    const a = await srv.api(athleteUser.cookie, `/api/templates${q}`);
+    assert.equal(a.status, 200, a.text);
+    const ids = a.body.templates.map((t) => String(t.plan_id));
+    assert.equal(ids.includes(String(open)), q !== "", `${q}: the template its optimove library access opens (the default scope is my_programs)`);
+    assert.ok(!ids.includes(String(coachOnly)), `${q}: never a template not open to athletes directly`);
+    assert.ok(a.body.templates.every((t) => Object.hasOwn(t, "creator_email")), `${q}: the athlete's rows are unchanged (no view reduction)`);
+    assert.deepEqual(a.body.allowedScopes, ["my_programs", "optimove"], `${q}: its scopes`);
+  }
+});
+
+test("V-5b: closing a club's Training Load licence hides an athlete's load and RPE prompts and refuses entries", async () => {
+  const pa = await person("v5bLicenceOwner", id => F.grantPlatform(id));
+  const who = await person("v5bAthlete");
+  const athlete = ok(await srv.api(w.adminA.cookie, "/api/organization/athletes", {
+    method: "POST", body: { fullName: "Licence Test Athlete", clubId: w.A, teamId: w.TA1 }
+  }), 201).athlete;
+  await k.query("update public.athletes set user_id=$1 where id=$2", [who.id, athlete.id]);
+  assert.equal((await me(who)).activeWorkspace.type, "athlete");
+  await k.query(`insert into public.app_notifications (recipient_user_id,type,title,body)
+    values ($1,'training_load_manual_reminder','Training load reminder','Log RPE'),
+           ($1,'tests_reminder','Test reminder','Complete your test')`, [who.id]);
+
+  const prefix = "/api/training-load";
+  const period = "dateFrom=2026-11-23&dateTo=2026-11-29";
+  const reads = [prefix + "/weekly?weekStart=2026-11-23", prefix + "/calendar?" + period,
+    "/api/training-activity?" + period, prefix + "/metrics/results?" + period];
+  for (const path of reads) ok(await srv.api(who.cookie, path));
+  const openInbox = ok(await srv.api(who.cookie, "/api/notifications"));
+  assert.equal(openInbox.unreadCount, 2);
+  assert.ok(openInbox.notifications.some(item => item.type === "training_load_manual_reminder"));
+  const today = prefix + "/athlete/today";
+  const openDate = ok(await srv.api(who.cookie, today)).date;
+  const schedule = async eventName => ok(await srv.api(w.adminA.cookie, prefix + "/external-schedules", {
+    method: "POST", body: {
+      eventName, scheduleKind: "one_time", timezone: "UTC", startDate: openDate,
+      opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: athlete.id }],
+    },
+  }), 201).schedules[0];
+  const toRate = await schedule("Pending practice");
+  const prior = await schedule("Previously rated practice");
+  const active = ok(await srv.api(who.cookie, today)).sessions;
+  const pendingId = active.find(session => session.scheduleId === toRate.id).externalAssignmentId;
+  const priorId = active.find(session => session.scheduleId === prior.id).externalAssignmentId;
+  const feedback = { rpe: 6, durationMinutes: 30 };
+  const saveRpe = id => srv.api(who.cookie, prefix + "/external-assignments/" + id + "/rpe", { method: "POST", body: feedback });
+  ok(await saveRpe(priorId), 201);
+  const priorFeedback = ok(await srv.api(who.cookie, today)).sessions.find(session => session.externalAssignmentId === priorId).feedback;
+  assert.equal(priorFeedback.rpe, 6);
+
+  await ceiling(pa, ["training_load"], []);
+  try {
+    const before = await snapshot();
+    for (const path of reads) assert.equal((await srv.api(who.cookie, path)).status, 403, path);
+    assert.deepEqual(ok(await srv.api(who.cookie, today)), { date: openDate, sessions: [] });
+    assert.equal((await saveRpe(pendingId)).status, 404, "a valid pending assignment remains closed");
+    const change = await srv.api(who.cookie, prefix + "/external-assignments/" + priorId + "/rpe/change", {
+      method: "POST", body: { ...feedback, rpe: 8, requestKey: key(), expectedRevision: 1 },
+    });
+    assert.equal(change.status, 404, "closed licence hides an existing editable answer");
+    const closedInbox = ok(await srv.api(who.cookie, "/api/notifications"));
+    assert.deepEqual(closedInbox.notifications.map(item => item.type), ["tests_reminder"]);
+    assert.equal(closedInbox.unreadCount, 1);
+    for (const route of ["/sessions/" + key() + "/rpe", "/external-assignments/" + key() + "/rpe",
+      "/external-assignments/" + key() + "/rpe/change"]) {
+      assert.equal((await srv.api(who.cookie, prefix + route, { method: "POST", body: {} })).status, 404, route);
+    }
+    assert.deepEqual(changed(before, await snapshot()), []);
+  } finally {
+    await ceiling(pa, [], ["training_load"]);
+  }
+  ok(await srv.api(who.cookie, reads[0]));
+  assert.deepEqual(ok(await srv.api(who.cookie, today)).sessions.find(session => session.externalAssignmentId === priorId).feedback, priorFeedback);
+});
+
+test("V-5b: the read-only coach workspace reads scoped schedules and weekly data without creating occurrences", async () => {
+  const named = await holderOf("v5bNamed", ["load.view.team", "load.view.athlete", "athletes.view"]);
+  const counts = await holderOf("v5bCounts", ["load.view.team"]);
+  const teamCounts = await holderOf("v5bTeamCounts", ["load.view.team"], "team", w.TA1);
+  const namesWithoutAthletes = await holderOf("v5bMissingAthletes", ["load.view.athlete"], "team", w.TA1);
+  await setPref(teamCounts, "team", w.TA1);
+  await setPref(namesWithoutAthletes, "team", w.TA1);
+  await setPref(named, "club", w.A);
+  await setPref(counts, "club", w.A);
+  const path = "/api/training-load/external-schedules";
+  const date = new Date().toISOString().slice(0, 10);
+  const schedule = async (owner, clubId, title) => ok(await srv.api(owner.cookie, path, {
+    method: "POST", body: {
+      eventName: title, scheduleKind: "one_time", timezone: "UTC", startDate: date,
+      opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "club", id: clubId }],
+    },
+  }), 201).schedules[0];
+  const own = await schedule(w.adminA, w.A, "Alpha practice");
+  const foreign = await schedule(w.adminB, w.B, "Beta practice");
+  const snapshotOccurrences = async () => (await k.query("select id from training_load.external_schedule_occurrences order by id")).rows;
+  const activity = async (teamId, title) => (await k.query(`insert into training.activities
+    (name,occurred_local_date,started_at,timezone_snapshot,owner_scope,owner_team_id,origin)
+    values($1,$2,now(),'UTC','team',$3,'manual') returning id`, [title, date, teamId])).rows[0].id;
+  const ownActivity = await activity(w.TA1, "Alpha workout");
+  const foreignActivity = await activity(w.TB1, "Beta workout");
+  const metric = async (clubId, label) => {
+    const { id } = (await k.query(`insert into training_load.metric_definitions
+      (key,label,owner_scope,owner_club_id,state,created_by_user_id)
+      values($1,$2,$5,$3,'active',$4) returning id`, [label.toLowerCase().replaceAll(" ", "_"), label, clubId, w.adminA.id, clubId ? "club" : "system"])).rows[0];
+    const version = (await k.query(`insert into training_load.metric_definition_versions
+      (metric_definition_id,version_number,unit,value_type,daily_aggregation_method,created_by_user_id)
+      values($1,1,'m','numeric','sum',$2) returning id`, [id, w.adminA.id])).rows[0];
+    await k.query("update training_load.metric_definitions set current_version_id=$2 where id=$1", [id, version.id]);
+    return id;
+  };
+  const alphaMetric = await metric(w.A, "Alpha load");
+  const betaMetric = await metric(w.B, "Beta load");
+  const systemMetric = await metric(null, "Shared load");
+  const catalog = "/api/training-load/metrics/definitions";
+  const activityPath = "/api/training-activity/";
+  const before = await snapshotOccurrences();
+  for (const viewer of [named, counts]) {
+    const list = ok(await srv.api(viewer.cookie, path));
+    assert.ok(list.schedules.some(item => item.id === own.id));
+    assert.ok(list.schedules.every(item => item.id !== foreign.id));
+    const denied = await srv.api(viewer.cookie, path + "/" + foreign.id);
+    const missing = await srv.api(viewer.cookie, path + "/" + key());
+    assert.deepEqual([denied.status, denied.text], [missing.status, missing.text]);
+    assert.equal(denied.status, 404);
+    const detail = ok(await srv.api(viewer.cookie, path + "/" + own.id));
+    assert.equal(detail.schedule.targetCount, 1);
+    assert.equal(detail.targets.length, viewer === named ? 1 : 0);
+    assert.equal(Object.hasOwn(detail.schedule, "ownerUserId"), false);
+    const calendar = ok(await srv.api(viewer.cookie, "/api/training-load/calendar?dateFrom=" + date + "&dateTo=" + date));
+    if (viewer === counts) assert.ok(calendar.days.flatMap(day => day.items).every(item => item.kind === "activity"));
+    const roster = ok(await srv.api(viewer.cookie, activityPath + ownActivity + "/roster"));
+    assert.deepEqual(roster.viewer, { readOnly: true });
+    assert.ok(roster.counts.total >= 1);
+    if (viewer === counts) assert.deepEqual(roster.athletes, []);
+    else assert.ok(roster.athletes.some(row => row.athleteId === w.athA.id));
+    assert.equal(Object.hasOwn(roster, "rosterFingerprint"), false);
+    const foreignRoster = await srv.api(viewer.cookie, activityPath + foreignActivity + "/roster");
+    const missingRoster = await srv.api(viewer.cookie, activityPath + key() + "/roster");
+    assert.deepEqual([foreignRoster.status, foreignRoster.text], [missingRoster.status, missingRoster.text]);
+    assert.equal(foreignRoster.status, 404);
+    const definitions = ok(await srv.api(viewer.cookie, catalog + "?ownerScope=club")).rows;
+    assert.ok(definitions.some(row => row.id === alphaMetric));
+    assert.ok(definitions.every(row => row.id !== betaMetric));
+  }
+  const catalogViews = ok(await srv.api(teamCounts.cookie, catalog)).rows;
+  assert.ok(catalogViews.some(row => row.id === alphaMetric));
+  assert.ok(!catalogViews.some(row => row.id === betaMetric));
+  assert.deepEqual(ok(await srv.api(teamCounts.cookie, activityPath + ownActivity + "/roster")).athletes, []);
+  for (const metricId of [systemMetric, betaMetric, key()]) {
+    const path = catalog + "/" + metricId + "/versions";
+    const roleless = await srv.api(w.nobody.cookie, path);
+    const scoped = await srv.api(counts.cookie, path);
+    assert.deepEqual([scoped.status, scoped.text], [roleless.status, roleless.text], "unlisted reads preserve roleless answers");
+  }
+  const hiddenWrite = await srv.api(counts.cookie, catalog + "/" + systemMetric + "/hide", { method: "POST" });
+  assert.equal(hiddenWrite.status, 403);
+  const weekly = "/api/training-load/weekly?weekStart=" + date;
+  assert.equal((await srv.api(namesWithoutAthletes.cookie, weekly)).status, 403);
+  ok(await srv.api(named.cookie, weekly));
+  assert.equal((await srv.api(counts.cookie, weekly)).status, 403);
+  assert.deepEqual(await snapshotOccurrences(), before);
+  const pa = await person("v5bRosterOwner", id => F.grantPlatform(id));
+  await ceiling(pa, ["training_load"], []);
+  try {
+    const rejected = await srv.api(w.coachA.cookie, activityPath + ownActivity + "/roster/complete", {
+      method: "POST", body: {},
+    });
+    assert.equal(rejected.status, 404);
+    assert.deepEqual(rejected.body, { error: "notFound" });
+  } finally {
+    await ceiling(pa, [], ["training_load"]);
+  }
 });

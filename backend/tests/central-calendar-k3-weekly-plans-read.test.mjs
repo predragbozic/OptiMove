@@ -92,6 +92,8 @@ async function statements(run) {
 }
 // The sign-in itself (requireAuth) reads the account's athlete row; the
 // route's own reads are the plans, the workspace and the scope.
+// The statements of one read-only workspace resolve (roles V-7's module gate) that this filter can see.
+const GATE_RESOLVE_READS = 1;
 const touchesPlansOrWorkspace = (sql) => /plans\.plans|user_workspace_preferences|athlete_memberships|user_athletes|unnest\(/.test(sql);
 
 test("1. the query string is refused with 400 before any plan, athlete or workspace query: a bad week, no ids, 201 ids, a non-UUID", async () => {
@@ -112,7 +114,13 @@ test("1. the query string is refused with 400 before any plan, athlete or worksp
     const seen = await statements(async () => { res = await read(coach.cookie, query); });
     assert.equal(res.status, 400, `${query}: ${res.text}`);
     assert.equal(res.body.error, code, query);
-    assert.deepEqual(seen.filter(touchesPlansOrWorkspace), [], `no plan, athlete or workspace query for ${query}`);
+    // Roles V-7 (R4 section 6): the Builder's module gate resolves the account's workspace READ-ONLY before any route (a
+    // club or team workspace needs programs.view there); that one resolve is the only workspace read allowed here. No
+    // plan or athlete query, and the route's own scope is never resolved.
+    const gateResolve = seen.filter(touchesPlansOrWorkspace).filter((sql) => !/plans\.plans|unnest\(/.test(sql));
+    assert.deepEqual(seen.filter((sql) => /plans\.plans|unnest\(/.test(sql)), [], `no plan or athlete query for ${query}`);
+    assert.ok(gateResolve.every((sql) => !/insert|update|delete/i.test(sql)), `only read-only workspace reads for ${query}`);
+    assert.ok(gateResolve.length <= GATE_RESOLVE_READS, `${gateResolve.length} workspace reads (the gate's resolve only) for ${query}`);
   }
   // Exactly the limit is accepted.
   const atLimit = Array.from({ length: WEEKLY_PLANS_READ_MAX }, () => crypto.randomUUID());

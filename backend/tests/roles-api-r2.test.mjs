@@ -101,8 +101,7 @@ test("17. ceiling: a club's admin adds a word it does not hold, a platform-only 
     code(await change(w.adminA, role.id, { expectedRevision: 1, items: ["org.view", word] }), 409, "permission_not_delegable");
   }
   code(await change(w.adminA, role.id, { expectedRevision: 1, items: ["org.view", "import.check"] }), 409, "permission_not_honoured");
-  // R4 (O6): a storable word no route checks yet is locked: never added (it is "not available yet").
-  code(await change(w.adminA, role.id, { expectedRevision: 1, items: ["org.view", "programs.view"] }), 409, "permission_not_available_yet");
+  // Both Training Load view words are now checked and delegable.
   // The platform admin takes org.club.edit out of Club admin: the club's admin no longer holds it.
   await clubAdminItems(w.pa, CLUB_ADMIN_SEED.filter((x) => x !== "org.club.edit"));
   try {
@@ -130,8 +129,7 @@ test("17. ceiling: a club's admin adds a word it does not hold, a platform-only 
   const record = await one(`select kind, basis, items_removed, reason from public.permission_role_changes where role_id = $1 and revision_after = $2`, [ROLE_IDS.team_coach, rev + 1]);
   assert.deepEqual(record, { kind: "change", basis: "platform_admin", items_removed: ["athletes.remove"], reason: "Change" });
   ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: rev + 1, items: ["org.view", "athletes.manage", "athletes.remove", ...VIEW_SEED] }));
-  // R4 (O6): a platform admin may not take an unchecked word out of a basic role either.
-  code(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: rev + 2, items: ["org.view", "athletes.manage", "athletes.remove"] }), 409, "permission_not_available_yet");
+  // V-5b completes the view package; all stored view words are now checked.
 });
 
 test("17-honoured. HONOURED_PERMISSIONS equals the (word, scope type) pairs of organization.js's can() calls at a club or team scope, plus roles.manage; a word checked only at a global site is not in it", async () => {

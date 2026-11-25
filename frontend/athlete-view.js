@@ -16,7 +16,8 @@ function avatarMarkup(athlete) {
 // Roles V-2: `readOnly` (a view workspace with athletes.view) draws each athlete as a plain row, never a button: the
 // athlete's plans and programs are programs.view, not athletes.view, so there is nothing to open, and the list carries
 // no plan counts.
-export function renderAthleteListHtml(athletes, selectedAthleteId, { searching = false, pending = false, readOnly = false } = {}) {
+// Roles V-7: `noCounts` (a view workspace) leaves the plan counts out of a clickable row (the list carries none).
+export function renderAthleteListHtml(athletes, selectedAthleteId, { searching = false, pending = false, readOnly = false, noCounts = false } = {}) {
   if (!athletes.length && pending) return "";
   if (!athletes.length) {
     return searching
@@ -44,10 +45,10 @@ export function renderAthleteListHtml(athletes, selectedAthleteId, { searching =
       <span>
         <span class="athlete-name">${escapeHtml(athlete.athlete)}</span>
         <span class="athlete-meta">ID ${escapeHtml(athlete.athlete_id)}</span>
-        <span class="athlete-counts">
+        ${noCounts ? "" : `<span class="athlete-counts">
           ${count(athlete.weekly_plan_count, "weekly")}
           ${count(athlete.program_count, "specific")}
-        </span>
+        </span>`}
       </span>
     </button>
   `).join("");

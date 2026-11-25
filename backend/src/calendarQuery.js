@@ -37,6 +37,7 @@
 //             athlete workspace gets the reduced card of D21.
 import crypto from "node:crypto";
 import { query } from "./db.js";
+import { athleteTrainingLoadAllowed } from "./athleteTrainingLoadLicence.js";
 import {
   calendarActivityFilterSql, calendarActivityScopeSql, calendarAthleteFilterSql, calendarAthleteScopeSql,
   calendarScheduleCandidateSql, calendarScheduleStructuralSql, loadWorkspaceTeams, membershipOnDaySql, membershipPeriodOnDaySql,
@@ -855,8 +856,9 @@ function newCard(fields) {
 
 export async function readCalendar(ctx, { from, to, today, kinds, filters, includeAthletes }) {
   const wantPlanned = kinds.has("planned");
-  const wantActivity = kinds.has("activity");
-  const wantExternal = kinds.has("external");
+  const allowRpe = ctx.type !== "athlete" || await athleteTrainingLoadAllowed(ctx.athleteId);
+  const wantActivity = allowRpe && kinds.has("activity");
+  const wantExternal = allowRpe && kinds.has("external");
   const wantTest = kinds.has("test");
   const teams = await loadWorkspaceTeams(ctx);
   const teamIds = teams.map((t) => t.teamId);
@@ -879,8 +881,8 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   const eventRows = await readEventRows(ctx, { from, to });
   const refersExternal = eventRows.some((r) => r.external_schedule_id);
   const refersTest = eventRows.some((r) => r.test_schedule_id);
-  const readExternal = wantExternal || wantActivity || refersExternal;
-  const readExternalProjected = wantExternal || refersExternal;
+  const readExternal = allowRpe && (wantExternal || wantActivity || refersExternal);
+  const readExternalProjected = allowRpe && (wantExternal || refersExternal);
   const readTest = wantTest || refersTest;
 
   // The event days (K2a), decided BEFORE the other kinds are read: a planned
@@ -1347,9 +1349,15 @@ export async function readCalendar(ctx, { from, to, today, kinds, filters, inclu
   const byDate = new Map();
   for (let cursor = from; cursor <= to; cursor = addDaysIso(cursor, 1)) byDate.set(cursor, []);
   for (const card of cards.values()) {
-    if (!kinds.has(card.kind)) continue;
+    if (!kinds.has(card.kind) || (!allowRpe && card.kind === "activity")) continue;
     const bucket = byDate.get(card.date);
     if (!bucket) continue;
+    if (!allowRpe) {
+      card.rpe = null;
+      card.expects = card.expects.filter(kind => kind !== "rpe");
+      for (const athlete of card.athletes) athlete.rpe = null;
+      for (const session of card.sessions ?? []) session.rpe = "not_asked";
+    }
     card.status = card.kind === "event" ? deriveEventStatus(card, today) : deriveStatus(card, today);
     if (card.links.activityIds) card.links.activityIds = uniq(card.links.activityIds);
     // K5-2: every way an activity reaches an event, planned or RPE card ends in its `links.activityIds` (an event's

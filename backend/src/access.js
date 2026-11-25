@@ -99,6 +99,45 @@ export function athleteViewScopes(req) {
   return { clubIds: [...clubIds], teamIds: [...teamIds] };
 }
 
+// Roles V-7 (docs/ai/roles-v-steps-plan.md, "V-7 design"): the clubs and teams of athleteViewScopes(req) where the account
+// may ALSO view programs - can(authz, "programs.view", that club or team). A club's athletes' plans are the club-shaped
+// part of Programs (P-2); the readers of a plan through the athlete branch (canAccessPlan, the Builder's editable-plan and
+// weekly-plan reads, an athlete's plan reads) take these arrays, so a club role version or a licence that takes the word
+// away removes those plans for that role. Own plans and the public library are the person's, never narrowed here.
+export function programViewScopes(req) {
+  const authz = req?.authz;
+  const { clubIds, teamIds } = athleteViewScopes(req);
+  return {
+    clubIds: clubIds.filter((id) => can(authz, "programs.view", clubScope(id))),
+    teamIds: teamIds.filter((id) => can(authz, "programs.view", teamScope(id))),
+  };
+}
+
+// May this account use Programs at one club or team (a coach workspace's scope; moduleView.js coachModuleGate on the
+// Builder, the Program Library and the plan reads, roles V-7)?
+export function canViewProgramsAt(authz, scope) {
+  return can(authz, "programs.view", scope);
+}
+
+// May this account read an athlete's plans (GET /api/athletes/:id/plans and /program-data on the coach path)? The
+// athlete access of canAccessAthlete, through the programs.view arrays.
+export async function canAccessAthletePlans(query, req, athleteId) {
+  if (!req?.user) return false;
+  if (canAccessAllAthletes(req)) return true;
+  const { clubIds, teamIds } = programViewScopes(req);
+  const result = await query(
+    `
+    select 1
+    from public.athletes a
+    where (a.athlete_id = $1 or a.source_external_id = $1 or a.id::text = $1)
+      and ${athleteAccessPredicate("a", "$2", "$3", "$4")}
+    limit 1
+    `,
+    [athleteId, req.user.id, clubIds, teamIds],
+  );
+  return result.rowCount > 0;
+}
+
 // May this account view the athletes of one club or team (a view workspace's own scope, roles V-2)? The one place a
 // scope-level athletes.view question is asked outside the predicate's arrays (routes/organization.js GET / for a view
 // workspace).
@@ -136,7 +175,8 @@ export async function canAccessAthlete(query, req, athleteId) {
 export async function canAccessPlan(query, req, planId, { editable = false } = {}) {
   if (!req?.user) return false;
   if (canAccessAllAthletes(req)) return true;
-  const { clubIds, teamIds } = athleteViewScopes(req);
+  // Roles V-7: a plan reached through its athlete needs athletes.view AND programs.view there.
+  const { clubIds, teamIds } = programViewScopes(req);
   const ownPlanStatus = editable
     ? "or p.created_by_user_id = $2"
     : "or (p.created_by_user_id = $2 and (p.visibility = 'private' or p.is_template = true))";

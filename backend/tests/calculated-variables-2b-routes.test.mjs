@@ -35,7 +35,7 @@ let hmld;
 
 before(async () => {
   // Every migration but the error-tracking one (an injected failure would be recorded as a row).
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calc2b_routes", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")) });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calc2b_routes", roleRead: true, migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")) });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
