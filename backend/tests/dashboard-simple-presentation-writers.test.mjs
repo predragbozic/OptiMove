@@ -39,6 +39,10 @@ if (needsModuleMocksRelaunch()) {
   } });
   mock.module("../src/trainingLoadDashboardQuery.js", { namedExports: {
     queryDashboard: async (...args) => batchQueryHandler(...args),
+    // Reference queries are closed in this legacy-writer fixture; never use the real DB.
+    fetchAuthorizedActivityIds: async () => { throw new Error('Unexpected reference activity query'); },
+    runDashboardBatchQuery: async () => { throw new Error('Unexpected reference batch query'); },
+    mergeFilters: () => { throw new Error('Unexpected reference filter resolution'); },
   } });
   const widgets = await import("../src/trainingLoadDashboardWidgets.js");
   const catalog = await import("../src/trainingLoadDashboardCatalog.js");
