@@ -54,7 +54,7 @@ export function bindCentralCalendarGestures(calendar) {
 
   calendar.addEventListener("touchstart", (event) => {
     const [a, b] = event.touches;
-    if (event.target.closest(".cc-panel, .cc-sheet, .cc-toolbar, .cc-filters, .cc-chip-row, input, select, textarea")) {
+    if (calendar.querySelector(".cc-sheet") || event.target.closest(".cc-panel, .cc-toolbar, .cc-filters, .cc-chip-row, input, select, textarea")) {
       start = null;
       return;
     }
