@@ -12,6 +12,14 @@ const v98 = new URL("../../../migrations_v2/202611301000_calendar_v98_manage_per
 // Calendar writers. Carry the exact v98 permission body into those fixtures,
 // and run the real v99 file. Full-stack M-2 tests rehearse the complete chain.
 export async function applyExternalScheduleBridgeForCuratedFixture(databaseUrl) {
+  await applyTrainingLoadBridgeMigrations(databaseUrl, [EXTERNAL_SCHEDULE_BRIDGE_MIGRATION]);
+}
+
+export async function applyRosterBridgeForCuratedFixture(databaseUrl) {
+  await applyTrainingLoadBridgeMigrations(databaseUrl, [EXTERNAL_SCHEDULE_BRIDGE_MIGRATION, "202612031000_training_load_v101_roster_manage_bridge.sql"]);
+}
+
+async function applyTrainingLoadBridgeMigrations(databaseUrl, files) {
   const url = new URL(databaseUrl);
   assert.ok(["localhost", "127.0.0.1", "[::1]"].includes(url.hostname));
   assert.match(url.pathname, /^\/optimove_tests_[a-z0-9_]+$/);
@@ -25,7 +33,7 @@ export async function applyExternalScheduleBridgeForCuratedFixture(databaseUrl) 
     assert.ok(body, "the curated schedule fixture copies v98's permission body");
     await client.query(body);
     await fs.mkdir(dir);
-    await fs.copyFile(new URL(`../../../migrations_v2/${EXTERNAL_SCHEDULE_BRIDGE_MIGRATION}`, import.meta.url), path.join(dir, EXTERNAL_SCHEDULE_BRIDGE_MIGRATION));
+    for (const file of files) await fs.copyFile(new URL(`../../../migrations_v2/${file}`, import.meta.url), path.join(dir, file));
     await runMigrations({ databaseUrl, migrationsRoot: dir });
   } finally {
     await client.end().catch(() => {});

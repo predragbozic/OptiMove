@@ -137,3 +137,6 @@ backend/scripts/calendar-m1-v98-rehearsal.sh text eol=lf
 migrations_v2/202612011000_training_load_v99_schedule_manage_bridge.sql text eol=lf
 docs/runbooks/training-load-m2-v99-*.sql text eol=lf
 backend/scripts/training-load-m2-v99-rehearsal.sh text eol=lf
+
+migrations_v2/202612031000_training_load_v101_roster_manage_bridge.sql text eol=lf
+docs/runbooks/training-load-m3a-v101-*.sql text eol=lf

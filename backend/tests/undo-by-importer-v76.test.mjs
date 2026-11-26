@@ -1,3 +1,4 @@
+import { applyRosterBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // v76 (2026-11-17): an imported session may be deleted (undone) by whoever may import it - the approval right's four
 // bases and its mode rule, derived again in the database under the undo's locks; the team's switch being off does not
 // remove it. The deletion log records the basis, and its insert trigger derives it again (a row cannot name a basis its
@@ -52,6 +53,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyRosterBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.SOURCE_CREDENTIAL_KEYS = (await import("../src/sourceCredentialCrypto.js")).generateKeyEntry(1);
