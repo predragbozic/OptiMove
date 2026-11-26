@@ -25,15 +25,15 @@ const CLUB_WS = { type: "club", scopeId: CLUB, label: "Example Club" };
 const TEAM_WS = { type: "team", scopeId: TEAM, label: "First team" };
 const PLATFORM_WS = { type: "platform", scopeId: null, label: "Platform administration" };
 const ADMIN = { clubs: [{ id: CLUB, role: "club_admin" }] };
-const ALL_WORDS = ["org.view", "org.teams.manage", "org.club.edit", "athletes.manage", "athletes.remove", "staff.assign", "roles.manage", "platform.admin", "platform.metrics.manage", "accounts.manage"];
+const ALL_WORDS = ["org.view", "org.teams.manage", "org.club.edit", "athletes.manage", "athletes.remove", "staff.assign", "roles.manage", "platform.admin", "platform.metrics.manage", "accounts.manage", "calendar.events.manage", "calendar.settings.manage"];
 const PLATFORM_TABS = ["dataSources", "sourceConnections", "storage", "appHealth"];
-const CLUB_ADMIN_WORDS = ["org.view", "org.teams.manage", "org.club.edit", "athletes.manage", "athletes.remove", "staff.assign"];
+const CLUB_ADMIN_WORDS = ["org.view", "org.teams.manage", "org.club.edit", "athletes.manage", "athletes.remove", "staff.assign", "calendar.settings.manage"];
 const COACH_WORDS = ["org.view", "athletes.manage", "athletes.remove"];
 
-test("1. FALLBACK: without /me permissions (absent, not an array, or unavailable) every tab list is exactly today's", () => {
+test("1. FALLBACK: legacy /me keeps its tabs; an explicit permission outage hides Calendar Settings", () => {
   as(CLUB_WS, ADMIN);
   const clubBaseline = tabs(panel());
-  assert.ok(["overview", "clubs", "teams", "athletes", "users", "roles"].every((t) => clubBaseline.includes(t)));
+  assert.ok(["overview", "clubs", "teams", "athletes", "users", "calendar", "roles"].every((t) => clubBaseline.includes(t)));
   as(PLATFORM_WS, { clubs: [] });
   const platformBaseline = tabs(panel(data({ isPlatformAdmin: true })));
   assert.ok(platformBaseline.includes("roles") && platformBaseline.includes("dataSources") && platformBaseline.includes("appHealth"));
@@ -48,7 +48,8 @@ test("1. FALLBACK: without /me permissions (absent, not an array, or unavailable
     as({ type: "private_coach" }, extra);
     assert.deepEqual(tabs(panel()), COACH_SETTINGS_SECTIONS, label);
     as(CLUB_WS, { ...ADMIN, ...extra });
-    assert.deepEqual(tabs(panel()), clubBaseline, label);
+    const expected = extra.permissionsUnavailable ? clubBaseline.filter((tab) => tab !== "calendar") : clubBaseline;
+    assert.deepEqual(tabs(panel()), expected, label);
     assert.deepEqual(rolesContext(data()), { clubId: CLUB, platform: false }, label);
     as(PLATFORM_WS, { clubs: [], ...extra });
     assert.deepEqual(tabs(panel(data({ isPlatformAdmin: true }))), platformBaseline, label);
@@ -98,16 +99,16 @@ test("4b. the Overview summary offers no Users tile when staff.assign is not hel
   assert.match(panel(), /organization-section-summary-tile" type="button" data-action="organization-section" data-section="users"/);
 });
 
-test("5. a club admin's tabs follow org.view, staff.assign and roles.manage; Roles is read-only with org.view alone", () => {
+test("5. a club admin's tabs follow the granted words; Calendar Settings requires its own Manage permission", () => {
   as(CLUB_WS, { ...ADMIN, permissions: [...CLUB_ADMIN_WORDS, "roles.manage"] });
   assert.deepEqual(tabs(panel()), ["overview", "clubs", "teams", "athletes", "users", "joinLinks", "presets", "icons", "calendar", "roles"]);
   as(CLUB_WS, { ...ADMIN, permissions: CLUB_ADMIN_WORDS });
   assert.ok(tabs(panel()).includes("roles"), "org.view reads the roles; the server's actions decide any button");
   as(CLUB_WS, { ...ADMIN, permissions: CLUB_ADMIN_WORDS.filter((w) => w !== "staff.assign") });
   assert.ok(!tabs(panel()).includes("users"), "no staff.assign: no Users tab");
-  as(CLUB_WS, { ...ADMIN, permissions: ["roles.manage", "athletes.manage"] });
+  as(CLUB_WS, { ...ADMIN, permissions: ["roles.manage", "athletes.manage", "calendar.events.manage"] });
   const noOrg = panel();
-  assert.deepEqual(tabs(noOrg), ["athletes", "joinLinks", "presets", "icons", "calendar", "roles"], "no org.view: no Overview, Clubs or Teams; invisible, not locked");
+  assert.deepEqual(tabs(noOrg), ["athletes", "joinLinks", "presets", "icons", "roles"], "missing org.view and calendar.settings.manage hide their own tabs");
   assert.doesNotMatch(noOrg, /lock|Locked/i);
   as(CLUB_WS, { ...ADMIN, permissions: ["athletes.manage"] });
   assert.ok(!tabs(panel()).includes("roles"));
