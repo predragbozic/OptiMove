@@ -4,7 +4,6 @@ import pg from "pg";
 import { setTimeout as delay } from "node:timers/promises";
 import { calendarRoleMatrix, newKey, startCalendarApp } from "./support/calendar-fixture.mjs";
 import { asActor, ROLE_IDS } from "./support/permission-roles-world.mjs";
-import { ENFORCED_PERMISSIONS, STORABLE_PERMISSIONS } from "../src/permissions.js";
 
 const ROUTE = "/api/training-load/external-schedules";
 const ROLES_API = "/api/organization/roles";
@@ -72,12 +71,18 @@ async function narrowTeamRole(clubId, word, client = null) {
 
 before(async () => {
   world = await startCalendarApp({ label: "m2_bridge", scheduleBridge: true });
+  await world.q(`create table public.app_notifications (
+    id uuid primary key default gen_random_uuid(), recipient_user_id uuid not null, actor_user_id uuid,
+    type varchar(80) not null, title text not null, body text, entity_type varchar(80), entity_id uuid, href text,
+    metadata jsonb not null default '{}'::jsonb, read_at timestamptz, created_at timestamptz not null default now(),
+    dedupe_key varchar(300))`);
   actors = await calendarRoleMatrix(world, "M-2");
 });
 after(async () => { await world?.stop(); });
 
 test("M-2: the staged SQL word and all seven native writes work without exposing it", async () => {
   const { roles, clubs, teams } = actors;
+  const { ENFORCED_PERMISSIONS, STORABLE_PERMISSIONS } = await import("../src/permissions.js");
   assert.equal(STORABLE_PERMISSIONS.includes(MANAGE), false);
   assert.equal(Object.hasOwn(ENFORCED_PERMISSIONS, MANAGE), false);
   assert.deepEqual(await world.q("select public.permission_word_honoured($1) as honoured", [MANAGE]), [{ honoured: true }]);
