@@ -2357,13 +2357,13 @@ test("M-3a: exact pre-bridge server writes a receipt the bridge can replay", { s
 
 test("M-3a: a session moved before the locks gets the same 404 as a missing session", async () => {
   const session = await plainSession("Bridge owner change", 1);
-  const other = await makeTeam("Bridge new owner");
+  const other = await plainSession("Bridge new owner", 1);
   const body = pnv();
   const missing = await put(key(), session.athletes[0], session.coach.cookie, body);
   const before = await rowCounts();
   const moved = await withHooks({
     beforeLocks: async () => {
-      await q("update training.activities set owner_team_id=$1 where id=$2", [other.teamId, session.activityId]);
+      await supersedeInto(session.activityId, other.activityId);
     },
   }, () => put(session.activityId, session.athletes[0], session.coach.cookie, body));
   assert.deepEqual([moved.status, moved.text], [404, missing.text], moved.text);

@@ -15,11 +15,11 @@ export async function applyExternalScheduleBridgeForCuratedFixture(databaseUrl) 
   await applyTrainingLoadBridgeMigrations(databaseUrl, [EXTERNAL_SCHEDULE_BRIDGE_MIGRATION]);
 }
 
-export async function applyRosterBridgeForCuratedFixture(databaseUrl) {
-  await applyTrainingLoadBridgeMigrations(databaseUrl, [EXTERNAL_SCHEDULE_BRIDGE_MIGRATION, "202612031000_training_load_v101_roster_manage_bridge.sql"]);
+export async function applyRosterBridgeForCuratedFixture(databaseUrl, { historicalRollback = false } = {}) {
+  await applyTrainingLoadBridgeMigrations(databaseUrl, [EXTERNAL_SCHEDULE_BRIDGE_MIGRATION, "202612031000_training_load_v101_roster_manage_bridge.sql"], historicalRollback);
 }
 
-async function applyTrainingLoadBridgeMigrations(databaseUrl, files) {
+async function applyTrainingLoadBridgeMigrations(databaseUrl, files, historicalRollback = false) {
   const url = new URL(databaseUrl);
   assert.ok(["localhost", "127.0.0.1", "[::1]"].includes(url.hostname));
   assert.match(url.pathname, /^\/optimove_tests_[a-z0-9_]+$/);
@@ -35,6 +35,12 @@ async function applyTrainingLoadBridgeMigrations(databaseUrl, files) {
     await fs.mkdir(dir);
     for (const file of files) await fs.copyFile(new URL(`../../../migrations_v2/${file}`, import.meta.url), path.join(dir, file));
     await runMigrations({ databaseUrl, migrationsRoot: dir });
+    // The shared test server needs current attendance checks. Historical rollback cases on its database still
+    // need the original registry cutoff, like the existing roleRead fixture.
+    if (historicalRollback) {
+      await client.query("delete from public.schema_migrations where migration_name = any($1)",
+        [files.map((file) => `migrations_v2/${file}`)]);
+    }
   } finally {
     await client.end().catch(() => {});
     await fs.rm(root, { recursive: true, force: true });
