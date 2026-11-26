@@ -386,9 +386,12 @@ test("0. the app pool and the test connections are on the disposable database, n
 // ---------------------------------------------------------------------------
 test("1. Did not participate with a reason and a note: one decision, one request, the revision and one log row", async () => {
   const s = await plainSession("Decide");
+  const writeMarker = async () => (await q("select first_checked_write_at from training_load.activity_roster_m3a_use where singleton"))[0].first_checked_write_at;
+  assert.equal(await writeMarker(), null);
   const res = await put(s.activityId, s.athletes[0], s.coach.cookie, dnp({ reasonKey: "contact_injury", note: "  hamstring  " }));
   assert.equal(res.status, 200, res.text);
   assert.equal(res.body.decision.kind, "did_not_participate");
+  assert.ok(await writeMarker(), "a real checked staff write closes the rollback boundary");
   assert.equal(res.body.decision.reasonKey, "contact_injury");
   assert.equal(res.body.decision.note, "hamstring", "the note is trimmed");
   assert.equal(res.body.decision.decidedBy.basis, "team_coach");
