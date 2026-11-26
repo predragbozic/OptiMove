@@ -8,6 +8,14 @@ This migration stages the existing Schedule Manage word for native club admins a
 2. Verify the actual previous application build on a migrated disposable database. Prove that all seven staff writes and full-list/copy/version/default/custom/end role operations keep their legacy behavior and preserve the staged word. Repeat on the exact bridge build and confirm native writer refusal on missing authority. A gap in preserving the staged word blocks the release.
 3. With a production order, run the read-only `training-load-m2-v99-preflight.sql` during a quiet period. Verify the v98 migration checksum and permission body, an unused v99 prefix and the exact v99 file checksum. Keep the previous app build ready until the bridge build is healthy. The v99 migration does not change Calendar v98's activation state.
 
+For the exact-build rehearsal, supply `M2_PREVIOUS_BUILD_SHA` and `M2_BRIDGE_BUILD_SHA` as full commit IDs, with both commits present locally and `DATABASE_URL` on the isolated loopback cluster. Run:
+
+```sh
+node scripts/test-runner.mjs --project backend --kind disposable --file training-load-m2-previous-build.test.mjs
+```
+
+The ordinary disposable gate records this file as skipped when neither build ID is supplied. A production release needs the separate exact-build result.
+
 ## Postcheck and retirement
 
 Run the read-only `training-load-m2-v99-postcheck.sql`. Verify one correct migration row, the new word and permission body, seed counts and the expected Calendar v98 activation state. The first checked write timestamp may become non-null as staff use the bridge. Confirm the new build and record the rollout.
