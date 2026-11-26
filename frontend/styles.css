@@ -23784,6 +23784,68 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     width: 100%;
   }
 
+  .cc-layout-phone .cc-switches:has(.cc-mode-switch) {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+
+  .cc-layout-phone .cc-new-event {
+    grid-column: 1 / -1;
+    width: auto;
+    justify-self: end;
+    min-height: 44px;
+    color: var(--text);
+    background: var(--surface, #fff);
+    border-color: var(--line-strong);
+  }
+
+  .cc-layout-phone .cc-segment {
+    min-height: 44px;
+  }
+
+  .cc-layout-phone .cc-timegrid-row {
+    grid-template-columns: 34px repeat(var(--cc-visible-days, 7), minmax(0, 1fr));
+    min-width: 0;
+    gap: 1px;
+  }
+
+  .cc-layout-phone .cc-timegrid-day .cc-timegrid-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-day-head {
+    padding-inline: 0;
+  }
+
+  .cc-layout-phone .cc-timegrid-row > [hidden] {
+    display: none;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-card-when {
+    display: none;
+  }
+
+  .cc-layout-phone .cc-timegrid,
+  .cc-layout-phone .cc-day-cards {
+    touch-action: pan-y;
+  }
+
+  .cc-layout-phone .cc-panel-when {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 4px;
+  }
+
+  .cc-layout-phone .cc-panel-time {
+    color: var(--text);
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cc-layout-phone .cc-panel-time > span {
+    display: none;
+  }
+
   .cc-form-actions .plain-button {
     flex: 1 1 100%;
   }

@@ -574,7 +574,7 @@ test("6d. a phone's week is the seven-day strip over the selected day's list; it
   assert.equal(doc.querySelector(".cc-strip-day.is-selected").getAttribute("aria-pressed"), "true");
   assert.equal(doc.querySelectorAll('.cc-strip-day[aria-pressed="false"]').length, 6);
   assert.equal(doc.querySelector(".cc-week"), null, "no seven columns on a phone");
-  assert.equal(doc.querySelector(".cc-mode-switch"), null, "no inert time-grid switch on a phone");
+  assert.ok(doc.querySelector('.cc-mode-switch [data-mode="grid"]'), "the phone can switch to the time grid");
   const selected = doc.querySelector(".cc-strip-day.is-selected");
   assert.equal(selected.dataset.date, TODAY);
   assert.equal(doc.querySelector(".cc-day-list").getAttribute("aria-label"), view.centralCalendarLongDate(TODAY));

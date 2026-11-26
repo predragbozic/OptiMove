@@ -105,6 +105,7 @@ import { captureCentralCalendarView, centralCalendarCanCreateEvents, centralCale
 import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalendarData, resetCentralCalendarForWorkspaceChange } from "./central-calendar-data.js";
 import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn, setImportsReturnOutcome } from "./central-calendar-gps-review.js";
 import { centralCalendarLongDate, renderCentralCalendarHtml } from "./central-calendar-view.js";
+import { bindCentralCalendarGestures } from "./central-calendar-gestures.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { handleWeeklyTemplateAction } from "./builder-weekly-template-actions.js";
 import { handleWeeklyAssignAction, updateWeeklyAssignStartDate } from "./builder-weekly-assign-actions.js";
@@ -2662,6 +2663,7 @@ function renderCentralCalendar() {
     uncertainWrites: centralCalendarUncertainWrites(),
   });
   restoreCentralCalendarView(els.content.querySelector(".central-calendar"), snapshot);
+  bindCentralCalendarGestures(els.content.querySelector(".central-calendar"));
   // K6: the chosen athlete's pill stays in view after every repaint.
   athleteSwitcherScrollIntoView(els.content);
 }

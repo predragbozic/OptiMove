@@ -745,7 +745,7 @@ function renderToolbarHtml(cal, layout, { canCreate = false } = {}) {
   const segment = (value, label, action, attr, current) => `<button type="button" class="cc-segment${current === value ? " is-active" : ""}" data-action="${action}" ${attr}="${value}" aria-pressed="${current === value ? "true" : "false"}" aria-label="${label}" title="${label}">${renderSwitchIcon(value)}</button>`;
   // K7 (Q1): the Day view on wide has the same switch, one choice for both; it shows List while "+N more"'s list is open.
   const mode = cal.view === "day" && cal.dayList ? "list" : cal.weekMode || "list";
-  const modeSwitch = layout === "wide" && (cal.view === "week" || cal.view === "day")
+  const modeSwitch = (layout === "wide" || layout === "phone") && (cal.view === "week" || cal.view === "day")
     ? `<div class="cc-segmented cc-mode-switch" role="group" aria-label="${cal.view === "day" ? "Day layout" : "Week layout"}">
           ${segment("list", "List", "central-calendar-mode", "data-mode", mode)}
           ${segment("grid", "Time grid", "central-calendar-mode", "data-mode", mode)}
@@ -1060,7 +1060,7 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = tr
 
 // The Day view's time grid (K7, Q1): wide, the switch on Time grid, and not the list "+N more" opened.
 export function centralCalendarDayGridShown(cal, layout) {
-  return cal.view === "day" && layout === "wide" && cal.weekMode === "grid" && !cal.dayList;
+  return cal.view === "day" && (layout === "wide" || layout === "phone") && cal.weekMode === "grid" && !cal.dayList;
 }
 
 function renderBodyHtml(cal, layout, today) {
@@ -1089,11 +1089,11 @@ function renderBodyHtml(cal, layout, today) {
     if (centralCalendarDayGridShown(cal, layout)) return renderTimeGridHtml([days[0]], byDate, cal, teams, today, { dayView: true }) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
     return renderSelectedDayListHtml(days[0], byDate, cal, teams, today, { heading: false });
   }
-  if (layout === "phone") {
+  if (layout === "phone" && cal.weekMode !== "grid") {
     const selected = days.includes(cal.selectedDate) ? cal.selectedDate : days[0];
     return renderStripHtml(days, byDate, cal, today, teams) + renderSelectedDayListHtml(selected, byDate, cal, teams, today);
   }
-  const grid = layout === "wide" && cal.weekMode === "grid";
+  const grid = (layout === "wide" || layout === "phone") && cal.weekMode === "grid";
   return (grid ? renderTimeGridHtml(days, byDate, cal, teams, today) : renderWeekColumnsHtml(days, byDate, cal, teams, today, layout)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
 }
 
@@ -1705,7 +1705,7 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
         <button type="button" class="plain-button icon-button cc-panel-close" data-action="central-calendar-close-panel" aria-label="Close">&times;</button>
       </header>
       <p class="cc-panel-kind${item.cancelled ? " is-cancelled" : ""}">${itemIconHtml(item, "cc-panel-icon")}<span>${escapeHtml(centralCalendarKindLabel(item))}</span></p>
-      <p class="cc-panel-when">${escapeHtml(centralCalendarLongDate(item.date))}${item.date === today ? " (today)" : ""}${when ? ` · ${escapeHtml(when)}` : ""}</p>
+      <p class="cc-panel-when">${escapeHtml(centralCalendarLongDate(item.date))}${item.date === today ? " (today)" : ""}${when && layout === "phone" ? `<span class="cc-panel-time"><span aria-hidden="true"> · </span>${escapeHtml(when)}</span>` : when ? ` · ${escapeHtml(when)}` : ""}</p>
       ${(item.teamIds || []).length ? `<p class="cc-panel-teams">${item.teamIds.map((id) => `<span class="cc-panel-team"${teamColorStyle(id, teams)}><span class="cc-team-dot" aria-hidden="true"></span>${escapeHtml(teamName(id, teams))}</span>`).join("")}</p>` : ""}
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
       ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: eventAskRpe }) : ""}

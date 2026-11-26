@@ -266,13 +266,23 @@ test("D5. the Day time grid only on wide with the switch on Time grid; six colum
   assert.equal(draw(cal).querySelector(".cc-timegrid"), null, "the switch on List: the list");
   cal.weekMode = "grid";
   assert.equal(draw(cal, "medium").querySelector(".cc-timegrid"), null, "medium: the list");
-  assert.equal(draw(cal, "phone").querySelector(".cc-timegrid"), null, "phone: the list");
+  assert.ok(draw(cal, "phone").querySelector(".cc-timegrid-day"), "phone: the time grid");
 });
 
-test("U. phone, medium, the wide week as a List and the wide Month are byte for byte as before K7", () => {
+test("phone offers List and Time grid and renders all seven days", () => {
+  const cal = k7State({ view: "week", mode: "grid" });
+  const document = draw(cal, "phone");
+  assert.ok(document.querySelector('.cc-mode-switch [data-mode="list"]'));
+  assert.equal(document.querySelectorAll(".cc-timegrid-head").length, 7);
+  cal.weekMode = "list";
+  assert.equal(draw(cal, "phone").querySelector(".cc-timegrid"), null);
+});
+
+test("U. phone Month and unchanged larger layouts retain the K7 markup", () => {
   const before = JSON.parse(readFileSync(new URL("./support/central-calendar-k7-unchanged.json", import.meta.url), "utf8"));
   assert.equal(Object.keys(before).length, K7_UNCHANGED_CASES.length);
   for (const c of K7_UNCHANGED_CASES) {
+    if (c.layout === "phone" && c.view !== "month") continue;
     const html = view.renderCentralCalendarHtml(k7State(c), { today: K7_TODAY, layout: c.layout });
     assert.equal(html, before[`${c.layout}/${c.view}/${c.mode}`], `${c.layout}/${c.view}/${c.mode}`);
   }
