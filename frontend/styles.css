@@ -23838,6 +23838,21 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     display: none;
   }
 
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box > .cc-card {
+    background: var(--surface, #fff);
+    border-color: var(--line-strong, #a8b3c0);
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box .cc-card-title {
+    font-weight: 700;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box-more > .cc-tg-more {
+    background: var(--surface, #fff);
+    border: 1px solid var(--line-strong, #a8b3c0);
+    font-weight: 700;
+  }
+
   .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box.is-tall .cc-card-marks {
     display: inline-flex;
     gap: 1px;
@@ -23900,7 +23915,6 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     display: none;
   }
 
-  .cc-time-picker-mode,
   .cc-time-picker-fields,
   .cc-time-picker-wheels {
     display: grid;
@@ -23921,8 +23935,40 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   .cc-time-picker-fields button strong { font-variant-numeric: tabular-nums; }
   .cc-layout-phone .cc-timegrid-untimed .cc-mini { min-height: 44px; min-width: 0; padding-inline: 3px; }
   .cc-layout-phone .cc-timegrid-untimed .cc-mini-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-timegrid-untimed .cc-mini {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    place-items: center;
+    background: var(--surface, #fff);
+    border: 1px solid var(--line-strong);
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) :is(.cc-mini-dot, .cc-mini-name, .cc-mini-status) {
+    display: none;
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-tg-box > .cc-card {
+    grid-template-columns: 2px minmax(0, 1fr);
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-tg-box .cc-card-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-tg-box .cc-card-title {
+    display: none;
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-tg-box .cc-card-icon {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
   .cc-time-picker button[aria-pressed="true"] { background: var(--bg); border-color: var(--line-strong); }
   .cc-time-picker-apply { grid-column: 1 / -1; }
+  .cc-time-picker-clear { margin-top: 6px; }
+  .cc-audience-label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+  .cc-audience-label small { color: var(--muted); font-weight: 400; }
   .cc-time-wheel { display: grid; gap: 2px; touch-action: none; }
   .cc-time-wheel output {
     padding: 6px;

@@ -603,12 +603,12 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
 
 // The month cell's compact card: the team colour, the type's icon, the
 // title and the status.
-function renderMiniCardHtml(item, teams, openKey, today) {
+function renderMiniCardHtml(item, teams, openKey, today, { mobileTimeline = false } = {}) {
   const badge = centralCalendarStatusBadge(item, today);
   const firstTeam = (item.teamIds || [])[0];
   return `<button type="button" class="cc-mini cc-mini-${escapeAttr(item.kind)}${item.cancelled ? " is-cancelled" : ""}${openKey === item.key ? " is-open" : ""}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)} aria-label="${escapeAttr(cardAriaLabel(item, teams, today))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
         <span class="cc-mini-dot" aria-hidden="true"></span>
-        <span class="cc-mini-title">${itemIconHtml(item, "cc-mini-icon", 12)}${renderMarksHtml(item, 12)}${escapeHtml(centralCalendarTitle(item))}</span>
+        <span class="cc-mini-title">${itemIconHtml(item, "cc-mini-icon", 12)}${renderMarksHtml(item, 12)}${mobileTimeline ? `<span class="cc-mini-name">${escapeHtml(centralCalendarTitle(item))}</span>` : escapeHtml(centralCalendarTitle(item))}</span>
         ${badge ? `<span class="cc-mini-status cc-mini-status-${badge.tone}" aria-hidden="true"></span>` : ""}
       </button>`;
 }
@@ -683,7 +683,7 @@ function renderShowOnlyLineHtml(cal, counts) {
 // the Groups and Event types chips away with a summary line. The folded chips stay in the markup (hidden) so their
 // sideways scroll and the focus survive a repaint. Groups: All groups and a chip per team with its colour dot; Event
 // types: a chip per event kind on the displayed days (or chosen).
-function renderFiltersHtml(cal, counts, teams) {
+function renderFiltersHtml(cal, counts, teams, { compact = false } = {}) {
   if (!cal.data) return "";
   const filters = cal.filters;
   // *Clear filters* beside More filters only while a group or an event type is chosen: Show only alone is reset by
@@ -704,14 +704,14 @@ function renderFiltersHtml(cal, counts, teams) {
     : "";
   return `<div class="cc-filters${open ? " is-open" : ""}">
       ${renderShowOnlyLineHtml(cal, counts)}
-      ${renderShowOnlyHtml(cal, counts)}
+      ${compact ? "" : renderShowOnlyHtml(cal, counts)}
       <div class="cc-filters-bar">
         <button type="button" class="cc-filters-toggle" data-action="central-calendar-toggle-filters" aria-expanded="${open ? "true" : "false"}" aria-controls="ccFiltersBody">
           ${renderIconSvg("adjust", { size: 18, className: "cc-filters-icon" })}<span class="cc-filters-word">More filters</span><span class="cc-filters-summary">${escapeHtml(centralCalendarFiltersSummary(filters, teams))}</span><span class="cc-filters-chevron" aria-hidden="true"></span>
         </button>
         ${active ? `<button type="button" class="plain-button cc-clear-filters" data-action="central-calendar-clear-filters">Clear filters</button>` : ""}
       </div>
-      <div class="cc-filters-body" id="ccFiltersBody"${open ? "" : " hidden"}>${groups}${eventTypes}</div>
+      <div class="cc-filters-body" id="ccFiltersBody"${open ? "" : " hidden"}>${compact ? renderShowOnlyHtml(cal, counts) : ""}${groups}${eventTypes}</div>
     </div>`;
 }
 
@@ -897,7 +897,7 @@ function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false, 
   const band = days.map((date) => {
     // 2.4: the band's entries in order, K5-4's GPS mark last; more than BAND_ITEMS show BAND_ITEMS and "+N more".
     const entries = bandItemsOf(visible.get(date)).map((item) => (phone && !dayView
-      ? renderMiniCardHtml(item, teams, openKey, today)
+      ? renderMiniCardHtml(item, teams, openKey, today, { mobileTimeline: true })
       : isMultiDay(item)
       ? renderCentralCalendarCardHtml(item, { teams, openKey, today, spanWhen: true })
       : renderDayItemHtml(item, teams, openKey, today)));
@@ -1804,7 +1804,7 @@ export function renderCentralCalendarHtml(sourceCal, { today, layout = "wide", r
       ${cal.anchor ? renderToolbarHtml(cal, layout, { canCreate }) : ""}
       ${renderCentralCalendarSwitcherHtml(sourceCal, switcherModel, { layout, counts })}
       ${renderCentralCalendarShowingLineHtml(sourceCal, switcherModel, { onlyLabel: only ? `only ${CENTRAL_CALENDAR_SHOW_ONLY_LABELS[only] || only}` : "" })}
-      ${renderFiltersHtml(sourceCal, counts, teams)}
+      ${renderFiltersHtml(sourceCal, counts, teams, { compact: layout === "phone" && cal.view === "week" && cal.weekMode === "grid" })}
       ${cal.refreshError ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.refreshError)} <button type="button" class="plain-button cc-inline-button" data-action="central-calendar-retry">Try again</button></p>` : ""}
       ${cal.notice ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.notice)}</p>` : ""}
       ${renderUncertainWritesHtml(cal, uncertainWrites)}

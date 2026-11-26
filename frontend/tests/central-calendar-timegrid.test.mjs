@@ -276,6 +276,8 @@ test("phone offers List and Time grid and renders all seven days", () => {
   assert.equal(document.querySelectorAll(".cc-timegrid-head").length, 7);
   assert.ok(document.querySelector(".cc-timegrid-untimed .cc-mini"), "phone uses compact untimed cards");
   assert.equal(document.querySelector(".cc-timegrid-untimed .cc-card"), null);
+  assert.match(document.querySelector(".athlete-switcher-fold").textContent, /Team & athlete/);
+  assert.ok(document.querySelector("#ccFiltersBody .cc-showonly"), "event filters stay available in the compact section");
   cal.weekMode = "list";
   assert.equal(draw(cal, "phone").querySelector(".cc-timegrid"), null);
 });
@@ -288,11 +290,11 @@ test("phone week gives overlapping events one full-width day slot with a link to
   assert.match(group.parentElement.getAttribute("style"), /--cc-tg-width:1(?:;|$)/);
 });
 
-test("U. phone Month and unchanged larger layouts retain the K7 markup", () => {
+test("U. unchanged larger layouts retain the K7 markup", () => {
   const before = JSON.parse(readFileSync(new URL("./support/central-calendar-k7-unchanged.json", import.meta.url), "utf8"));
   assert.equal(Object.keys(before).length, K7_UNCHANGED_CASES.length);
   for (const c of K7_UNCHANGED_CASES) {
-    if (c.layout === "phone" && c.view !== "month") continue;
+    if (c.layout === "phone") continue;
     const html = view.renderCentralCalendarHtml(k7State(c), { today: K7_TODAY, layout: c.layout });
     assert.equal(html, before[`${c.layout}/${c.view}/${c.mode}`], `${c.layout}/${c.view}/${c.mode}`);
   }

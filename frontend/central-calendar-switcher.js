@@ -275,7 +275,7 @@ export function renderCentralCalendarSwitcherHtml(cal, model, { layout = "wide",
   }
   if (!body) return "";
   const fold = phone
-    ? `<button type="button" class="athlete-switcher-fold" data-action="${CC_SWITCHER_ACTIONS.toggle}" aria-expanded="${open ? "true" : "false"}"><span>${escapeHtml(summary.text)}</span><span class="cc-filters-chevron" aria-hidden="true"></span></button>`
+    ? `<button type="button" class="athlete-switcher-fold" data-action="${CC_SWITCHER_ACTIONS.toggle}" aria-expanded="${open ? "true" : "false"}"><span class="cc-audience-label">${model.type === "platform" ? "Club &amp; team" : model.showGroups ? "Team &amp; athlete" : "Athlete"} <small>${escapeHtml(summary.text)}</small></span><span class="cc-filters-chevron" aria-hidden="true"></span></button>`
     : "";
   // A computer's box can be hidden; it then keeps one line (who is chosen) and the one control to show it again.
   const hidden = !phone && centralCalendarStripHidden(cal);

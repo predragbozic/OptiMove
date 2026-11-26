@@ -16,6 +16,7 @@ export function bindCentralCalendarGestures(calendar) {
   function updateGrid() {
     grid.style.setProperty("--cc-hour-px", `${hourHeight}px`);
     if (!weekGrid) return;
+    grid.classList.toggle("cc-timegrid-closeup", visibleColumns === ZOOMED_COLUMNS);
     grid.style.setProperty("--cc-visible-days", visibleColumns);
     grid.querySelectorAll(".cc-timegrid-row").forEach((row) => {
       Array.from(row.children).slice(1).forEach((column, index) => {

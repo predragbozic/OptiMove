@@ -11,14 +11,11 @@ export function bindCentralCalendarTimePicker(calendar) {
   const controls = doc.createElement("div");
   controls.className = "cc-time-picker";
   controls.innerHTML = `
-    <div class="cc-time-picker-mode" role="group" aria-label="Event timing">
-      <button type="button" class="plain-button" data-timing="timed">With time</button>
-      <button type="button" class="plain-button" data-timing="untimed">Without time</button>
-    </div>
-    <div class="cc-time-picker-editor" hidden>
+    <div class="cc-time-picker-editor">
       <div class="cc-time-picker-fields" role="group" aria-label="Time to adjust">
         ${FIELD_LABELS.map((label, index) => `<button type="button" class="plain-button" data-time-field="${index}" aria-pressed="false"><span>${label}</span><strong></strong></button>`).join("")}
       </div>
+      <button type="button" class="plain-button cc-time-picker-clear" data-timing="untimed" hidden>Remove time</button>
       <div class="cc-time-picker-wheels" hidden>
         ${["Hour", "Minute"].map((label, index) => `
           <div class="cc-time-wheel" data-time-wheel="${index}" role="group" aria-label="${label}">
@@ -34,7 +31,7 @@ export function bindCentralCalendarTimePicker(calendar) {
   const wheels = controls.querySelector(".cc-time-picker-wheels");
   const strips = Array.from(wheels.querySelectorAll("[data-time-wheel]"));
   const fields = Array.from(controls.querySelectorAll("[data-time-field]"));
-  const modeButtons = Array.from(controls.querySelectorAll("[data-timing]"));
+  const clear = controls.querySelector('[data-timing="untimed"]');
   let active = 0;
   let values = [0, 0];
 
@@ -42,22 +39,13 @@ export function bindCentralCalendarTimePicker(calendar) {
     fields.forEach((button, index) => {
       button.querySelector("strong").textContent = inputs[index].value || "Set time";
     });
+    clear.hidden = !inputs.some((input) => input.value);
   }
 
   function write(input, value) {
     if (input.value === value) return;
     input.value = value;
     input.dispatchEvent(new doc.defaultView.Event("change", { bubbles: true }));
-  }
-
-  function selectMode(timed) {
-    modeButtons.forEach((button) => button.setAttribute("aria-pressed", String((button.dataset.timing === "timed") === timed)));
-    editor.hidden = !timed;
-    if (!timed) {
-      inputs.forEach((input) => write(input, ""));
-      wheels.hidden = true;
-    }
-    updateTimes();
   }
 
   function renderStrip(strip, index) {
@@ -111,7 +99,13 @@ export function bindCentralCalendarTimePicker(calendar) {
     updateTimes();
     fields[active].focus();
   });
-  modeButtons.forEach((button) => button.addEventListener("click", () => selectMode(button.dataset.timing === "timed")));
+  clear.addEventListener("click", () => {
+    inputs.forEach((input) => write(input, ""));
+    wheels.hidden = true;
+    fields.forEach((field) => field.setAttribute("aria-pressed", "false"));
+    updateTimes();
+    fields[0].focus();
+  });
   labels[0].parentElement.insertBefore(controls, labels[0]);
   labels.forEach((label, index) => {
     label.hidden = true;
@@ -124,5 +118,5 @@ export function bindCentralCalendarTimePicker(calendar) {
       editor.append(error);
     }
   });
-  selectMode(inputs.some((input) => input.value || input.getAttribute("aria-invalid") === "true"));
+  updateTimes();
 }
