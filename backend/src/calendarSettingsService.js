@@ -3,9 +3,9 @@
 // place). Plan: docs/ai/central-calendar-k2b-plan.md, sections 2-6 and 16
 // (D24 who writes, D30 hidden options, D33-D38); migration v51.
 //
-// Who: the active CLUB workspace only, on the basis eventWriteBasis gives a
-// club-owned event there (club_admin; a platform admin reaches a club
-// workspace only through that club's club_admin role, T6). Everyone else:
+// Who: the active CLUB workspace only, with its club_admin role and
+// calendar.settings.manage at that club. A platform admin in a club
+// workspace still needs the club_admin role (T6). Everyone else:
 // 403 on a collection route (workspace_required from the platform
 // workspace), the identical 404 on a route that names an id (ADR-006), and
 // the identical 400 for an id in a body (missing, foreign, archived and
@@ -23,10 +23,11 @@ import { pool } from "./db.js";
 import { boundedText, unitTokenOk } from "./metricTextRules.js";
 import { isIconKey } from "./iconKeys.js";
 import { isCalendarColorKey } from "./calendarColors.js";
-import { EventError, eventWriteBasis, forbidden, notFound } from "./calendarEventAccess.js";
+import { EventError, forbidden, notFound } from "./calendarEventAccess.js";
 import { EVENT_EXPECTS, eventCatalogOwner, expectsField, isUuid, listEventTypes, requestKeyOf, revisionField, textField } from "./calendarEventService.js";
 import { hashOf, runCalendarCommand } from "./calendarCommandRunner.js";
-import { isPlatformAdministrator } from "./authz.js";
+import { holdsClubAdminRole, isPlatformAdministrator } from "./authz.js";
+import { can, clubScope } from "./permissions.js";
 import { questionsOff, typeQuestions, validateDefaultQuestions } from "./calendarQuestions.js";
 
 export const EVENT_KINDS = Object.freeze(["training", "match", "travel", "meeting", "day_off", "camp", "test"]);
@@ -54,12 +55,9 @@ export function settingsClub(ctx, { withId = false } = {}) {
   if (ctx.workspace?.type === "platform") throw withId ? notFound() : workspaceRequired();
   if (ctx.workspace?.type !== "club") throw refuse();
   const clubId = String(ctx.workspace.scopeId);
-  // T6: a club workspace is offered only to the holders of that club's
-  // club_admin role (a platform admin included), and eventWriteBasis answers
-  // club_admin first — the one basis Settings -> Calendar writes on.
-  const basis = eventWriteBasis(ctx, { scope: "club", clubId, teamId: null, userId: null, teamClubId: null, teamActive: true, clubActive: true });
-  if (basis !== "club_admin") throw refuse();
-  return { clubId, basis };
+  if (ctx.readOnly === true || ctx.view || !holdsClubAdminRole(ctx.authz, clubId)
+    || !can(ctx.authz, "calendar.settings.manage", clubScope(clubId))) throw refuse();
+  return { clubId, basis: "club_admin" };
 }
 
 // ---------------------------------------------------------------------------
@@ -497,19 +495,12 @@ async function runSettingsCommand(ctx, { requestKey, canonical, subject }, apply
     userId: ctx.userId, requestKey, operation, label: "calendar-settings", subject: `${operation} in club ${clubId}`,
     requestsTable: "calendar.settings_requests", requestKeyConstraint: "settings_requests_one_per_key",
     busyMessage: BUSY, hooks: testHooks,
-    async prepare(client) {
+    async prepare(client, { recovery = false } = {}) {
       const hash = hashOf({ canonical, club: clubId, subject: withId ? `${subject.kind}:${subject.id}` : null });
-      if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
-      let lockScope = "club";
-      let lockOwner = clubId;
-      if (subject?.kind === "team") {
-        const team = (await client.query(`select t.club_id from public.teams t where t.id = $1`, [subject.id])).rows[0];
-        if (!team || String(team.club_id) !== clubId) throw notFound();
-        lockScope = "team";
-        lockOwner = subject.id;
-      }
+      if (!recovery && testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
       try {
-        await client.query(`select calendar.lock_event_writer($1, $2, $3, $4)`, [ctx.userId, lockScope, lockOwner, basis]);
+        await client.query(`select calendar.lock_settings_writer_checked($1, $2, $3)`,
+          [ctx.userId, clubId, subject?.kind === "team" ? subject.id : null]);
       } catch (error) {
         if (error?.code === "42501") throw withId ? notFound() : forbidden();
         throw error;
@@ -1072,7 +1063,7 @@ export async function setQuestionsSwitch(ctx, body) {
       if (!installed) throw refuse();
       const hash = hashOf({ canonical, club: clubId, subject: `club:${clubId}` });
       try {
-        await client.query(`select calendar.lock_event_writer($1, 'club', $2, $3)`, [ctx.userId, clubId, basis]);
+        await client.query(`select calendar.lock_questions_switch_checked($1, $2)`, [ctx.userId, clubId]);
       } catch (error) {
         if (error?.code === "42501") throw refuse();
         throw error;

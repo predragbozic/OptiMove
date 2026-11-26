@@ -240,18 +240,13 @@ test("2. the seed equals the code catalog: 12 modules, 52 words, 89 scope rows, 
   assert.equal((await one(`select to_regclass('public.module_switch_changes') as t`)).t, null);
 });
 
-test("2b. the text rule is a byte-for-byte copy of v40's; the honoured list of the database equals HONOURED_PERMISSIONS", async () => {
+test("2b. the text rule is a byte-for-byte copy of v40's; the database honours exactly the seven v84 words", async () => {
   const bodies = (await k.query(`select n.nspname, p.prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
       where (n.nspname, p.proname) in (('public', 'permission_text_ok'), ('training_load', 'source_metric_text_ok'))`)).rows;
   assert.equal(bodies.length, 2);
   assert.equal(bodies[0].prosrc, bodies[1].prosrc);
-  const { HONOURED_PERMISSIONS } = await import("../src/permissions.js");
   const honoured = (await k.query(`select word from public.permissions where public.permission_word_honoured(word) order by word`)).rows.map((r) => r.word);
-  // v84's twin is the list R2 checked. A word checked later (roles V-1: variables.view, presets.use) is storable since
-  // v92 (roles-r4-v92 compares that twin with STORABLE_PERMISSIONS), so it is not in v84's list (roles V-2 adds
-  // athletes.view, roles V-3 calendar.view, roles V-4 tests.view and tests.results.view).
-  const LATER = ["variables.view", "presets.use", "athletes.view", "calendar.view", "tests.view", "tests.results.view", "dashboards.view", "programs.view", "exercises.use", "load.view.team", "load.view.athlete"];
-  assert.deepEqual(honoured, HONOURED_PERMISSIONS.filter((w) => !LATER.includes(w)).sort());
+  assert.deepEqual(honoured, ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign"]);
 });
 
 test("2c. no v84 function body, CHECK, default, trigger definition or comment holds a literal the legacy-schema tool refuses (a schema-only dump of a database with v84 must stay generatable; the seed's literal ids are data, not schema)", async () => {

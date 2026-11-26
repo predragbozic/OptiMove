@@ -19,6 +19,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+import { calendarManageMigrations } from "./support/calendar-fixture.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -272,7 +273,7 @@ async function clubFixture(label) {
 // Setup
 // ---------------------------------------------------------------------------
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k2ab", roleRead: true, migrations: MIGRATIONS });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k2ab", migrations: calendarManageMigrations(MIGRATIONS) });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

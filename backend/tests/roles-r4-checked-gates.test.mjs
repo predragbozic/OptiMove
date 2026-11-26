@@ -97,7 +97,7 @@ const REVIEWED = Object.freeze({
   "calendarEventAccess.js": 7,
   // V-3: calendar.view on a coach workspace (its club or team scope), and the club of a team view scope (the gate's).
   "calendarModuleContext.js": 2,
-  "calendarEventService.js": 5, // V-3: the catalog owner of a view workspace's GET /types (the club or team it names)
+  "calendarEventService.js": 8, // V-3 catalog owner and M-1 checked writers use the already authorized workspace
   "calendarQuery.js": 12,
   "calendarQuestionService.js": 2,
   "calendarSettingsService.js": 3,

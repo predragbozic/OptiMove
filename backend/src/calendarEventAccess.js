@@ -10,6 +10,7 @@
 // only decides what to ask the database for, never grants anything by itself.
 import { holdsClubAdminRole, holdsTeamCoachRole, isPlatformAdministrator } from "./authz.js";
 import { membershipOnDaySql } from "./calendarAccess.js";
+import { can, clubScope, teamScope } from "./permissions.js";
 
 export class EventError extends Error {
   constructor(status, code, message, details) {
@@ -84,12 +85,13 @@ export function eventWriteBasis(ctx, owner) {
   if (ws.type === "club") {
     const club = String(ws.scopeId);
     const inClub = (owner.scope === "club" && owner.clubId === club) || (owner.scope === "team" && owner.teamClubId === club);
-    if (!inClub) return null;
+    if (!inClub || !can(authz, "calendar.events.manage", clubScope(club))) return null;
     if (!clubArchived && holdsClubAdminRole(authz, club)) return "club_admin";
     return platform;
   }
   if (ws.type === "team") {
     if (owner.scope !== "team" || owner.teamId !== String(ws.scopeId)) return null;
+    if (!can(authz, "calendar.events.manage", teamScope(String(ws.scopeId)))) return null;
     if (!teamArchived && !clubArchived && holdsTeamCoachRole(authz, owner.teamId)) return "team_coach";
     if (!clubArchived && owner.teamClubId && holdsClubAdminRole(authz, owner.teamClubId)) return "club_admin";
     return platform;

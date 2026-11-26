@@ -18,7 +18,9 @@ import { asActor, buildDatabase, fixtures, MIGRATIONS, migrationsWithout, RUNBOO
 // The migrations that replace v92's bodies (and so need v92's to be in force): a database built without v92 leaves them
 // out too. v96 (the licence hierarchy) replaces user_has_permission and permission_club_rule7_ok.
 const V92_DEPENDENTS = ["202611271000_roles_v95_closed_module_dominance.sql", "202611281000_roles_v96_licence_hierarchy.sql"];
-const UP_TO_V92 = migrationsWithout(V92_DEPENDENTS, "all");
+const BEFORE_CALENDAR_MANAGE = "202611291000_training_load_v97_references.sql";
+const UP_TO_V92 = migrationsWithout(V92_DEPENDENTS, BEFORE_CALENDAR_MANAGE);
+const UP_TO_V97 = migrationsWithout([], BEFORE_CALENDAR_MANAGE);
 
 const V93_FILE = "202611251000_calendar_v93_event_delete.sql";
 const VIEW = ["athletes.view", "programs.view", "exercises.use", "presets.use", "calendar.view", "load.view.team",
@@ -27,7 +29,7 @@ const ORIGINAL_DATABASE_URL = process.env.DATABASE_URL;
 
 let db, k, F, srv, authz, perms;
 before(async () => {
-  db = await buildDatabase({ label: "r4v92", upTo: "all" });
+  db = await buildDatabase({ label: "r4v92", upTo: BEFORE_CALENDAR_MANAGE });
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   F = fixtures(k);
@@ -40,6 +42,7 @@ after(async () => {
   await k?.end().catch(() => {});
   await db?.drop();
   UP_TO_V92.cleanup();
+  UP_TO_V97.cleanup();
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
 });
 
@@ -135,7 +138,7 @@ test("1. both orders against v93: fresh (v92 then v93 by name) and production (v
   const fresh = await k.query(`select migration_name from public.schema_migrations where migration_name in ($1, $2) order by applied_at, migration_name`, [V92_NAME, `migrations_v2/${V93_FILE}`]).catch(() => null);
   assert.ok(fresh, "schema_migrations readable");
   const freshCatalog = await v92Catalog(k);
-  const prod = await buildDatabase({ label: "r4v92_prod", upTo: "all", skip: [V92_FILE, ...V92_DEPENDENTS] });
+  const prod = await buildDatabase({ label: "r4v92_prod", upTo: BEFORE_CALENDAR_MANAGE, skip: [V92_FILE, ...V92_DEPENDENTS] });
   const c = new pg.Client({ connectionString: prod.url });
   await c.connect();
   try {
@@ -145,10 +148,10 @@ test("1. both orders against v93: fresh (v92 then v93 by name) and production (v
     const rec = (await c.query(`select checksum from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows[0];
     assert.equal(rec.checksum, crypto.createHash("sha256").update(fs.readFileSync(path.join(MIGRATIONS, V92_FILE))).digest("hex"));
     // Then what builds on v92 (v95), as production meets it after v92: the same objects as the fresh world.
-    await runMigrations({ databaseUrl: prod.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: prod.url, migrationsRoot: UP_TO_V97.dir });
     assert.deepEqual(await v92Catalog(c), freshCatalog);
     // The runner again: skipped by its checksum.
-    await runMigrations({ databaseUrl: prod.url, migrationsRoot: MIGRATIONS });
+    await runMigrations({ databaseUrl: prod.url, migrationsRoot: UP_TO_V97.dir });
     assert.equal((await c.query(`select count(*)::int as n from public.schema_migrations where migration_name = $1`, [V92_NAME])).rows[0].n, 1);
   } finally { await c.end(); await prod.drop(); }
 });
@@ -167,15 +170,15 @@ test("2. the seed: Club admin and Team coach get exactly the view words of 4.1, 
   for (const key of ["platform_admin", "independent_coach"]) {
     assert.equal((await one(`select count(*)::int as n from public.permission_role_changes where role_id = $1 and migration_name = $2`, [ROLE_IDS[key], V92_NAME])).n, 0);
   }
-  // The storable list of the database equals the code twin.
+  // Historical SQL checks the v84 plus VIEW list, before Calendar MANAGE.
   const storable = [];
   for (const p of (await k.query(`select word from public.permissions`)).rows) if ((await one(`select public.permission_word_honoured($1) as ok`, [p.word])).ok) storable.push(p.word);
-  assert.deepEqual(storable.sort(), [...perms.STORABLE_PERMISSIONS].sort());
+  assert.deepEqual(storable.sort(), ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign", ...VIEW].sort());
   assert.deepEqual([...perms.HONOURED_PERMISSIONS].sort(), Object.keys(perms.ENFORCED_PERMISSIONS).sort());
 });
 
 test("3. old-vs-new of the twin: before and after v92 every account answers identically for every word, apart from the view words the seed gave to their holders", async () => {
-  const pre = await buildDatabase({ label: "r4v92_old", upTo: "all", skip: [V92_FILE, ...V92_DEPENDENTS] });
+  const pre = await buildDatabase({ label: "r4v92_old", upTo: BEFORE_CALENDAR_MANAGE, skip: [V92_FILE, ...V92_DEPENDENTS] });
   const c = new pg.Client({ connectionString: pre.url });
   await c.connect();
   try {
@@ -500,7 +503,7 @@ test("12. a later migration seeds a word into live versions and customs (H2), th
   // Through the runner: a temporary folder holding every migration plus the seed file.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "r4v92-h2-"));
   const dir = path.join(root, "migrations_v2"); fs.mkdirSync(dir);
-  for (const f of fs.readdirSync(MIGRATIONS)) if (f.endsWith(".sql")) fs.copyFileSync(path.join(MIGRATIONS, f), path.join(dir, f));
+  for (const f of fs.readdirSync(UP_TO_V97.dir)) if (f.endsWith(".sql")) fs.copyFileSync(path.join(UP_TO_V97.dir, f), path.join(dir, f));
   const name = "209901010000_test_h2_seed.sql";
   fs.writeFileSync(path.join(dir, name), `select public.lock_club_ceiling(array['${w.club}']::uuid[], 'exclusive');
 update public.permission_club_role_versions set revision = revision + 1 where id = '${v}';
@@ -538,7 +541,7 @@ test("14. the rollback: refused after real writes; clean, it restores v84's bodi
   const rollback = fs.readFileSync(path.join(RUNBOOKS, "roles-layers-v92-rollback.sql"), "utf8");
   await refused(k.query(rollback), "23514", /v92 rollback refused/);
   await k.query("rollback"); // the file's own BEGIN left the refused transaction open on this connection
-  const pre = await buildDatabase({ label: "r4v92_rb", upTo: "all", skip: [V92_FILE, ...V92_DEPENDENTS] });
+  const pre = await buildDatabase({ label: "r4v92_rb", upTo: BEFORE_CALENDAR_MANAGE, skip: [V92_FILE, ...V92_DEPENDENTS] });
   const c = new pg.Client({ connectionString: pre.url }); await c.connect();
   try {
     const catalog = async () => (await c.query(`select p.proname || ':' || md5(p.prosrc) as x from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like any (array['permission%', 'user_has%', 'user_holds%', 'lock_%'])
@@ -786,7 +789,7 @@ test("20. the rollback refuses after a later migration was applied and after a b
       await x.query(`insert into public.permission_role_changes (role_id, revision_after, kind, performed_by_user_id, basis, reason, items_removed) values ($1, $2, 'change', $3, 'platform_admin', 'x', '{athletes.remove}')`, [ROLE_IDS.team_coach, rev, pa]);
     })],
   ]) {
-    const pre = await buildDatabase({ label: "r4v92_rbref", upTo: "all", skip: [V92_FILE, ...V92_DEPENDENTS] });
+    const pre = await buildDatabase({ label: "r4v92_rbref", upTo: BEFORE_CALENDAR_MANAGE, skip: [V92_FILE, ...V92_DEPENDENTS] });
     const c = new pg.Client({ connectionString: pre.url }); await c.connect();
     try {
       await runMigrations({ databaseUrl: pre.url, migrationsRoot: UP_TO_V92.dir });

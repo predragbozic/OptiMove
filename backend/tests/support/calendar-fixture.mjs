@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
 import pg from "pg";
-import { createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS } from "../_gpexe-disposable-db.mjs";
+import { createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS, ROLE_READ_MIGRATIONS } from "../_gpexe-disposable-db.mjs";
 
 export const CALENDAR_TESTS_MIGRATIONS = Object.freeze([
   "202608220900_tests_v42_schema.sql",
@@ -53,6 +53,17 @@ export function calendarMigrations({ upTo = null } = {}) {
   return upTo ? all.filter((m) => m <= upTo) : all;
 }
 
+// Build the current Calendar writer schema for HTTP fixtures. Historical SQL
+// rehearsals keep their original migration lists and never call this helper.
+export const CALENDAR_MANAGE_MIGRATION = "202611301000_calendar_v98_manage_permissions.sql";
+export function calendarManageMigrations(migrations) {
+  return [...new Set([
+    ...migrations, ...ROLE_READ_MIGRATIONS, ...CALENDAR_EXTRA_TRAINING_LOAD_MIGRATIONS,
+    "202611041100_training_load_v54_rights_locks_users_first.sql", ...CALENDAR_QUESTIONS_MIGRATIONS,
+    ...CALENDAR_DELETE_MIGRATIONS, CALENDAR_MANAGE_MIGRATION,
+  ])];
+}
+
 export const uid = () => crypto.randomBytes(4).toString("hex");
 export const newKey = () => crypto.randomUUID();
 
@@ -67,9 +78,7 @@ export function addDays(iso, days) {
 export async function startCalendarApp({ label, migrations = calendarMigrations() }) {
   const baseDatabaseUrl = process.env.DATABASE_URL;
   if (!baseDatabaseUrl) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
-  // Roles V-3: every calendar route asks can(calendar.view) for a coach workspace, so the server needs the role read
-  // (v84, v92) even on a database a suite builds only up to an earlier migration (a no-op when its list has them).
-  const db = await createGpexeDisposableDb({ baseDatabaseUrl, label, migrations, roleRead: true });
+  const db = await createGpexeDisposableDb({ baseDatabaseUrl, label, migrations: calendarManageMigrations(migrations) });
   const admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

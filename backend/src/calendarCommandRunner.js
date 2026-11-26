@@ -131,6 +131,7 @@ export async function runCalendarCommand(spec) {
     if (spec.beforeRequestRow) await spec.beforeRequestRow(client, out, prepared);
     await spec.writeRecord({ client, requestId, out, prepared, hash });
     if (spec.beforeCommit) await spec.beforeCommit(client, out);
+    if (requestsTable !== "calendar.event_deletion_log") await client.query("select calendar.record_m1_write()");
     commitSent = true;
     const committing = Promise.resolve().then(() => (hooks.commit ? hooks.commit(client) : client.query("commit")));
     committing.catch(() => {});
@@ -146,12 +147,13 @@ export async function runCalendarCommand(spec) {
       if (error?.code === "23505" && error.constraint === requestKeyConstraint && hash) {
         let found;
         try {
-          found = await findStoredResult(requestsTable, userId, requestKey, hash, hooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS, hooks);
+          found = await findStoredAnswer(spec, hash, hooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS, { replayed: true });
         } catch (checkError) {
+          if (checkError instanceof EventError) throw checkError;
           console.error(`[${spec.label}] checking a racing ${operation} failed: ${checkError?.message}`);
           throw new EventError(409, "try_again", busyMessage);
         }
-        if (found) return { ...(await savedAnswer(spec, pool, found, { replayed: true })), replayed: true };
+        if (found) return { ...found, replayed: true };
         throw requestKeyReused();
       }
       throw error;
@@ -167,13 +169,14 @@ export async function runCalendarCommand(spec) {
     client.release(true);
     let found = null;
     try {
-      found = await findStoredResult(requestsTable, userId, requestKey, hash, hooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS, hooks);
+      found = await findStoredAnswer(spec, hash, hooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS, { verifiedAfterCommitError: true });
     } catch (checkError) {
+      if (checkError instanceof EventError) throw checkError;
       console.error(`[${spec.label}] checking ${operation} after an unconfirmed COMMIT failed: ${checkError?.message}`);
     }
     if (found) {
       runAfterCommit(spec, out);
-      return { ...(await savedAnswer(spec, pool, found, { verifiedAfterCommitError: true })), verifiedAfterCommitError: true };
+      return { ...found, verifiedAfterCommitError: true };
     }
     throw new EventError(503, "outcome_unknown", OUTCOME_UNKNOWN);
   } finally {
@@ -209,9 +212,10 @@ async function savedAnswer(spec, queryable, stored, extra) {
   }
 }
 
-// Is the request committed? Bounded as a whole on a new connection (the
-// roster commands' findStoredResult). Returns the stored result, or null.
-async function findStoredResult(requestsTable, userId, requestKey, hash, ms, hooks) {
+// Does the committed receipt belong to a still-authorized writer? Bound the
+// lookup, permission locks and projection together using a fresh transaction.
+async function findStoredAnswer(spec, hash, ms, extra) {
+  const { requestsTable, userId, requestKey, hooks = {} } = spec;
   const deadline = Date.now() + ms;
   const left = () => Math.max(1, deadline - Date.now());
   const connecting = pool.connect();
@@ -227,14 +231,20 @@ async function findStoredResult(requestsTable, userId, requestKey, hash, ms, hoo
   checker.on("error", onErr);
   try {
     if (hooks.checkFault) await hooks.checkFault(checker);
-    const answer = checker.query({
-      text: `select request_hash, result from ${requestsTable} where performed_by_user_id = $1 and request_key = $2`,
-      values: [userId, requestKey],
-      query_timeout: left(),
+    await withinBound(checker.query("begin"), left());
+    await withinBound(checker.query(`set local lock_timeout = '${left()}ms'`), left());
+    const lookup = checker.query({
+      text: `select * from ${requestsTable} where performed_by_user_id = $1 and request_key = $2`,
+      values: [userId, requestKey], query_timeout: left(),
     });
-    answer.catch(() => {});
-    const row = (await withinBound(answer, left())).rows[0];
-    return row && row.request_hash === hash ? row.result : null;
+    const row = (await withinBound(lookup, left())).rows[0];
+    let answer = null;
+    if (row?.request_hash === hash) {
+      const prepared = await withinBound(spec.prepare(checker, { recovery: true }), left());
+      if (spec.sameRequest(row, prepared)) answer = await withinBound(savedAnswer(spec, checker, row.result, extra), left());
+    }
+    await withinBound(checker.query("rollback"), left());
+    return answer;
   } catch (error) {
     bad = true;
     throw error;

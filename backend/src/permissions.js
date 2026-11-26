@@ -227,6 +227,9 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "athletes.view": Object.freeze(["access.js", "positionService.js", "routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js"]),
   // Roles V-3 (docs/ai/roles-v-steps-plan.md section 2.4): the calendar (reads, events, Settings -> Calendar).
   "calendar.view": Object.freeze(["calendarModuleContext.js"]),
+  // Roles M-1: active-workspace event writes and the active club's Calendar Settings are independent.
+  "calendar.events.manage": Object.freeze(["calendarEventAccess.js"]),
+  "calendar.settings.manage": Object.freeze(["calendarSettingsService.js"]),
   // Roles V-4 (docs/ai/roles-v-steps-plan.md section 2.5): the Tests module (schedules; results and the per-athlete group).
   "tests.view": Object.freeze(["testsAccess.js"]),
   "tests.results.view": Object.freeze(["testsAccess.js"]),

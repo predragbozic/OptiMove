@@ -84,11 +84,11 @@ async function clubAdminItems(pa, items) {
   const rev = await revision(ROLE_IDS.club_admin);
   return ok(await change(pa, ROLE_IDS.club_admin, { expectedRevision: rev, items }));
 }
-// Since v92 (roles R4-1) Club admin and Team coach also hold the VIEW package's words; they are locked (unchecked), so
-// a change that sends the full item list keeps them.
+// Full lists for a current database: the VIEW seed and the Calendar M-1 words already held by the basic roles.
 const VIEW_SEED = ["athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team",
   "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"];
-const CLUB_ADMIN_SEED = ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign", ...VIEW_SEED];
+const TEAM_COACH_SCOPE_SEED = [...VIEW_SEED, "calendar.events.manage"];
+const CLUB_ADMIN_SEED = ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign", "calendar.settings.manage", ...TEAM_COACH_SCOPE_SEED];
 
 // ---------------------------------------------------------------------------
 // Ceiling and dominance
@@ -110,7 +110,7 @@ test("17. ceiling: a club's admin adds a word it does not hold, a platform-only 
   } finally {
     await clubAdminItems(w.pa, CLUB_ADMIN_SEED);
   }
-  code(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), items: ["org.view", "athletes.manage", "athletes.remove", "import.check", ...VIEW_SEED] }), 409, "permission_not_honoured");
+  code(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: await revision(ROLE_IDS.team_coach), items: ["org.view", "athletes.manage", "athletes.remove", "import.check", ...TEAM_COACH_SCOPE_SEED] }), 409, "permission_not_honoured");
   // A club's own role holding athletes.remove, held by one person: the narrowing does not reach it (S4).
   const own = ok(await createRole(w.adminA, { clubId: w.A, items: ["athletes.remove"] })).role;
   ok(await grant(w.adminA, { userId: w.target.id, roleId: own.id, scopeType: "club", scopeId: w.A }));
@@ -121,14 +121,14 @@ test("17. ceiling: a club's admin adds a word it does not hold, a platform-only 
     where r.owner_scope = 'club' and r.archived_at is null`);
   assert.ok(expected.roles >= 1 && expected.people >= 1);
   const rev = await revision(ROLE_IDS.team_coach);
-  const removed = ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: rev, items: ["org.view", "athletes.manage", ...VIEW_SEED] }));
-  assert.deepEqual(removed.role.items, ["athletes.manage", "org.view", ...VIEW_SEED].sort());
+  const removed = ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: rev, items: ["org.view", "athletes.manage", ...TEAM_COACH_SCOPE_SEED] }));
+  assert.deepEqual(removed.role.items, ["athletes.manage", "org.view", ...TEAM_COACH_SCOPE_SEED].sort());
   assert.ok(removed.affected.people >= 1 && removed.affected.clubs >= 1, JSON.stringify(removed.affected));
   assert.deepEqual(removed.affected.clubRolesKeepingRemovedWords, expected);
   assert.deepEqual((await one(`select array_agg(permission_word) as w from public.permission_role_items where role_id = $1`, [own.id])).w, ["athletes.remove"], "the club's own role keeps the word");
   const record = await one(`select kind, basis, items_removed, reason from public.permission_role_changes where role_id = $1 and revision_after = $2`, [ROLE_IDS.team_coach, rev + 1]);
   assert.deepEqual(record, { kind: "change", basis: "platform_admin", items_removed: ["athletes.remove"], reason: "Change" });
-  ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: rev + 1, items: ["org.view", "athletes.manage", "athletes.remove", ...VIEW_SEED] }));
+  ok(await change(w.pa, ROLE_IDS.team_coach, { expectedRevision: rev + 1, items: ["org.view", "athletes.manage", "athletes.remove", ...TEAM_COACH_SCOPE_SEED] }));
   // V-5b completes the view package; all stored view words are now checked.
 });
 

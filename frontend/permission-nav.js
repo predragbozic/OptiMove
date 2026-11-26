@@ -25,6 +25,12 @@ export function holdsPermission(word, legacy = true, user = state.currentUser) {
   return held ? held.has(word) : legacy;
 }
 
+// Calendar's new-event entry points share the server's active-workspace permission.
+export function canCreateCalendarEvents(workspaceType, user = state.currentUser) {
+  return workspaceType === "private_coach" || ((workspaceType === "club" || workspaceType === "team")
+    && holdsPermission("calendar.events.manage", user?.permissionsUnavailable !== true, user));
+}
+
 // Settings tabs (and the sidebar's Settings entries) that a honoured word decides. Any other tab is not listed here.
 const SETTINGS_TAB_WORDS = Object.freeze({
   overview: ["org.view"],

@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+import { calendarManageMigrations } from "./support/calendar-fixture.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -277,7 +278,7 @@ async function clubFixture(label) {
 // Setup
 // ---------------------------------------------------------------------------
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k2a", roleRead: true, migrations: MIGRATIONS });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "k2a", migrations: calendarManageMigrations(MIGRATIONS) });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -1298,7 +1299,7 @@ test("19. two creates with the same key at the same time: the second meets the u
   const meeting = await typeOf(c.clubAdmin.cookie, "meeting");
   const e0 = (await createEvent(c.clubAdmin.cookie, { eventTypeId: meeting.id, title: "First", day: FUTURE, notes: "secret", targets: [{ kind: "club", id: c.clubId }] })).body.event;
   const stored = (await q(`select result from calendar.event_requests where event_id = $1`, [e0.id]))[0].result;
-  assert.deepEqual(Object.keys(stored).sort(), ["eventId", "httpStatus"], "the request record holds ids only");
+  assert.deepEqual(stored, { eventId: e0.id, httpStatus: 201, counts: { questionsAsked: [], questionsSkipped: [], dayOffCancelled: 0 } }, "the receipt has ids and existing question counts, no event contents");
   assert.equal(JSON.stringify(stored).includes("secret"), false);
   const hooks = eventService.testHooks;
   const key = newKey();

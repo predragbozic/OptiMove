@@ -473,6 +473,16 @@ test("4a. New event only in a club, team or private-coach workspace; never in th
   assert.equal(dom().querySelector('[data-action="central-calendar-new-event"]'), null, "nothing before the answer says the workspace");
 });
 
+test("M-1: reading the calendar or managing its settings does not offer New event", async () => {
+  state.currentUser.permissions = ["calendar.view", "calendar.settings.manage"];
+  installFetchMock(server());
+  await loadCentralCalendar({ render });
+  assert.equal(dom().querySelector('[data-action="central-calendar-new-event"]'), null);
+  state.currentUser.permissions = ["calendar.view", "calendar.events.manage"];
+  render();
+  assert.ok(dom().querySelector('[data-action="central-calendar-new-event"]'));
+});
+
 test("4b. Edit and Cancel event only on an event whose card says canManage and that is not cancelled; the panel shows its facts and gaps", async () => {
   const calls = installFetchMock(server());
   await loadCentralCalendar({ render });
