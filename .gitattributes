@@ -132,3 +132,7 @@ backend/scripts/dashboard-references-* text eol=lf
 migrations_v2/202611301000_calendar_v98_manage_permissions.sql text eol=lf
 docs/runbooks/calendar-m1-v98*.sql text eol=lf
 backend/scripts/calendar-m1-v98-rehearsal.sh text eol=lf
+
+# Training Load M-2 checksum and rehearsal SQL.
+migrations_v2/202612011000_training_load_v99_schedule_manage_bridge.sql text eol=lf
+docs/runbooks/training-load-m2-v99-*.sql text eol=lf

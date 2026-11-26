@@ -9,6 +9,7 @@
 // training-load-external-scheduling.test.mjs; this file is scoped to the
 // API surface built on top of that schema.
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
+import { applyExternalScheduleBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import fsp from "node:fs/promises";
@@ -263,6 +264,7 @@ before(async () => {
   migrationsDir = await writeMigrationsDir("primary", files);
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
   await applyRoleReadMigrations(db.url);
+  await applyExternalScheduleBridgeForCuratedFixture(db.url);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");
@@ -511,7 +513,7 @@ test("A8. a dual-role coach (club_admin of BOTH Club A and Club B) is scoped to 
   assert.equal(updateAWhileB.status, 404, "PATCH on the Club A schedule while Club B is active must 404");
 
   const remindAWhileB = await api(`/api/training-load/external-schedules/${scheduleAId}/remind`, { method: "POST", cookie: coachCookie, body: { assignmentIds: [crypto.randomUUID()] } });
-  assert.equal(remindAWhileB.status, 403, "a manual reminder against the Club A schedule while Club B is active must be a controlled 403, not silently processed");
+  assert.equal(remindAWhileB.status, 404, "a manual reminder against a foreign schedule is indistinguishable from a missing schedule");
 
   const createTargetingAWhileB = await api("/api/training-load/external-schedules", { method: "POST", cookie: coachCookie, body: scheduleBody({ eventName: "should also fail", targets: [{ kind: "athlete", id: athleteAId }] }) });
   assert.equal(createTargetingAWhileB.status, 403, "targeting Club A's athlete while Club B is the active workspace must be rejected");
@@ -857,11 +859,14 @@ test("E6. only a currently pending/eligible assignment within its own window is 
   assert.equal(closedResult.outcome, "skippedClosed");
 });
 
-test("E7. a coach outside this schedule's workspace access gets an explicit 403, never able to trigger a reminder", async () => {
+test("E7. a coach outside this schedule's workspace gets the same 404 as a missing schedule", async () => {
   const { scheduleId, assignmentId } = await makeReadyAssignment("e7a");
   const outside = await makeClubWithAthletes("e7b", 1);
   const res = await api(`/api/training-load/external-schedules/${scheduleId}/remind`, { method: "POST", cookie: outside.coachCookie, body: { assignmentIds: [assignmentId] } });
-  assert.equal(res.status, 403);
+  const missing = await api(`/api/training-load/external-schedules/${crypto.randomUUID()}/remind`, { method: "POST", cookie: outside.coachCookie, body: { assignmentIds: [assignmentId] } });
+  assert.equal(res.status, 404);
+  assert.equal(missing.status, 404);
+  assert.deepEqual(res.body, missing.body);
 });
 
 // ------------------------------------------------------------

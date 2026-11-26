@@ -31,7 +31,7 @@ let eventHooks;
 let questionHooks;
 
 before(async () => {
-  env = await startCalendarApp({ label: "k2b2q" });
+  env = await startCalendarApp({ label: "k2b2q", scheduleBridge: true });
   ({ q, api, fx } = env);
   // The fixture's legacy scaffold has no in-app notifications table: the
   // real one's shape (legacy schema + 202608280900's dedupe index).
