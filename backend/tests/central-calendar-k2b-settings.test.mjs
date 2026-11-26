@@ -262,8 +262,16 @@ test("0c. GET /events/types: the types as before (T2), additively each type's co
 // 1. The migration
 // ---------------------------------------------------------------------------
 test("1a. v51 is recorded once, with its objects and the seed exactly; the post-check reads as expected on the fresh database", async () => {
-  const client = await rawClient();
-  const post = await runbookBlocks(client, "calendar-settings-v51-postcheck.sql");
+  const historical = await createGpexeDisposableDb({ baseDatabaseUrl: env.db.url, label: "k2b51post", migrations: calendarMigrations({ upTo: V51 }) });
+  const client = new pg.Client({ connectionString: historical.url });
+  let post;
+  try {
+    await client.connect();
+    post = await runbookBlocks(client, "calendar-settings-v51-postcheck.sql");
+  } finally {
+    await client.end();
+    await historical.drop();
+  }
   assert.equal(Number(post[0].v51_rows), 1);
   assert.equal(Number(post[0].later_rows), 0);
   assert.equal(post[0].last_migration, `migrations_v2/${V51}`);

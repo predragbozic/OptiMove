@@ -8,6 +8,7 @@ let world;
 let matrix;
 let cases;
 let event;
+let savedTeamDelete;
 const missing = Object.freeze({ error: "notFound", message: "Not found." });
 
 before(async () => {
@@ -30,6 +31,20 @@ before(async () => {
   });
   assert.equal(created.status, 201, created.text);
   event = created.body.event;
+  const native = await world.api("/api/calendar/events", {
+    method: "POST", cookie: roles.teamCoach.cookie, body: {
+      requestKey: newKey(), eventTypeId, title: "M-1 native team", day: "2026-11-28",
+      timezone: "UTC", targets: [{ kind: "team", id: teams.t1 }],
+    },
+  });
+  assert.equal(native.status, 201, native.text);
+  const deletedId = native.body.event.id;
+  savedTeamDelete = { path: `/api/calendar/events/${deletedId}/delete`,
+    body: { requestKey: newKey(), expectedRevision: native.body.event.revision } };
+  const deleted = await world.api(savedTeamDelete.path, { method: "POST", cookie: roles.teamCoach.cookie, body: savedTeamDelete.body });
+  assert.deepEqual(deleted.body, { deleted: true, eventId: deletedId });
+  const replay = await world.api(savedTeamDelete.path, { method: "POST", cookie: roles.teamCoach.cookie, body: savedTeamDelete.body });
+  assert.deepEqual(replay.body, { deleted: true, eventId: deletedId, replayed: true });
   // Rule 7: Club admin remains a superset of the club's Team coach version.
   for (const [roleId, remove] of [
     [ROLE_IDS.team_coach, ["calendar.events.manage"]],
@@ -102,4 +117,97 @@ test("M-1: post-cutover old lock and v93 delete refuse, the checked path can sti
   assert.deepEqual(replay.body, { deleted: true, eventId: id, replayed: true });
   assert.deepEqual(await world.q("select writer_workspace_type,writer_workspace_id from calendar.event_deletion_log where event_id=$1", [id]),
     [{ writer_workspace_type: "club", writer_workspace_id: clubs.c1 }]);
+});
+
+test("M-1: a deleted-event receipt becomes unavailable after removing the writer's permission", async () => {
+  const res = await world.api(savedTeamDelete.path, { method: "POST", cookie: matrix.roles.teamCoach.cookie, body: savedTeamDelete.body });
+  assert.equal(res.status, 404, res.text);
+  assert.deepEqual(res.body, missing);
+  const receipts = await world.q("select count(*)::int as count from calendar.event_deletion_log where request_key=$1", [savedTeamDelete.body.requestKey]);
+  assert.deepEqual(receipts, [{ count: 1 }]);
+});
+
+async function nativeClub(label) {
+  const clubId = await world.fx.makeClub(label);
+  const admin = await world.fx.clubAdminOf(clubId, `${label} admin`);
+  const types = await world.api("/api/calendar/events/types", { cookie: admin.cookie });
+  assert.equal(types.status, 200, types.text);
+  const eventTypeId = types.body.types.find((type) => type.kind === "training").id;
+  return { clubId, admin, body: {
+    requestKey: newKey(), eventTypeId, title: label, day: "2026-11-28", timezone: "UTC",
+    targets: [{ kind: "club", id: clubId }],
+  } };
+}
+
+async function closeCalendar(clubId) {
+  const response = await world.api(`/api/organization/roles/clubs/${clubId}/ceiling`, {
+    method: "POST", cookie: matrix.roles.platformAdmin.cookie,
+    body: { requestKey: newKey(), close: ["calendar"], open: [], reason: "M-1 transaction race" },
+  });
+  assert.equal(response.status, 200, response.text);
+}
+
+test("M-1: a Calendar licence closed after JS authorization makes the checked DB write refuse", async () => {
+  const { clubId, admin, body } = await nativeClub("M-1 SQL race");
+  const { testHooks } = await import("../src/calendarEventService.js");
+  const recorded = [];
+  testHooks.beforeLocks = async ({ client }) => {
+    await closeCalendar(clubId);
+    const query = client.query.bind(client);
+    client.query = (...args) => {
+      recorded.push(args[0]);
+      return query(...args);
+    };
+    testHooks.restoreQuery = () => { client.query = query; };
+  };
+  try {
+    const response = await world.api("/api/calendar/events", { method: "POST", cookie: admin.cookie, body });
+    assert.equal(response.status, 403, response.text);
+    assert.deepEqual(response.body, { error: "Forbidden" });
+    assert.match(recorded[0], /select calendar\.lock_event_writer_checked\(/);
+    assert.equal(recorded.at(-1), "rollback");
+    assert.equal(recorded.some((sql) => /^\s*(insert|update|delete)\b/i.test(sql)), false);
+    assert.deepEqual(await world.q("select id from calendar.event_requests where request_key=$1", [body.requestKey]), []);
+  } finally {
+    testHooks.restoreQuery?.();
+    delete testHooks.restoreQuery;
+    delete testHooks.beforeLocks;
+  }
+});
+
+test("M-1: an unconfirmed COMMIT never returns a saved receipt once the writer has been revoked", async () => {
+  const { clubId, admin, body } = await nativeClub("M-1 uncertain COMMIT");
+  const { testHooks } = await import("../src/calendarEventService.js");
+  testHooks.commit = async (client) => {
+    await client.query("commit");
+    await closeCalendar(clubId);
+    throw new Error("M-1 test lost the commit answer");
+  };
+  try {
+    const response = await world.api("/api/calendar/events", { method: "POST", cookie: admin.cookie, body });
+    assert.equal(response.status, 403, response.text);
+    assert.deepEqual(response.body, { error: "Forbidden" });
+    assert.deepEqual(await world.q("select count(*)::int as count from calendar.event_requests where request_key=$1", [body.requestKey]), [{ count: 1 }]);
+  } finally {
+    delete testHooks.commit;
+  }
+});
+
+test("M-1: foreign and missing team defaults give the same refusal even while the foreign team is locked", async () => {
+  const { roles, teams } = matrix;
+  await world.admin.query("begin");
+  try {
+    await world.admin.query("select id from public.teams where id=$1 for update", [teams.u1]);
+    const change = (teamId) => world.api(`/api/calendar/settings/teams/${teamId}`, {
+      method: "PUT", cookie: roles.platformInClub.cookie,
+      body: { requestKey: newKey(), expectedRevision: 0, colorKey: "teal" },
+    });
+    const foreign = await change(teams.u1);
+    const nonexistent = await change(newKey());
+    assert.equal(foreign.status, 404, foreign.text);
+    assert.equal(foreign.text, nonexistent.text);
+    assert.deepEqual(foreign.body, missing);
+  } finally {
+    await world.admin.query("rollback");
+  }
 });

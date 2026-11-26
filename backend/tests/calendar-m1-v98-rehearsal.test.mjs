@@ -98,6 +98,17 @@ test("v98 rehearses live layers, reversible apply, identical catalogue, reapply,
       from public.permission_club_role_versions v join public.permission_roles r on r.id=v.system_role_id where v.id=$1`, [data.versionId])).rows
       .map(({ revision, based_on_revision, answered_revision, base }) => [revision,based_on_revision===base,answered_revision===base]), [[2,true,true]]);
     assert.deepEqual((await admin.query("select revision from public.permission_custom_roles where id=$1", [data.customId])).rows, [{ revision: 2 }]);
+    const future = "migrations_v2/209912311000_later_calendar_rehearsal.sql";
+    await admin.query("insert into public.schema_migrations (migration_name,checksum,runner_version) values ($1,$2,'test')", [future,"b".repeat(64)]);
+    await assert.rejects(admin.query(read("rollback")), /later migration/);
+    await admin.query("rollback");
+    await admin.query("delete from public.schema_migrations where migration_name=$1", [future]);
+
+    await admin.query("begin");
+    await admin.query("select calendar.record_m1_write()");
+    await assert.rejects(admin.query(read("rollback")), /activated or used/);
+    await admin.query("rollback");
+
     await admin.query(read("rollback"));
     assert.deepEqual(await snapshot(admin), before);
     await runMigrations({ databaseUrl: db.url, migrationsRoot: staged.dir });

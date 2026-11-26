@@ -12,7 +12,7 @@ with expected(signature, body_md5) as (values
   ('calendar.lock_event_writer_basis(uuid,character varying,uuid,character varying)', '7ebf1bcf39cbb930fb913d89f25fd406'),
   ('calendar.lock_m1_owner(character varying,uuid)', '180ccf855e3a4d0ddbf72db65cf820e5'),
   ('calendar.lock_event_writer_checked(uuid,character varying,uuid,character varying,character varying,uuid)', '6dc716ecceeedc6635d52e1d59249d86'),
-  ('calendar.lock_settings_writer_checked(uuid,uuid,uuid)', '3058f5b967fbdb3085089829d2ec91cd'),
+  ('calendar.lock_settings_writer_checked(uuid,uuid,uuid)', '79152dacec57e32b5085c726019e1e29'),
   ('calendar.lock_questions_switch_checked(uuid,uuid)', '10a6254c761ee2d8de0c2687819bb7af'),
   ('calendar.delete_event_checked(uuid,integer,uuid,character varying,uuid,text,jsonb,character varying,uuid)', '88484b28236e730471996435512fce98')
 )

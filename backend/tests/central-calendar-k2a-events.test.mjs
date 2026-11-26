@@ -1299,7 +1299,7 @@ test("19. two creates with the same key at the same time: the second meets the u
   const meeting = await typeOf(c.clubAdmin.cookie, "meeting");
   const e0 = (await createEvent(c.clubAdmin.cookie, { eventTypeId: meeting.id, title: "First", day: FUTURE, notes: "secret", targets: [{ kind: "club", id: c.clubId }] })).body.event;
   const stored = (await q(`select result from calendar.event_requests where event_id = $1`, [e0.id]))[0].result;
-  assert.deepEqual(Object.keys(stored).sort(), ["eventId", "httpStatus"], "the request record holds ids only");
+  assert.deepEqual(stored, { eventId: e0.id, httpStatus: 201, counts: { questionsAsked: [], questionsSkipped: [], dayOffCancelled: 0 } }, "the receipt has ids and existing question counts, no event contents");
   assert.equal(JSON.stringify(stored).includes("secret"), false);
   const hooks = eventService.testHooks;
   const key = newKey();

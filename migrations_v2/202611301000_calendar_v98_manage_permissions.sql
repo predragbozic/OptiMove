@@ -231,6 +231,10 @@ declare
   v_club uuid;
 begin
   perform calendar.require_m1_cutover(true);
+  if p_club_id is null or (p_team_id is not null and not exists
+    (select 1 from public.teams where id=p_team_id and club_id=p_club_id)) then
+    raise exception 'Calendar settings permission is unavailable' using errcode = '42501';
+  end if;
   v_club := calendar.lock_m1_owner(v_scope, v_owner);
   if p_club_id is null or v_club is distinct from p_club_id then
     raise exception 'Calendar settings permission is unavailable' using errcode = '42501';
