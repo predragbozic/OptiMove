@@ -62,7 +62,7 @@ const scopesOf = () => ({
   team: [[`team T1`, perms.teamScope(W.T1), W.T1], [`team T2`, perms.teamScope(W.T2), W.T2], [`unknown team`, perms.teamScope(crypto.randomUUID()), null], ["team without id", perms.teamScope(null), null]],
 });
 
-test("31. old-vs-new: for every account of R1's matrix, every one of the 52 words and every scope, the new can(), the SQL twin and R1's can() agree - apart from roles.manage for a club's admin at its club and its club's teams", async () => {
+test("31. old-vs-new: for every account of R1's matrix, every one of the 52 words and every scope, the new can(), the SQL twin and R1's can() agree - apart from the audited V and Calendar M-1 seeds and roles.manage for a club's admin", async () => {
   const words = Object.keys(perms.PERMISSIONS);
   let cells = 0, differences = 0;
   for (const [name, userId] of Object.entries(W.users)) {
@@ -74,13 +74,18 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           const r1 = oracle.canR1(ctx, word, scope);
           const now = perms.can(ctx, word, scope);
           const sql = await twin(userId, word, type, scope.id);
-          const clubAdminHere = word === "roles.manage" && ctx.clubRoles.some((r) => r.role === "club_admin"
+          const clubAdminHere = ctx.clubRoles.some((r) => r.role === "club_admin"
             && ((type === "club" && r.clubId === scope.id) || (type === "team" && ((r.clubId === W.A && scope.id === W.T1) || (r.clubId === W.B && scope.id === W.T2)))));
           // Roles R4-1 (v92): the VIEW package is seeded into Club admin and Team coach (contract 4.1); R1's oracle never
           // knew those words. A seeded view word is held exactly where org.view (seeded in both since v84) is held.
           const seededView = SEEDED_VIEW.includes(word) && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
-          const expected = (clubAdminHere && ctx.platformRoles.length === 0) || seededView ? true : r1;
-          if (expected !== r1 && !seededView) differences++;
+          const seededCalendar = ctx.platformRoles.length === 0 && (
+            (word === "calendar.events.manage" && oracle.canR1(ctx, "org.view", scope))
+            || (word === "calendar.settings.manage" && clubAdminHere)
+          );
+          const rolesManage = word === "roles.manage" && clubAdminHere && ctx.platformRoles.length === 0;
+          const expected = rolesManage || seededView || seededCalendar ? true : r1;
+          if (expected !== r1 && !seededView && !seededCalendar) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);
           assert.equal(sql, expected, `${name}: twin(${word}) on ${scopeName}`);
           cells++;
