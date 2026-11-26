@@ -1593,7 +1593,7 @@ function athleteAnswersMeta(item, cal) {
 
 // The event's panel below its facts (the owner's redesign of 2026-11-23): the summary row, Plan / Open the training,
 // the sections, See each athlete, Athletes, Details, then Edit · Cancel event · Delete together at the bottom.
-function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe = false }) {
+function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe = false, compact = false }) {
   const targets = centralCalendarGoTargets(item);
   const target = (key) => targets.find((entry) => entry.key === key) || null;
   const links = eventLinkParts(item, cal, pending, pendingQuestion);
@@ -1637,7 +1637,8 @@ function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion,
       <div class="cc-sum-chips">${sections.map((entry) => {
         const shown = entry.count === "" ? "…" : String(entry.count);
         const spoken = `${entry.title}: ${entry.count === "" ? "loading" : entry.count}${entry.meta ? `, ${entry.meta}` : ""}. Show`;
-        return `<button type="button" class="cc-sum-chip${entry.count === 0 ? " is-empty" : ""}" data-action="central-calendar-panel-reveal" data-key="${escapeAttr(entry.id)}" aria-label="${escapeAttr(spoken)}">${renderIconSvg(PANEL_SECTION_ICONS[entry.id] || "list", { size: 18, className: "cc-sum-icon" })}<span class="cc-sum-count">${escapeHtml(shown)}</span><span class="cc-sum-name">${escapeHtml(entry.title)}</span></button>`;
+        const label = compact ? ({ trainings: "Training", activities: "GPS", questions: "RPE" }[entry.id] || entry.title) : entry.title;
+        return `<button type="button" class="cc-sum-chip${entry.count === 0 ? " is-empty" : ""}" data-action="central-calendar-panel-reveal" data-key="${escapeAttr(entry.id)}" aria-label="${escapeAttr(spoken)}">${renderIconSvg(PANEL_SECTION_ICONS[entry.id] || "list", { size: 18, className: "cc-sum-icon" })}<span class="cc-sum-count">${escapeHtml(shown)}</span><span class="cc-sum-name">${escapeHtml(label)}</span></button>`;
       }).join("")}</div>
     </div>` : "";
   // The link sections share one status line (a write's result, its Check result), always in view.
@@ -1710,7 +1711,7 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
       ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: eventAskRpe }) : ""}
       ${item.kind === "event"
-    ? renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe: eventAskRpe })
+    ? renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe: eventAskRpe, compact: layout === "phone" })
     : `${renderEventActionsHtml(item, { locked: linksLocked })}
       ${renderEventDeleteHtml(item, cal, pending, { locked: linksLocked || Boolean(cal.form) })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}

@@ -1,0 +1,108 @@
+const FIELD_NAMES = ["startTime", "endTime"];
+const FIELD_LABELS = ["Starts", "Ends"];
+const pad = (value) => String(value).padStart(2, "0");
+const wrap = (value, limit) => (value % limit + limit) % limit;
+
+export function bindCentralCalendarTimePicker(calendar) {
+  if (!calendar?.classList.contains("cc-layout-phone")) return;
+  const inputs = FIELD_NAMES.map((name) => calendar.querySelector(`[data-cc-event-field="${name}"]`));
+  if (inputs.some((input) => !input || input.matches(":disabled"))) return;
+  const doc = calendar.ownerDocument;
+  const controls = doc.createElement("div");
+  controls.className = "cc-time-picker";
+  controls.innerHTML = `
+    <div class="cc-time-picker-mode" role="group" aria-label="Event timing">
+      <button type="button" class="plain-button" data-timing="timed">With time</button>
+      <button type="button" class="plain-button" data-timing="untimed">Without time</button>
+    </div>
+    <div class="cc-time-picker-editor" hidden>
+      <div class="cc-time-picker-fields" role="group" aria-label="Time to adjust">
+        <button type="button" class="plain-button" data-time-field="0">Adjust start</button>
+        <button type="button" class="plain-button" data-time-field="1">Adjust end</button>
+      </div>
+      <div class="cc-time-picker-wheels" hidden>
+        ${["Hour", "Minute"].map((label, index) => `
+          <div class="cc-time-wheel" data-time-wheel="${index}" role="group" aria-label="${label}">
+            <button type="button" class="plain-button" data-tick="-1" aria-label="Previous ${label.toLowerCase()}"></button>
+            <output aria-label="Selected ${label.toLowerCase()}"></output>
+            <button type="button" class="plain-button" data-tick="1" aria-label="Next ${label.toLowerCase()}"></button>
+          </div>`).join("")}
+        <button type="button" class="plain-button cc-time-picker-apply">Set time</button>
+      </div>
+    </div>`;
+  const labels = inputs.map((input) => input.closest("label"));
+  const editor = controls.querySelector(".cc-time-picker-editor");
+  const wheels = controls.querySelector(".cc-time-picker-wheels");
+  const strips = Array.from(wheels.querySelectorAll("[data-time-wheel]"));
+  const fields = Array.from(controls.querySelectorAll("[data-time-field]"));
+  const modeButtons = Array.from(controls.querySelectorAll("[data-timing]"));
+  let active = 0;
+  let values = [0, 0];
+
+  function write(input, value) {
+    if (input.value === value) return;
+    input.value = value;
+    input.dispatchEvent(new doc.defaultView.Event("change", { bubbles: true }));
+  }
+
+  function selectMode(timed) {
+    modeButtons.forEach((button) => button.setAttribute("aria-pressed", String((button.dataset.timing === "timed") === timed)));
+    labels.forEach((label) => { label.hidden = !timed; });
+    editor.hidden = !timed;
+    if (!timed) {
+      inputs.forEach((input) => write(input, ""));
+      wheels.hidden = true;
+    }
+  }
+
+  function renderStrip(strip, index) {
+    const value = values[index];
+    const limit = index === 0 ? 24 : 60;
+    strip.querySelector("output").textContent = pad(value);
+    strip.querySelectorAll("[data-tick]").forEach((button) => {
+      button.textContent = pad(wrap(value + Number(button.dataset.tick), limit));
+    });
+  }
+
+  fields.forEach((button, index) => button.addEventListener("click", () => {
+    active = index;
+    const fallback = index === 1 ? inputs[0].value || "09:00" : "09:00";
+    values = (inputs[index].value || fallback).split(":").map(Number);
+    fields.forEach((field) => field.setAttribute("aria-pressed", String(field === button)));
+    strips.forEach(renderStrip);
+    wheels.hidden = false;
+  }));
+  strips.forEach((strip, index) => {
+    let start;
+    function step(amount) {
+      values[index] = wrap(values[index] + amount, index === 0 ? 24 : 60);
+      renderStrip(strip, index);
+    }
+    strip.querySelectorAll("[data-tick]").forEach((button) => button.addEventListener("click", () => step(Number(button.dataset.tick))));
+    strip.addEventListener("wheel", (event) => {
+      if (!event.deltaY) return;
+      event.preventDefault();
+      step(Math.sign(event.deltaY));
+    }, { passive: false });
+    strip.addEventListener("touchstart", (event) => {
+      start = event.touches.length === 1 ? event.touches[0].clientY : undefined;
+    }, { passive: true });
+    strip.addEventListener("touchmove", (event) => {
+      if (start === undefined || event.touches.length !== 1) return;
+      const steps = Math.trunc((start - event.touches[0].clientY) / 22);
+      if (!steps) return;
+      if (event.cancelable) event.preventDefault();
+      start -= steps * 22;
+      step(steps);
+    }, { passive: false });
+  });
+  controls.querySelector(".cc-time-picker-apply").addEventListener("click", () => {
+    write(inputs[active], values.map(pad).join(":"));
+    wheels.hidden = true;
+    fields[active].focus();
+  });
+  modeButtons.forEach((button) => button.addEventListener("click", () => selectMode(button.dataset.timing === "timed")));
+  labels[0].parentElement.insertBefore(controls, labels[0]);
+  selectMode(inputs.some((input) => input.value || input.getAttribute("aria-invalid") === "true"));
+  fields.forEach((button, index) => button.setAttribute("aria-label", `Adjust ${FIELD_LABELS[index].toLowerCase()} time`));
+}

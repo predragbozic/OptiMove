@@ -20778,6 +20778,12 @@ body.exercise-header-pinned #viewToolbar {
   background: var(--bg);
   transition: top 180ms ease-out;
 }
+body.exercise-header-pinned.calendar-header-only #viewToolbar {
+  position: relative;
+  top: auto;
+  z-index: auto;
+  box-shadow: none;
+}
 body.exercise-header-pinned .workspace > .topbar {
   top: var(--exercise-header-shift, 0px);
   z-index: 31;
@@ -23846,6 +23852,55 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     display: none;
   }
 
+  .cc-layout-phone .cc-panel-summary .cc-sum-chip {
+    flex: 1 1 22%;
+    min-width: 0;
+    min-height: 44px;
+    color: var(--text);
+    background: var(--surface, #fff);
+    border-color: var(--line);
+  }
+
+  .cc-time-picker {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 8px;
+  }
+
+  .cc-time-picker [hidden],
+  .cc-layout-phone .cc-form-grid > label[hidden] {
+    display: none;
+  }
+
+  .cc-time-picker-mode,
+  .cc-time-picker-fields,
+  .cc-time-picker-wheels {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .cc-time-picker-wheels {
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+
+  .cc-time-picker button { min-height: 44px; }
+  .cc-time-picker button[aria-pressed="true"] { background: var(--bg); border-color: var(--line-strong); }
+  .cc-time-picker-apply { grid-column: 1 / -1; }
+  .cc-time-wheel { display: grid; gap: 2px; touch-action: none; }
+  .cc-time-wheel output {
+    padding: 6px;
+    text-align: center;
+    font-size: 24px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    background: var(--bg);
+    border-radius: 6px;
+  }
+
   .cc-form-actions .plain-button {
     flex: 1 1 100%;
   }
@@ -24532,7 +24587,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 @media (max-width: 640px) {
   /* U4: on a phone (up to 640 px) "Online" is a 12 px dot in the top right corner of the header (level with the title), not a row of its own;
      every other state keeps the text pill. The state is in the aria-label. */
-  body:not(.athlete-mode):not(.login-mode) .topbar { position: relative; }
+  body:not(.athlete-mode):not(.login-mode):not(.exercise-header-pinned) .topbar { position: relative; }
   /* keep the title text clear of the dot */
   body:not(.athlete-mode):not(.login-mode) .topbar > div:first-child { padding-right: 20px; }
   body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="ok"] {

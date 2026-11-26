@@ -14,7 +14,7 @@ const TOPBAR = { top: 10, bottom: 139 };
 const TOOLBAR = { top: 147, bottom: 365 };
 const settleHide = () => new Promise((resolve) => setTimeout(resolve, 260));
 
-function page({ reducedMotion = false, active = true, height = 812, width = 375, topbar = TOPBAR, toolbar = TOOLBAR } = {}) {
+function page({ reducedMotion = false, active = true, height = 812, width = 375, topbar = TOPBAR, toolbar = TOOLBAR, includeToolbar = true } = {}) {
   const dom = new JSDOM(`<body>
     <main class="workspace">
       <header class="topbar"><button class="mobile-nav-toggle" type="button">Menu</button><div class="notification-panel" hidden></div><div class="workspace-panel" hidden></div></header>
@@ -43,7 +43,7 @@ function page({ reducedMotion = false, active = true, height = 812, width = 375,
     if (name === "--exercise-header-shift") shifts.push(value);
     setProperty(name, value);
   };
-  const reveal = installExerciseHeaderReveal({ view, isActive: () => state.active });
+  const reveal = installExerciseHeaderReveal({ view, isActive: () => state.active, includeToolbar: () => includeToolbar });
   const scrollTo = (top) => { y = top; view.dispatchEvent(new view.Event("scroll")); };
   const scrollBy = (delta, steps = 1) => { for (let index = 0; index < steps; index += 1) scrollTo(y + delta / steps); };
   return {
@@ -272,9 +272,20 @@ test("B3: styles - sticky (never fixed, never a transform), under the menu, slid
   assert.match(css, /\.exercise-selection-bar \{ position: sticky; bottom: 12px; z-index: 4;/);
 });
 
-test("app.js installs it for the Exercise Library only and syncs it on every change of screen", async () => {
+test("Calendar reveals only the app header after a short upward scroll", () => {
+  const p = page({ includeToolbar: false });
+  p.doc.getElementById("viewToolbar").remove();
+  p.scrollTo(900);
+  p.scrollBy(-16);
+  assert.equal(p.pinned(), true);
+  assert.equal(p.shifts.at(-2), "-129px");
+  assert.equal(p.cssVar("--exercise-header-gap"), "0px");
+  p.dom.window.close();
+});
+
+test("app.js enables header reveal for Exercise Library and phone Calendar and syncs on tab changes", async () => {
   const app = (await readFile(new URL("../app.js", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
-  assert.match(app, /exerciseHeaderReveal = installExerciseHeaderReveal\(\{ isActive: \(\) => state\.activeTab === "exercises" && !isAthleteMode\(\) \}\);/);
+  assert.match(app, /exerciseHeaderReveal = installExerciseHeaderReveal\(\{\s*isActive: \(\) => \(state\.activeTab === "exercises" && !isAthleteMode\(\)\)\s*\|\| \(state\.activeTab === "central-calendar" && centralCalendarLayout\(\) === "phone"\),\s*includeToolbar: \(\) => state\.activeTab === "exercises"/);
   const renderTabs = app.match(/function renderTabs\(\) \{([\s\S]*?)\n\}/)?.[1] || "";
   assert.match(renderTabs, /exerciseHeaderReveal\?\.sync\(\);/);
 });

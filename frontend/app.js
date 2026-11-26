@@ -106,6 +106,7 @@ import { invalidateCentralCalendarCache, loadCentralCalendar as loadCentralCalen
 import { claimImportsReturn, clearGpsReview, importsReturnFor, setImportsReturn, setImportsReturnOutcome } from "./central-calendar-gps-review.js";
 import { centralCalendarLongDate, renderCentralCalendarHtml } from "./central-calendar-view.js";
 import { bindCentralCalendarGestures } from "./central-calendar-gestures.js";
+import { bindCentralCalendarTimePicker } from "./central-calendar-time-picker.js";
 import { athleteMatches, clearAthleteFilters, handleAthleteFilter } from "./athlete-list-tools.js";
 import { handleWeeklyTemplateAction } from "./builder-weekly-template-actions.js";
 import { handleWeeklyAssignAction, updateWeeklyAssignStartDate } from "./builder-weekly-assign-actions.js";
@@ -649,7 +650,11 @@ function bindEvents() {
   const contentSwipe = createContentSwipe({ content: els.content, onSwipe: handleHorizontalSwipe, isMediaOpen: () => !els.mediaModal?.hidden });
   els.content.addEventListener("touchstart", contentSwipe.start, { passive: true });
   els.content.addEventListener("touchend", contentSwipe.end, { passive: true });
-  exerciseHeaderReveal = installExerciseHeaderReveal({ isActive: () => state.activeTab === "exercises" && !isAthleteMode() });
+  exerciseHeaderReveal = installExerciseHeaderReveal({
+    isActive: () => (state.activeTab === "exercises" && !isAthleteMode())
+      || (state.activeTab === "central-calendar" && centralCalendarLayout() === "phone"),
+    includeToolbar: () => state.activeTab === "exercises",
+  });
   // Specific-dates calendar click-and-drag (Phase 2.5): Pointer Events, not
   // separate mouse/touch listeners - one code path drives mouse AND touch
   // drags identically (see handleContentPointerMove's own comment for why
@@ -2662,8 +2667,10 @@ function renderCentralCalendar() {
     // The event saves left unconfirmed in this workspace, each with Check result.
     uncertainWrites: centralCalendarUncertainWrites(),
   });
-  restoreCentralCalendarView(els.content.querySelector(".central-calendar"), snapshot);
-  bindCentralCalendarGestures(els.content.querySelector(".central-calendar"));
+  const calendar = els.content.querySelector(".central-calendar");
+  restoreCentralCalendarView(calendar, snapshot);
+  bindCentralCalendarGestures(calendar);
+  bindCentralCalendarTimePicker(calendar);
   // K6: the chosen athlete's pill stays in view after every repaint.
   athleteSwitcherScrollIntoView(els.content);
 }
