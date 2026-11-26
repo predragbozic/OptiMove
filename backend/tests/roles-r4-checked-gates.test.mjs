@@ -151,6 +151,7 @@ const REVIEWED = Object.freeze({
   "trainingActivityMaterialize.js": 4,
   "trainingActivityResults.js": 1,
   "trainingLoadAccess.js": 24,
+  "externalScheduleWriteAccess.js": 4, // M-2 binds the active scope and rechecks the native role and SQL permission inside the write.
   // V-6: dashboards.view at a coach workspace's own club or team (an old role row), and the club / team data workspace
   // that load.view.athlete is asked for (+2); a view workspace is read through viewReadScope (the gate's), never offered.
   "trainingLoadDashboardAccess.js": 10,
