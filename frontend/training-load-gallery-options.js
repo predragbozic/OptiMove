@@ -12,6 +12,7 @@ export function galleryChartPlot(data, {
     return map;
   };
   const bucketKeys=[...new Set(data.groups.map(g=>g.bucketKey))].sort();
+  const dayBuckets=bucketKeys.every(key=>/^\d{4}-\d{2}-\d{2}$/.test(key))?bucketKeys:null;
   const bucketNames=new Map(bucketKeys.map(key=>[key,bucketLabel(key)]));
   const athleteKeys=sortAthletes([...new Set(data.groups.map(g=>g.athleteId).filter(Boolean))].map(id=>({id,name:athleteLabel(id)||'Athlete name unavailable'}))).map(row=>row.id);
   const names=distinctNames(athleteKeys,athleteLabel);
@@ -33,6 +34,7 @@ export function galleryChartPlot(data, {
     return plot;
   }
   if(data.kind==='heatmap'){
+    if(dayBuckets)plot.bucketKeys=dayBuckets;
     plot.shortDateAxis=true;option.tooltip.trigger='item';option.legend.show=false;
     option.yAxis={type:'category',data:athleteKeys.map(k=>names.get(k))};
     const values=data.groups.map(g=>g.values[0]),min=Math.min(...values),max=Math.max(...values);
@@ -48,6 +50,7 @@ export function galleryChartPlot(data, {
       {name:'Outliers',type:'scatter',data:bucketKeys.flatMap((k,n)=>boxes.get(k).outliers.map(value=>[n,value]))}];
     return plot;
   }
+  if(dayBuckets)plot.bucketKeys=dayBuckets;
   const athletes=athleteKeys.length?athleteKeys:[null],used=new Set();
   for(let index=0;index<definitions.length;index++)for(let athleteIndex=0;athleteIndex<athletes.length;athleteIndex++){
     const athlete=athletes[athleteIndex],rows=new Map(data.groups.filter(g=>(g.athleteId??null)===athlete).map(g=>[g.bucketKey,g]));

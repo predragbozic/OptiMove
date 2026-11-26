@@ -1,9 +1,9 @@
-import {renderGalleryPicker} from './training-load-gallery-picker.js';
+import {chartPickerIllustration,renderGalleryPicker} from './training-load-gallery-picker.js';
 import {dashboardDisclosureOpen} from './training-load-dashboard-disclosures.js';
 import {GALLERY_CHOICES} from './training-load-gallery-editor.js';
 import {renderDashboardPages} from './training-load-pages-view.js';
 import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from './training-load-calculation-view.js';
-import { analysisChartInteractionGeneration, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
+import { analysisChartDay, analysisChartInteractionGeneration, BUILT_IN_FIXED_SCOPE, BUILT_IN_SERIES, analysisEditorDraftFromWidget, analysisEditorPlan, analysisEditorProblem, analysisLayoutLimits, analysisSeriesLimit, analysisWidgetSupportsComparison, metricPanelCanSave } from "./training-load-analysis-data.js";
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
 import { viewModuleOpen } from "./view-modules.js";
@@ -268,11 +268,13 @@ function renderDashboardMenuHtml() {
 }
 
 function renderTopBarHtml() {
+  const chartDay=analysisChartDay();
   return `
     <div class="tl-analysis-topbar tl-analysis-topbar-compact">
       <div class="tl-compact-dashboard-picker">${renderDashboardPickerHtml()}</div>
       <div data-dashboard-controls="period" class="tl-compact-period-host"></div>
       <div class="tl-compact-dashboard-menu">${renderDashboardMenuHtml()}</div>
+      ${chartDay?`<button type="button" class="plain-button compact-button tl-chart-day-chip" data-action="training-load-analysis-clear-chart-day" aria-label="Clear chart day filter">Chart day · ${escapeHtml(formatDate(chartDay))} ×</button>`:''}
       <section id="dashboard-period-panel" class="tl-compact-filter-panel" aria-label="Period and activity" hidden>
         <div data-dashboard-controls="fields"></div>
         <div class="tl-compact-activity-filter">${renderActivityPickerHtml()}</div>
@@ -724,7 +726,7 @@ function renderMetricPanelHtml() {
           <button type="button" class="plain-button icon-button" data-action="training-load-analysis-panel-close" aria-label="Close" ${panel.saving ? "disabled" : ""}>&times;</button>
         </div>
         <div class="tl-metric-panel-body">
-          <section class="tl-metric-panel-step">
+          <section class="tl-metric-panel-step tl-metric-panel-metric">
             <h4><span class="tl-metric-panel-step-no">1</span>Metric</h4>
             ${panel.metric ? `<p class="tl-metric-panel-chosen"><span class="tl-analysis-activity-chip"><strong>${escapeHtml(panel.metric.label)}</strong>${panel.metric.unit ? `<small>${escapeHtml(panel.metric.unit)}</small>` : ""}</span></p>` : ""}
             <label class="search-field"><span>Search metrics</span><input type="search" data-action="training-load-analysis-panel-search" data-tl-analysis-search="metric" value="${escapeAttr(panel.search)}" placeholder="Search metrics" autocomplete="off"></label>
@@ -733,8 +735,9 @@ function renderMetricPanelHtml() {
           <section class="tl-metric-panel-step">
             <h4><span class="tl-metric-panel-step-no">2</span>View</h4>
             <div class="tl-analysis-widget-type-grid tl-metric-panel-types">
-              ${WIDGET_TYPES.map((type) => `<button type="button" class="plain-button tl-analysis-type-button ${panel.widgetType === type.key ? "is-selected" : ""}" aria-pressed="${panel.widgetType === type.key ? "true" : "false"}" data-action="training-load-analysis-panel-type" data-widget-type="${type.key}"><strong>${escapeHtml(type.label)}</strong><small>${escapeHtml(type.hint)}</small></button>`).join("")}
+              ${WIDGET_TYPES.map((type) => `<button type="button" class="plain-button tl-analysis-type-button ${panel.widgetType === type.key ? "is-selected" : ""}" aria-pressed="${panel.widgetType === type.key ? "true" : "false"}" data-action="training-load-analysis-panel-type" data-widget-type="${type.key}">${chartPickerIllustration(type.key)}<strong>${escapeHtml(type.label)}</strong><small>${escapeHtml(type.hint)}</small></button>`).join("")}
             </div>
+            ${editing ? `<div class="tl-metric-panel-advanced"><span class="muted">More chart types, axes, sources and series</span> <button type="button" class="plain-button compact-button" data-action="training-load-analysis-open-advanced" data-widget-id="${escapeAttr(panel.widgetId)}">Advanced settings</button></div>` : ""}
           </section>
           <section class="tl-metric-panel-step">
             <h4><span class="tl-metric-panel-step-no">3</span>Settings</h4>
@@ -744,7 +747,7 @@ function renderMetricPanelHtml() {
               <label>Calculate<select data-action="training-load-analysis-panel-field" data-field="aggregation">${((state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === panel.metric?.id)?.allowedAggregations ?? AGGREGATIONS.filter(v => v !== "ratio")).map((v) => optionHtml(v, AGGREGATION_LABELS[v], panel.aggregation)).join("")}</select></label>
               ${renderScopeSelectHtml({ action: "training-load-analysis-panel-field", attrs: 'data-field="scope"', value: panel.scope, metric: panel.metric, label: "Data level" })}
             </div>
-            ${editing ? `<div class="tl-metric-panel-advanced"><span class="muted">Source, coverage, comparison and extra series:</span> <button type="button" class="plain-button compact-button" data-action="training-load-analysis-open-advanced" data-widget-id="${escapeAttr(panel.widgetId)}">Advanced settings</button></div>` : ""}
+
           </section>
           <section class="tl-metric-panel-step">
             <h4><span class="tl-metric-panel-step-no">4</span>Preview</h4>

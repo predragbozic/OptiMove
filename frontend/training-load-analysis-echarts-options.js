@@ -32,7 +32,7 @@ export function dashboardChartPlots(model, labelForSeries, rowContext, groupLabe
         usedNames.add(name);
         return name;
       });
-      plots.push({ caption: labelForSeries(series.definition), precision, shortDateAxis: true, option: {
+      plots.push({ caption: labelForSeries(series.definition), precision, shortDateAxis: true, bucketKeys:keys, option: {
         animation: false,
         grid: { left: 12, right: 20, top: 48, bottom: 12, containLabel: true },
         legend: { show: model.config.effective.legend.visible, type: "scroll", top: 4 },
@@ -58,6 +58,7 @@ export function dashboardChartPlots(model, labelForSeries, rowContext, groupLabe
         caption,
         precision,
         shortDateAxis: true,
+        bucketKeys: rows.map(row => row.identity.bucketKey),
         option: {
           animation: false,
           color: ["#002d9c"],
@@ -117,6 +118,7 @@ export function galleryUnavailableMessage(reason){return ({
 
 export function configureDashboardPlot(plot,model){
  const settings=model.chartInteractions??{};plot.interactions=structuredClone(settings);plot.period=model.period??null;plot.interactionGeneration=model.interactionGeneration??null;
+ if(settings.pointSelection?.mode==='disabled'||model.groupBy!=='day'||!plot.bucketKeys?.every(key=>/^\d{4}-\d{2}-\d{2}$/.test(key))) delete plot.bucketKeys;
  if(settings.legend?.toggle===false&&plot.option.legend)plot.option.legend.selectedMode=false;
  const axes=Array.isArray(plot.option.yAxis)?plot.option.yAxis:[plot.option.yAxis];
  if(settings.yAxis?.mode==='fixed'&&axes[0]?.type==='value'){axes[0].min=settings.yAxis.min;axes[0].max=settings.yAxis.max;}

@@ -43,6 +43,13 @@ test("bar widgets use an honest numeric axis for negatives and zero, with no sta
   assert.deepEqual(plot.option.series[0].data.map(point => point?.value ?? null), [-15, 0, 7, null]);
 });
 
+test("a daily chart exposes only date buckets and honors disabled point selection", () => {
+  const display = model([row(1), row(2, "2026-10-02")], {type:"bar_chart"});
+  assert.deepEqual(plots(display)[0].bucketKeys, ["2026-10-01", "2026-10-02"]);
+  assert.equal(plots({...display,chartInteractions:{pointSelection:{mode:"disabled"}}})[0].bucketKeys, undefined);
+  assert.equal(plots({...display,groupBy:"week"})[0].bucketKeys, undefined);
+});
+
 test("V1/absent defaults and V2 presentation settings preserve server values; unsupported versions do not draw", () => {
   for (const config of [null, { schemaVersion: 1 }, { schemaVersion: 2, legend: { visible: false }, valueLabels: { visible: true }, numberFormat: { maximumFractionDigits: 2 } }]) {
     const [plot] = plots(model([row(1.2345)], { config }));

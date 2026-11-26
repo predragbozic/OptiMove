@@ -47,6 +47,7 @@ import {
 } from "./training-load-data.js";
 import {
   analysisChartInteractionGeneration,
+  setAnalysisChartDay,
   BUILT_IN_FIXED_SCOPE,
   BUILT_IN_SERIES,
   addEditorSeries,
@@ -1542,6 +1543,16 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const from=action.dataset.dateFrom,to=action.dataset.dateTo;
     if(!/^\d{4}-\d{2}-\d{2}$/.test(from??'')||!/^\d{4}-\d{2}-\d{2}$/.test(to??'')||to<from)return true;
     a.period={...a.period,dateFrom:from,dateTo:to};await queryAnalysisDashboard(renderTrainingLoad,{force:true});return true;
+  }
+  if(type==='training-load-analysis-clear-chart-day'||type==='training-load-analysis-chart-day'){
+    const a=state.trainingLoad.analysis;
+    const date=action.dataset.dateFrom;
+    if(type==='training-load-analysis-chart-day'&&(a.queryLoading||!a.widgets.some(widget=>widget.id===action.dataset.widgetId)
+      ||Number(action.dataset.boundGeneration)!==analysisChartInteractionGeneration()
+      ||!/^\d{4}-\d{2}-\d{2}$/.test(date??'')||date<a.period.dateFrom||date>a.period.dateTo))return true;
+    setAnalysisChartDay(type==='training-load-analysis-chart-day'?date:null);
+    await queryAnalysisDashboard(renderTrainingLoad,{force:true});
+    return true;
   }
   if(type==='training-load-reference-open'){await referenceAction('openBinding',action.dataset.widgetId);return true;}
   if(type==='training-load-analysis-print'){
