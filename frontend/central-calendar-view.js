@@ -896,7 +896,9 @@ function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false, 
   const heads = days.map((date) => `<div class="cc-timegrid-head${date === today ? " is-today" : ""}">${dayHeadHtml(date, today, visible.get(date).length)}</div>`).join("");
   const band = days.map((date) => {
     // 2.4: the band's entries in order, K5-4's GPS mark last; more than BAND_ITEMS show BAND_ITEMS and "+N more".
-    const entries = bandItemsOf(visible.get(date)).map((item) => (isMultiDay(item)
+    const entries = bandItemsOf(visible.get(date)).map((item) => (phone && !dayView
+      ? renderMiniCardHtml(item, teams, openKey, today)
+      : isMultiDay(item)
       ? renderCentralCalendarCardHtml(item, { teams, openKey, today, spanWhen: true })
       : renderDayItemHtml(item, teams, openKey, today)));
     const mark = renderGpsMarkHtml(cal, date);

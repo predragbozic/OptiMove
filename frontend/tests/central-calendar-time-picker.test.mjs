@@ -15,10 +15,13 @@ test("phone wheel preserves exact minutes and removing time keeps the event date
   const changed = [];
   calendar.addEventListener("change", (event) => changed.push([event.target.dataset.ccEventField, event.target.value]));
   bindCentralCalendarTimePicker(calendar);
+  assert.equal(calendar.querySelector('[data-time-field="0"]').textContent, "Starts09:16");
+  assert.ok(calendar.querySelector('[type="time"]').closest("label").hidden);
   calendar.querySelector('[data-time-field="0"]').click();
   calendar.querySelector('[data-time-wheel="1"] [data-tick="1"]').click();
   calendar.querySelector(".cc-time-picker-apply").click();
   assert.deepEqual(changed, [["startTime", "09:17"]]);
+  assert.equal(calendar.querySelector('[data-time-field="0"]').textContent, "Starts09:17");
   calendar.querySelector('[data-timing="untimed"]').click();
   assert.deepEqual(changed.slice(1), [["startTime", ""], ["endTime", ""]]);
   assert.equal(calendar.querySelector('[type="date"]').value, "2026-11-26");

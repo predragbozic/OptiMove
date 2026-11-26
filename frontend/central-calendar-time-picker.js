@@ -17,8 +17,7 @@ export function bindCentralCalendarTimePicker(calendar) {
     </div>
     <div class="cc-time-picker-editor" hidden>
       <div class="cc-time-picker-fields" role="group" aria-label="Time to adjust">
-        <button type="button" class="plain-button" data-time-field="0">Adjust start</button>
-        <button type="button" class="plain-button" data-time-field="1">Adjust end</button>
+        ${FIELD_LABELS.map((label, index) => `<button type="button" class="plain-button" data-time-field="${index}" aria-pressed="false"><span>${label}</span><strong></strong></button>`).join("")}
       </div>
       <div class="cc-time-picker-wheels" hidden>
         ${["Hour", "Minute"].map((label, index) => `
@@ -39,6 +38,12 @@ export function bindCentralCalendarTimePicker(calendar) {
   let active = 0;
   let values = [0, 0];
 
+  function updateTimes() {
+    fields.forEach((button, index) => {
+      button.querySelector("strong").textContent = inputs[index].value || "Set time";
+    });
+  }
+
   function write(input, value) {
     if (input.value === value) return;
     input.value = value;
@@ -47,12 +52,12 @@ export function bindCentralCalendarTimePicker(calendar) {
 
   function selectMode(timed) {
     modeButtons.forEach((button) => button.setAttribute("aria-pressed", String((button.dataset.timing === "timed") === timed)));
-    labels.forEach((label) => { label.hidden = !timed; });
     editor.hidden = !timed;
     if (!timed) {
       inputs.forEach((input) => write(input, ""));
       wheels.hidden = true;
     }
+    updateTimes();
   }
 
   function renderStrip(strip, index) {
@@ -66,7 +71,10 @@ export function bindCentralCalendarTimePicker(calendar) {
 
   fields.forEach((button, index) => button.addEventListener("click", () => {
     active = index;
-    const fallback = index === 1 ? inputs[0].value || "09:00" : "09:00";
+    const [startHour, startMinute] = (inputs[0].value || "09:00").split(":").map(Number);
+    const fallback = index === 1
+      ? (startHour === 23 ? "23:59" : `${pad(startHour + 1)}:${pad(startMinute)}`)
+      : "09:00";
     values = (inputs[index].value || fallback).split(":").map(Number);
     fields.forEach((field) => field.setAttribute("aria-pressed", String(field === button)));
     strips.forEach(renderStrip);
@@ -99,10 +107,22 @@ export function bindCentralCalendarTimePicker(calendar) {
   controls.querySelector(".cc-time-picker-apply").addEventListener("click", () => {
     write(inputs[active], values.map(pad).join(":"));
     wheels.hidden = true;
+    fields[active].setAttribute("aria-pressed", "false");
+    updateTimes();
     fields[active].focus();
   });
   modeButtons.forEach((button) => button.addEventListener("click", () => selectMode(button.dataset.timing === "timed")));
   labels[0].parentElement.insertBefore(controls, labels[0]);
+  labels.forEach((label, index) => {
+    label.hidden = true;
+    const input = inputs[index];
+    const errorId = input.getAttribute("aria-describedby");
+    const error = errorId && doc.getElementById(errorId);
+    if (error && label.contains(error)) {
+      fields[index].setAttribute("aria-invalid", "true");
+      fields[index].setAttribute("aria-describedby", errorId);
+      editor.append(error);
+    }
+  });
   selectMode(inputs.some((input) => input.value || input.getAttribute("aria-invalid") === "true"));
-  fields.forEach((button, index) => button.setAttribute("aria-label", `Adjust ${FIELD_LABELS[index].toLowerCase()} time`));
 }

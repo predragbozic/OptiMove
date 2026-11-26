@@ -23916,6 +23916,11 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   }
 
   .cc-time-picker button { min-height: 44px; }
+  .cc-time-picker-fields button { display: grid; justify-items: start; gap: 2px; }
+  .cc-time-picker-fields button span { font-size: 12px; }
+  .cc-time-picker-fields button strong { font-variant-numeric: tabular-nums; }
+  .cc-layout-phone .cc-timegrid-untimed .cc-mini { min-height: 44px; min-width: 0; padding-inline: 3px; }
+  .cc-layout-phone .cc-timegrid-untimed .cc-mini-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cc-time-picker button[aria-pressed="true"] { background: var(--bg); border-color: var(--line-strong); }
   .cc-time-picker-apply { grid-column: 1 / -1; }
   .cc-time-wheel { display: grid; gap: 2px; touch-action: none; }

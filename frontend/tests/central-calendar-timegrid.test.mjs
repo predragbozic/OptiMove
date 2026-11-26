@@ -274,6 +274,8 @@ test("phone offers List and Time grid and renders all seven days", () => {
   const document = draw(cal, "phone");
   assert.ok(document.querySelector('.cc-mode-switch [data-mode="list"]'));
   assert.equal(document.querySelectorAll(".cc-timegrid-head").length, 7);
+  assert.ok(document.querySelector(".cc-timegrid-untimed .cc-mini"), "phone uses compact untimed cards");
+  assert.equal(document.querySelector(".cc-timegrid-untimed .cc-card"), null);
   cal.weekMode = "list";
   assert.equal(draw(cal, "phone").querySelector(".cc-timegrid"), null);
 });
