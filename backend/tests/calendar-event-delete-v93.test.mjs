@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb } from "./_gpexe-disposable-db.mjs";
-import { calendarMigrations } from "./support/calendar-fixture.mjs";
+import { calendarManageMigrations, calendarMigrations } from "./support/calendar-fixture.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNBOOKS = path.resolve(__dirname, "../../docs/runbooks");
@@ -130,7 +130,7 @@ async function world(label) {
 const teamEvent = (w, extra = {}) => createEvent(w.coach1.cookie, { eventTypeId: w.training.id, title: `Training ${uid()}`, targets: [{ kind: "team", id: w.team1 }], ...extra });
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v93", migrations: MIGRATIONS });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v93", migrations: calendarManageMigrations(MIGRATIONS) });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

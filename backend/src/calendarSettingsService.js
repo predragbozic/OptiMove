@@ -495,19 +495,12 @@ async function runSettingsCommand(ctx, { requestKey, canonical, subject }, apply
     userId: ctx.userId, requestKey, operation, label: "calendar-settings", subject: `${operation} in club ${clubId}`,
     requestsTable: "calendar.settings_requests", requestKeyConstraint: "settings_requests_one_per_key",
     busyMessage: BUSY, hooks: testHooks,
-    async prepare(client) {
+    async prepare(client, { recovery = false } = {}) {
       const hash = hashOf({ canonical, club: clubId, subject: withId ? `${subject.kind}:${subject.id}` : null });
-      if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
-      let lockScope = "club";
-      let lockOwner = clubId;
-      if (subject?.kind === "team") {
-        const team = (await client.query(`select t.club_id from public.teams t where t.id = $1`, [subject.id])).rows[0];
-        if (!team || String(team.club_id) !== clubId) throw notFound();
-        lockScope = "team";
-        lockOwner = subject.id;
-      }
+      if (!recovery && testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
       try {
-        await client.query(`select calendar.lock_event_writer($1, $2, $3, $4)`, [ctx.userId, lockScope, lockOwner, basis]);
+        await client.query(`select calendar.lock_settings_writer_checked($1, $2, $3)`,
+          [ctx.userId, clubId, subject?.kind === "team" ? subject.id : null]);
       } catch (error) {
         if (error?.code === "42501") throw withId ? notFound() : forbidden();
         throw error;
@@ -1070,7 +1063,7 @@ export async function setQuestionsSwitch(ctx, body) {
       if (!installed) throw refuse();
       const hash = hashOf({ canonical, club: clubId, subject: `club:${clubId}` });
       try {
-        await client.query(`select calendar.lock_event_writer($1, 'club', $2, $3)`, [ctx.userId, clubId, basis]);
+        await client.query(`select calendar.lock_questions_switch_checked($1, $2)`, [ctx.userId, clubId]);
       } catch (error) {
         if (error?.code === "42501") throw refuse();
         throw error;

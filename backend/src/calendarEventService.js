@@ -764,7 +764,7 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
     // v93: a deleted event's request keys stay spent (its create's above all).
     spentKeysTable: "calendar.event_deleted_request_keys",
     busyMessage: "The event is being changed. Try again.", hooks: testHooks,
-    async prepare(client) {
+    async prepare(client, { recovery = false } = {}) {
       let owner;
       let basis;
       let row = null;
@@ -788,9 +788,10 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
         if (!basis) throw forbidden();
       }
       const hash = requestHash(canonical, { eventId, owner });
-      if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
+      if (!recovery && testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
       try {
-        await client.query(`select calendar.lock_event_writer($1, $2, $3, $4)`, [ctx.userId, owner.scope, eventOwnerId(owner), basis]);
+        await client.query(`select calendar.lock_event_writer_checked($1, $2, $3, $4, $5, $6)`,
+          [ctx.userId, owner.scope, eventOwnerId(owner), basis, ctx.workspace.type, ctx.workspace.scopeId]);
       } catch (error) {
         if (error?.code === "42501") throw eventId ? notFound() : forbidden();
         throw error;
@@ -804,7 +805,7 @@ async function runEventCommand(ctx, { requestKey, canonical, eventId }, apply) {
         // The key (id) of an event never changes and an event is never deleted.
         row = (await client.query(`${EVENT_ROW_FOR_WRITE_SQL} for no key update of e`, [eventId])).rows[0];
         if (!row) throw notFound();
-        if (testHooks.afterEventLock) await testHooks.afterEventLock({ client, operation, eventId });
+        if (!recovery && testHooks.afterEventLock) await testHooks.afterEventLock({ client, operation, eventId });
         // The right is decided again on the locked row (an owner never changes,
         // but the team's or the club's activity may have), and the owner is
         // taken from it: lock_event_writer holds a team owner's team FOR SHARE,
@@ -1441,16 +1442,17 @@ export async function deleteEvent(ctx, eventId, body) {
     userId: ctx.userId, requestKey, operation: "delete", label: "calendar", subject: `delete on event ${id}`,
     requestsTable: "calendar.event_deletion_log", requestKeyConstraint: "event_deletion_log_one_per_key",
     busyMessage: "The event is being changed. Try again.", hooks: testHooks,
-    async prepare(client) {
+    async prepare(client, { recovery = false } = {}) {
       let row = (await client.query(EVENT_ROW_FOR_WRITE_SQL, [id])).rows[0] || null;
       let owner = row ? eventOwnerOfRow(row) : await ownDeletionOwner(client);
       if (!owner) throw notFound();
       const basis = eventWriteBasis(ctx, owner);
       if (!basis) throw notFound();
       const hash = requestHash(canonical, { eventId: id, owner });
-      if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation: "delete" });
+      if (!recovery && testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation: "delete" });
       try {
-        await client.query(`select calendar.lock_event_writer($1, $2, $3, $4)`, [ctx.userId, owner.scope, eventOwnerId(owner), basis]);
+        await client.query(`select calendar.lock_event_writer_checked($1, $2, $3, $4, $5, $6)`,
+          [ctx.userId, owner.scope, eventOwnerId(owner), basis, ctx.workspace.type, ctx.workspace.scopeId]);
       } catch (error) {
         if (error?.code === "42501") throw notFound();
         throw error;
@@ -1461,7 +1463,7 @@ export async function deleteEvent(ctx, eventId, body) {
         // itself (calendar.delete_event) takes FOR UPDATE after those keys.
         row = (await client.query(`${EVENT_ROW_FOR_WRITE_SQL} for no key update of e`, [id])).rows[0] || null;
         if (row) {
-          if (testHooks.afterEventLock) await testHooks.afterEventLock({ client, operation: "delete", eventId: id });
+          if (!recovery && testHooks.afterEventLock) await testHooks.afterEventLock({ client, operation: "delete", eventId: id });
           owner = eventOwnerOfRow(row);
           if (eventWriteBasis(ctx, owner) !== basis) throw notFound();
         } else if (!(await ownDeletionOwner(client))) {
@@ -1488,8 +1490,9 @@ export async function deleteEvent(ctx, eventId, body) {
     },
     async writeRecord({ client, out, prepared, hash }) {
       await client.query(
-        `select calendar.delete_event($1, $2, $3, $4, $5, $6, $7)`,
-        [out.eventId, canonical.expectedRevision, ctx.userId, prepared.basis, requestKey, hash, JSON.stringify({ httpStatus: 200, eventId: out.eventId })],
+        `select calendar.delete_event_checked($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [out.eventId, canonical.expectedRevision, ctx.userId, prepared.basis, requestKey, hash,
+          JSON.stringify({ httpStatus: 200, eventId: out.eventId }), ctx.workspace.type, ctx.workspace.scopeId],
       );
     },
     async beforeCommit(client, out) {
