@@ -129,43 +129,81 @@ estimates, Metrics, Dashboards and Imports follow separately.
 
 ### Transaction and browser
 
-Use the same transaction for authority and each staff write. In a native club/team workspace, take
-the applicable shared club ceiling lock before row locks and call `public.lock_permission_actor`
-to lock the actor's roles. Use `public.user_has_permission` for both words under those locks.
-The lock function's return value describes role-administration authority and is unsuitable for
-authorizing a schedule. Revalidate the active native workspace relationship under lock. Keep
-the schedule owner and target rules in force, and recheck the owner on the row locked for writes.
+Use a write-only schedule helper for the seven mounted writes. Keep the shared scope resolver's
+GET and planned-load callers on their existing paths. Reuse the one request-bound workspace
+snapshot, including its owner context, throughout the write. In a native club/team transaction,
+derive the active club from that snapshot, obtain its shared ceiling lock before row locks,
+then call `public.lock_permission_actor` and check both permission words with
+`public.user_has_permission`. The lock function's return value describes role administration
+and cannot authorize scheduling. Recheck the native workspace relationship and exact schedule
+owner. Use the transaction's checked-out client for mutable team, club and athlete membership
+validation and target/schedule row checks. Order the locks ceiling → actor → target or schedule
+rows. Preserve the existing schedule, occurrence and assignment lock order within each route.
 
 Preserve schedule UPDATE locks for edit and lifecycle changes. Schedule-again reads a source and
-its defaults. Capture and recheck the source under the write transaction after authorization before
-copying, while keeping its existing create-on-retry behavior. Remind keeps schedule SHARE, occurrence
-SHARE in ID order and assignment UPDATE in ID order. Preserve cooldown, deduplication and
-post-commit notification emission. A refused request leaves no changes or notification.
+its defaults. Capture and recheck the locked source in the write transaction before copying.
+Its existing create-on-retry behavior stays. Remind keeps schedule SHARE, occurrence SHARE in ID
+order and assignment UPDATE in ID order. Preserve cooldown, deduplication and post-commit
+notification emission. A refused request leaves no changes or notification.
 
-Use the existing server-projected permission for the Schedule toolbar and schedule detail controls
-in `training-load-view.js` and their dispatched actions. Users with read access can open schedule
-detail. Preserve the distinct platform/private branches. A native writer with permission data
-explicitly unavailable gets no write controls. No new screen or client-side role authority.
+The bridge release has no new client permission gating. After the older writers are drained,
+the second release uses the server-projected permission for the Schedule toolbar, schedule detail
+controls and their dispatched actions. Users with read access can open schedule detail. Preserve
+the existing platform and private-coach paths. A native writer whose permission data is
+unavailable gets no write controls. No new screen or client-side source of authority.
 
-### Migration and release
+### Two-release rollout and test gates
 
-One focused migration is expected. Confirm the slot before authoring. Pin the v98
-`permission_word_honoured(text)` body and retain its Calendar words. Enable the schedule word in
-SQL and the server's checked list together. Seed only native basic holders, their live club
-versions and live customs as required by R4 §7.4. Use the audit rows, revision bumps, ceiling lock
-order and no pending version question rule. Preserve independently created roles and existing
-schedule, recurrence and athlete RPE functions. Run read-only preflight and postcheck and an
-isolated apply → rollback → identical catalog and audited seed data → reapply rehearsal.
-Rollback requires a quiet moment and refuses for altered bodies, grants, seeded revisions,
-unsafe use or later migrations.
+**Release 1, bridge.** One focused migration, v99 with the exact prefix reserved before SQL.
+Pin the v98 `permission_word_honoured(text)` body, preserve its Calendar words and honor
+`load.schedule.manage` in SQL. Seed existing native basic holders and their live versions and
+customs under R4 §7.4, including audit rows, revision bumps, ceiling order and no new version
+question. Independently created roles and existing schedule, recurrence and athlete RPE
+functions stay unchanged. The bridge checks both native words in SQL under the transaction locks
+on all seven writes. It fails closed if the schema, word or required scope is unavailable.
+The bridge neither bypasses the Manage check while rolling out nor takes an unscoped actor's
+word as authority. Preserve separate platform and private ownership rules.
 
-The old binary retains its existing native schedule rights while it serves. Seed compatibility
-keeps those writers working during the rollout. Rehearse all seven routes on the previous build
-against the migrated database. Allow new permission changes for this slice only after the
-new build is healthy and the old instances are confirmed drained. Document how release operations
-enforce that boundary before freeze. If reliable drain cannot be verified, require an explicit
-database cutover design before deployment. Production migration and any activation have their
-own recorded orders.
+The database can store the seeded word while JS still treats it as unavailable for role edits.
+Keep it out of the native `/me` projection and the JS checked/editable inventory during this
+release. The existing platform projection lists all permission names and is unchanged. There
+is no new client gating during the bridge. Test this intentional SQL/JS inventory difference
+explicitly, and retain other role catalog and inventory assertions.
+
+During the roll the actual previous server may still write with its existing authority.
+The seed must preserve that authority and older role operations must not remove or accidentally
+grant the staged word. Verify, using the exact previous production binary **and** the exact
+bridge binary against a fresh migrated disposable database:
+
+- All seven native schedule writes continue for seeded holders, while the bridge rejects a
+  missing word or closed licence through its transaction checks. Existing view-only and cross-
+  workspace refusals, Calendar Ask athletes and athlete self feedback still hold.
+- Full-list basic role edits preserve the staged word and reject a crafted omission or add.
+  Create/edit a club version and a custom of a seeded role using unrelated editable words.
+  Confirm each inherited set retains the staged word, and direct add/remove requests are
+  refused. Verify accepting the default and ending a custom restore an effective set still
+  containing the word where seeded. Copy as a new independent role keeps the source intact and
+  does not grant the unavailable word to the copy. Check persistence, audit/revision and
+  effective holdings, rather than relying on catalog flags or HTTP shape alone.
+- If an older or bridge role operation can remove the staged word or apply a new grant before
+  drain, stop before deploy and change the bridge design. A green health endpoint alone is
+  insufficient evidence of server compatibility or of drain.
+
+**Release 2, exposure.** Require authoritative evidence that every pre-bridge writer has
+stopped serving, including all replicas and any other app process that can execute the routes.
+Record the prior and new deployment IDs/builds, the serving inventory and the completed retirement
+event. Keep the role word uneditable if that evidence is unavailable. After drain, a second small
+change adds the word to the checked/editable JS catalog, native `/me` projection and client
+controls. Both releases use the same SQL checks in transactions. Test the second release's
+inventory, effective permissions, grant/revoke behavior and native controls against v99.
+Train/Calendar deployments and the separate mobile Calendar PR have no automatic coupling.
+Production migration, the follow-up release and any activation require their own recorded orders.
+
+Run read-only preflight and postcheck and an isolated apply → rollback → identical catalog and
+audited seed data → reapply rehearsal. Rollback requires a quiet moment and refuses for altered
+bodies, grants, seeded revisions, unsafe use or later migrations. Record the permitted
+application rollback boundaries for each release in its runbook. Once exposed rights have been
+changed, use a forward fix instead of restarting a writer that ignores them.
 
 ### Release gate
 
