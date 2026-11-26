@@ -93,9 +93,9 @@ test("1. every seeded view word: the seeded holders pass the module's read gate 
     }
     proven.push(...row.words);
   }
-  // Every VIEW word seeded by v92 has its row. Calendar event management is seeded separately by v98.
+  // Every VIEW word seeded by v92 has its row. Calendar and schedule management have separate migrations.
   const seeded = (await k.query(`select permission_word from public.permission_role_items where role_id = '00000000-0000-4000-8000-000000000843'
-      and permission_word not in ('org.view', 'athletes.manage', 'athletes.remove', 'calendar.events.manage') order by 1`)).rows.map((r) => r.permission_word);
+      and permission_word not in ('org.view', 'athletes.manage', 'athletes.remove', 'calendar.events.manage', 'load.schedule.manage') order by 1`)).rows.map((r) => r.permission_word);
   assert.deepEqual([...proven].sort(), seeded);
   void crypto;
 });
