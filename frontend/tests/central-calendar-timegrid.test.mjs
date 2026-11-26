@@ -282,11 +282,14 @@ test("phone offers List and Time grid and renders all seven days", () => {
   assert.equal(draw(cal, "phone").querySelector(".cc-timegrid"), null);
 });
 
-test("phone week gives overlapping events one full-width day slot with a link to the day's list", () => {
+test("phone week shows icons for a pair and counts larger overlaps in full-width slots", () => {
   const document = draw(k7State({ view: "week", mode: "grid" }), "phone");
-  const group = document.querySelector('.cc-tg-col .cc-tg-more[data-date="2026-10-13"]');
+  const group = document.querySelector('.cc-tg-col .cc-tg-more-pair[data-date="2026-10-12"]');
   assert.equal(group.dataset.dayList, "1");
-  assert.ok(Number(group.textContent.match(/\d+/)[0]) > 1);
+  assert.equal(group.querySelectorAll(".cc-tg-pair-icon").length, 2);
+  assert.equal(group.querySelector(".cc-tg-pair-count").textContent, "2");
+  assert.match(group.getAttribute("aria-label"), /2 overlapping events/);
+  assert.match(document.querySelector(".cc-tg-col .cc-tg-more:not(.cc-tg-more-pair)").textContent, /\+\d+/);
   assert.match(group.parentElement.getAttribute("style"), /--cc-tg-width:1(?:;|$)/);
 });
 

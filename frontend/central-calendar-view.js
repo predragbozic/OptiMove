@@ -874,10 +874,14 @@ function bandItemsOf(items) {
 }
 
 // "+N more" (2.3): opens the day as the Day view's list, where every item of the day is listed in the server's order.
-function renderTimeGridMoreHtml(date, count, { from = "" } = {}) {
-  const label = `${count} more item${count === 1 ? "" : "s"}, ${centralCalendarLongDate(date)}${from ? `, from ${from}` : ""}: open the day`;
+function renderTimeGridMoreHtml(date, count, { from = "", pair = null } = {}) {
+  const title = pair ? `2 overlapping events: ${pair.map(centralCalendarTitle).join(", ")}` : `${count} more item${count === 1 ? "" : "s"}`;
+  const label = `${title}, ${centralCalendarLongDate(date)}${from ? `, from ${from}` : ""}: open the day`;
+  const contents = pair
+    ? `<span class="cc-tg-pair-icons" aria-hidden="true">${pair.map((item) => itemIconHtml(item, "cc-tg-pair-icon", 14)).join("")}</span><span class="cc-tg-pair-count" aria-hidden="true">2</span>`
+    : `+${count}<span class="cc-tg-more-word"> more</span>`;
   // In a narrow column only "+3" shows (a container query); the label keeps the whole sentence.
-  return `<button type="button" class="cc-tg-more" data-action="central-calendar-open-day" data-day-list="1" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(label)}">+${count}<span class="cc-tg-more-word"> more</span></button>`;
+  return `<button type="button" class="cc-tg-more${pair ? " cc-tg-more-pair" : ""}" data-action="central-calendar-open-day" data-day-list="1" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(label)}">${contents}</button>`;
 }
 
 const clockOf = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
@@ -918,7 +922,9 @@ function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false, 
     const count = visible.get(date).length;
     let html = "";
     let next = 0;
-    const moreHtml = (block) => `<div class="cc-tg-box cc-tg-box-more" role="listitem" style="${boxStyle(block)}">${renderTimeGridMoreHtml(date, block.items.length, { from: clockOf(block.top + startHour * 60) })}</div>`;
+    const moreHtml = (block) => `<div class="cc-tg-box cc-tg-box-more" role="listitem" style="${boxStyle(block)}">${renderTimeGridMoreHtml(date, block.items.length, {
+      from: clockOf(block.top + startHour * 60), pair: phone && !dayView && block.items.length === 2 ? block.items : null,
+    })}</div>`;
     placed.forEach((box, index) => {
       const classes = ["cc-tg-box"];
       if (box.openEnd) classes.push("is-open-end");

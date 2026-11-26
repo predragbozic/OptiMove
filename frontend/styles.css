@@ -23853,6 +23853,35 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     font-weight: 700;
   }
 
+  .cc-layout-phone .cc-timegrid .cc-tg-box-more > .cc-tg-more-pair {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    color: var(--text);
+  }
+
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box-more > .cc-tg-more-pair {
+    flex-direction: row;
+    gap: 6px;
+  }
+
+  .cc-layout-phone .cc-tg-pair-icons { display: inline-flex; align-items: center; gap: 2px; }
+  .cc-layout-phone .cc-tg-pair-icon { flex: 0 0 13px; width: 13px; height: 13px; color: currentColor; }
+  .cc-layout-phone .cc-tg-pair-count {
+    min-width: 16px;
+    height: 15px;
+    padding-inline: 3px;
+    border-radius: 5px;
+    background: var(--accent-soft);
+    font-size: 10px;
+    line-height: 15px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
   .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box.is-tall .cc-card-marks {
     display: inline-flex;
     gap: 1px;
