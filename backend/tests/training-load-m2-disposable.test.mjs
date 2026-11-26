@@ -278,7 +278,7 @@ test("M-2: the real writer locks targets in D45 order without rewriting the subm
     assert.deepEqual(insertOrder.map(({ params }) => params[2] ?? params[3] ?? params[4]), targets.map(({id}) => id));
 
     observed.length = 0;
-    await create(roles.teamCoach, teams.t1, "team");
+    await create(roles.clubAdmin, clubs.c1, "club");
     const order = observed.map(({ sql }) => sql);
     const firstRowLock = order.findIndex((sql) => sql.includes("for share"));
     assert.equal(order[0], "begin");
