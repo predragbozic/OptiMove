@@ -1945,7 +1945,13 @@ async function resolveValidExternalTargets(client, scope, rawTargets) {
     return { ok: false, status: 400, error: "One of the chosen targets has an invalid id." };
   }
   const queryRunner = (sql, params) => client.query(sql + " for share", params);
-  for (const target of targets) {
+  // D45: team rows precede membership/athlete rows. Take locks in a
+  // consistent order regardless of the picker order, keeping the latter for
+  // insertion and responses.
+  const targetLockOrder = { team: 0, club: 1, athlete: 2 };
+  const ordered = [...targets].sort((a, b) => targetLockOrder[a.kind] - targetLockOrder[b.kind]
+    || a.id.toLowerCase().localeCompare(b.id.toLowerCase()));
+  for (const target of ordered) {
     const allowed = await validateExternalTargetInScope(scope, target, queryRunner);
     if (!allowed) return { ok: false, status: 403, error: "One of the chosen targets is outside your access." };
   }

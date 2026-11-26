@@ -238,3 +238,56 @@ test("M-2: role editing inherits and preserves seeded words but cannot make them
   });
   assert.equal(add.status, 409, add.text);
 });
+
+test("M-2: the real writer locks targets in D45 order without rewriting the submitted set", async () => {
+  const { roles, clubs, teams, athletes } = actors;
+  const lower = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+  const teamIds = [teams.t1, teams.t2].sort(lower);
+  const athleteIds = [athletes.athlete.athleteId, athletes.athleteU1.athleteId].sort(lower);
+  const targets = [
+    { kind: "athlete", id: athleteIds[1] },
+    { kind: "team", id: teamIds[1] },
+    { kind: "club", id: clubs.c1 },
+    { kind: "athlete", id: athleteIds[0] },
+    { kind: "team", id: teamIds[0] },
+  ];
+  const observed = [];
+  const originalConnect = world.appPool.connect;
+  world.appPool.connect = function (...args) {
+    if (args.length) return originalConnect.apply(this, args);
+    return originalConnect.call(this).then((client) => {
+      const originalQuery = client.query;
+      const release = client.release;
+      client.query = function (sql, params) {
+        observed.push({ sql, params });
+        return originalQuery.call(this, sql, params);
+      };
+      client.release = function (...options) {
+        client.query = originalQuery;
+        return release.apply(this, options);
+      };
+      return client;
+    });
+  };
+  try {
+    const response = await call(roles.platformAdmin.cookie, "", "POST", { ...body(clubs.c1, "club"), targets });
+    assert.equal(response.status, 201, response.text);
+    const targetLocks = observed.filter(({ sql }) => /from public[.](teams|clubs|athletes) where.*for share$/.test(sql));
+    assert.deepEqual(targetLocks.map(({ params }) => params[0]), [...teamIds, clubs.c1, ...athleteIds]);
+    const insertOrder = observed.filter(({ sql }) => sql.includes("insert into training_load.external_schedule_targets"));
+    assert.deepEqual(insertOrder.map(({ params }) => params[2] ?? params[3] ?? params[4]), targets.map(({id}) => id));
+
+    observed.length = 0;
+    await create(roles.teamCoach, teams.t1, "team");
+    const order = observed.map(({ sql }) => sql);
+    const firstRowLock = order.findIndex((sql) => sql.includes("for share"));
+    assert.equal(order[0], "begin");
+    assert.match(order[1], /select public[.]lock_club_ceiling/);
+    assert.match(order[2], /select public[.]lock_permission_actor/);
+    assert.ok(firstRowLock > 2);
+    assert.match(order.at(-2), /update training_load[.]external_schedule_m2_use/);
+    assert.equal(order.at(-1), "commit");
+  } finally {
+    world.appPool.connect = originalConnect;
+  }
+});
