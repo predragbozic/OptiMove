@@ -49,6 +49,9 @@ test("phone pinch shows three aligned columns; a swipe pans then changes week", 
   touch("touchmove", [[137, 100], [162, 100]]);
   touch("touchend", [[137, 100]]);
   sameColumns([0, 1, 2, 3, 4, 5, 6]);
+  calendar.insertAdjacentHTML("beforeend", '<div class="athlete-switcher"></div>');
+  swipe(calendar.querySelector(".athlete-switcher"));
+  assert.equal(next, 1);
   calendar.insertAdjacentHTML("beforeend", '<button class="cc-sheet-backdrop"></button><aside class="cc-sheet"></aside>');
   swipe(calendar.querySelector(".cc-sheet-backdrop"));
   assert.equal(next, 1);
