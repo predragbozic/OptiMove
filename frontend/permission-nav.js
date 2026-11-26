@@ -31,6 +31,14 @@ export function canCreateCalendarEvents(workspaceType, user = state.currentUser)
     && holdsPermission("calendar.events.manage", user?.permissionsUnavailable !== true, user));
 }
 
+export function canManageExternalSchedules(user = state.currentUser) {
+  const workspaceType = user?.activeWorkspace?.type;
+  if (workspaceType === "platform" || workspaceType === "private_coach") return true;
+  if (workspaceType !== "club" && workspaceType !== "team") return false;
+  const held = heldPermissions(user);
+  return Boolean(held?.has("load.view.team") && held.has("load.schedule.manage"));
+}
+
 // Settings tabs (and the sidebar's Settings entries) that a honoured word decides. Any other tab is not listed here.
 const SETTINGS_TAB_WORDS = Object.freeze({
   overview: ["org.view"],

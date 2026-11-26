@@ -81,7 +81,7 @@ function fakeAction(dataset, value) {
 // itself overrides it for a workspace-switch scenario.
 function resetState() {
   clearAllViewCache();
-  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-1" } };
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-1" }, permissions: ["load.view.team", "load.schedule.manage"] };
   state.trainingLoad = emptyTrainingLoadState();
   state.athletes = [];
   queried = {};
@@ -567,6 +567,42 @@ test("G2. Results only ever lists RATED sessions in the agenda - an unrated plan
   const html = renderTrainingLoadResultsHtml();
   assert.equal((html.match(/training-load-session-row/g) || []).length > 0, true);
   assert.ok(!html.includes("Not rated"), "Results never shows an unrated row at all");
+});
+
+test("M-2. external RPE schedule reads stay available when the native write controls are closed", async () => {
+  resetState();
+  installFetchMock(() => { throw new Error("A refused write action must not send any request"); });
+  const manager = ["load.view.team", "load.schedule.manage"];
+  const setUser = (type, permissions, unavailable = false) => {
+    state.currentUser = { id: "coach-1", activeWorkspace: { type, scopeId: "scope-1" }, permissions, permissionsUnavailable: unavailable };
+  };
+  setUser("team", manager);
+  state.trainingLoad.scheduleDetail = {
+    schedule: { id: "schedule-1", eventName: "Session presentation", status: "active" }, targets: [],
+  };
+  assert.match(renderTrainingLoadScheduleHtml(), /New RPE session/);
+  assert.match(renderTrainingLoadScheduleHtml(), /data-action="training-load-open-edit-external-schedule"/);
+  assert.match(renderTrainingLoadScheduleHtml(), /data-action="training-load-external-schedule-again"/);
+  assert.match(renderTrainingLoadScheduleHtml(), /data-status="pause"/);
+  for (const user of [
+    ["team", ["load.view.team"]], ["club", ["load.schedule.manage"]], ["team", manager, true],
+    ["club", undefined], ["club_view", manager], ["team_view", manager], ["athlete", manager],
+  ]) {
+    setUser(...user);
+    const html = renderTrainingLoadScheduleHtml();
+    assert.match(html, /Session presentation/);
+    assert.match(html, /Back to schedule/);
+    assert.doesNotMatch(html, /training-load-(?:open-schedule-form|open-edit-external-schedule|external-schedule-again|set-external-schedule-status)/);
+    for (const action of ["open-schedule-form", "open-edit-external-schedule", "external-schedule-again", "set-external-schedule-status", "schedule-submit"]) {
+      await handleTrainingLoadAction(fakeAction({ action: "training-load-" + action, scheduleId: "schedule-1", status: "cancel" }), { renderTrainingLoad });
+    }
+  }
+  assert.equal(fetchCalls.length, 0);
+  assert.equal(state.trainingLoad.scheduleForm, null);
+  for (const type of ["platform", "private_coach"]) {
+    setUser(type);
+    assert.match(renderTrainingLoadScheduleHtml(), /New RPE session/);
+  }
 });
 
 // Phase D: the rated/planned denominator moved from Athletes to Schedule

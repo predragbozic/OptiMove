@@ -83,11 +83,11 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
             (word === "calendar.events.manage" && oracle.canR1(ctx, "org.view", scope))
             || (word === "calendar.settings.manage" && clubAdminHere)
           );
-          const stagedSchedule = word === "load.schedule.manage" && ctx.platformRoles.length === 0
+          const seededSchedule = word === "load.schedule.manage" && ctx.platformRoles.length === 0
             && oracle.canR1(ctx, "org.view", scope);
           const rolesManage = word === "roles.manage" && clubAdminHere && ctx.platformRoles.length === 0;
-          const expected = rolesManage || seededView || seededCalendar || stagedSchedule ? true : r1;
-          if (expected !== r1 && !seededView && !seededCalendar && !stagedSchedule) differences++;
+          const expected = rolesManage || seededView || seededCalendar || seededSchedule ? true : r1;
+          if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);
           assert.equal(sql, expected, `${name}: twin(${word}) on ${scopeName}`);
           cells++;
