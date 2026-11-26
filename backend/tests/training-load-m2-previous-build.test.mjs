@@ -83,7 +83,7 @@ async function makeWorld(client) {
   const athlete = await actor("M2 Athlete");
   await fixture.makeAthlete(athlete.id);
   const id = (await client.query("update public.athletes set device_timezone = 'UTC' where user_id=$1 returning id", [athlete.id])).rows[0].id;
-  await client.query("insert into public.athlete_memberships (athlete_id,club_id,team_id,membership_type,status) values ($1,$2,$3,'team','active')", [id, club, team]);
+  await client.query("insert into public.athlete_memberships (athlete_id,club_id,team_id,membership_type,status) values ($1,$2,$3,'team','active'), ($1,$2,null,'club','active')", [id, club, team]);
   return { club, team, otherClub, otherTeam, pa, admin, coach, noRole, athlete, athleteId: id };
 }
 
@@ -215,7 +215,7 @@ async function exerciseRolePolicy(server, client, world, original) {
   assert.equal(await effective(client, world.coach.id, "team", world.team), true);
 }
 
-async function exerciseSchedules(server, client, world) {
+async function exerciseSchedules(server, client, world, writer, scopeType) {
   // A UTC offset that puts the local clock near noon avoids a 23:59 endpoint race.
   const offset = (12 - new Date().getUTCHours() + 36) % 24 - 12;
   const timezone = offset === 0 ? "UTC" : "Etc/GMT" + (offset > 0 ? "-" : "+") + Math.abs(offset);
@@ -225,28 +225,34 @@ async function exerciseSchedules(server, client, world) {
     eventName: "M2 role rollout", scheduleKind: "one_time", timezone, startDate: day,
     opensTime: "00:00", closesTime: "23:59", targets: [{ kind: "athlete", id: world.athleteId }],
   };
-  const created = expect(await request(server, world.coach, S, "POST", payload), 201).schedules[0];
+  const created = expect(await request(server, writer, S, "POST", payload), 201).schedules[0];
   const route = S + "/" + created.id;
-  const storedOwner = (await client.query("select owner_scope, owner_team_id from training_load.external_schedules where id=$1", [created.id])).rows[0];
-  assert.deepEqual(storedOwner, { owner_scope: "team", owner_team_id: world.team });
-  const updated = expect(await request(server, world.coach, route, "PATCH", { eventName: "M2 edited" }), 200).schedule;
+  const storedOwner = (await client.query("select owner_scope, owner_team_id, owner_club_id from training_load.external_schedules where id=$1", [created.id])).rows[0];
+  assert.deepEqual(storedOwner, { owner_scope: scopeType, owner_team_id: scopeType === "team" ? world.team : null, owner_club_id: scopeType === "club" ? world.club : null });
+  const updated = expect(await request(server, writer, route, "PATCH", { eventName: "M2 edited" }), 200).schedule;
   assert.equal(updated.eventName, "M2 edited");
-  assert.equal(expect(await request(server, world.coach, route + "/pause", "POST"), 200).schedule.status, "paused");
-  assert.equal(expect(await request(server, world.coach, route + "/resume", "POST"), 200).schedule.status, "active");
+  assert.equal(expect(await request(server, writer, route + "/pause", "POST"), 200).schedule.status, "paused");
+  assert.equal(expect(await request(server, writer, route + "/resume", "POST"), 200).schedule.status, "active");
   const next = new Date(Date.parse(day) + 86400000).toISOString().slice(0, 10);
-  const again = expect(await request(server, world.coach, route + "/schedule-again", "POST", { startDate: next }), 201).schedule;
+  const again = expect(await request(server, writer, route + "/schedule-again", "POST", { startDate: next }), 201).schedule;
   assert.notEqual(again.id, created.id);
   assert.equal(again.eventName, "M2 edited");
   const today = expect(await request(server, world.athlete, "/api/training-load/athlete/today"), 200);
-  const assignment = today.sessions.find((row) => row.source === "scheduled_external");
-  assert.ok(assignment?.externalAssignmentId, "Athlete Home materializes today's schedule");
+  const pending = await client.query(
+    "select a.id from training_load.external_assignments a join training_load.external_schedule_occurrences o on o.id=a.occurrence_id " +
+    "where o.schedule_id=$1 and a.athlete_id=$2",
+    [created.id, world.athleteId],
+  );
+  assert.equal(pending.rowCount, 1, "Athlete Home materializes exactly one assignment for this schedule");
+  const assignment = today.sessions.find((row) => row.externalAssignmentId === pending.rows[0].id);
+  assert.ok(assignment, "the materialized assignment appears in Athlete Home");
   const reminders = { assignmentIds: [assignment.externalAssignmentId] };
-  assert.equal(expect(await request(server, world.coach, route + "/remind", "POST", reminders), 200).notifiedCount, 1);
-  assert.equal(expect(await request(server, world.coach, route + "/remind", "POST", reminders), 200).results[0].outcome, "skippedCooldown");
+  assert.equal(expect(await request(server, writer, route + "/remind", "POST", reminders), 200).notifiedCount, 1);
+  assert.equal(expect(await request(server, writer, route + "/remind", "POST", reminders), 200).results[0].outcome, "skippedCooldown");
   const notices = await client.query("select recipient_user_id from public.app_notifications where entity_type='training_load_external_assignment' and type='training_load_manual_reminder' and entity_id=$1", [assignment.externalAssignmentId]);
   assert.deepEqual(notices.rows, [{ recipient_user_id: world.athlete.id }]);
   expect(await request(server, world.athlete, "/api/training-load/external-assignments/" + assignment.externalAssignmentId + "/rpe", "POST", { rpe: 5, durationMinutes: 30 }), 201);
-  assert.equal(expect(await request(server, world.coach, route + "/cancel", "POST"), 200).schedule.status, "cancelled");
+  assert.equal(expect(await request(server, writer, route + "/cancel", "POST"), 200).schedule.status, "cancelled");
   const denied = await request(server, world.noRole, S, "POST", payload);
   assert.equal(denied.status, 403, denied.raw);
 }
@@ -280,7 +286,8 @@ for (const phase of ["previous", "bridge"]) {
       }
       t.diagnostic("previous=" + OLD + " bridge=" + BRIDGE + " v99_sha256=" + checksum);
       await exerciseRolePolicy(server, client, world, { version, custom });
-      await exerciseSchedules(server, client, world);
+      await exerciseSchedules(server, client, world, world.coach, "team");
+      await exerciseSchedules(server, client, world, world.admin, "club");
     } finally {
       try {
         await server?.stop();
