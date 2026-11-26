@@ -41,6 +41,17 @@ export function DashboardPageStrip({ pages, selectedPageId, page, busy, canManag
   },[selectedPageId]);
   const closeMenu = () => { if (menu.current) menu.current.open = false; onMenuOpenChange?.(false); };
   return <div className="tl-compact-page-row">
+    <label className="tl-compact-page-picker">Page
+      <select value={selectedPageId ?? ""} disabled={busy || !pages.length} onChange={event => {
+        const pageId = event.currentTarget.value;
+        // Route through the same delegated action as the desktop tabs.
+        Array.from(tabs.current?.children ?? []).find(button => button.dataset.pageId === pageId)?.click();
+      }}>
+        {pages.map(item => <option key={item.id} value={item.id}>
+          {item.name}{item.is_home && item.name !== "Home" ? " · Home" : ""}
+        </option>)}
+      </select>
+    </label>
     <nav ref={tabs} aria-label="Dashboard pages" className="tl-compact-page-tabs">{pages.map(item =>
       <button type="button" key={item.id} data-action="training-load-pages-select" data-page-id={item.id}
         aria-current={item.id === selectedPageId ? "page" : undefined} disabled={busy}>{item.name}{item.is_home && item.name !== "Home" ? " · Home" : ""}</button>)}</nav>
