@@ -218,3 +218,140 @@ changed, use a forward fix instead of restarting a writer that ignores them.
   Prove mutations that lose the View check, Manage check or owner match are caught separately.
   Run full backend disposable, frontend-fast, build and focused browser flows at phone and desktop
   widths, then obtain independent review.
+
+## M-3a: attendance decisions for a team session
+
+### Scope and behavior
+
+Activate the existing `load.roster.decide` permission for exactly these staff writes under
+`/api/training-activity/:activityId/roster`:
+
+| Method | Remaining path | Action |
+| --- | --- | --- |
+| PUT | `/:athleteId/decision` | Set or change one athlete's attendance state |
+| DELETE | `/:athleteId/decision` | Clear a prior decision |
+| POST | `/decisions` | Decide attendance for several athletes |
+| POST | `/complete` | Complete the roster |
+| POST | `/reopen` | Reopen the roster |
+
+The active native club must own the activity's team and the active native team must be that
+exact team. This is the roster's existing club-to-team rule. Hold both `load.view.team`
+and `load.roster.decide` in that active scope, including the licence ceiling, while the
+underlying native workspace and team remain available. Preserve the designated platform
+support path and the existing limits for private-coach and athlete workspaces. View-only
+workspaces retain roster reads and their current refusal behavior. Another club's role
+cannot authorize a write in the active workspace.
+
+Resolve the active workspace once per request and retain the request-bound context. Preserve
+the identical missing/foreign `404 notFound`, ordinary malformed-body validation, the v44
+roster-not-applicable rule and stable response codes. A valid native scope without the new
+write word is refused before changes or receipt disclosure. Keep the existing no-op,
+completion, fingerprint and conflict behavior for an authorized caller. Carry the requested
+activity identifier and canonical alias set exactly as today, including retries after a merge.
+
+Keep the `GET /:activityId/roster` read open according to its View scope. At exposure use
+a separate server-derived `viewer.canDecideRoster` flag for attendance, bulk actions,
+complete and reopen. Preserve `viewer.basis` and the independent controls for estimates,
+manual values and type changes. The present shared browser predicate is called before
+those action dispatches and must be split when the new flag is introduced. Existing server
+authorization remains the source of truth.
+
+Out of scope: the GPEXE approval-origin roster writer, import/undo and their receipt paths,
+self-report and athlete RPE, planned-session ownership or RPE switches, session type
+assignments, estimates, manual values, Metrics corrections, and identity/materialization
+writes. `decideImportStates` deliberately uses the shared `runRosterCommand` with an
+`origin` tied to the approval. Leave its authorization, request hash, replay window,
+receipt and undo behavior intact. The five staff callers opt into the new guard explicitly.
+Do not place it on the generic roster route wrapper or on shared roster triggers.
+
+### Transaction and recovery
+
+Read the current target and its club without taking a foreign resource lock. Within the
+write transaction, obtain the shared club ceiling before row locks. Order owner team and
+club row locks before the users-first rights locks to match the v54 structural writer
+and team-archive paths. Take `public.lock_permission_actor` and verify both fixed words
+with `public.user_has_permission` in the actual active native scope. The return value
+of the lock helper is for role administration. Under lock, recheck team membership of
+the active club, native role holding and active owners. Preserve the subsequent team
+import mutex, completion/roster team lock as applicable, canonical alias/resource locks,
+and receipt order. Record SQL order and prove it is compatible with role revocation,
+club/team archive, import and merge. The team/club context of the canonical activity is
+rechecked if resolution changes under lock.
+
+Check authority before reading a saved receipt. The new guard applies to ordinary
+staff request-key replays and to the fresh connection used by `findStoredResult`
+after an unknown COMMIT. That recovery path must repeat the scoped authorization and
+canonical owner check in a single bounded, checked transaction before reading or returning
+the stored result. Keep the existing total deadline and broken-connection handling,
+request hash and replay semantics. A revoked viewer sees no saved result or details,
+and the response must not claim the earlier write was rolled back. Preserve the
+legacy recovery contract for the excluded approval-origin writer.
+
+### Migration, bridge and exposure
+
+Use one new audited seed migration, with exact slot reserved first. Gate on the
+current `permission_word_honoured(text)` body, preserve all accepted v99 and earlier
+words, and seed the word into the two native basic roles plus their applicable live
+versions/customs under R4 §7.4. Preserve independent custom role definitions, audited
+change rows, revision updates and pending-version behavior. Record first checked use
+and retain the relevant R4 lock and ACL boundaries. Restore only the staged seed and
+exact earlier function body during authorized rollback. Refuse rollback after a later
+migration, changed function or staged grant, changed seed state or checked use.
+
+Bridge release: run the fresh transaction-time SQL check for all five staff routes
+while the new word stays unavailable to edit and ordinary native `/me` and browser
+projection remain unchanged. Rehearse the exact previous production binary and the
+bridge on the migrated disposable database. Both must keep seeded staff attendance
+rights operational and must protect the staged word in full-list role edit, copy,
+version/default acceptance, custom edit/end and bulk removal. Demonstrate no row/audit
+or request-receipt change on refusal. Prove legacy replay receipts are still read by
+an authorized bridge caller, including an existing receipt through an alias. Preserve
+the observed platform projection contract and exact import/self-service cases.
+
+Exposure release: after authoritative verification that every pre-bridge staff writer
+has stopped serving, check and project the word in JS and show the role-editor
+controls through the existing Roles and Training Load APIs. Hold exposure if the
+retirement or role-editor compatibility cannot be proven. The bridge and exposure
+binaries both enforce SQL in their overlap. Build, role-policy exposure and any
+production migration follow the approved release process. Once the word can be changed,
+an earlier writer ignoring it is outside the rollback boundary.
+
+### Verification
+
+- Pin all five mounted routes, with successful club/team cases, mixed accounts, a
+  closed licence, View missing, Decide missing, a different team in the same club
+  for the native team writer, and byte-identical foreign/missing activity responses.
+  Assert denied requests change neither decision/completion state nor receipts.
+- Use the current v54/alias/order fixtures in `activity-roster-5a2.test.mjs`
+  (idempotency through aliases, rights loss, two writers, import and membership
+  serialization, lost COMMIT). Add deterministic ceiling/revocation races, lost
+  COMMIT with permission removed before recovery and no-op/receipt parity.
+- Keep `activity-roster-5a1.test.mjs`, `activity-roster-self-report.test.mjs`,
+  `import-states-j20c.test.mjs`, `session-undo-roster-o1.test.mjs` and the V role sweep
+  green against the applicable baseline. Verify historical migration rehearsals use
+  their exact own cutoff.
+- Exercise independent mutations removing scope ownership, View or Decide, skipping
+  fresh receipt authorization and weakening locked owner revalidation. Rehearse
+  apply → rollback → identical catalogue and audited seed → reapply on isolated
+  PostgreSQL 17; verify rollback refusals and exact old/bridge compatibility.
+- Run the full backend disposable kind, frontend-fast, build and focused role/roster
+  browser flows, including `roster-decisions.test.mjs` at phone and desktop widths.
+  Independent review before release.
+
+### Training Load next slices
+
+M-3b covers the estimated-value save with `load.estimates.manage`. The proposal is
+part of the estimate editor and should follow that permission at exposure. Ordinary
+measured reads, Dashboard estimate policy and athlete confidentiality retain their
+existing contract.
+
+M-3c covers `load.activities.manage` on seven explicit staff HTTP commands: accept
+and dismiss a match suggestion, reparent and merge participants, and the three
+materialization endpoints. Separate authorization at the explicit staff entry and its
+transaction from automatic/self/Calendar materialization callers.
+
+Changes to recorded measurements (manual save/restore/remove and Metrics correction)
+need a separate permission decision. Session-wide type and per-athlete type change
+classification. Neither is an attendance decision. Decide their mapping together in
+a later contract. Keep model administration of the session-type catalog separate from
+assignment of a type to an activity or participant. Imports remain last.
