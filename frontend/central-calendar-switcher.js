@@ -244,8 +244,8 @@ export function renderCentralCalendarSearchResultsHtml(cal, model) {
   return renderAthleteSwitcherResultsHtml(searchArgs(cal, model));
 }
 
-export function renderCentralCalendarSwitcherHtml(cal, model, { layout = "wide", counts = null } = {}) {
-  if (!model || (model.type === "platform" && !model.showGroups)) return "";
+export function renderCentralCalendarSwitcherHtml(cal, model, { layout = "wide", counts = null, phoneAction = "" } = {}) {
+  if (!model || (model.type === "platform" && !model.showGroups)) return phoneAction;
   const phone = layout === "phone";
   const open = !phone || cal.switcher.open;
   const summary = centralCalendarSwitcherSummary(cal, model);
@@ -273,14 +273,14 @@ export function renderCentralCalendarSwitcherHtml(cal, model, { layout = "wide",
       body += `<p class="athlete-switcher-note" role="status">Teams could not be loaded. <button type="button" class="plain-button cc-inline-button" data-action="${CC_SWITCHER_ACTIONS.orgRetry}">Try again</button></p>`;
     }
   }
-  if (!body) return "";
+  if (!body) return phoneAction;
   const fold = phone
     ? `<button type="button" class="athlete-switcher-fold" data-action="${CC_SWITCHER_ACTIONS.toggle}" aria-expanded="${open ? "true" : "false"}"><span class="cc-audience-label">${model.type === "platform" ? "Club &amp; team" : model.showGroups ? "Team &amp; athlete" : "Athlete"} <small>${escapeHtml(summary.text)}</small></span><span class="cc-filters-chevron" aria-hidden="true"></span></button>`
     : "";
   // A computer's box can be hidden; it then keeps one line (who is chosen) and the one control to show it again.
   const hidden = !phone && centralCalendarStripHidden(cal);
   const head = phone ? "" : `<div class="athlete-switcher-head"><span class="athlete-switcher-head-text">${escapeHtml(summary.text)}</span><button type="button" class="plain-button athlete-switcher-hide" data-action="${CC_SWITCHER_ACTIONS.hide}" aria-expanded="${hidden ? "false" : "true"}">${hidden ? "Show athletes" : "Hide athletes"}</button></div>`;
-  return `<section class="athlete-switcher${open ? " is-open" : ""}${hidden ? " is-collapsed" : ""}" aria-label="Team and athlete">${fold}${head}<div class="athlete-switcher-body"${open && !hidden ? "" : " hidden"}>${body}</div></section>`;
+  return `<section class="athlete-switcher${open ? " is-open" : ""}${hidden ? " is-collapsed" : ""}" aria-label="Team and athlete">${phone && phoneAction ? `<div class="cc-audience-actions">${fold}${phoneAction}</div>` : fold}${head}<div class="athlete-switcher-body"${open && !hidden ? "" : " hidden"}>${body}</div></section>`;
 }
 
 // F2: the green line above the grid whenever the choice is not Everyone.

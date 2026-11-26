@@ -735,13 +735,17 @@ function renderSwitchIcon(value) {
   return `<svg class="cc-switch-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${CENTRAL_CALENDAR_SWITCH_ICONS[value] || ""}</svg>`;
 }
 
-function renderToolbarHtml(cal, layout, { canCreate = false } = {}) {
-  const unit = cal.view === "month" ? "month" : cal.view === "day" ? "day" : "week";
+function renderNewEventHtml(cal, canCreate) {
   // K2a-2: New event only where this workspace may create one (a club, a
   // team, a private coach); the server decides again on the write.
-  const newEvent = canCreate
+  return canCreate
     ? `<button type="button" class="plain-button cc-primary cc-new-event" data-action="central-calendar-new-event"${cal.form || cal.linkWrite ? " disabled" : ""}>${renderIconSvg("calendar-event", { size: 18 })}<span>New event</span></button>`
     : "";
+}
+
+function renderToolbarHtml(cal, layout, { canCreate = false } = {}) {
+  const unit = cal.view === "month" ? "month" : cal.view === "day" ? "day" : "week";
+  const newEvent = layout === "phone" ? "" : renderNewEventHtml(cal, canCreate);
   const segment = (value, label, action, attr, current) => `<button type="button" class="cc-segment${current === value ? " is-active" : ""}" data-action="${action}" ${attr}="${value}" aria-pressed="${current === value ? "true" : "false"}" aria-label="${label}" title="${label}">${renderSwitchIcon(value)}</button>`;
   // K7 (Q1): the Day view on wide has the same switch, one choice for both; it shows List while "+N more"'s list is open.
   const mode = cal.view === "day" && cal.dayList ? "list" : cal.weekMode || "list";
@@ -1802,7 +1806,7 @@ export function renderCentralCalendarHtml(sourceCal, { today, layout = "wide", r
   return `<section class="central-calendar cc-layout-${escapeAttr(layout)} cc-view-${escapeAttr(cal.view)}${panelOpen ? " cc-panel-open" : ""}" aria-label="Calendar">
       ${layout === "wide" ? renderK2c3FormBandHtml(cal.form) : ""}
       ${cal.anchor ? renderToolbarHtml(cal, layout, { canCreate }) : ""}
-      ${renderCentralCalendarSwitcherHtml(sourceCal, switcherModel, { layout, counts })}
+      ${renderCentralCalendarSwitcherHtml(sourceCal, switcherModel, { layout, counts, phoneAction: layout === "phone" && cal.anchor ? renderNewEventHtml(cal, canCreate) : "" })}
       ${renderCentralCalendarShowingLineHtml(sourceCal, switcherModel, { onlyLabel: only ? `only ${CENTRAL_CALENDAR_SHOW_ONLY_LABELS[only] || only}` : "" })}
       ${renderFiltersHtml(sourceCal, counts, teams, { compact: layout === "phone" && cal.view === "week" && cal.weekMode === "grid" })}
       ${cal.refreshError ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.refreshError)} <button type="button" class="plain-button cc-inline-button" data-action="central-calendar-retry">Try again</button></p>` : ""}

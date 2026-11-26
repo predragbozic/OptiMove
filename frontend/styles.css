@@ -23964,11 +23964,45 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     width: 14px;
     height: 14px;
   }
+
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-body {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr);
+    align-items: center;
+    align-content: center;
+    gap: 2px 4px;
+  }
+
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-top { grid-column: 1; }
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-icon { display: block; width: 14px; height: 14px; }
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-title { grid-column: 2; }
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-marks { grid-column: 2; }
+
+  .cc-layout-phone {
+    --accent: #374151;
+    --accent-soft: #eef0f3;
+  }
+
+  .cc-layout-phone :is(.cc-card-stripe, .cc-team-dot, .cc-mini-dot, .cc-chip-dot) {
+    background: #8793a2;
+  }
+
+  .cc-layout-phone .cc-team-pill { background: var(--surface-soft); }
+  .cc-layout-phone .cc-timegrid-cell.is-today { background: #eef0f3; }
+
+  .cc-layout-phone .cc-panel .cc-primary:not(.cc-danger) {
+    background: var(--surface, #fff);
+    border-color: var(--line-strong, #a8b3c0);
+    color: var(--text);
+    font-weight: 700;
+  }
   .cc-time-picker button[aria-pressed="true"] { background: var(--bg); border-color: var(--line-strong); }
   .cc-time-picker-apply { grid-column: 1 / -1; }
   .cc-time-picker-clear { margin-top: 6px; }
   .cc-audience-label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
   .cc-audience-label small { color: var(--muted); font-weight: 400; }
+  .cc-audience-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 8px; }
+  .cc-audience-actions > .cc-new-event { grid-column: auto; align-self: stretch; white-space: nowrap; }
   .cc-time-wheel { display: grid; gap: 2px; touch-action: none; }
   .cc-time-wheel output {
     padding: 6px;
