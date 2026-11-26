@@ -2264,6 +2264,15 @@ async function assertStagedRoleOperations(call) {
     "select public.user_has_permission($1,$2,'team',$3) as allowed", [s.coach.id, word, s.teamId],
   ))[0].allowed;
   const original = await defaultRole();
+  const clubAdmin = await clubAdminOf(s.clubId, "Staged roster club admin");
+  for (const native of [s.coach, clubAdmin]) {
+    const me = await call("/api/auth/me", { method: "GET", cookie: native.cookie });
+    assert.equal(me.status, 200, me.text);
+    assert.ok(me.body.user.permissions.includes("load.view.team"), me.text);
+    assert.ok(!me.body.user.permissions.includes(word), me.text);
+  }
+  const platformMe = await call("/api/auth/me", { method: "GET", cookie: actor.cookie });
+  assert.ok(platformMe.body.user.permissions.includes(word), platformMe.text);
   assert.equal(await storedWord(), true);
   const refusal = await change(`/${id}/change`, {
     expectedRevision: original.revision, items: original.items.filter((item) => item !== word),
