@@ -30,7 +30,7 @@ const SCROLL_TOLERANCE = 2;
 // Builder modal): a drag in it never moves or closes the exercise behind.
 export function isSwipeArea(target, { mediaOpen = false } = {}) {
   if (mediaOpen) return false;
-  if (target.closest(".week-selector, .week-calendar-picker, .program-day-grid, .exercise-list, .tests-calendar, .exercise-sibling-strip")) return false;
+  if (target.closest(".week-selector, .week-calendar-picker, .program-day-grid, .exercise-list, .tests-calendar, .exercise-sibling-strip, .central-calendar")) return false;
   // A week keeps the finger only while it scrolls sideways (the athlete's app); a coach's week on a
   // phone is a list (design A3), and a sideways swipe over it changes the week like anywhere else.
   const week = target.closest(".calendar-grid");

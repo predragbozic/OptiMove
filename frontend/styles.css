@@ -20778,6 +20778,12 @@ body.exercise-header-pinned #viewToolbar {
   background: var(--bg);
   transition: top 180ms ease-out;
 }
+body.exercise-header-pinned.calendar-header-only #viewToolbar {
+  position: relative;
+  top: auto;
+  z-index: auto;
+  box-shadow: none;
+}
 body.exercise-header-pinned .workspace > .topbar {
   top: var(--exercise-header-shift, 0px);
   z-index: 31;
@@ -23784,6 +23790,259 @@ div.metric-mappings-flow:not(.metric-variables-head) {
     width: 100%;
   }
 
+  .cc-layout-phone .cc-switches:has(.cc-mode-switch) {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+
+  .cc-layout-phone .cc-new-event {
+    grid-column: 1 / -1;
+    width: auto;
+    justify-self: end;
+    min-height: 44px;
+    color: var(--text);
+    background: var(--surface, #fff);
+    border-color: var(--line-strong);
+  }
+
+  .cc-layout-phone .cc-segment {
+    min-height: 44px;
+  }
+
+  .cc-layout-phone .cc-timegrid-row {
+    grid-template-columns: 34px repeat(var(--cc-visible-days, 7), minmax(0, 1fr));
+    min-width: 0;
+    gap: 1px;
+  }
+
+  .cc-layout-phone .cc-timegrid-day .cc-timegrid-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-day-head {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding-inline: 0;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-day-count {
+    display: none;
+  }
+
+  .cc-layout-phone .cc-timegrid-row > [hidden] {
+    display: none;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-card-when {
+    display: none;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box > .cc-card {
+    background: var(--surface, #fff);
+    border-color: var(--line-strong, #a8b3c0);
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box .cc-card-title {
+    font-weight: 700;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box-more > .cc-tg-more {
+    background: var(--surface, #fff);
+    border: 1px solid var(--line-strong, #a8b3c0);
+    font-weight: 700;
+  }
+
+  .cc-layout-phone .cc-timegrid .cc-tg-box-more > .cc-tg-more-pair {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    color: var(--text);
+  }
+
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box-more > .cc-tg-more-pair {
+    flex-direction: row;
+    gap: 6px;
+  }
+
+  .cc-layout-phone .cc-tg-pair-icons { display: inline-flex; align-items: center; gap: 2px; }
+  .cc-layout-phone .cc-tg-pair-icon { flex: 0 0 13px; width: 13px; height: 13px; color: currentColor; }
+  .cc-layout-phone .cc-tg-pair-count {
+    min-width: 16px;
+    height: 15px;
+    padding-inline: 3px;
+    border-radius: 5px;
+    background: var(--accent-soft);
+    font-size: 10px;
+    line-height: 15px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box.is-tall .cc-card-marks {
+    display: inline-flex;
+    gap: 1px;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box.is-tall .cc-mark {
+    width: 10px;
+    height: 10px;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-more-word {
+    display: none;
+  }
+
+  /* Keep adjacent appointments' clickable areas inside their time slots. */
+  .cc-layout-phone .cc-timegrid .cc-tg-box,
+  .cc-layout-phone .cc-timegrid .cc-tg-box > :is(.cc-card, .cc-daychip, .cc-tg-more) {
+    min-height: 0;
+  }
+
+  .cc-layout-phone .cc-timegrid,
+  .cc-layout-phone .cc-day-cards {
+    touch-action: pan-y;
+  }
+
+  .cc-layout-phone .cc-panel-when {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 4px;
+  }
+
+  .cc-layout-phone .cc-panel-time {
+    color: var(--text);
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cc-layout-phone .cc-panel-time > span {
+    display: none;
+  }
+
+  .cc-layout-phone .cc-panel-summary .cc-sum-chip {
+    flex: 1 1 22%;
+    min-width: 0;
+    min-height: 44px;
+    color: var(--text);
+    background: var(--surface, #fff);
+    border-color: var(--line);
+  }
+
+  .cc-time-picker {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 8px;
+  }
+
+  .cc-time-picker [hidden],
+  .cc-layout-phone .cc-form-grid > label[hidden] {
+    display: none;
+  }
+
+  .cc-time-picker-fields,
+  .cc-time-picker-wheels {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .cc-time-picker-wheels {
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+
+  .cc-time-picker button { min-height: 44px; }
+  .cc-time-picker-fields button { display: grid; justify-items: start; gap: 2px; }
+  .cc-time-picker-fields button span { font-size: 12px; }
+  .cc-time-picker-fields button strong { font-variant-numeric: tabular-nums; }
+  .cc-layout-phone .cc-timegrid-untimed .cc-mini { min-height: 44px; min-width: 0; padding-inline: 3px; }
+  .cc-layout-phone .cc-timegrid-untimed .cc-mini-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-timegrid-untimed .cc-mini {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    place-items: center;
+    background: var(--surface, #fff);
+    border: 1px solid var(--line-strong);
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) :is(.cc-mini-dot, .cc-mini-name, .cc-mini-status) {
+    display: none;
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-tg-box > .cc-card {
+    grid-template-columns: 2px minmax(0, 1fr);
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-tg-box .cc-card-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-tg-box .cc-card-title {
+    display: none;
+  }
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day, .cc-timegrid-closeup) .cc-tg-box .cc-card-icon {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
+
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-body {
+    display: grid;
+    grid-template-columns: 15px minmax(0, 1fr);
+    align-items: center;
+    align-content: center;
+    gap: 2px 4px;
+  }
+
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-top { grid-column: 1; }
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-icon { display: block; width: 14px; height: 14px; }
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-title { grid-column: 2; }
+  .cc-layout-phone .cc-timegrid-closeup .cc-tg-box .cc-card-marks { grid-column: 2; }
+
+  .cc-layout-phone {
+    --accent: #374151;
+    --accent-soft: #eef0f3;
+  }
+
+  .cc-layout-phone :is(.cc-card-stripe, .cc-team-dot, .cc-mini-dot, .cc-chip-dot) {
+    background: #8793a2;
+  }
+
+  .cc-layout-phone .cc-team-pill { background: var(--surface-soft); }
+  .cc-layout-phone .cc-timegrid-cell.is-today { background: #eef0f3; }
+
+  .cc-layout-phone .cc-panel .cc-primary:not(.cc-danger) {
+    background: var(--surface, #fff);
+    border-color: var(--line-strong, #a8b3c0);
+    color: var(--text);
+    font-weight: 700;
+  }
+  .cc-time-picker button[aria-pressed="true"] { background: var(--bg); border-color: var(--line-strong); }
+  .cc-time-picker-apply { grid-column: 1 / -1; }
+  .cc-time-picker-clear { margin-top: 6px; }
+  .cc-audience-label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+  .cc-audience-label small { color: var(--muted); font-weight: 400; }
+  .cc-audience-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; gap: 8px; }
+  .cc-audience-actions > .cc-new-event { grid-column: auto; align-self: stretch; white-space: nowrap; }
+  .cc-time-wheel { display: grid; gap: 2px; touch-action: none; }
+  .cc-time-wheel output {
+    padding: 6px;
+    text-align: center;
+    font-size: 24px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    background: var(--bg);
+    border-radius: 6px;
+  }
+
   .cc-form-actions .plain-button {
     flex: 1 1 100%;
   }
@@ -24470,7 +24729,7 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 @media (max-width: 640px) {
   /* U4: on a phone (up to 640 px) "Online" is a 12 px dot in the top right corner of the header (level with the title), not a row of its own;
      every other state keeps the text pill. The state is in the aria-label. */
-  body:not(.athlete-mode):not(.login-mode) .topbar { position: relative; }
+  body:not(.athlete-mode):not(.login-mode):not(.exercise-header-pinned) .topbar { position: relative; }
   /* keep the title text clear of the dot */
   body:not(.athlete-mode):not(.login-mode) .topbar > div:first-child { padding-right: 20px; }
   body:not(.athlete-mode):not(.login-mode) .topbar-actions .status-pill[data-state="ok"] {
