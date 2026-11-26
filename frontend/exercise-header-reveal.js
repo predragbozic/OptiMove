@@ -27,7 +27,7 @@ const HIDE_SETTLE_MS = 200;
 
 const PINNED_CLASS = "exercise-header-pinned";
 
-export function installExerciseHeaderReveal({ view = window, isActive }) {
+export function installExerciseHeaderReveal({ view = window, isActive, includeToolbar = () => true }) {
   const doc = view.document;
   const body = doc.body;
   let pinned = false;
@@ -38,13 +38,14 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
   let hideTimer = 0;
   // Where the header sits in the page, measured before it is pinned.
   let slot = null;
+  let withToolbar = includeToolbar();
 
   function scrollY() {
     return view.scrollY || doc.documentElement.scrollTop || 0;
   }
 
   function parts() {
-    return { topbar: doc.querySelector(".workspace > .topbar"), toolbar: doc.getElementById("viewToolbar") };
+    return { topbar: doc.querySelector(".workspace > .topbar"), toolbar: includeToolbar() ? doc.getElementById("viewToolbar") : null };
   }
 
   function reducedMotion() {
@@ -75,10 +76,10 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
 
   function reveal() {
     const { topbar, toolbar } = parts();
-    if (!topbar || !toolbar) return;
+    if (!topbar || (includeToolbar() && !toolbar)) return;
     if (!pinned) {
       const top = topbar.getBoundingClientRect();
-      const bar = toolbar.getBoundingClientRect();
+      const bar = toolbar?.getBoundingClientRect() || top;
       const visible = Math.min(view.innerHeight, view.visualViewport?.height || view.innerHeight);
       if (bar.bottom - top.top > visible * HEADER_MAX_SCREEN_SHARE) {
         upRun = 0;
@@ -91,6 +92,7 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
       // view, else just above the screen - and slides down from there.
       setVar("--exercise-header-shift", Math.max(top.top, -slot.height));
       body.classList.add(PINNED_CLASS);
+      body.classList.toggle("calendar-header-only", !toolbar);
       pinned = true;
       // The start position is applied before the slide begins.
       topbar.getBoundingClientRect();
@@ -116,7 +118,7 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
     pinned = false;
     shown = false;
     slot = null;
-    body.classList.remove(PINNED_CLASS);
+    body.classList.remove(PINNED_CLASS, "calendar-header-only");
     for (const name of ["--exercise-header-shift", "--exercise-header-toolbar-top", "--exercise-header-gap"]) body.style.removeProperty(name);
   }
 
@@ -190,7 +192,9 @@ export function installExerciseHeaderReveal({ view = window, isActive }) {
     // Called on every change of screen: off the Exercise Library the header
     // is back in its place at once.
     sync() {
-      if (!isActive() && pinned) unpin();
+      const next = includeToolbar();
+      if (pinned && (!isActive() || next !== withToolbar)) unpin();
+      withToolbar = next;
       lastY = scrollY();
       upRun = downRun = 0;
     },

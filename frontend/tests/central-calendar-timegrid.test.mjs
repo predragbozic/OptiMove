@@ -266,13 +266,38 @@ test("D5. the Day time grid only on wide with the switch on Time grid; six colum
   assert.equal(draw(cal).querySelector(".cc-timegrid"), null, "the switch on List: the list");
   cal.weekMode = "grid";
   assert.equal(draw(cal, "medium").querySelector(".cc-timegrid"), null, "medium: the list");
-  assert.equal(draw(cal, "phone").querySelector(".cc-timegrid"), null, "phone: the list");
+  assert.ok(draw(cal, "phone").querySelector(".cc-timegrid-day"), "phone: the time grid");
 });
 
-test("U. phone, medium, the wide week as a List and the wide Month are byte for byte as before K7", () => {
+test("phone offers List and Time grid and renders all seven days", () => {
+  const cal = k7State({ view: "week", mode: "grid" });
+  const document = draw(cal, "phone");
+  assert.ok(document.querySelector('.cc-mode-switch [data-mode="list"]'));
+  assert.equal(document.querySelectorAll(".cc-timegrid-head").length, 7);
+  assert.ok(document.querySelector(".cc-timegrid-untimed .cc-mini"), "phone uses compact untimed cards");
+  assert.equal(document.querySelector(".cc-timegrid-untimed .cc-card"), null);
+  assert.match(document.querySelector(".athlete-switcher-fold").textContent, /Team & athlete/);
+  assert.ok(document.querySelector("#ccFiltersBody .cc-showonly"), "event filters stay available in the compact section");
+  cal.weekMode = "list";
+  assert.equal(draw(cal, "phone").querySelector(".cc-timegrid"), null);
+});
+
+test("phone week shows icons for a pair and counts larger overlaps in full-width slots", () => {
+  const document = draw(k7State({ view: "week", mode: "grid" }), "phone");
+  const group = document.querySelector('.cc-tg-col .cc-tg-more-pair[data-date="2026-10-12"]');
+  assert.equal(group.dataset.dayList, "1");
+  assert.equal(group.querySelectorAll(".cc-tg-pair-icon").length, 2);
+  assert.equal(group.querySelector(".cc-tg-pair-count").textContent, "2");
+  assert.match(group.getAttribute("aria-label"), /2 overlapping events/);
+  assert.match(document.querySelector(".cc-tg-col .cc-tg-more:not(.cc-tg-more-pair)").textContent, /\+\d+/);
+  assert.match(group.parentElement.getAttribute("style"), /--cc-tg-width:1(?:;|$)/);
+});
+
+test("U. unchanged larger layouts retain the K7 markup", () => {
   const before = JSON.parse(readFileSync(new URL("./support/central-calendar-k7-unchanged.json", import.meta.url), "utf8"));
   assert.equal(Object.keys(before).length, K7_UNCHANGED_CASES.length);
   for (const c of K7_UNCHANGED_CASES) {
+    if (c.layout === "phone") continue;
     const html = view.renderCentralCalendarHtml(k7State(c), { today: K7_TODAY, layout: c.layout });
     assert.equal(html, before[`${c.layout}/${c.view}/${c.mode}`], `${c.layout}/${c.view}/${c.mode}`);
   }

@@ -603,12 +603,12 @@ export function renderCentralCalendarCardHtml(item, { teams, openKey = "", today
 
 // The month cell's compact card: the team colour, the type's icon, the
 // title and the status.
-function renderMiniCardHtml(item, teams, openKey, today) {
+function renderMiniCardHtml(item, teams, openKey, today, { mobileTimeline = false } = {}) {
   const badge = centralCalendarStatusBadge(item, today);
   const firstTeam = (item.teamIds || [])[0];
   return `<button type="button" class="cc-mini cc-mini-${escapeAttr(item.kind)}${item.cancelled ? " is-cancelled" : ""}${openKey === item.key ? " is-open" : ""}" data-action="central-calendar-open-item" data-key="${escapeAttr(item.key)}" data-date="${escapeAttr(item.date)}"${teamColorStyle(firstTeam, teams)} aria-label="${escapeAttr(cardAriaLabel(item, teams, today))}" aria-pressed="${openKey === item.key ? "true" : "false"}">
         <span class="cc-mini-dot" aria-hidden="true"></span>
-        <span class="cc-mini-title">${itemIconHtml(item, "cc-mini-icon", 12)}${renderMarksHtml(item, 12)}${escapeHtml(centralCalendarTitle(item))}</span>
+        <span class="cc-mini-title">${itemIconHtml(item, "cc-mini-icon", 12)}${renderMarksHtml(item, 12)}${mobileTimeline ? `<span class="cc-mini-name">${escapeHtml(centralCalendarTitle(item))}</span>` : escapeHtml(centralCalendarTitle(item))}</span>
         ${badge ? `<span class="cc-mini-status cc-mini-status-${badge.tone}" aria-hidden="true"></span>` : ""}
       </button>`;
 }
@@ -683,7 +683,7 @@ function renderShowOnlyLineHtml(cal, counts) {
 // the Groups and Event types chips away with a summary line. The folded chips stay in the markup (hidden) so their
 // sideways scroll and the focus survive a repaint. Groups: All groups and a chip per team with its colour dot; Event
 // types: a chip per event kind on the displayed days (or chosen).
-function renderFiltersHtml(cal, counts, teams) {
+function renderFiltersHtml(cal, counts, teams, { compact = false } = {}) {
   if (!cal.data) return "";
   const filters = cal.filters;
   // *Clear filters* beside More filters only while a group or an event type is chosen: Show only alone is reset by
@@ -704,14 +704,14 @@ function renderFiltersHtml(cal, counts, teams) {
     : "";
   return `<div class="cc-filters${open ? " is-open" : ""}">
       ${renderShowOnlyLineHtml(cal, counts)}
-      ${renderShowOnlyHtml(cal, counts)}
+      ${compact ? "" : renderShowOnlyHtml(cal, counts)}
       <div class="cc-filters-bar">
         <button type="button" class="cc-filters-toggle" data-action="central-calendar-toggle-filters" aria-expanded="${open ? "true" : "false"}" aria-controls="ccFiltersBody">
           ${renderIconSvg("adjust", { size: 18, className: "cc-filters-icon" })}<span class="cc-filters-word">More filters</span><span class="cc-filters-summary">${escapeHtml(centralCalendarFiltersSummary(filters, teams))}</span><span class="cc-filters-chevron" aria-hidden="true"></span>
         </button>
         ${active ? `<button type="button" class="plain-button cc-clear-filters" data-action="central-calendar-clear-filters">Clear filters</button>` : ""}
       </div>
-      <div class="cc-filters-body" id="ccFiltersBody"${open ? "" : " hidden"}>${groups}${eventTypes}</div>
+      <div class="cc-filters-body" id="ccFiltersBody"${open ? "" : " hidden"}>${compact ? renderShowOnlyHtml(cal, counts) : ""}${groups}${eventTypes}</div>
     </div>`;
 }
 
@@ -735,17 +735,21 @@ function renderSwitchIcon(value) {
   return `<svg class="cc-switch-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${CENTRAL_CALENDAR_SWITCH_ICONS[value] || ""}</svg>`;
 }
 
-function renderToolbarHtml(cal, layout, { canCreate = false } = {}) {
-  const unit = cal.view === "month" ? "month" : cal.view === "day" ? "day" : "week";
+function renderNewEventHtml(cal, canCreate) {
   // K2a-2: New event only where this workspace may create one (a club, a
   // team, a private coach); the server decides again on the write.
-  const newEvent = canCreate
+  return canCreate
     ? `<button type="button" class="plain-button cc-primary cc-new-event" data-action="central-calendar-new-event"${cal.form || cal.linkWrite ? " disabled" : ""}>${renderIconSvg("calendar-event", { size: 18 })}<span>New event</span></button>`
     : "";
+}
+
+function renderToolbarHtml(cal, layout, { canCreate = false } = {}) {
+  const unit = cal.view === "month" ? "month" : cal.view === "day" ? "day" : "week";
+  const newEvent = layout === "phone" ? "" : renderNewEventHtml(cal, canCreate);
   const segment = (value, label, action, attr, current) => `<button type="button" class="cc-segment${current === value ? " is-active" : ""}" data-action="${action}" ${attr}="${value}" aria-pressed="${current === value ? "true" : "false"}" aria-label="${label}" title="${label}">${renderSwitchIcon(value)}</button>`;
   // K7 (Q1): the Day view on wide has the same switch, one choice for both; it shows List while "+N more"'s list is open.
   const mode = cal.view === "day" && cal.dayList ? "list" : cal.weekMode || "list";
-  const modeSwitch = layout === "wide" && (cal.view === "week" || cal.view === "day")
+  const modeSwitch = (layout === "wide" || layout === "phone") && (cal.view === "week" || cal.view === "day")
     ? `<div class="cc-segmented cc-mode-switch" role="group" aria-label="${cal.view === "day" ? "Day layout" : "Week layout"}">
           ${segment("list", "List", "central-calendar-mode", "data-mode", mode)}
           ${segment("grid", "Time grid", "central-calendar-mode", "data-mode", mode)}
@@ -870,10 +874,14 @@ function bandItemsOf(items) {
 }
 
 // "+N more" (2.3): opens the day as the Day view's list, where every item of the day is listed in the server's order.
-function renderTimeGridMoreHtml(date, count, { from = "" } = {}) {
-  const label = `${count} more item${count === 1 ? "" : "s"}, ${centralCalendarLongDate(date)}${from ? `, from ${from}` : ""}: open the day`;
+function renderTimeGridMoreHtml(date, count, { from = "", pair = null } = {}) {
+  const title = pair ? `2 overlapping events: ${pair.map(centralCalendarTitle).join(", ")}` : `${count} more item${count === 1 ? "" : "s"}`;
+  const label = `${title}, ${centralCalendarLongDate(date)}${from ? `, from ${from}` : ""}: open the day`;
+  const contents = pair
+    ? `<span class="cc-tg-pair-icons" aria-hidden="true">${pair.map((item) => itemIconHtml(item, "cc-tg-pair-icon", 14)).join("")}</span><span class="cc-tg-pair-count" aria-hidden="true">2</span>`
+    : `+${count}<span class="cc-tg-more-word"> more</span>`;
   // In a narrow column only "+3" shows (a container query); the label keeps the whole sentence.
-  return `<button type="button" class="cc-tg-more" data-action="central-calendar-open-day" data-day-list="1" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(label)}">+${count}<span class="cc-tg-more-word"> more</span></button>`;
+  return `<button type="button" class="cc-tg-more${pair ? " cc-tg-more-pair" : ""}" data-action="central-calendar-open-day" data-day-list="1" data-date="${escapeAttr(date)}" aria-label="${escapeAttr(label)}">${contents}</button>`;
 }
 
 const clockOf = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
@@ -887,7 +895,7 @@ function boxStyle({ top, height, column, columns, span = 1 }) {
 // The time grid (K7): the week on wide (Time grid), or one day (the Day view on wide with Time grid). The heads, the
 // band and the day columns; each column is a list of its items laid out by centralCalendarTimeLayout, day by day in
 // reading order (section 5).
-function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false } = {}) {
+function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false, phone = false } = {}) {
   const openKey = cal.panel.key;
   const visible = new Map(days.map((date) => [date, centralCalendarVisibleItems(byDate.get(date), cal.filters)]));
   const entriesByDay = new Map(days.map((date) => [date, visible.get(date).map(timedEntryOf).filter(Boolean)]));
@@ -896,7 +904,9 @@ function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false }
   const heads = days.map((date) => `<div class="cc-timegrid-head${date === today ? " is-today" : ""}">${dayHeadHtml(date, today, visible.get(date).length)}</div>`).join("");
   const band = days.map((date) => {
     // 2.4: the band's entries in order, K5-4's GPS mark last; more than BAND_ITEMS show BAND_ITEMS and "+N more".
-    const entries = bandItemsOf(visible.get(date)).map((item) => (isMultiDay(item)
+    const entries = bandItemsOf(visible.get(date)).map((item) => (phone && !dayView
+      ? renderMiniCardHtml(item, teams, openKey, today, { mobileTimeline: true })
+      : isMultiDay(item)
       ? renderCentralCalendarCardHtml(item, { teams, openKey, today, spanWhen: true })
       : renderDayItemHtml(item, teams, openKey, today)));
     const mark = renderGpsMarkHtml(cal, date);
@@ -907,11 +917,14 @@ function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false }
   }).join("");
   const gutter = Array.from({ length: hours }, (_, index) => `<span class="cc-tg-hour" style="--cc-tg-top:${index * 60}">${String(startHour + index).padStart(2, "0")}:00</span>`).join("");
   const columns = days.map((date) => {
-    const { placed, more } = centralCalendarTimeLayout(entriesByDay.get(date), { startHour, maxColumns: dayView ? 6 : 3 });
+    const maxColumns = phone ? (dayView ? 3 : 1) : (dayView ? 6 : 3);
+    const { placed, more } = centralCalendarTimeLayout(entriesByDay.get(date), { startHour, maxColumns });
     const count = visible.get(date).length;
     let html = "";
     let next = 0;
-    const moreHtml = (block) => `<div class="cc-tg-box cc-tg-box-more" role="listitem" style="${boxStyle(block)}">${renderTimeGridMoreHtml(date, block.items.length, { from: clockOf(block.top + startHour * 60) })}</div>`;
+    const moreHtml = (block) => `<div class="cc-tg-box cc-tg-box-more" role="listitem" style="${boxStyle(block)}">${renderTimeGridMoreHtml(date, block.items.length, {
+      from: clockOf(block.top + startHour * 60), pair: phone && !dayView && block.items.length === 2 ? block.items : null,
+    })}</div>`;
     placed.forEach((box, index) => {
       const classes = ["cc-tg-box"];
       if (box.openEnd) classes.push("is-open-end");
@@ -1060,7 +1073,7 @@ function renderMonthHtml(days, byDate, cal, teams, today, layout, { dayList = tr
 
 // The Day view's time grid (K7, Q1): wide, the switch on Time grid, and not the list "+N more" opened.
 export function centralCalendarDayGridShown(cal, layout) {
-  return cal.view === "day" && layout === "wide" && cal.weekMode === "grid" && !cal.dayList;
+  return cal.view === "day" && (layout === "wide" || layout === "phone") && cal.weekMode === "grid" && !cal.dayList;
 }
 
 function renderBodyHtml(cal, layout, today) {
@@ -1086,15 +1099,15 @@ function renderBodyHtml(cal, layout, today) {
   if (cal.view === "day") {
     // K7 (Q1): on wide, the Day view is a time grid too when the switch says Time grid, unless "+N more" asked for
     // the day's list (cal.dayList).
-    if (centralCalendarDayGridShown(cal, layout)) return renderTimeGridHtml([days[0]], byDate, cal, teams, today, { dayView: true }) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
+    if (centralCalendarDayGridShown(cal, layout)) return renderTimeGridHtml([days[0]], byDate, cal, teams, today, { dayView: true, phone: layout === "phone" }) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
     return renderSelectedDayListHtml(days[0], byDate, cal, teams, today, { heading: false });
   }
-  if (layout === "phone") {
+  if (layout === "phone" && cal.weekMode !== "grid") {
     const selected = days.includes(cal.selectedDate) ? cal.selectedDate : days[0];
     return renderStripHtml(days, byDate, cal, today, teams) + renderSelectedDayListHtml(selected, byDate, cal, teams, today);
   }
-  const grid = layout === "wide" && cal.weekMode === "grid";
-  return (grid ? renderTimeGridHtml(days, byDate, cal, teams, today) : renderWeekColumnsHtml(days, byDate, cal, teams, today, layout)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
+  const grid = (layout === "wide" || layout === "phone") && cal.weekMode === "grid";
+  return (grid ? renderTimeGridHtml(days, byDate, cal, teams, today, { phone: layout === "phone" }) : renderWeekColumnsHtml(days, byDate, cal, teams, today, layout)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
 }
 
 // `roster` maps an athlete UUID to the rail roster's athlete_id, the id the
@@ -1593,7 +1606,7 @@ function athleteAnswersMeta(item, cal) {
 
 // The event's panel below its facts (the owner's redesign of 2026-11-23): the summary row, Plan / Open the training,
 // the sections, See each athlete, Athletes, Details, then Edit · Cancel event · Delete together at the bottom.
-function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe = false }) {
+function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe = false, compact = false }) {
   const targets = centralCalendarGoTargets(item);
   const target = (key) => targets.find((entry) => entry.key === key) || null;
   const links = eventLinkParts(item, cal, pending, pendingQuestion);
@@ -1637,7 +1650,8 @@ function renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion,
       <div class="cc-sum-chips">${sections.map((entry) => {
         const shown = entry.count === "" ? "…" : String(entry.count);
         const spoken = `${entry.title}: ${entry.count === "" ? "loading" : entry.count}${entry.meta ? `, ${entry.meta}` : ""}. Show`;
-        return `<button type="button" class="cc-sum-chip${entry.count === 0 ? " is-empty" : ""}" data-action="central-calendar-panel-reveal" data-key="${escapeAttr(entry.id)}" aria-label="${escapeAttr(spoken)}">${renderIconSvg(PANEL_SECTION_ICONS[entry.id] || "list", { size: 18, className: "cc-sum-icon" })}<span class="cc-sum-count">${escapeHtml(shown)}</span><span class="cc-sum-name">${escapeHtml(entry.title)}</span></button>`;
+        const label = compact ? ({ trainings: "Training", activities: "GPS", questions: "RPE" }[entry.id] || entry.title) : entry.title;
+        return `<button type="button" class="cc-sum-chip${entry.count === 0 ? " is-empty" : ""}" data-action="central-calendar-panel-reveal" data-key="${escapeAttr(entry.id)}" aria-label="${escapeAttr(spoken)}">${renderIconSvg(PANEL_SECTION_ICONS[entry.id] || "list", { size: 18, className: "cc-sum-icon" })}<span class="cc-sum-count">${escapeHtml(shown)}</span><span class="cc-sum-name">${escapeHtml(label)}</span></button>`;
       }).join("")}</div>
     </div>` : "";
   // The link sections share one status line (a write's result, its Check result), always in view.
@@ -1705,12 +1719,12 @@ function renderPanelHtml(cal, layout, today, roster, formCtx, uncertainWrites = 
         <button type="button" class="plain-button icon-button cc-panel-close" data-action="central-calendar-close-panel" aria-label="Close">&times;</button>
       </header>
       <p class="cc-panel-kind${item.cancelled ? " is-cancelled" : ""}">${itemIconHtml(item, "cc-panel-icon")}<span>${escapeHtml(centralCalendarKindLabel(item))}</span></p>
-      <p class="cc-panel-when">${escapeHtml(centralCalendarLongDate(item.date))}${item.date === today ? " (today)" : ""}${when ? ` · ${escapeHtml(when)}` : ""}</p>
+      <p class="cc-panel-when">${escapeHtml(centralCalendarLongDate(item.date))}${item.date === today ? " (today)" : ""}${when && layout === "phone" ? `<span class="cc-panel-time"><span aria-hidden="true"> · </span>${escapeHtml(when)}</span>` : when ? ` · ${escapeHtml(when)}` : ""}</p>
       ${(item.teamIds || []).length ? `<p class="cc-panel-teams">${item.teamIds.map((id) => `<span class="cc-panel-team"${teamColorStyle(id, teams)}><span class="cc-team-dot" aria-hidden="true"></span>${escapeHtml(teamName(id, teams))}</span>`).join("")}</p>` : ""}
       ${renderBadgeHtml(item, today) || count || sentence ? `<div class="cc-panel-status">${renderBadgeHtml(item, today)}${count ? `<span class="cc-panel-count">${escapeHtml(count)}</span>` : ""}${sentence ? `<p class="cc-panel-sentence">${escapeHtml(sentence)}</p>` : ""}</div>` : ""}
       ${item.kind === "event" ? renderEventFactsHtml(item, { askRpe: eventAskRpe }) : ""}
       ${item.kind === "event"
-    ? renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe: eventAskRpe })
+    ? renderEventPanelBodyHtml(item, cal, { roster, pending, pendingQuestion, linksLocked, questionsOn, today, askRpe: eventAskRpe, compact: layout === "phone" })
     : `${renderEventActionsHtml(item, { locked: linksLocked })}
       ${renderEventDeleteHtml(item, cal, pending, { locked: linksLocked || Boolean(cal.form) })}
       ${item.kind === "planned" ? renderPlannedLinksHtml(item, cal, pending, uncertainWrites.filter((entry) => entry.mode === "link")) : ""}
@@ -1798,9 +1812,9 @@ export function renderCentralCalendarHtml(sourceCal, { today, layout = "wide", r
   return `<section class="central-calendar cc-layout-${escapeAttr(layout)} cc-view-${escapeAttr(cal.view)}${panelOpen ? " cc-panel-open" : ""}" aria-label="Calendar">
       ${layout === "wide" ? renderK2c3FormBandHtml(cal.form) : ""}
       ${cal.anchor ? renderToolbarHtml(cal, layout, { canCreate }) : ""}
-      ${renderCentralCalendarSwitcherHtml(sourceCal, switcherModel, { layout, counts })}
+      ${renderCentralCalendarSwitcherHtml(sourceCal, switcherModel, { layout, counts, phoneAction: layout === "phone" && cal.anchor ? renderNewEventHtml(cal, canCreate) : "" })}
       ${renderCentralCalendarShowingLineHtml(sourceCal, switcherModel, { onlyLabel: only ? `only ${CENTRAL_CALENDAR_SHOW_ONLY_LABELS[only] || only}` : "" })}
-      ${renderFiltersHtml(sourceCal, counts, teams)}
+      ${renderFiltersHtml(sourceCal, counts, teams, { compact: layout === "phone" && cal.view === "week" && cal.weekMode === "grid" })}
       ${cal.refreshError ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.refreshError)} <button type="button" class="plain-button cc-inline-button" data-action="central-calendar-retry">Try again</button></p>` : ""}
       ${cal.notice ? `<p class="cc-refresh-note" role="status">${escapeHtml(cal.notice)}</p>` : ""}
       ${renderUncertainWritesHtml(cal, uncertainWrites)}

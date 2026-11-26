@@ -2,8 +2,8 @@
 // real browser on the real server, as the team coach. Today holds the owner's two trainings (00:00-01:00 and
 // 00:30-01:29) and a cluster of five at 10:00-11:00. At 1280 and 1024 px: the pair side by side at its minutes, the
 // cluster as two columns and "+3 more", whose click shows the Day list with all of them; the team colour; no horizontal
-// page scroll; at 1024 px with the panel open the grid scrolls in its own box; reading order day by day. At 390 px the
-// phone's strip and day list as before. Invented data on a disposable database.
+// page scroll; at 1024 px with the panel open the grid scrolls in its own box; reading order day by day. At 390 px
+// the phone switches between its selected-day list and the weekly time grid. Invented data on a disposable database.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import pg from "pg";
@@ -192,13 +192,27 @@ test("(1280 px, touch) a tablet in landscape keeps 44 px targets: the short box 
   } finally { await context.close(); }
 });
 
-test("(390 px) the phone is unchanged: the strip and the day list, no time grid", async () => {
+test("(390 px) a team coach can switch List → Time grid → List without horizontal overflow", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", WIDTHS.phone);
   try {
     await openCalendar(page);
     await page.waitForSelector(".cc-strip", { timeout: 20_000 });
     assert.equal(await page.locator(".cc-timegrid").count(), 0);
-    assert.equal(await page.locator(".cc-mode-switch").count(), 0);
+    const modes = page.locator(".cc-mode-switch");
+    const list = modes.getByRole("button", { name: "List", exact: true });
+    const timeGrid = modes.getByRole("button", { name: "Time grid", exact: true });
+    assert.equal(await list.getAttribute("aria-pressed"), "true");
+    await timeGrid.click();
+    const grid = page.locator(".cc-timegrid");
+    await grid.waitFor({ state: "visible" });
+    assert.equal(await timeGrid.getAttribute("aria-pressed"), "true");
+    assert.equal(await grid.locator(".cc-timegrid-head").count(), 7);
+    assert.equal(await grid.evaluate((element) => element.scrollWidth - element.clientWidth), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
+    await list.click();
+    await page.locator(".cc-day-list").waitFor({ state: "visible" });
+    assert.equal(await grid.count(), 0);
+    assert.equal(await list.getAttribute("aria-pressed"), "true");
     assert.ok(await page.locator(".cc-day-list").count(), "the selected day's list");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), 0);
     assert.deepEqual(pageErrors, []);

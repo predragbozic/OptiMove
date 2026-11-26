@@ -369,7 +369,7 @@ test("K6-1o. the phone's fold line: a team alone reads 'U19 · all athletes', ne
   await open();
   await act({ action: "central-calendar-toggle-team", teamId: A });
   render();
-  assert.equal(dom().querySelector(".athlete-switcher-fold span").textContent, "U19 · all athletes");
+  assert.equal(dom().querySelector(".athlete-switcher-fold small").textContent, "U19 · all athletes");
 });
 
 // --- K6 follow-up (2026-11-22): hide / show the strip, and the phone's box kept open by the arrows ------------------
