@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { bindCentralCalendarTimePicker } from "../central-calendar-time-picker.js";
+import { buildCentralCalendarEventRequest, newCentralCalendarCreateForm } from "../central-calendar-event-form.js";
 
 test("phone wheel preserves exact minutes and removing time keeps the event date", () => {
   const { document } = new JSDOM(`
@@ -31,4 +32,20 @@ test("the picker is unavailable for disabled event fields", () => {
   </fieldset></section>`).window;
   bindCentralCalendarTimePicker(document.querySelector("section"));
   assert.equal(document.querySelector(".cc-time-picker"), null);
+});
+
+test("the existing event request accepts a midnight crossing with a later end date", () => {
+  const form = newCentralCalendarCreateForm({ day: "2026-11-26", types: [] });
+  Object.assign(form.draft, {
+    eventTypeId: "training",
+    title: "Late training",
+    startTime: "23:45",
+    endTime: "00:15",
+    targets: [{ kind: "team", id: "team-1" }],
+  });
+  assert.match(buildCentralCalendarEventRequest(form).errors.endTime, /after the start/);
+  form.draft.endDay = "2026-11-27";
+  const { body, errors } = buildCentralCalendarEventRequest(form);
+  assert.deepEqual(errors, {});
+  assert.deepEqual([body.endDay, body.startTime, body.endTime], ["2026-11-27", "23:45", "00:15"]);
 });

@@ -887,7 +887,7 @@ function boxStyle({ top, height, column, columns, span = 1 }) {
 // The time grid (K7): the week on wide (Time grid), or one day (the Day view on wide with Time grid). The heads, the
 // band and the day columns; each column is a list of its items laid out by centralCalendarTimeLayout, day by day in
 // reading order (section 5).
-function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false } = {}) {
+function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false, phone = false } = {}) {
   const openKey = cal.panel.key;
   const visible = new Map(days.map((date) => [date, centralCalendarVisibleItems(byDate.get(date), cal.filters)]));
   const entriesByDay = new Map(days.map((date) => [date, visible.get(date).map(timedEntryOf).filter(Boolean)]));
@@ -907,7 +907,8 @@ function renderTimeGridHtml(days, byDate, cal, teams, today, { dayView = false }
   }).join("");
   const gutter = Array.from({ length: hours }, (_, index) => `<span class="cc-tg-hour" style="--cc-tg-top:${index * 60}">${String(startHour + index).padStart(2, "0")}:00</span>`).join("");
   const columns = days.map((date) => {
-    const { placed, more } = centralCalendarTimeLayout(entriesByDay.get(date), { startHour, maxColumns: dayView ? 6 : 3 });
+    const maxColumns = phone ? (dayView ? 3 : 1) : (dayView ? 6 : 3);
+    const { placed, more } = centralCalendarTimeLayout(entriesByDay.get(date), { startHour, maxColumns });
     const count = visible.get(date).length;
     let html = "";
     let next = 0;
@@ -1086,7 +1087,7 @@ function renderBodyHtml(cal, layout, today) {
   if (cal.view === "day") {
     // K7 (Q1): on wide, the Day view is a time grid too when the switch says Time grid, unless "+N more" asked for
     // the day's list (cal.dayList).
-    if (centralCalendarDayGridShown(cal, layout)) return renderTimeGridHtml([days[0]], byDate, cal, teams, today, { dayView: true }) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
+    if (centralCalendarDayGridShown(cal, layout)) return renderTimeGridHtml([days[0]], byDate, cal, teams, today, { dayView: true, phone: layout === "phone" }) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
     return renderSelectedDayListHtml(days[0], byDate, cal, teams, today, { heading: false });
   }
   if (layout === "phone" && cal.weekMode !== "grid") {
@@ -1094,7 +1095,7 @@ function renderBodyHtml(cal, layout, today) {
     return renderStripHtml(days, byDate, cal, today, teams) + renderSelectedDayListHtml(selected, byDate, cal, teams, today);
   }
   const grid = (layout === "wide" || layout === "phone") && cal.weekMode === "grid";
-  return (grid ? renderTimeGridHtml(days, byDate, cal, teams, today) : renderWeekColumnsHtml(days, byDate, cal, teams, today, layout)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
+  return (grid ? renderTimeGridHtml(days, byDate, cal, teams, today, { phone: layout === "phone" }) : renderWeekColumnsHtml(days, byDate, cal, teams, today, layout)) + (anyVisible ? "" : renderEmptyHtml(cal, scope));
 }
 
 // `roster` maps an athlete UUID to the rail roster's athlete_id, the id the

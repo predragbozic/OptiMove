@@ -2668,6 +2668,13 @@ function renderCentralCalendar() {
     uncertainWrites: centralCalendarUncertainWrites(),
   });
   const calendar = els.content.querySelector(".central-calendar");
+  if (calendar?.querySelector(".cc-sheet")) {
+    for (const region of calendar.children) {
+      if (!region.classList.contains("cc-body") && !region.classList.contains("k3-sheet-layer")) region.inert = true;
+    }
+    const background = calendar.querySelector(".cc-main");
+    if (background) background.inert = true;
+  }
   restoreCentralCalendarView(calendar, snapshot);
   bindCentralCalendarGestures(calendar);
   bindCentralCalendarTimePicker(calendar);

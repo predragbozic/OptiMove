@@ -23819,7 +23819,15 @@ div.metric-mappings-flow:not(.metric-variables-head) {
   }
 
   .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-day-head {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
     padding-inline: 0;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-day-count {
+    display: none;
   }
 
   .cc-layout-phone .cc-timegrid-row > [hidden] {
@@ -23828,6 +23836,26 @@ div.metric-mappings-flow:not(.metric-variables-head) {
 
   .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-card-when {
     display: none;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box.is-tall .cc-card-marks {
+    display: inline-flex;
+    gap: 1px;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-box.is-tall .cc-mark {
+    width: 10px;
+    height: 10px;
+  }
+
+  .cc-layout-phone .cc-timegrid:not(.cc-timegrid-day) .cc-tg-more-word {
+    display: none;
+  }
+
+  /* Keep adjacent appointments' clickable areas inside their time slots. */
+  .cc-layout-phone .cc-timegrid .cc-tg-box,
+  .cc-layout-phone .cc-timegrid .cc-tg-box > :is(.cc-card, .cc-daychip, .cc-tg-more) {
+    min-height: 0;
   }
 
   .cc-layout-phone .cc-timegrid,
