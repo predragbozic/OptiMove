@@ -99,3 +99,122 @@ Training Load starts with explicit words those flows already define: schedules, 
 roster decisions and estimates. The phase plan will distinguish staff writes from athlete self RPE,
 and will resolve manual measurements, participant session types and RPE switches against their
 resource scopes before implementation. Imports, Dashboard M and the remaining modules stay separate.
+
+## M-2 Training Load external RPE schedules
+
+This RISKY slice enables the existing `load.schedule.manage` word for the seven staff write routes under
+`/api/training-load/external-schedules`: POST create, PATCH detail, and POST pause, resume, cancel,
+schedule-again and remind. List and detail remain available under the current V-5b read rules.
+Planned-RPE defaults and quick toggles, plan ownership resolution, activity and roster writes,
+estimates, Metrics, Dashboards and Imports follow separately.
+
+### Scope and responses
+
+- Native club/team writers must hold both `load.view.team` and `load.schedule.manage` at the active
+  authenticated workspace. Reuse the request's checked workspace through `trainingLoadAccess.js`
+  and its owner snapshot; do not resolve it again after checking targets. Club and team schedules
+  remain distinct owners, including when one account holds both workspaces. Keep the current target
+  membership validation. A module closure and permission revocation refuse without mutation.
+- Preserve the platform branch and system owner in the platform workspace. Preserve a private
+  coach's user-owned path. View workspaces, athlete workspaces and unscoped accounts cannot write.
+  Old roles in another workspace grant no authority in the active one.
+- For an eligible writer, a missing or foreign schedule ID returns the same existing 404, including
+  remind, which currently returns 403 for a foreign schedule. Reject a foreign resource before
+  locking its owner or schedule. Keep current malformed-body responses.
+- Keep the existing Calendar-owned refusal on edit, pause, resume, cancel and schedule-again.
+  Remind currently allows eligible staff to remind on a Calendar-owned schedule. Keep that
+  behavior subject to the new permission. Calendar's Ask athletes and athlete self feedback,
+  occurrence materialization and licence enforcement stay on their own existing paths.
+  Leave shared insert functions in `externalScheduleWriter.js` unchanged.
+
+### Transaction and browser
+
+Use a write-only schedule helper for the seven mounted writes. Keep the shared scope resolver's
+GET and planned-load callers on their existing paths. Reuse the one request-bound workspace
+snapshot, including its owner context, throughout the write. In a native club/team transaction,
+derive the active club from that snapshot, obtain its shared ceiling lock before row locks,
+then call `public.lock_permission_actor` and check both permission words with
+`public.user_has_permission`. The lock function's return value describes role administration
+and cannot authorize scheduling. Recheck the native workspace relationship and exact schedule
+owner. Use the transaction's checked-out client for mutable team, club and athlete membership
+validation and target/schedule row checks. Order the locks ceiling → actor → target or schedule
+rows. Preserve the existing schedule, occurrence and assignment lock order within each route.
+
+Preserve schedule UPDATE locks for edit and lifecycle changes. Schedule-again reads a source and
+its defaults. Capture and recheck the locked source in the write transaction before copying.
+Its existing create-on-retry behavior stays. Remind keeps schedule SHARE, occurrence SHARE in ID
+order and assignment UPDATE in ID order. Preserve cooldown, deduplication and post-commit
+notification emission. A refused request leaves no changes or notification.
+
+The bridge release has no new client permission gating. After the older writers are drained,
+the second release uses the server-projected permission for the Schedule toolbar, schedule detail
+controls and their dispatched actions. Users with read access can open schedule detail. Preserve
+the existing platform and private-coach paths. A native writer whose permission data is
+unavailable gets no write controls. No new screen or client-side source of authority.
+
+### Two-release rollout and test gates
+
+**Release 1, bridge.** One focused migration, v99 with the exact prefix reserved before SQL.
+Pin the v98 `permission_word_honoured(text)` body, preserve its Calendar words and honor
+`load.schedule.manage` in SQL. Seed existing native basic holders and their live versions and
+customs under R4 §7.4, including audit rows, revision bumps, ceiling order and no new version
+question. Independently created roles and existing schedule, recurrence and athlete RPE
+functions stay unchanged. The bridge checks both native words in SQL under the transaction locks
+on all seven writes. It fails closed if the schema, word or required scope is unavailable.
+The bridge neither bypasses the Manage check while rolling out nor takes an unscoped actor's
+word as authority. Preserve separate platform and private ownership rules.
+
+The database can store the seeded word while JS still treats it as unavailable for role edits.
+Keep it out of the native `/me` projection and the JS checked/editable inventory during this
+release. The existing platform projection lists all permission names and is unchanged. There
+is no new client gating during the bridge. Test this intentional SQL/JS inventory difference
+explicitly, and retain other role catalog and inventory assertions.
+
+During the roll the actual previous server may still write with its existing authority.
+The seed must preserve that authority and older role operations must not remove or accidentally
+grant the staged word. Verify, using the exact previous production binary **and** the exact
+bridge binary against a fresh migrated disposable database:
+
+- All seven native schedule writes continue for seeded holders, while the bridge rejects a
+  missing word or closed licence through its transaction checks. Existing view-only and cross-
+  workspace refusals, Calendar Ask athletes and athlete self feedback still hold.
+- Full-list basic role edits preserve the staged word and reject a crafted omission or add.
+  Create/edit a club version and a custom of a seeded role using unrelated editable words.
+  Confirm each inherited set retains the staged word, and direct add/remove requests are
+  refused. Verify accepting the default and ending a custom restore an effective set still
+  containing the word where seeded. Copy as a new independent role keeps the source intact and
+  does not grant the unavailable word to the copy. Check persistence, audit/revision and
+  effective holdings, rather than relying on catalog flags or HTTP shape alone.
+- If an older or bridge role operation can remove the staged word or apply a new grant before
+  drain, stop before deploy and change the bridge design. A green health endpoint alone is
+  insufficient evidence of server compatibility or of drain.
+
+**Release 2, exposure.** Require authoritative evidence that every pre-bridge writer has
+stopped serving, including all replicas and any other app process that can execute the routes.
+Record the prior and new deployment IDs/builds, the serving inventory and the completed retirement
+event. Keep the role word uneditable if that evidence is unavailable. After drain, a second small
+change adds the word to the checked/editable JS catalog, native `/me` projection and client
+controls. Both releases use the same SQL checks in transactions. Test the second release's
+inventory, effective permissions, grant/revoke behavior and native controls against v99.
+Train/Calendar deployments and the separate mobile Calendar PR have no automatic coupling.
+Production migration, the follow-up release and any activation require their own recorded orders.
+
+Run read-only preflight and postcheck and an isolated apply → rollback → identical catalog and
+audited seed data → reapply rehearsal. Rollback requires a quiet moment and refuses for altered
+bodies, grants, seeded revisions, unsafe use or later migrations. Record the permitted
+application rollback boundaries for each release in its runbook. Once exposed rights have been
+changed, use a forward fix instead of restarting a writer that ignores them.
+
+### Release gate
+
+- Pin all seven mounted writes in the route inventory. Exercise successful native club/team writes
+  and denial when either word is missing, with byte-identical missing/foreign replies, exact owner
+  matching, mixed accounts, closed licence, unchanged rows and zero notifications on refusal.
+- Preserve platform and own private schedule behavior, Calendar Ask athletes, Calendar-owned
+  refusal and remind behavior, and all self-RPE paths. Verify one request-bound workspace and
+  recorded SQL ordering. Race role removal or ceiling closure against an actual write, including
+  remind, and verify that scope is rechecked before any change.
+- Test every native seed and audit layer, historical cutoffs and previous build compatibility.
+  Prove mutations that lose the View check, Manage check or owner match are caught separately.
+  Run full backend disposable, frontend-fast, build and focused browser flows at phone and desktop
+  widths, then obtain independent review.
