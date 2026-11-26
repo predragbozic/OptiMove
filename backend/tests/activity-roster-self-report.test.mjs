@@ -14,6 +14,7 @@
 // dropped here; nothing touches OPTIMOVE or any persistent database. The RPE
 // result goes through the real POST /api/training-load/sessions/:id/rpe, the
 // roster through the real routes, as the coach's screen would.
+import { applyExternalScheduleBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -305,6 +306,8 @@ before(async () => {
     "202609020900_training_load_v7_external_schedule_notification_rules.sql",
     "202609030900_training_load_v8_specific_dates_group.sql",
   ]);
+
+  await applyExternalScheduleBridgeForCuratedFixture(db.url);
 
   process.env.DATABASE_URL = db.url;
   const serverModule = await import("../src/server.js");

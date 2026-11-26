@@ -39,7 +39,7 @@ let api;
 let fx;
 
 before(async () => {
-  env = await startCalendarApp({ label: "k5holds" });
+  env = await startCalendarApp({ label: "k5holds", scheduleBridge: true });
   ({ q, api, fx } = env);
 });
 

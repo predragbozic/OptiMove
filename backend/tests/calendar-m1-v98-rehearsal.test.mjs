@@ -79,7 +79,7 @@ test("v98 rehearses live layers, reversible apply, identical catalogue, reapply,
   const db = await buildDatabase({ label: "calendar_m1_rehearsal", upTo: v97 });
   const admin = new pg.Client({ connectionString: db.url });
   const other = new pg.Client({ connectionString: db.url });
-  const staged = migrationsWithout([], "all");
+  const staged = migrationsWithout([], v98.split("/").at(-1));
   try {
     await admin.connect();
     await other.connect();

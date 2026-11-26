@@ -14,6 +14,8 @@ import http from "node:http";
 import pg from "pg";
 import { createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS, ROLE_READ_MIGRATIONS } from "../_gpexe-disposable-db.mjs";
 
+import { EXTERNAL_SCHEDULE_BRIDGE_MIGRATION } from "./external-schedule-m2-fixture.mjs";
+
 export const CALENDAR_TESTS_MIGRATIONS = Object.freeze([
   "202608220900_tests_v42_schema.sql",
   "202608221000_tests_v42_seed_wellness_fms.sql",
@@ -75,10 +77,12 @@ export function addDays(iso, days) {
 
 // Starts the database and the app. `env.stop()` closes the server and the
 // pools and drops the database; call it from after().
-export async function startCalendarApp({ label, migrations = calendarMigrations() }) {
+export async function startCalendarApp({ label, migrations = calendarMigrations(), scheduleBridge = false }) {
   const baseDatabaseUrl = process.env.DATABASE_URL;
   if (!baseDatabaseUrl) throw new Error("DATABASE_URL must be set (see backend/.env.example) to run this test.");
-  const db = await createGpexeDisposableDb({ baseDatabaseUrl, label, migrations: calendarManageMigrations(migrations) });
+  const currentMigrations = calendarManageMigrations(migrations);
+  if (scheduleBridge) currentMigrations.push(EXTERNAL_SCHEDULE_BRIDGE_MIGRATION);
+  const db = await createGpexeDisposableDb({ baseDatabaseUrl, label, migrations: currentMigrations });
   const admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

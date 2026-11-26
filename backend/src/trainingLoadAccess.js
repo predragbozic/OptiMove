@@ -109,21 +109,21 @@ export function externalScheduleScopeForWorkspace(workspace, req) {
 // readable athlete_id code the org picker's fuzzier global helper
 // supports), so a direct membership-table comparison is both correct
 // and simpler than reusing that helper.
-export async function isAthleteInWorkspaceScope(scope, athleteId) {
+export async function isAthleteInWorkspaceScope(scope, athleteId, queryRunner = query) {
   if (scope.type === "platform") {
-    const r = await query(`select 1 from public.athletes where id = $1`, [athleteId]);
+    const r = await queryRunner(`select 1 from public.athletes where id = $1`, [athleteId]);
     return r.rowCount > 0;
   }
   if (scope.type === "club") {
-    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'club' and status = 'active' and club_id = $2`, [athleteId, scope.clubId]);
+    const r = await queryRunner(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'club' and status = 'active' and club_id = $2`, [athleteId, scope.clubId]);
     return r.rowCount > 0;
   }
   if (scope.type === "team") {
-    const r = await query(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'team' and status = 'active' and team_id = $2`, [athleteId, scope.teamId]);
+    const r = await queryRunner(`select 1 from public.athlete_memberships where athlete_id = $1 and membership_type = 'team' and status = 'active' and team_id = $2`, [athleteId, scope.teamId]);
     return r.rowCount > 0;
   }
   if (scope.type === "private_coach") {
-    const r = await query(`select 1 from public.user_athletes where athlete_id = $1 and user_id = $2 and is_active = true`, [athleteId, scope.userId]);
+    const r = await queryRunner(`select 1 from public.user_athletes where athlete_id = $1 and user_id = $2 and is_active = true`, [athleteId, scope.userId]);
     return r.rowCount > 0;
   }
   return false;

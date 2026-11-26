@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { insertExternalSchedule, insertExternalTargets, insertNotificationRules } from "../externalScheduleWriter.js";
+import { lockExternalSchedule, lockExternalScheduleWriter, recordExternalScheduleWrite, resolveExternalScheduleWriteScope } from "../externalScheduleWriteAccess.js";
 import { MANAGED_BY_CALENDAR, scheduleManagedByCalendar } from "../calendarQuestions.js";
 import { Router } from "express";
 import { athleteTrainingLoadAllowed } from "../athleteTrainingLoadLicence.js";
@@ -126,6 +127,22 @@ async function requireExternalScheduleWorkspace(req, res) {
     return null;
   }
   return scope;
+}
+
+async function requireExternalScheduleWriteWorkspace(req, res) {
+  const scope = await resolveExternalScheduleWriteScope(req);
+  if (scope.type !== null) return scope;
+  res.status(403).json({ error: "Forbidden" });
+  return null;
+}
+
+// Only the seven external-schedule writes use this bridge gate.
+async function beginExternalScheduleWrite(client, req, res, scope) {
+  await client.query("begin");
+  if (await lockExternalScheduleWriter(client, req.user.id, scope)) return true;
+  await client.query("rollback");
+  res.status(403).json({ error: "Forbidden" });
+  return false;
 }
 
 const DATE_STRING_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -1886,36 +1903,36 @@ function dedupeExternalTargets(rawTargets) {
 // dual-role bug this closes). isAthleteInWorkspaceScope now lives in
 // trainingLoadAccess.js (shared with routes/builder.js's own weekly-plan
 // target validation) - imported above.
-async function isTeamInWorkspaceScope(scope, teamId) {
+async function isTeamInWorkspaceScope(scope, teamId, queryRunner) {
   if (scope.type === "platform") {
-    const r = await query(`select 1 from public.teams where id = $1 and coalesce(is_active, true)`, [teamId]);
+    const r = await queryRunner(`select 1 from public.teams where id = $1 and coalesce(is_active, true)`, [teamId]);
     return r.rowCount > 0;
   }
   if (scope.type === "club") {
-    const r = await query(`select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true)`, [teamId, scope.clubId]);
+    const r = await queryRunner(`select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true)`, [teamId, scope.clubId]);
     return r.rowCount > 0;
   }
   if (scope.type === "team") return String(teamId) === String(scope.teamId);
   return false; // private_coach has no team concept to target
 }
-async function isClubInWorkspaceScope(scope, clubId) {
+async function isClubInWorkspaceScope(scope, clubId, queryRunner) {
   if (scope.type === "platform") {
-    const r = await query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)`, [clubId]);
+    const r = await queryRunner(`select 1 from public.clubs where id = $1 and coalesce(is_active, true)`, [clubId]);
     return r.rowCount > 0;
   }
   if (scope.type === "club") return String(clubId) === String(scope.clubId);
   return false; // a team/private_coach workspace can never target a club
 }
-async function validateExternalTargetInScope(scope, target) {
-  if (target.kind === "athlete") return isAthleteInWorkspaceScope(scope, target.id);
-  if (target.kind === "team") return isTeamInWorkspaceScope(scope, target.id);
-  if (target.kind === "club") return isClubInWorkspaceScope(scope, target.id);
+async function validateExternalTargetInScope(scope, target, queryRunner) {
+  if (target.kind === "athlete") return isAthleteInWorkspaceScope(scope, target.id, queryRunner);
+  if (target.kind === "team") return isTeamInWorkspaceScope(scope, target.id, queryRunner);
+  if (target.kind === "club") return isClubInWorkspaceScope(scope, target.id, queryRunner);
   return false;
 }
 
 // The WHOLE request is rejected on the FIRST invalid target - never a
 // partial accepted set (matches tests.js's own resolveValidTargets).
-async function resolveValidExternalTargets(scope, rawTargets) {
+async function resolveValidExternalTargets(client, scope, rawTargets) {
   const targets = dedupeExternalTargets(rawTargets);
   if (!targets.length) return { ok: false, status: 400, error: "Choose at least one athlete, team or club." };
   // Every target's own id is validated as a real UUID BEFORE it ever
@@ -1927,8 +1944,15 @@ async function resolveValidExternalTargets(scope, rawTargets) {
   if (targets.some((t) => !UUID_PATTERN.test(t.id))) {
     return { ok: false, status: 400, error: "One of the chosen targets has an invalid id." };
   }
-  for (const target of targets) {
-    const allowed = await validateExternalTargetInScope(scope, target);
+  const queryRunner = (sql, params) => client.query(sql + " for share", params);
+  // D45: team rows precede membership/athlete rows. Take locks in a
+  // consistent order regardless of the picker order, keeping the latter for
+  // insertion and responses.
+  const targetLockOrder = { team: 0, club: 1, athlete: 2 };
+  const ordered = [...targets].sort((a, b) => targetLockOrder[a.kind] - targetLockOrder[b.kind]
+    || a.id.toLowerCase().localeCompare(b.id.toLowerCase()));
+  for (const target of ordered) {
+    const allowed = await validateExternalTargetInScope(scope, target, queryRunner);
     if (!allowed) return { ok: false, status: 403, error: "One of the chosen targets is outside your access." };
   }
   return { ok: true, targets };
@@ -2167,14 +2191,11 @@ function resolveAndValidateExternalScheduleBody(body, fallback) {
 router.post("/external-schedules", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const scope = await requireExternalScheduleWorkspace(req, res);
+    const scope = await requireExternalScheduleWriteWorkspace(req, res);
     if (!scope) return;
     const body = req.body || {};
     const validated = resolveAndValidateExternalScheduleBody(body, null);
     if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
-
-    const resolved = await resolveValidExternalTargets(scope, body.targets);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
 
     const resolvedRules = resolveValidNotificationRules(body.notificationRules);
     if (!resolvedRules.ok) return res.status(400).json({ error: resolvedRules.error });
@@ -2185,7 +2206,12 @@ router.post("/external-schedules", closedTrainingLoadViewGate, trainingLoadCoach
     // landing between two independent reads could validate targets
     // against workspace A but stamp ownership from workspace B).
     const owner = scope.ownerContext;
-    await client.query("begin");
+    if (!(await beginExternalScheduleWrite(client, req, res, scope))) return;
+    const resolved = await resolveValidExternalTargets(client, scope, body.targets);
+    if (!resolved.ok) {
+      await client.query("rollback");
+      return res.status(resolved.status).json({ error: resolved.error });
+    }
     // One schedule row regardless of kind - a "Dates" pick of N dates is
     // ONE logical schedule (item 10's own fix), never N independent rows.
     const schedule = await insertExternalSchedule(client, {
@@ -2198,6 +2224,7 @@ router.post("/external-schedules", closedTrainingLoadViewGate, trainingLoadCoach
     if (validated.scheduleKind === "dates") await insertExternalScheduleDates(client, schedule.id, validated.dates);
     await insertExternalTargets(client, schedule.id, resolved.targets);
     await insertNotificationRules(client, schedule.id, resolvedRules.rules);
+    await recordExternalScheduleWrite(client);
     await client.query("commit");
     // Still an array in the response - existing/older callers reading
     // schedules[0] keep working unchanged; it's simply always length 1 now.
@@ -2296,12 +2323,11 @@ router.get("/external-schedules/:scheduleId", loadTeamViewGate, trainingLoadCoac
 router.patch("/external-schedules/:scheduleId", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const scope = await requireExternalScheduleWorkspace(req, res);
+    const scope = await requireExternalScheduleWriteWorkspace(req, res);
     if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
-    await client.query("begin");
-    const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for update`, [req.params.scheduleId]);
-    const schedule = scheduleResult.rows[0];
+    if (!(await beginExternalScheduleWrite(client, req, res, scope))) return;
+    const schedule = await lockExternalSchedule(client, scope, req.params.scheduleId, "update");
     if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
@@ -2426,7 +2452,7 @@ router.patch("/external-schedules/:scheduleId", closedTrainingLoadViewGate, trai
       [schedule.id, eventName, eventType, eventNote, opensTime, dueTime, closesTime, endDate, timezone],
     );
     if (body.targets !== undefined) {
-      const resolved = await resolveValidExternalTargets(scope, body.targets);
+      const resolved = await resolveValidExternalTargets(client, scope, body.targets);
       if (!resolved.ok) {
         await client.query("rollback");
         return res.status(resolved.status).json({ error: resolved.error });
@@ -2448,6 +2474,7 @@ router.patch("/external-schedules/:scheduleId", closedTrainingLoadViewGate, trai
       await client.query(`delete from training_load.external_schedule_notification_rules where schedule_id = $1`, [schedule.id]);
       await insertNotificationRules(client, schedule.id, resolvedRules.rules);
     }
+    await recordExternalScheduleWrite(client);
     await client.query("commit");
     const freshResult = await query(
       `select s.*, (select array_agg(d.scheduled_date::text order by d.scheduled_date) from training_load.external_schedule_dates d where d.schedule_id = s.id) as dates_list
@@ -2483,12 +2510,11 @@ router.patch("/external-schedules/:scheduleId", closedTrainingLoadViewGate, trai
 async function setExternalScheduleStatus(req, res, next, newStatus) {
   const client = await pool.connect();
   try {
-    const scope = await requireExternalScheduleWorkspace(req, res);
+    const scope = await requireExternalScheduleWriteWorkspace(req, res);
     if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
-    await client.query("begin");
-    const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for update`, [req.params.scheduleId]);
-    const schedule = scheduleResult.rows[0];
+    if (!(await beginExternalScheduleWrite(client, req, res, scope))) return;
+    const schedule = await lockExternalSchedule(client, scope, req.params.scheduleId, "update");
     if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
@@ -2510,6 +2536,7 @@ async function setExternalScheduleStatus(req, res, next, newStatus) {
       await client.query("rollback");
       return res.status(400).json({ error: "This schedule was already cancelled." });
     }
+    await recordExternalScheduleWrite(client);
     await client.query("commit");
     res.json({ schedule: formatExternalScheduleRow(updateResult.rows[0]) });
   } catch (error) {
@@ -2546,20 +2573,27 @@ router.post("/external-schedules/:scheduleId/cancel", closedTrainingLoadViewGate
 router.post("/external-schedules/:scheduleId/schedule-again", closedTrainingLoadViewGate, trainingLoadCoachGate, async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const scope = await requireExternalScheduleWorkspace(req, res);
+    const scope = await requireExternalScheduleWriteWorkspace(req, res);
     if (!scope) return;
     if (!UUID_PATTERN.test(req.params.scheduleId)) return res.status(404).json({ error: "Schedule not found." });
-    const sourceResult = await query(`select * from training_load.external_schedules where id = $1`, [req.params.scheduleId]);
-    const source = sourceResult.rows[0];
-    if (!source || !canManageExternalScheduleInScope(scope, source)) return res.status(404).json({ error: "Schedule not found." });
+    if (!(await beginExternalScheduleWrite(client, req, res, scope))) return;
+    const source = await lockExternalSchedule(client, scope, req.params.scheduleId, "share");
+    if (!source || !canManageExternalScheduleInScope(scope, source)) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Schedule not found." });
+    }
     // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names is scheduled again on its event.
-    if (await scheduleManagedByCalendar(pool, "external", source.id)) {
+    if (await scheduleManagedByCalendar(client, "external", source.id)) {
+      await client.query("rollback");
       return res.status(409).json({ error: "schedule_managed_by_calendar", message: MANAGED_BY_CALENDAR });
     }
 
     const body = req.body || {};
     const validated = resolveAndValidateExternalScheduleBody(body, source);
-    if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+    if (!validated.ok) {
+      await client.query("rollback");
+      return res.status(validated.status).json({ error: validated.error });
+    }
 
     // Targets: from the request body if supplied; otherwise fall back to
     // the source's own current targets - but EITHER WAY, always
@@ -2568,32 +2602,37 @@ router.post("/external-schedules/:scheduleId/schedule-again", closedTrainingLoad
     // the active workspace can never be silently copied over unchecked.
     let targetsInput = body.targets;
     if (targetsInput === undefined) {
-      const sourceTargetsResult = await query(
+      const sourceTargetsResult = await client.query(
         `select target_kind, target_athlete_id, target_team_id, target_club_id from training_load.external_schedule_targets where schedule_id = $1`,
         [source.id],
       );
       targetsInput = sourceTargetsResult.rows.map((t) => ({ kind: t.target_kind, id: t.target_athlete_id || t.target_team_id || t.target_club_id }));
     }
-    const resolvedTargets = await resolveValidExternalTargets(scope, targetsInput);
-    if (!resolvedTargets.ok) return res.status(resolvedTargets.status).json({ error: resolvedTargets.error });
+    const resolvedTargets = await resolveValidExternalTargets(client, scope, targetsInput);
+    if (!resolvedTargets.ok) {
+      await client.query("rollback");
+      return res.status(resolvedTargets.status).json({ error: resolvedTargets.error });
+    }
 
     // Notification rules: same "from body if present, else copy source"
     // fallback, still fully re-validated either way.
     let rulesInput = body.notificationRules;
     if (rulesInput === undefined) {
-      const sourceRulesResult = await query(
+      const sourceRulesResult = await client.query(
         `select kind, enabled, reminder_offset_minutes from training_load.external_schedule_notification_rules where schedule_id = $1`,
         [source.id],
       );
       rulesInput = normalizeNotificationRuleRows(sourceRulesResult.rows);
     }
     const resolvedRules = resolveValidNotificationRules(rulesInput);
-    if (!resolvedRules.ok) return res.status(400).json({ error: resolvedRules.error });
+    if (!resolvedRules.ok) {
+      await client.query("rollback");
+      return res.status(400).json({ error: resolvedRules.error });
+    }
 
     // Resolved once, inside requireExternalScheduleWorkspace above - see
     // the matching comment on POST /external-schedules (item 5).
     const owner = scope.ownerContext;
-    await client.query("begin");
     const schedule = await insertExternalSchedule(client, {
       scheduleKind: validated.scheduleKind, timezone: validated.timezone, startDate: validated.startDate, endDate: validated.endDate,
       recurrenceRule: validated.recurrenceRule ? JSON.stringify(validated.recurrenceRule) : null,
@@ -2604,6 +2643,7 @@ router.post("/external-schedules/:scheduleId/schedule-again", closedTrainingLoad
     if (validated.scheduleKind === "dates") await insertExternalScheduleDates(client, schedule.id, validated.dates);
     await insertExternalTargets(client, schedule.id, resolvedTargets.targets);
     await insertNotificationRules(client, schedule.id, resolvedRules.rules);
+    await recordExternalScheduleWrite(client);
     await client.query("commit");
     res.status(201).json({ schedule: formatExternalScheduleRow(schedule, validated.scheduleKind === "dates" ? validated.dates : undefined) });
   } catch (error) {
@@ -2858,24 +2898,18 @@ router.post("/external-schedules/:scheduleId/remind", closedTrainingLoadViewGate
   }
   const assignmentIds = rawAssignmentIds;
 
-  const scope = await requireExternalScheduleWorkspace(req, res);
+  const scope = await requireExternalScheduleWriteWorkspace(req, res);
   if (!scope) return;
 
   const client = await pool.connect();
   let results;
   const toEmit = [];
   try {
-    await client.query("begin");
-
-    const scheduleResult = await client.query(`select * from training_load.external_schedules where id = $1 for share`, [req.params.scheduleId]);
-    const schedule = scheduleResult.rows[0];
-    if (!schedule) {
+    if (!(await beginExternalScheduleWrite(client, req, res, scope))) return;
+    const schedule = await lockExternalSchedule(client, scope, req.params.scheduleId, "share");
+    if (!schedule || !canManageExternalScheduleInScope(scope, schedule)) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
-    }
-    if (!canManageExternalScheduleInScope(scope, schedule)) {
-      await client.query("rollback");
-      return res.status(403).json({ error: "Forbidden" });
     }
     if (schedule.status === "cancelled") {
       await client.query("rollback");
@@ -2978,6 +3012,7 @@ router.post("/external-schedules/:scheduleId/remind", closedTrainingLoadViewGate
       results.push({ ...base, outcome: "notified" });
     }
 
+    await recordExternalScheduleWrite(client);
     await client.query("commit");
   } catch (error) {
     await client.query("rollback").catch(() => {});
