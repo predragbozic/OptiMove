@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { calendarManageCases } from "./support/calendar-m1-requests.mjs";
 
 // Loading the routers constructs lazy pools. No connection is used by these tests.
 process.env.DATABASE_URL ??= "postgresql://calendar_m1@127.0.0.1:1/calendar_m1_no_database";
@@ -71,19 +72,21 @@ function mountedWrites(router) {
     : []).sort();
 }
 
-test("M-1: every mounted staff write and the separate athlete self write are in the permission inventory", () => {
-  assert.deepEqual(mountedWrites(events), [
-    "POST /", "PATCH /:eventId", "POST /:eventId/cancel", "POST /:eventId/delete",
-    "POST /:eventId/sessions", "POST /:eventId/sessions/detach", "POST /:eventId/sessions/align",
-    "POST /:eventId/activities", "POST /:eventId/activities/detach", "POST /:eventId/fields",
-    "POST /:eventId/questions", "POST /:eventId/questions/:questionId/remove",
-    "POST /:eventId/questions/:questionId/move",
-  ].sort());
-  assert.deepEqual(mountedWrites(settings), [
-    "POST /types", "POST /types/order", "PATCH /types/:typeId", "POST /types/:typeId/archive", "POST /types/:typeId/restore",
-    "POST /fields", "PATCH /fields/:fieldId", "POST /fields/:fieldId/archive", "POST /fields/:fieldId/restore",
-    "POST /locations", "PATCH /locations/:locationId", "POST /locations/:locationId/archive", "POST /locations/:locationId/restore",
-    "PUT /teams/:teamId", "PUT /questions",
-  ].sort());
+test("M-1: every mounted staff write has a real HTTP test case; athlete self Later stays separate", () => {
+  const ids = {
+    eventId: "event", eventTypeId: "type", clubId: "club", teamId: "team",
+    detailId: "field", locationId: "location", auxiliaryId: "related", requestKey: () => "request",
+  };
+  const pathParams = { eventId: ids.eventId, questionId: ids.auxiliaryId, typeId: ids.eventTypeId,
+    fieldId: ids.detailId, locationId: ids.locationId, teamId: ids.teamId };
+  const cases = calendarManageCases(ids);
+  const sent = (casesOfKind) => casesOfKind.map(({ method, path }) => `${method} ${path}`).sort();
+  const paths = (router, prefix) => mountedWrites(router).map((signature) => {
+    const [method, route] = signature.split(" ");
+    const path = route.replace(/:(\w+)/g, (_, name) => pathParams[name]);
+    return `${method} ${prefix}${path === "/" ? "" : path}`;
+  }).sort();
+  assert.deepEqual(sent(cases.event), paths(events, "/api/calendar/events"));
+  assert.deepEqual(sent(cases.settings), paths(settings, "/api/calendar/settings"));
   assert.deepEqual(mountedWrites(athleteQuestions), ["POST /:questionId/later"]);
 });
