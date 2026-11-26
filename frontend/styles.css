@@ -31259,6 +31259,12 @@ body.athlete-questions-prompt-open {
 .tl-compact-page-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .tl-dashboard-pages nav.tl-compact-page-tabs { position: relative; display: flex; flex: 1; min-width: 0; flex-wrap: nowrap; overflow-x: auto; gap: 2px; padding: 0; scrollbar-width: thin; }
 .tl-compact-page-tabs > button { flex: none; white-space: nowrap; border: 0; border-radius: 6px 6px 0 0; background: transparent; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.tl-compact-page-picker { display: none; }
+@media (max-width: 640px) {
+  .tl-dashboard-pages nav.tl-compact-page-tabs { display: none; }
+  .tl-dashboard-pages .tl-compact-page-picker { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .tl-compact-page-picker select { flex: 1; min-width: 0; min-height: 44px; font-size: 16px; }
+}
 .tl-dashboard-pages .tl-compact-page-tabs > [aria-current="page"] { background: #edf7f4; border: 0; box-shadow: inset 0 -2px #087d72; }
 .tl-compact-page-tools { display: flex; flex: none; align-items: center; gap: 2px; }
 .tl-compact-page-tools > button { width: 44px; height: 44px; padding: 0; border: 0; background: transparent; font-size: 22px; }
