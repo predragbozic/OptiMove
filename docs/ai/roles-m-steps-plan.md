@@ -99,3 +99,84 @@ Training Load starts with explicit words those flows already define: schedules, 
 roster decisions and estimates. The phase plan will distinguish staff writes from athlete self RPE,
 and will resolve manual measurements, participant session types and RPE switches against their
 resource scopes before implementation. Imports, Dashboard M and the remaining modules stay separate.
+
+## M-2 Training Load external RPE schedules
+
+This RISKY slice enables the existing `load.schedule.manage` word for the seven staff write routes under
+`/api/training-load/external-schedules`: POST create, PATCH detail, and POST pause, resume, cancel,
+schedule-again and remind. List and detail remain available under the current V-5b read rules.
+Planned-RPE defaults and quick toggles, plan ownership resolution, activity and roster writes,
+estimates, Metrics, Dashboards and Imports follow separately.
+
+### Scope and responses
+
+- Native club/team writers must hold both `load.view.team` and `load.schedule.manage` at the active
+  authenticated workspace. Reuse the request's checked workspace through `trainingLoadAccess.js`
+  and its owner snapshot; do not resolve it again after checking targets. Club and team schedules
+  remain distinct owners, including when one account holds both workspaces. Keep the current target
+  membership validation. A module closure and permission revocation refuse without mutation.
+- Preserve the platform branch and system owner in the platform workspace. Preserve a private
+  coach's user-owned path. View workspaces, athlete workspaces and unscoped accounts cannot write.
+  Old roles in another workspace grant no authority in the active one.
+- For an eligible writer, a missing or foreign schedule ID returns the same existing 404, including
+  remind, which currently returns 403 for a foreign schedule. Reject a foreign resource before
+  locking its owner or schedule. Keep current malformed-body responses.
+- Keep the existing Calendar-owned refusal on edit, pause, resume, cancel and schedule-again.
+  Remind currently allows eligible staff to remind on a Calendar-owned schedule. Keep that
+  behavior subject to the new permission. Calendar's Ask athletes and athlete self feedback,
+  occurrence materialization and licence enforcement stay on their own existing paths.
+  Leave shared insert functions in `externalScheduleWriter.js` unchanged.
+
+### Transaction and browser
+
+Use the same transaction for authority and each staff write. In a native club/team workspace, take
+the applicable shared club ceiling lock before row locks and call `public.lock_permission_actor`
+to lock the actor's roles. Use `public.user_has_permission` for both words under those locks.
+The lock function's return value describes role-administration authority and is unsuitable for
+authorizing a schedule. Revalidate the active native workspace relationship under lock. Keep
+the schedule owner and target rules in force, and recheck the owner on the row locked for writes.
+
+Preserve schedule UPDATE locks for edit and lifecycle changes. Schedule-again reads a source and
+its defaults. Capture and recheck the source under the write transaction after authorization before
+copying, while keeping its existing create-on-retry behavior. Remind keeps schedule SHARE, occurrence
+SHARE in ID order and assignment UPDATE in ID order. Preserve cooldown, deduplication and
+post-commit notification emission. A refused request leaves no changes or notification.
+
+Use the existing server-projected permission for the Schedule toolbar and schedule detail controls
+in `training-load-view.js` and their dispatched actions. Users with read access can open schedule
+detail. Preserve the distinct platform/private branches. A native writer with permission data
+explicitly unavailable gets no write controls. No new screen or client-side role authority.
+
+### Migration and release
+
+One focused migration is expected. Confirm the slot before authoring. Pin the v98
+`permission_word_honoured(text)` body and retain its Calendar words. Enable the schedule word in
+SQL and the server's checked list together. Seed only native basic holders, their live club
+versions and live customs as required by R4 §7.4. Use the audit rows, revision bumps, ceiling lock
+order and no pending version question rule. Preserve independently created roles and existing
+schedule, recurrence and athlete RPE functions. Run read-only preflight and postcheck and an
+isolated apply → rollback → identical catalog and audited seed data → reapply rehearsal.
+Rollback requires a quiet moment and refuses for altered bodies, grants, seeded revisions,
+unsafe use or later migrations.
+
+The old binary retains its existing native schedule rights while it serves. Seed compatibility
+keeps those writers working during the rollout. Rehearse all seven routes on the previous build
+against the migrated database. Allow new permission changes for this slice only after the
+new build is healthy and the old instances are confirmed drained. Document how release operations
+enforce that boundary before freeze. If reliable drain cannot be verified, require an explicit
+database cutover design before deployment. Production migration and any activation have their
+own recorded orders.
+
+### Release gate
+
+- Pin all seven mounted writes in the route inventory. Exercise successful native club/team writes
+  and denial when either word is missing, with byte-identical missing/foreign replies, exact owner
+  matching, mixed accounts, closed licence, unchanged rows and zero notifications on refusal.
+- Preserve platform and own private schedule behavior, Calendar Ask athletes, Calendar-owned
+  refusal and remind behavior, and all self-RPE paths. Verify one request-bound workspace and
+  recorded SQL ordering. Race role removal or ceiling closure against an actual write, including
+  remind, and verify that scope is rechecked before any change.
+- Test every native seed and audit layer, historical cutoffs and previous build compatibility.
+  Prove mutations that lose the View check, Manage check or owner match are caught separately.
+  Run full backend disposable, frontend-fast, build and focused browser flows at phone and desktop
+  widths, then obtain independent review.
