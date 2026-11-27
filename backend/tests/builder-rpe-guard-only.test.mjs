@@ -32,12 +32,20 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     const bridge = await previousDashboardServer(db.url, {}, process.env.OPTIMOVE_BUILDER_RPE_BRIDGE_SHA
       ?? "66220c1224abdbdc0eaa1a23fa8d53591064a98a");
     let descendant;
+    let descendantOfLaterPublished;
     try {
       const copied = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.before.id}/duplicate`, {
         method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-05-17" },
       });
       assert.equal(copied.status, 201, JSON.stringify(copied.body));
       descendant = copied.body.plan.id;
+      const later = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.during.id}/duplicate`, {
+        method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-06-14" },
+      });
+      assert.equal(later.status, 201, JSON.stringify(later.body));
+      descendantOfLaterPublished = later.body.plan.id;
+      const publishedAfterCopy = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.during.id}/submit`, { method: "POST" });
+      assert.equal(publishedAfterCopy.status, 200, JSON.stringify(publishedAfterCopy.body));
     } finally {
       await bridge.stop();
     }
@@ -46,9 +54,9 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     try {
       const api = (path, options) => builderRpeFixtureApi(server, cookies.owner, path, options);
       const submit = id => api(`/api/builder/plans/${id}/submit`, { method: "POST" });
-      const ids = [...Object.values(cases).map(item => item.id), descendant, templateId];
+      const ids = [...Object.values(cases).map(item => item.id), descendant, descendantOfLaterPublished, templateId];
       const before = await snapshot(ids);
-      for (const item of [cases.before, cases.during, cases.editDraft, { id: descendant }]) {
+      for (const item of [cases.before, cases.editDraft, { id: descendant }, { id: descendantOfLaterPublished }]) {
         const result = await submit(item.id);
         assert.equal(result.status, 409, JSON.stringify(result.body));
         assert.equal(result.body.code, "rpe_recovery_required");
