@@ -1,6 +1,6 @@
 # v104 — kopiranje Dashboard strane
 
-Ova proba polazi od v102. Ako M-3c uđe prvi, pre puštanja identifikujte njegov tačan commit i checksum za v103, uskladite preflight sa tim prethodnikom i ponovite probu. v100 je povučen broj, pa preflight izričito proverava da stari pisac nije primenjen.
+Osnova probe je M-3c bridge iz commita `6b6ddf29a27799b09a47eee4c48829add9568fee`. Preflight proverava da je potvrđeni v103 poslednja migracija i da povučeni v100 nije primenjen.
 
 Proverite ciljni host, port i ime baze. Izvršite `dashboard-page-copy-v104-preflight.sql` i proverite da su svi rezultati `true`. Posle odobrenja primenite v104 zvaničnim migration runner-om. Proverite oba rezultata iz `dashboard-page-copy-v104-postcheck.sql` pre otvaranja UI funkcije korisnicima.
 

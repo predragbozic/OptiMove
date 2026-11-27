@@ -184,9 +184,9 @@ test('v104 rehearsal verifies the writer, rolls back without data loss, and reap
  await q.query('begin');
  try{
   await q.query(`insert into public.schema_migrations (migration_name,checksum,execution_time_ms,runner_version)
-    values ('migrations_v2/202612051000_reserved_predecessor.sql',repeat('0',64),0,'rehearsal')`);
+    values ('migrations_v2/202612051100_reserved_predecessor.sql',repeat('0',64),0,'rehearsal')`);
   const checks=(await q.query(await sql('preflight'))).rows[0];
-  assert.equal(checks.v102_is_latest,false);
+  assert.equal(checks.v103_is_latest,false);
  }finally{
   await q.query('rollback');
  }
