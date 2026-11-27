@@ -8,26 +8,28 @@ export async function beginBuilderRpeProvenance(client) {
   return schema.ready;
 }
 
-export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = null, origin = sourcePlanId ? "edit" : "created", copies = new Map() }) {
+export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = null, origin = sourcePlanId ? "edit" : "created", copies = new Map(), lockedSources = null }) {
+  if (origin === "copy") await assertBuilderRpeCopyProvenance(client, sourcePlanId, copies, lockedSources);
   const { rowCount } = await client.query(
     `insert into training_load.builder_rpe_plan_baselines
-       (plan_id,origin,source_plan_id,source_updated_at,owner_scope,owner_user_id,owner_club_id,owner_team_id,opening_tracking,opening_rpe)
+       (plan_id,origin,source_plan_id,source_updated_at,owner_scope,owner_user_id,owner_club_id,owner_team_id,opening_tracking,opening_rpe,opening_verified)
      select p.id,$3,
             src.id,src.updated_at,o.owner_scope,o.owner_user_id,o.owner_club_id,o.owner_team_id,
-            p.track_training_load_default,p.request_rpe_default
+            p.track_training_load_default,p.request_rpe_default,
+            (p.track_training_load_default and ($3 = 'copy' or ($3 = 'edit' and src.status = 'active' and not coalesce(src.is_edit_draft,false))))
      from plans.plans p
      left join plans.plans src on src.id=$2
      left join training_load.plan_workspace_ownership o on o.plan_id=p.id
      where p.id=$1 and (
        ($3 = 'created' and $2::uuid is null and p.edit_source_plan_id is null)
-       or ($3 = 'edit' and p.edit_source_plan_id=src.id)
-       or ($3 = 'copy' and src.id is not null and p.edit_source_plan_id is null)
+       or ($3 = 'edit' and p.edit_source_plan_id=src.id and (p.track_training_load_default,p.request_rpe_default)=(src.track_training_load_default,src.request_rpe_default))
+       or ($3 = 'copy' and src.id is not null and p.edit_source_plan_id is null and (p.track_training_load_default,p.request_rpe_default)=(src.track_training_load_default,src.request_rpe_default))
      )`,
     [planId, sourcePlanId, origin],
   );
   if (rowCount !== 1) throw new Error("Builder RPE opening plan was not recorded.");
 
-  await recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, copies, retained: origin === "edit" });
+  await recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, copies, retained: origin === "edit", verified: origin === "copy" });
   await recordBuilderRpeUse(client);
 }
 
@@ -35,15 +37,18 @@ export async function recordBuilderRpeUse(client) {
   await client.query("insert into training_load.builder_rpe_provenance_use default values on conflict do nothing");
 }
 
-async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, sourcePlanIds = [sourcePlanId], copies, retained = false }) {
+async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, sourcePlanIds = [sourcePlanId], copies, retained = false, verified = false }) {
   if (!copies.size) return;
+  if (!retained && !verified) await assertBuilderRpeCopyProvenance(client, null, copies);
   const { rowCount: sessions } = await client.query(
     `insert into training_load.builder_rpe_session_baselines
-       (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe)
-     select $1,dst.id,dst.logical_session_id,sd.plan_id,src.id,$5,dst.training_load_enabled,dst.rpe_enabled
+       (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe,opening_verified)
+     select $1,dst.id,dst.logical_session_id,sd.plan_id,src.id,$5,dst.training_load_enabled,dst.rpe_enabled,
+            dst.training_load_enabled and (not $5::boolean or (source_plan.status='active' and not coalesce(source_plan.is_edit_draft,false)))
      from unnest($3::uuid[],$4::uuid[]) pair(source_id,target_id)
      join plans.plan_sessions src on src.id=pair.source_id
      join plans.plan_days sd on sd.id=src.plan_day_id and sd.plan_id=any($2::uuid[])
+     join plans.plans source_plan on source_plan.id=sd.plan_id
      join plans.plan_sessions dst on dst.id=pair.target_id
      join plans.plan_days dd on dd.id=dst.plan_day_id and dd.plan_id=$1
      join training_load.builder_rpe_plan_baselines opening on opening.plan_id=dd.plan_id
@@ -55,8 +60,9 @@ async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, so
 
 export async function recordBuilderRpeCopyIfTracked(client, copy) {
   if (!copy.copies.size) return;
+  if (!copy.verified) await assertBuilderRpeCopyProvenance(client, null, copy.copies, copy.lockedSources);
   const opening = await client.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [copy.planId]);
-  if (opening.rowCount) await recordBuilderRpeCopiedSessions(client, copy);
+  if (opening.rowCount) await recordBuilderRpeCopiedSessions(client, { ...copy, verified: true });
 }
 
 export async function recordBuilderRpeNewLogicalCopies(client, { planId, sourcePlanId, copies }) {
@@ -72,7 +78,7 @@ export async function recordBuilderRpeNewLogicalCopies(client, { planId, sourceP
   );
   const missing = new Set(rows.map(row => row.id));
   await recordBuilderRpeCopiedSessions(client, {
-    planId, sourcePlanId, copies: new Map([...copies].filter(([,targetId]) => missing.has(targetId))),
+    planId, sourcePlanId, verified: true, copies: new Map([...copies].filter(([,targetId]) => missing.has(targetId))),
   });
 }
 
@@ -84,8 +90,8 @@ export async function recordBuilderRpeSyncedCopy(client, { planId, sourcePlanId,
     inherited.delete(source_id);
     const { rowCount } = await client.query(
       `insert into training_load.builder_rpe_session_baselines
-         (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe)
-       select $1,dst.id,dst.logical_session_id,$2,$3,old.opening_tracking,old.opening_rpe
+         (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe,opening_verified)
+       select $1,dst.id,dst.logical_session_id,$2,$3,old.opening_tracking,old.opening_rpe,old.opening_verified
        from training_load.builder_rpe_session_baselines old
        join plans.plan_sessions dst on dst.id=$5
        join plans.plan_days d on d.id=dst.plan_day_id and d.plan_id=old.plan_id
@@ -108,7 +114,7 @@ export async function recordBuilderRpeSyncedCopy(client, { planId, sourcePlanId,
       [planId,sourcePlanId,source_id,target_id,inserted],
     );
   }
-  await recordBuilderRpeCopyIfTracked(client, { planId, sourcePlanId, copies: inherited });
+  await recordBuilderRpeCopyIfTracked(client, { planId, sourcePlanId, copies: inherited, verified: true });
 }
 
 // Existing drafts without exact baselines stay unclassified while exposure is closed.
@@ -172,11 +178,25 @@ export async function recordBuilderRpePlanEffect(client, before, after) {
 
 // Record exact inserted rows only under a known immutable plan baseline.
 export async function recordBuilderRpeSessionOpening(client, planId, sessionId, source = null) {
+  if (source) {
+    const copied = await client.query(
+      `select 1 from plans.plan_sessions original
+       join plans.plan_days day on day.id=original.plan_day_id and day.plan_id=$2
+       join plans.plan_sessions destination on destination.id=$3
+       where original.id=$1 and (original.training_load_enabled,original.rpe_enabled)=
+         (destination.training_load_enabled,destination.rpe_enabled)`, [source.id, source.plan.id, sessionId],
+    );
+    if (!copied.rowCount) throw recoveryRequired();
+    await assertBuilderRpeCopyProvenance(client, null, new Map([[source.id, sessionId]]));
+  }
   await client.query(
     `insert into training_load.builder_rpe_session_baselines
-       (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe)
-     select $1,s.id,s.logical_session_id,$3,$4,s.training_load_enabled,s.rpe_enabled
+       (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe,opening_verified)
+     select $1,s.id,s.logical_session_id,$3,$4,s.training_load_enabled,s.rpe_enabled,
+            s.training_load_enabled and ($3::uuid is not null or (p.status='active' and not coalesce(p.is_edit_draft,false))
+              or (b.opening_verified and b.opening_tracking and (not s.rpe_enabled or b.opening_rpe)))
      from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=$1
+     join plans.plans p on p.id=d.plan_id
      join training_load.builder_rpe_plan_baselines b on b.plan_id=d.plan_id
      where s.id=$2`,
     [planId,sessionId,source?.plan.id ?? null,source?.id ?? null],
@@ -259,4 +279,169 @@ export async function listBuilderRpeSiblingLineage(client, sourcePlanId, targetP
 export async function hasBuilderRpeSiblingLineage(client, source, target) {
   const matches = await listBuilderRpeSiblingLineage(client, source.planId, target.planId, [source.sessionId], []);
   return matches.length === 1 && matches[0].target_id === target.sessionId;
+}
+
+function hasRpe(row) {
+  return row.tracking === true || row.rpe === true;
+}
+
+function sameRpe(left, right) {
+  return left.tracking === right.tracking && left.rpe === right.rpe;
+}
+
+function matchesRecordedRpe(row) {
+  return row.known && row.tracking === row.expected_tracking && row.rpe === row.expected_rpe;
+}
+
+function provesRpeChange(before, after) {
+  return matchesRecordedRpe(after) &&
+    (before.tracking === after.tracking || after.changed_tracking === true) &&
+    (before.rpe === after.rpe || after.changed_rpe === true);
+}
+
+function recoveryRequired() {
+  return Object.assign(new Error("The draft is still saved. Confirm its Training Load settings before publishing."), {
+    status: 409, code: "rpe_recovery_required",
+  });
+}
+
+async function readBuilderRpeState(client, planId) {
+  const planResult = await client.query(
+      `select p.track_training_load_default as tracking, p.request_rpe_default as rpe,
+              p.status, p.is_edit_draft, b.opening_verified, b.opening_tracking, b.opening_rpe,
+              b.plan_id is not null as known,
+              e.changed_tracking, e.changed_rpe,
+              coalesce(e.effective_tracking,b.opening_tracking) as expected_tracking,
+              coalesce(e.effective_rpe,b.opening_rpe) as expected_rpe
+       from plans.plans p
+       left join training_load.builder_rpe_plan_baselines b on b.plan_id=p.id
+       left join training_load.builder_rpe_plan_effects e on e.plan_id=b.plan_id
+       where p.id=$1`, [planId],
+    );
+  const sessionResult = await client.query(
+      `select s.id,s.logical_session_id,s.training_load_enabled as tracking,s.rpe_enabled as rpe,
+              b.opening_verified, b.opening_tracking, b.opening_rpe,
+              b.session_id is not null as known,
+              e.changed_tracking, e.changed_rpe,
+              coalesce(e.effective_tracking,b.opening_tracking) as expected_tracking,
+              coalesce(e.effective_rpe,b.opening_rpe) as expected_rpe
+       from plans.plan_sessions s
+       join plans.plan_days d on d.id=s.plan_day_id
+       left join training_load.builder_rpe_session_baselines b
+         on b.plan_id=d.plan_id and b.session_id=s.id and b.logical_session_id=s.logical_session_id
+       left join training_load.builder_rpe_session_effects e on e.plan_id=b.plan_id and e.session_id=b.session_id
+       where d.plan_id=$1`, [planId],
+    );
+  return { plan: planResult.rows[0], sessions: sessionResult.rows };
+}
+
+function provesEnabledRpe(row) {
+  return !hasRpe(row) || (matchesRecordedRpe(row) &&
+    (!row.tracking || row.changed_tracking || (row.opening_verified && row.opening_tracking)) &&
+    (!row.rpe || row.changed_rpe || (row.opening_verified && row.opening_rpe)));
+}
+
+function assertBuilderRpeStateProven(state) {
+  if ([state.plan, ...state.sessions].some(row => !provesEnabledRpe(row))) throw recoveryRequired();
+}
+
+export async function assertBuilderRpeCopyProvenance(client, planId = null, copies = new Map(), lockedSources = null) {
+  const sessionIds = [...copies.keys()];
+  if (!planId && !sessionIds.length) return;
+  if (sessionIds.length) {
+    if (lockedSources) {
+      if (sessionIds.some(id => !lockedSources.has(id))) throw recoveryRequired();
+    } else {
+      const locked = await client.query(
+        "select id from plans.plan_sessions where id=any($1::uuid[]) order by id for share", [sessionIds],
+      );
+      if (locked.rowCount !== sessionIds.length) throw recoveryRequired();
+    }
+    const copied = await client.query(
+      `select src.id
+       from unnest($1::uuid[],$2::uuid[]) pair(source_id,destination_id)
+       join plans.plan_sessions src on src.id=pair.source_id
+       join plans.plan_sessions dst on dst.id=pair.destination_id
+       where (src.training_load_enabled,src.rpe_enabled)=(dst.training_load_enabled,dst.rpe_enabled)`,
+      [sessionIds,[...copies.values()]],
+    );
+    if (copied.rowCount !== sessionIds.length) throw recoveryRequired();
+  }
+  const { rows } = await client.query(
+    `select p.track_training_load_default as tracking,p.request_rpe_default as rpe,
+            p.status,p.is_edit_draft,b.opening_verified,b.opening_tracking,b.opening_rpe
+     from plans.plans p left join training_load.builder_rpe_plan_baselines b on b.plan_id=p.id where p.id=$1
+     union all
+     select s.training_load_enabled,s.rpe_enabled,p.status,p.is_edit_draft,b.opening_verified,b.opening_tracking,b.opening_rpe
+     from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id join plans.plans p on p.id=d.plan_id
+     left join training_load.builder_rpe_session_baselines b
+       on b.plan_id=p.id and b.session_id=s.id and b.logical_session_id=s.logical_session_id
+     where s.id=any($2::uuid[])`, [planId, sessionIds],
+  );
+  if (rows.length !== new Set(sessionIds).size + Number(Boolean(planId))) throw recoveryRequired();
+  for (const row of rows.filter(hasRpe)) {
+    // Only a publication observed under the source locks can attest a fresh copy.
+    if (row.status === "active" && !row.is_edit_draft) continue;
+    if (!row.opening_verified || (row.tracking && !row.opening_tracking) || (row.rpe && !row.opening_rpe)) {
+      throw recoveryRequired();
+    }
+  }
+}
+
+export async function assertBuilderRpeActivationProvenance(client, planId) {
+  assertBuilderRpeStateProven(await readBuilderRpeState(client, planId));
+}
+export async function assertBuilderRpeReplacementProvenance(client, targetId, replacementId, { edit = false } = {}) {
+  const target = await readBuilderRpeState(client, targetId);
+  const replacement = await readBuilderRpeState(client, replacementId);
+  if (!edit && (replacement.plan.status !== "active" || replacement.plan.is_edit_draft)) assertBuilderRpeStateProven(replacement);
+  if (!sameRpe(target.plan, replacement.plan) && (!provesRpeChange(target.plan, replacement.plan) || (!edit && !matchesRecordedRpe(target.plan)))) {
+    throw recoveryRequired();
+  }
+  const enabled = state => state.sessions.filter(hasRpe);
+  if (!enabled(replacement).length && !enabled(target).length) return;
+  const pairs = await listBuilderRpeSiblingLineage(client, replacementId, targetId,
+    enabled(replacement).map(row => row.id), enabled(target).map(row => row.id));
+  if (edit) {
+    // The live row and its edit draft retain these server-owned logical ids.
+    for (const after of replacement.sessions) {
+      if (!after.logical_session_id) continue;
+      for (const before of target.sessions) {
+        if (before.logical_session_id !== after.logical_session_id) continue;
+        if (pairs.some(pair => pair.target_id === before.id && pair.source_id === after.id)) continue;
+        pairs.push({ target_id: before.id, source_id: after.id });
+      }
+    }
+  }
+  const targetById = new Map(target.sessions.map(row => [row.id, row]));
+  const replacementById = new Map(replacement.sessions.map(row => [row.id, row]));
+  const removed = edit ? await client.query(
+    `select b.source_session_id as id, b.opening_tracking as tracking, b.opening_rpe as rpe
+       from training_load.builder_rpe_session_baselines b
+       join training_load.builder_rpe_plan_baselines p on p.plan_id=b.plan_id and p.source_plan_id=b.source_plan_id
+       join plans.plan_sessions source on source.id=b.source_session_id and source.logical_session_id=b.logical_session_id
+       where b.plan_id=$1 and b.source_plan_id=$2 and b.retained_from_opening
+         and not exists (
+           select 1 from plans.plan_sessions session join plans.plan_days day on day.id=session.plan_day_id
+           where day.plan_id=b.plan_id and session.logical_session_id=b.logical_session_id
+         )`, [replacementId, targetId],
+  ) : { rows: [] };
+  const enabledTargets = enabled(target).filter(row => {
+    const openings = removed.rows.filter(opening => opening.id === row.id);
+    return openings.length !== 1 || !sameRpe(row, openings[0]) || pairs.some(pair => pair.target_id === row.id);
+  });
+  const enabledReplacements = enabled(replacement);
+  const added = new Set();
+  for (const row of enabledReplacements) {
+    if (!edit || pairs.some(pair => pair.source_id === row.id)) continue;
+    if (provesEnabledRpe(row)) added.add(row.id);
+  }
+  for (const row of [...enabledTargets, ...enabledReplacements.filter(item => !added.has(item.id))]) {
+    const matches = pairs.filter(pair => pair.target_id === row.id || pair.source_id === row.id);
+    if (matches.length !== 1) throw recoveryRequired();
+    const { target_id, source_id } = matches[0];
+    const before = targetById.get(target_id);
+    const after = replacementById.get(source_id);
+    if (!sameRpe(before, after) && (!provesRpeChange(before, after) || (!edit && !matchesRecordedRpe(before)))) throw recoveryRequired();
+  }
 }

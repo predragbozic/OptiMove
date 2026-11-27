@@ -158,3 +158,7 @@ docs/runbooks/dashboards-manage-v105-*.sql text eol=lf
 docs/runbooks/builder-rpe-v106-*.sql text eol=lf
 migrations_v2/202612081000_training_load_v106_builder_rpe_provenance.sql text eol=lf
 backend/scripts/builder-rpe-v106-rehearsal.* text eol=lf
+
+migrations_v2/202612091000_training_load_v107_builder_rpe_copy_attestation.sql text eol=lf
+docs/runbooks/builder-rpe-v107-*.sql text eol=lf
+backend/scripts/builder-rpe-v107-rehearsal.* text eol=lf

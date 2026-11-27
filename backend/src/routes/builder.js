@@ -3,7 +3,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
-import { beginBuilderRpeProvenance, hasBuilderRpeSiblingLineage, inspectBuilderRpeSubmitEffects, listBuilderRpeExplicitSessions, listBuilderRpeSiblingLineage, recordBuilderRpeCopyIfTracked, recordBuilderRpeNewLogicalCopies, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening, recordBuilderRpeSyncedCopy, recordBuilderRpeUse } from "../builderRpeProvenance.js";
+import { assertBuilderRpeActivationProvenance, assertBuilderRpeCopyProvenance, assertBuilderRpeReplacementProvenance, beginBuilderRpeProvenance, hasBuilderRpeSiblingLineage, inspectBuilderRpeSubmitEffects, listBuilderRpeExplicitSessions, listBuilderRpeSiblingLineage, recordBuilderRpeCopyIfTracked, recordBuilderRpeNewLogicalCopies, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening, recordBuilderRpeSyncedCopy, recordBuilderRpeUse } from "../builderRpeProvenance.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -603,7 +603,7 @@ router.post("/plans/:planId/sync-batch", withBatchReuseGuard(async (req, res, ne
     const freshPlan = await getEditablePlan(req, plan.id);
     res.json(await buildDraft(freshPlan || plan, req));
   } catch (error) {
-    if (error?.code === "rpe_sibling_unmatched") return res.status(409).json({ error: error.message, code: error.code });
+    if (["rpe_sibling_unmatched", "rpe_recovery_required"].includes(error?.code)) return res.status(409).json({ error: error.message, code: error.code });
     if (error?.code === "program_rpe_scope") return res.status(404).json({ error: "Draft program not found" });
     next(error);
   }
@@ -849,7 +849,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
       client.release();
     }
     if (error?.code === "program_rpe_scope") return res.status(404).json({ error: "Draft program not found" });
-    if (error?.code === "rpe_sibling_unmatched") return res.status(409).json({ error: error.message, code: error.code });
+    if (["rpe_sibling_unmatched", "rpe_recovery_required"].includes(error?.code)) return res.status(409).json({ error: error.message, code: error.code });
     next(error);
   }
 }));
@@ -1070,6 +1070,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         const copies = source.plan_type === "weekly"
           ? await copyWeeklyPlanTree(client, source.id, planId, targetWeekStart, { targetIsNew: true })
           : await copyProgramTree(client, source.id, planId);
+        if (recordRpeOpening && !planOwner) await assertBuilderRpeCopyProvenance(client, source.id, copies);
         if (planOwner) {
           await insertPlanOwnershipSnapshot(client, planId, planOwner);
           if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId, sourcePlanId: source.id, origin: "copy", copies });
@@ -1334,7 +1335,12 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       });
     }
 
+    const lockedSources = recordRpeOpening ? new Set((await client.query(
+      `select s.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
+       where d.plan_id=$1 order by s.id for share of s`, [source.id],
+    )).rows.map(row => row.id)) : null;
     // Write.
+    if (recordRpeOpening && entries.some(entry => entry.kind === "new")) await assertBuilderRpeCopyProvenance(client, source.id);
     const created = [];
     const replaced = [];
     const skipped = [];
@@ -1364,7 +1370,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         const targetDays = (await client.query("select id, date::text as date from plans.plan_days where plan_id = $1", [row.id])).rows;
         entry.targetDays = new Map(targetDays.map((d) => [d.date.slice(0, 10), d.id]));
         const copies = await writeTemplateDays(client, entry, new Map());
-        if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: row.id, sourcePlanId: source.id, origin: "copy", copies });
+        if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: row.id, sourcePlanId: source.id, origin: "copy", copies, lockedSources });
         newPlanIds.push(row.id);
         created.push({ athleteId: entry.athleteId, weekStart: entry.weekStart, planId: row.id });
         notify.push(row);
@@ -1393,7 +1399,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         await client.query("delete from plans.plan_sessions where id = $1", [session.id]);
       }
       const copies = await writeTemplateDays(client, entry, keptOrder);
-      if (recordRpeOpening) await recordBuilderRpeCopyIfTracked(client, { planId: entry.planId, sourcePlanId: source.id, copies });
+      if (recordRpeOpening) await recordBuilderRpeCopyIfTracked(client, { planId: entry.planId, sourcePlanId: source.id, copies, lockedSources });
       writtenDayIds.push(...touchedIds);
       const row = (await client.query(
         "update plans.plans set updated_at = clock_timestamp() where id = $1 returning id, athlete_id, name, plan_type, week_start::text as week_start, status",
@@ -2157,18 +2163,20 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
     if (kindError) return res.status(400).json({ error: kindError });
 
     client = await pool.connect();
-    const nextOrderResult = await client.query(
-      "select coalesce(max(session_order), -1) + 1 as next_order from plans.plan_sessions where plan_day_id = $1",
-      [target.id],
-    );
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    if (source.plan.id !== target.plan.id) {
+      const plans = await client.query(
+        "select id from plans.plans where id=any($1::uuid[]) order by id for no key update", [[source.plan.id, target.plan.id]],
+      );
+      if (plans.rowCount !== 2) throw Object.assign(new Error("Program not found."), { status: 404 });
+    }
     await lockCopyTargetPlan(client,target.plan.id,{dayId:target.id});
     const { rows: [currentSource] } = await client.query(
       `select ps.training_load_enabled, ps.rpe_enabled
        from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id
-       where ps.id=$1 and pd.plan_id=$2`,
+       where ps.id=$1 and pd.plan_id=$2 for update of ps`,
       [source.id, source.plan.id],
     );
     if (!currentSource) {
@@ -2177,6 +2185,10 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
       client = null;
       return res.status(404).json({ error: "Source session not found." });
     }
+    const nextOrderResult = await client.query(
+      "select coalesce(max(session_order), -1) + 1 as next_order from plans.plan_sessions where plan_day_id = $1",
+      [target.id],
+    );
     const created = await client.query(
       // session_time/rpe_enabled/training_load_enabled: content
       // properties, always copied unconditionally (session_time was
@@ -2902,7 +2914,7 @@ async function respondWithDraft(req, res, user, plan, options = {}) {
       await syncBatchFromPlan(targetPlan, req, req.exerciseReuseGuard);
       freshPlan = await getEditablePlan(req, targetPlan.id);
     } catch (error) {
-      if (error?.code !== "program_rpe_scope" && error?.code !== "rpe_sibling_unmatched") throw error;
+      if (!["program_rpe_scope", "rpe_sibling_unmatched", "rpe_recovery_required"].includes(error?.code)) throw error;
       batchRpeRefused = true;
     }
   }
@@ -2932,6 +2944,11 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
       : { rows: [{ id: plan.id }] };
     const deletedIds = [];
     for (const target of targets.rows) {
+      await checkFirstRpeSubmit(client, req, target.id);
+      const eligible = await client.query(
+        "select 1 from plans.plans where id=$1 and status='draft' and source_type='builder' and not coalesce(is_edit_draft,false) for update", [target.id],
+      );
+      if (!eligible.rowCount) continue;
       const hasContent = plan.plan_type === "weekly"
         ? await planHasWeeklyTrainingContentWithClient(client, target.id)
         : await planHasBuilderContentWithClient(client, target.id);
@@ -3067,7 +3084,7 @@ async function syncBatchContentWithClient(client, sourceRow, siblingRows, guard 
     }
     if (provenance) {
       const lineage = provenance.sessionLineage?.get(sibling.id);
-      const copy = { planId: sibling.id, sourcePlanId: sourceRow.id, copies };
+      const copy = { planId: sibling.id, sourcePlanId: sourceRow.id, copies, verified: true };
       if (lineage?.length) await recordBuilderRpeSyncedCopy(client, { ...copy, lineage });
       else await recordBuilderRpeCopyIfTracked(client, copy);
     }
@@ -3135,6 +3152,7 @@ async function syncBatchFromPlan(sourcePlan, req, guard = null) {
     }
     const evidence = checkProvenance ? await checkBatchRpeEffects(client, rpe, sourceRow, siblingRows, false) : null;
     await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
+    if (checkProvenance) await assertBuilderRpeBatchProvenance(client, sourceRow, siblingRows, false);
     await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, evidence);
     await client.query("commit");
   } catch (error) {
@@ -3196,6 +3214,13 @@ async function checkBatchRpeEffects(client, rpe, source, siblings, activating) {
   return { sessionLineage, planEffects };
 }
 
+async function assertBuilderRpeBatchProvenance(client, source, siblings, activating) {
+  if (activating && source.status === "draft") await assertBuilderRpeActivationProvenance(client, source.id);
+  for (const sibling of siblings) {
+    await assertBuilderRpeReplacementProvenance(client, sibling.id, source.id);
+  }
+}
+
 async function prepareRpeBatchSync(client, sourcePlan, req, guard) {
   let rpe;
   let checkProvenance = false;
@@ -3218,13 +3243,14 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
   const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, req.user);
   if (!sourceRow) return { activatedPlans: [] };
   if (checkProvenance) await checkBatchRpeEffects(client, rpe, sourceRow, siblingRows, true);
+  await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
+  if (checkProvenance) await assertBuilderRpeBatchProvenance(client, sourceRow, siblingRows, true);
   if (!sourceRow.builder_batch_id) {
     // Not actually part of a batch (or no longer owned/active) - the
     // caller falls back to its own plain single-plan activation using
     // this SAME locked source row, never a second independent lock.
     return { sourceRow, activatedPlans: null };
   }
-  await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
   await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, checkProvenance ? {} : null);
 
   const emptinessTargets = sourceRow.status === "draft" ? [sourceRow, ...siblingRows] : siblingRows;
@@ -3411,7 +3437,9 @@ async function checkFirstRpeSubmit(client, req, planId) {
   const actor = await lockProgramRpeActor(client, req, scope);
   const locked = await client.query("select id from plans.plans where id=$1 and status='draft' for update", [planId]);
   if (!locked.rowCount) return;
+  await lockRpeEditSessions(client, [planId], null);
   if (await hasBuilderRpeExplicitEffect(client, planId)) await assertProgramRpeTargets(client, actor, scope, [planId]);
+  await assertBuilderRpeActivationProvenance(client, planId);
 }
 
 async function hasBuilderRpeExplicitEffect(client, planId) {
@@ -3568,6 +3596,9 @@ async function applyEditDraft(req, draftPlan, timing) {
       }
       if (effects.changed && rpe) await assertProgramRpeTargets(client, rpe.actor, scope, [source.id]);
     }
+    if (hasProvenance) {
+      await assertBuilderRpeReplacementProvenance(client, source.id, freshDraft.id, { edit: true });
+    }
     const retained = await client.query(`select item.exercise_id, count(*)::integer as uses
       from plans.plan_items item join plans.plan_sessions session on session.id = item.plan_session_id
       join plans.plan_days day on day.id = session.plan_day_id
@@ -3615,7 +3646,7 @@ async function applyEditDraft(req, draftPlan, timing) {
             copyLegacySession,
             assertReuse: (c, planId, retainedItems) => assertExerciseReuseAllowed(c, req.user.id, { planIds: [planId], retainedItems }),
           });
-          if (hasProvenance) await recordBuilderRpeCopyIfTracked(client, { planId: member.planId, sourcePlanId: freshDraft.id, copies });
+          if (hasProvenance) await recordBuilderRpeCopyIfTracked(client, { planId: member.planId, sourcePlanId: freshDraft.id, copies, verified: true });
         }
       });
     }
