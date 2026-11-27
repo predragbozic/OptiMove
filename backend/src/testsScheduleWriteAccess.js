@@ -1,6 +1,7 @@
 import { isPlatformAdministrator, loadAuthorizationContext } from "./authz.js";
 import { clubOfScope, lockClubCeiling } from "./clubCeilingLock.js";
-import { can, clubScope, teamScope } from "./permissions.js";
+import { canViewAthletesAt } from "./access.js";
+import { clubScope, teamScope } from "./permissions.js";
 import { canManageSchedule } from "./testsAccess.js";
 import { resolveActiveWorkspaceReadOnly } from "./workspace.js";
 
@@ -134,7 +135,7 @@ export async function targetMatchesTestsScheduleOwner(query, req, owner, target)
   }
   if (target.kind !== "athlete") return false;
   const scope = teamOwned ? teamScope(scopeId) : clubScope(scopeId);
-  if (!can(req.authz, "athletes.view", scope)) return false;
+  if (!canViewAthletesAt(req.authz, scope)) return false;
   const membership = await query(
     `select m.id from public.athlete_memberships m
      where m.athlete_id=$1 and m.status='active' and m.membership_type=$2
