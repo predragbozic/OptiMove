@@ -66,6 +66,7 @@ function roleData(client) {
 
 
 const previousBuild = "58762744039fa00577d50926c50b1cacfcf3b6ea";
+const stagedBuild = "2d31d54e403d6b4211ab70006829a2745b2f1453";
 const migration = "202612121000";
 const bridgeWords = ["programs.assign", "programs.publish"];
 const read = name => readFile(new URL(`../../docs/runbooks/program-assign-publish-v110-${name}.sql`, import.meta.url), "utf8");
@@ -73,7 +74,7 @@ const read = name => readFile(new URL(`../../docs/runbooks/program-assign-publis
 test("Programs Assign and Publish stage independently of Edit and preserve previous Settings and receipts", async () => {
   const fixture = await createPagesDatabase({ through: "202612111000", label: "program_ap_v110" });
   const { client } = fixture;
-  let current, previous;
+  let current, previous, staged;
   try {
     const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'team',$4),($3,'team',$4)", [platform,coach,versionCoach,team]);
@@ -130,16 +131,18 @@ test("Programs Assign and Publish stage independently of Edit and preserve previ
 
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, previousBuild);
+    staged = await previousDashboardServer(fixture.url, {}, stagedBuild);
     const platformCookie = await current.cookieFor(platform);
     const versionCookie = await current.cookieFor(versionCoach);
-    const post = async (server, cookie, path, body) => {
+    const call = async (server, cookie, path, body, method = "POST") => {
       const response = await fetch(server.baseUrl + path, {
-        method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body),
+        method, headers: { cookie, ...(body ? { "content-type": "application/json" } : {}) }, body: JSON.stringify(body),
       });
       const text = await response.text();
       return { status: response.status, body: JSON.parse(text), text };
     };
 
+    const post = call;
     const { rows: [template] } = await client.query(`insert into plans.plans
       (plan_type,created_by_user_id,name,is_template,status,source_type,visibility)
       values('program',$1,'Pre-existing template',true,'active','builder','private') returning id`, [versionCoach]);
@@ -152,7 +155,7 @@ test("Programs Assign and Publish stage independently of Edit and preserve previ
     const customPath = root + "/users/" + coach + "/clubs/" + club + "/custom";
     for (const send of [
       (path, body) => post(previous, platformCookie, path, body),
-      (path, body) => current.api(platformCookie, path, { method: "POST", body }),
+      (path, body) => post(staged, platformCookie, path, body),
     ]) {
       const { rows: [roles] } = await client.query(`select
         (select revision from public.permission_roles where id=$1) as role_revision,
@@ -175,16 +178,21 @@ test("Programs Assign and Publish stage independently of Edit and preserve previ
       });
       assert.equal(allowed.status, 200, allowed.text);
     }
-    const roleCatalog = await current.api(platformCookie, root + "/catalog?clubId=" + club, { method: "GET" });
+    const roleCatalog = await call(staged, platformCookie, root + "/catalog?clubId=" + club, undefined, "GET");
     assert.equal(roleCatalog.status, 200, roleCatalog.text);
     for (const word of bridgeWords) {
       assert.equal(roleCatalog.body.permissions.find(entry => entry.word === word)?.checked, false);
     }
     for (const user of [coach, versionCoach]) {
       const cookie = await current.cookieFor(user);
-      const me = await current.api(cookie, "/api/auth/me", { method: "GET" });
+      const me = await call(staged, cookie, "/api/auth/me", undefined, "GET");
       assert.equal(me.status, 200, me.text);
       for (const word of bridgeWords) assert.equal(me.body.user.permissions.includes(word), false);
+    }
+    const exposed = await current.api(platformCookie, root + "/catalog?clubId=" + club, { method: "GET" });
+    assert.equal(exposed.status, 200, exposed.text);
+    for (const word of [...bridgeWords, "programs.edit", "programs.rpe_settings"]) {
+      assert.equal(exposed.body.permissions.find(entry => entry.word === word)?.checked, true, word);
     }
     const athleteLogin = await fixtures(client).user("Program assignment recipient");
     const { rows: [athlete] } = await client.query(`insert into public.athletes
@@ -243,6 +251,65 @@ test("Programs Assign and Publish stage independently of Edit and preserve previ
     assert.equal(guarded.status, 201, guarded.text);
     assert.equal(await marker(), 1);
     assert.deepEqual(await state(), { ...beforeMarkedWrite, plans: beforeMarkedWrite.plans + 1, receipts: 1, edit_evidence: 1, notifications: beforeMarkedWrite.notifications + 1 });
+
+    const permissionsFor = async cookie => {
+      const me = await current.api(cookie, "/api/auth/me");
+      assert.equal(me.status, 200, me.text);
+      return me.body.user.permissions;
+    };
+    const { rows: [customSource] } = await client.query(`insert into plans.plans
+      (plan_type,created_by_user_id,name,is_template,status,source_type,visibility)
+      values('program',$1,'Custom role template',true,'active','builder','private') returning id`, [coach]);
+    const layers = [
+      { kind: "version", id: versionId, path: versionPath, cookie: versionCookie, plan: template.id, intent: {} },
+      { kind: "custom", id: customId, path: customPath, cookie: await current.cookieFor(coach), plan: customSource.id,
+        intent: { roleId, scopeType: "team", scopeId: team } },
+    ];
+    for (const layer of layers) {
+      const placement = { ...request, assignmentRequestId: key() };
+      const duplicate = () => current.api(layer.cookie, `/api/builder/plans/${layer.plan}/duplicate`, { method: "POST", body: placement });
+      const grant = () => current.api(layer.cookie, `/api/templates/${layer.plan}/assignments`, { method: "POST", body: { athleteIds: [athlete.id] } });
+      const initial = await duplicate();
+      assert.equal(initial.status, 201, initial.text);
+      const durable = async () => (await client.query(`select
+        (select count(*)::int from plans.plans where athlete_id=$1) as plans,
+        (select count(*)::int from public.builder_assignment_requests where id=$2) as receipts,
+        (select count(*)::int from public.app_notifications) as notifications`, [athlete.id,placement.assignmentRequestId])).rows[0];
+      const issued = await durable();
+      const revise = async (change, word) => {
+        const sql = layer.kind === "version" ? "select revision from public.permission_club_role_versions where id=$1"
+          : "select revision from public.permission_custom_roles where id=$1";
+        const revision = (await client.query(sql, [layer.id])).rows[0].revision;
+        const body = { requestKey: key(), expectedRevision: revision, reason: "Verify independent program permissions",
+          ...layer.intent, [change]: [word] };
+        const result = await current.api(platformCookie, layer.path, { method: "POST", body });
+        assert.equal(result.status, 200, result.text);
+        const oldReplay = await post(staged, platformCookie, layer.path, body);
+        assert.equal(oldReplay.status, 200, oldReplay.text);
+        assert.equal(oldReplay.body.replayed, true);
+      };
+      await revise("remove", "programs.assign");
+      assert.deepEqual((await permissionsFor(layer.cookie)).filter(word => bridgeWords.includes(word)).sort(), ["programs.publish"]);
+      assert.equal((await grant()).status, 403);
+      assert.equal((await duplicate()).status, 403);
+      assert.deepEqual(await durable(), issued);
+      await revise("add", "programs.assign");
+
+      await revise("remove", "programs.publish");
+      assert.deepEqual((await permissionsFor(layer.cookie)).filter(word => bridgeWords.includes(word)).sort(), ["programs.assign"]);
+      const entitlement = await grant();
+      assert.equal(entitlement.status, 201, entitlement.text);
+      assert.equal(entitlement.body.assigned.length, 1);
+      assert.equal((await duplicate()).status, 403);
+      assert.deepEqual(await durable(), issued);
+      await revise("add", "programs.publish");
+
+      assert.deepEqual((await permissionsFor(layer.cookie)).filter(word => bridgeWords.includes(word)).sort(), bridgeWords);
+      const restored = await duplicate();
+      assert.equal(restored.status, 201, restored.text);
+      assert.deepEqual(restored.body.assignments, initial.body.assignments);
+      assert.deepEqual(await durable(), issued);
+    }
     for (const action of ["delete from", "truncate", "update"]) {
       const command = action + " plans.program_assign_publish_v110_use" + (action === "update" ? " set first_used_at=now()" : "");
       await assert.rejects(client.query(command), /first-use evidence is immutable/);
@@ -251,7 +318,7 @@ test("Programs Assign and Publish stage independently of Edit and preserve previ
     await assert.rejects(client.query(rollback), /checked Assign or Publish writer use/);
     await client.query("rollback");
   } finally {
-    try { await previous?.stop(); } finally {
+    try { await Promise.all([previous?.stop(), staged?.stop()]); } finally {
       try { await current?.stop(); } finally { await fixture.drop(); }
     }
   }

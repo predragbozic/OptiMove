@@ -207,7 +207,7 @@ for (const width of [360, 375, 390]) {
   });
 }
 
-test("Programs Edit can be changed in Settings while Assign and Publish stay locked", async () => {
+test("Programs Assign and Publish can be changed independently in Settings", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "club_admin", WIDTHS.phone);
   try {
     await openRoles(page);
@@ -215,11 +215,12 @@ test("Programs Edit can be changed in Settings while Assign and Publish stay loc
     const editor = page.locator(`[data-club-roles-editor="${coachRoleId}"]`);
     const programs = editor.locator('[data-role-words-group="programs"]');
     await programs.waitFor();
-    const edit = programs.locator('[data-role-word="programs.edit"]');
-    assert.ok(await edit.isEnabled());
-    assert.ok(await edit.isChecked());
-    assert.ok(await programs.locator('[data-role-word="programs.assign"]').isDisabled());
-    assert.ok(await programs.locator('[data-role-word="programs.publish"]').isDisabled());
+    const assign = programs.locator('[data-role-word="programs.assign"]');
+    const publish = programs.locator('[data-role-word="programs.publish"]');
+    for (const checkbox of [assign, publish]) {
+      assert.ok(await checkbox.isEnabled());
+      assert.ok(await checkbox.isChecked());
+    }
     const save = page.locator("[data-club-roles-save]");
     const apply = async reason => {
       await save.locator("textarea").fill(reason);
@@ -228,14 +229,20 @@ test("Programs Edit can be changed in Settings while Assign and Publish stay loc
     };
     const items = async () => JSON.parse((await request(context, world, `${R}/clubs/${world.ids.clubA}/roles`)).text)
       .systemRoles.find(role => role.roleId === coachRoleId).effectiveItems;
-    await edit.uncheck();
-    await apply("Review draft permission");
-    assert.ok(!(await items()).includes("programs.edit"));
-    await edit.check();
-    await apply("Restore draft permission");
-    const restored = await items();
-    assert.ok(restored.includes("programs.edit"));
-    assert.ok(!restored.includes("programs.assign") && !restored.includes("programs.publish"));
+    for (const [control, word, other] of [
+      [assign, "programs.assign", "programs.publish"],
+      [publish, "programs.publish", "programs.assign"],
+    ]) {
+      await control.uncheck();
+      await apply("Review program permission");
+      const reduced = await items();
+      assert.ok(!reduced.includes(word));
+      assert.ok(reduced.includes(other) && reduced.includes("programs.edit"));
+      await control.check();
+      await apply("Restore program permission");
+      const restored = await items();
+      assert.ok(restored.includes(word) && restored.includes(other) && restored.includes("programs.edit"));
+    }
     assert.deepEqual(pageErrors, []);
   } finally {
     await context.close();
