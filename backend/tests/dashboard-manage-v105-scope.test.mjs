@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import pg from "pg";
+import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
 import { buildDatabase, fixtures, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 
 const v105 = "202612071000_training_load_v105_dashboards_manage_bridge.sql";
@@ -18,9 +19,10 @@ async function selectWorkspace(db, userId, type, scopeId = null) {
 test("real Dashboard routes preserve standalone-team authorization and private ownership while checking native writes", async () => {
   const database = await buildDatabase({ label: "dashboard_manage_scope", upTo: v105 });
   const sql = new pg.Client({ connectionString: database.url });
-  let server;
+  let server, bridge;
   const priorFlag = process.env.DASHBOARD_PAGES_ENABLED;
   const priorDatabase = process.env.DATABASE_URL;
+  const priorBuild = process.env.P1_PREVIOUS_BUILD_SHA;
   try {
     await sql.connect();
     const f = fixtures(sql);
@@ -110,6 +112,27 @@ test("real Dashboard routes preserve standalone-team authorization and private o
     assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
     assert.equal((await server.api(viewer, path)).body.canCreateDashboard, true);
 
+    const bridgeCommit = process.env.OPTIMOVE_DASHBOARDS_BRIDGE_SHA;
+    if (bridgeCommit) {
+      process.env.P1_PREVIOUS_BUILD_SHA = bridgeCommit;
+      bridge = await previousDashboardServer(database.url, { DASHBOARD_PAGES_ENABLED: "true" });
+      assert.equal(bridge.commit, bridgeCommit);
+      console.log("Exact Dashboard Manage bridge build:", bridge.commit);
+    }
+    const bridgeApi = (target, options = {}) => fetch(bridge.baseUrl + target, {
+      method: options.method,
+      headers: { Cookie: viewer, ...(options.body ? { "Content-Type": "application/json" } : {}) },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+    if (bridge) {
+      const me = await bridgeApi("/api/auth/me");
+      assert.equal(me.status, 200);
+      assert.ok(!(await me.json()).user.permissions.includes("dashboards.manage"));
+      const before = await bridgeApi(targetPath);
+      assert.equal(before.status, 200);
+      assert.equal((await before.json()).canManage, undefined);
+    }
+
     const change = (expectedRevision, effect) => server.api(platformCookie, `/api/organization/roles/${ROLE_IDS.team_coach}/clubs/${club}/version`, {
       method: "POST", body: { requestKey: randomUUID(), expectedRevision, reason: "Adjust Dashboard Manage", ...effect },
     });
@@ -123,16 +146,39 @@ test("real Dashboard routes preserve standalone-team authorization and private o
     assert.equal((await server.api(viewer, path)).body.canCreateDashboard, false);
     const offeredName = { expectedRevision: target.body.dashboard.revision, name: "Name granted after restore" };
     assert.equal((await server.api(viewer, targetPath, { method: "PATCH", body: offeredName })).status, 404);
+    if (bridge) {
+      const denied = await bridgeApi(targetPath, { method: "PATCH", body: offeredName });
+      const missing = await bridgeApi(`${path}/${randomUUID()}`, { method: "PATCH", body: offeredName });
+      assert.equal(denied.status, 404);
+      assert.equal(missing.status, 404);
+      assert.equal(await denied.text(), await missing.text());
+    }
     assert.equal((await server.api(viewer, `${path}/active`, { method: "POST", body: { dashboardId: target.body.dashboard.id } })).status, 200);
     assert.equal((await server.api(viewer, `${path}/active`, { method: "DELETE" })).status, 200);
     const restored = await change(removed.body.role.version.revision, { add: ["dashboards.manage"] });
     assert.equal(restored.status, 200, restored.text);
     assert.deepEqual((await server.api(viewer, "/api/auth/me")).body.user.permissions, originalWords);
     assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
-    assert.equal((await server.api(viewer, targetPath, { method: "PATCH", body: offeredName })).status, 200);
+    const written = await server.api(viewer, targetPath, { method: "PATCH", body: offeredName });
+    assert.equal(written.status, 200, written.text);
+    if (bridge) {
+      const visible = await bridgeApi(targetPath);
+      assert.equal(visible.status, 200);
+      const latest = (await visible.json()).dashboard;
+      assert.equal(latest.name, offeredName.name);
+      const bridgeWrite = await bridgeApi(targetPath, {
+        method: "PATCH", body: { name: "Written by the bridge after restore", expectedRevision: latest.revision },
+      });
+      assert.equal(bridgeWrite.status, 200, await bridgeWrite.text());
+      const read = await server.api(viewer, targetPath);
+      assert.equal(read.body.dashboard.name, "Written by the bridge after restore");
+    }
 
   } finally {
+    await bridge?.stop();
     await server?.stop();
+    if (priorBuild === undefined) delete process.env.P1_PREVIOUS_BUILD_SHA;
+    else process.env.P1_PREVIOUS_BUILD_SHA = priorBuild;
     if (priorFlag === undefined) delete process.env.DASHBOARD_PAGES_ENABLED;
     else process.env.DASHBOARD_PAGES_ENABLED = priorFlag;
     if (priorDatabase === undefined) delete process.env.DATABASE_URL;
