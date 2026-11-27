@@ -12,7 +12,7 @@ function fail(code = 'invalidRequest', httpStatus = 400) {
   throw Object.assign(new Error(code), { code, httpStatus });
 }
 
-export async function buildGalleryDraft(query, target, draft) {
+export async function buildGalleryDraft(query, target, draft, {referenceContext} = {}) {
   const allowed = ['kind', 'title', 'groupBy', 'series', 'additive', 'teamId', 'tableId', 'versionId', 'anchorKey'];
   if (!draft || typeof draft !== 'object' || Array.isArray(draft) || Object.keys(draft).some(key => !allowed.includes(key))
     || !['area', 'horizontal_bar', 'combined', 'heatmap', 'scatter', 'stacked', 'boxplot', 'radar'].includes(draft.kind)
@@ -67,7 +67,8 @@ export async function buildGalleryDraft(query, target, draft) {
   let presentation;
   if (radar) {
     const req = { ...target.req, _resolvedDataWorkspacePromise: Promise.resolve(target.workspace) };
-    const context = process.env.DASHBOARD_REFERENCES_ENABLED === 'true' ? await resolveReferenceContext(req) : null;
+    const context = process.env.DASHBOARD_REFERENCES_ENABLED === 'true'
+      ? referenceContext ?? await resolveReferenceContext(req) : null;
     if (!context || context.readOnly) fail('notFound', 404);
     const referenceConfig = {schemaVersion:1,mode:'radar',clubId:context.owner.clubId,...(preset?{
       source:'preset',tableId:draft.tableId,versionId:draft.versionId,

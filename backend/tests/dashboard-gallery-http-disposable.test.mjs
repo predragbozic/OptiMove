@@ -143,6 +143,32 @@ test('new Radar uses measured team reference and binds the newly saved series ID
   await q.query("update public.user_workspace_preferences set workspace_type='team',scope_id=$2 where user_id=$1",[club.id,world.ids.teamA]);
   await q.query("delete from public.user_club_roles where user_id=$1 and club_id=$2",[club.id,world.ids.clubA]);
  }
+ const setReferencesClosed=async closed=>{
+  await q.query('begin');
+  try{
+   await q.query("select set_config('optimove.permission_actor',$1||':'||pg_current_xact_id()::text,true)",[actor.id]);
+   await q.query("select public.lock_club_ceiling($1::uuid[],'exclusive')",[[world.ids.clubA]]);
+   if(closed)await q.query("insert into public.club_permission_ceiling(club_id,module_word,closed_by_user_id,reason) values($1,'data_configuration',$2,'Radar replay test')",[world.ids.clubA,actor.id]);
+   else await q.query("delete from public.club_permission_ceiling where club_id=$1 and module_word='data_configuration'",[world.ids.clubA]);
+   await q.query("insert into public.club_permission_ceiling_changes(club_id,module_word,action,performed_by_user_id,reason) values($1,'data_configuration',$2,$3,'Radar replay test')",[world.ids.clubA,closed?'close':'open',actor.id]);
+   await q.query('commit');
+  }catch(error){await q.query('rollback');throw error;}
+ };
+ assert.deepEqual((await api(url+'/gallery',body,'POST',club)).body,saved.body);
+ await setReferencesClosed(true);
+ try{
+  const detail=await api(url,null,'GET',club);
+  assert.equal(detail.status,200,detail.text);
+  assert.equal(detail.body.canManage,true,'dashboard management remains available');
+  const references=await api('/api/training-load/reference-tables/options',null,'GET',club);
+  assert.equal(references.status,404,references.text);
+  const replay=await api(url+'/gallery',body,'POST',club);
+  assert.deepEqual([replay.status,replay.body],[404,{error:'notFound'}]);
+  const status=await api(`/api/training-load/dashboards/${d.id}/pages/requests/${body.requestId}`,null,'GET',club);
+  assert.deepEqual([status.status,status.body],[200,{status:'notRecorded',requestId:body.requestId,retrySameRequest:true}]);
+  assert.deepEqual(await snapshot(),before);
+ }finally{await setReferencesClosed(false);}
+ assert.deepEqual((await api(url+'/gallery',body,'POST',club)).body,saved.body);
 });
 
 test('new Radar shows actual club values against a published reference before saving',async()=>{

@@ -227,7 +227,8 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
   if(!isUuid(requestId))throw pageError('invalidRequest',400);
   return transaction(async q=>{
    const target=await lockManagedPageTarget(q,req,dashboardId,{status:true});
-   const row=(await q('select receipt,retain_until,workspace from training_load.dashboard_page_requests where initiator_user_id=$1 and request_id=$2 and dashboard_id=$3',[req.user.id,requestId,dashboardId])).rows[0];
+   // Gallery receipts must be recovered through POST so Radar rechecks reference access.
+   const row=(await q("select receipt,retain_until,workspace from training_load.dashboard_page_requests where initiator_user_id=$1 and request_id=$2 and dashboard_id=$3 and operation<>'createGallery'",[req.user.id,requestId,dashboardId])).rows[0];
    if(row&&canonicalKey(row.workspace)!==canonicalKey(target.workspace))throw pageError();
    if(row&&now()>new Date(row.retain_until).getTime())throw pageError('requestExpired',409);
    return row?{status:'recorded',requestId,receipt:row.receipt}:{status:'notRecorded',requestId,retrySameRequest:true};
@@ -262,6 +263,12 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    // Management ownership does not authorize the selected data workspace.
    // Verify the locked dashboard before looking up even an existing receipt.
    if(!dataWorkspaceMatches(target.workspace,target.dashboard))throw pageError();
+   let referenceContext;
+   if(body.draft?.kind==='radar'){
+    if(process.env.DASHBOARD_REFERENCES_ENABLED!=='true'||!dashboardNamedAthletesAllowed(target.req,target.workspace))throw pageError();
+    referenceContext=await resolveReferenceContext({...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)});
+    if(!referenceContext||referenceContext.readOnly||!await adminWriteKit.rightsStillHold({query:q},referenceContext))throw pageError();
+   }
    const operation='createGallery';
    const hash=createHash('sha256').update(canonicalKey({dashboardId,pageId,operation,body})).digest('hex');
    const replay=await recordedPageRequest(q,target,req.user.id,body.requestId,hash,operation,now);
@@ -270,13 +277,8 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    await q('select id from training_load.dashboard_pages where dashboard_id=$1 order by id for update',[dashboardId]);
    const page=await requirePage(q,dashboardId,pageId);
    if(page.revision!==body.expectedPageRevision||target.dashboard.revision!==body.expectedDashboardRevision)throw pageError('staleRevision',409);
-   const draft=await buildGalleryDraft(q,target,body.draft);
+   const draft=await buildGalleryDraft(q,target,body.draft,{referenceContext});
    const reference=draft.presentation_config.referenceConfig;
-   let referenceContext;
-   if(reference){
-    referenceContext=await resolveReferenceContext({...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)});
-    if(!dashboardNamedAthletesAllowed(target.req,target.workspace)||!await adminWriteKit.rightsStillHold({query:q},referenceContext))throw pageError();
-   }
    const layout=(await q('select coalesce(max(y+height),0) as y, coalesce(max(greatest(widget_order,mobile_order)),0)+1 as position from training_load.dashboard_widgets where page_id=$1',[pageId])).rows[0];
    const write=async (operation,id,payload,revision=null)=>(await q('select training_load.write_dashboard_page_widget($1,$2,$3,$4,$5,$6,$7,$8) result',[dashboardId,pageId,revision,operation,id,null,req.user.id,payload])).rows[0].result;
    const {widgetId}=await write('create',null,{widgetType:draft.widget_type,title:draft.title,groupBy:draft.group_by,widgetOrder:layout.position,mobileOrder:layout.position,x:0,y:layout.y,width:6,height:5},page.revision);
