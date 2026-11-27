@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { calendarManageMigrations } from "./support/calendar-fixture.mjs";
+import { seedProgramRpeGrants } from "./support/program-rpe-grants.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -277,6 +278,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await seedProgramRpeGrants(admin);
   await admin.query(`alter table plans.plans add column if not exists builder_batch_id uuid`);
   // The scaffold's public.clubs carries only the columns the calendar reads;
   // POST /api/organization/clubs (test 14) writes the real table's columns.

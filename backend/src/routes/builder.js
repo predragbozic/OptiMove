@@ -10,10 +10,16 @@ import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
 import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSessionsOf, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
-import { canManagePlanTrainingLoadInScope, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
+import { canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
+import { resolveActiveWorkspaceReadOnly } from "../workspace.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
+
+async function resolveBuilderRpeWorkspace(client, req) {
+  const { workspace } = await resolveActiveWorkspaceReadOnly(req.user.id, req.authz, client.query.bind(client));
+  return externalScheduleScopeForWorkspace(workspace, req);
+}
 
 const router = Router();
 let activeBatchGuards = 0;
@@ -654,7 +660,7 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
     let recordedOwner = ownerScope?.ownerContext;
     if (recordRpeOpening) {
-      const expected = ownerScope ?? await resolveExternalScheduleWorkspaceScope(req);
+      const expected = ownerScope ?? await resolveBuilderRpeWorkspace(client, req);
       const actor = await lockProgramRpeActor(client, req, expected);
       let targetsAllowed = false;
       if (actor) {
@@ -952,7 +958,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
     if (recordRpeOpening) {
-      const expected = weeklyPlanOwnerScope ?? await resolveExternalScheduleWorkspaceScope(req);
+      const expected = weeklyPlanOwnerScope ?? await resolveBuilderRpeWorkspace(client, req);
       const actor = await lockProgramRpeActor(client, req, expected);
       const currentTargets = [];
       for (const target of targets) {
@@ -1488,7 +1494,7 @@ router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
     let owner;
     if (recordRpeOpening) {
-      const expected = await resolveExternalScheduleWorkspaceScope(req);
+      const expected = await resolveBuilderRpeWorkspace(client, req);
       const actor = await lockProgramRpeActor(client, req, expected);
       if (actor) owner = expected.ownerContext;
       else if (expected.type) throw Object.assign(new Error("Your workspace changed. Open the plan again."), { status: 409 });
@@ -3095,7 +3101,7 @@ async function syncBatchContentWithClient(client, sourceRow, siblingRows, guard 
 // syncBatchContentWithClient above - never its own separate copy of it.
 async function prepareWeeklyRpeSync(client, sourcePlan, req, guard) {
   if (sourcePlan?.plan_type !== "weekly" || !sourcePlan.builder_batch_id) return null;
-  const scope = await resolveExternalScheduleWorkspaceScope(req);
+  const scope = await resolveBuilderRpeWorkspace(client, req);
   if (scope.type === "platform") return null;
   if (!nativeProgramRpeScope(scope)) return { scope, actor: await lockProgramRpeActor(client, req, scope) };
   // Match edit-draft Saves: take exercise reuse before the role and plan
@@ -3197,7 +3203,7 @@ async function prepareRpeBatchSync(client, sourcePlan, req, guard) {
     await lockExerciseReuse(client, guard);
     checkProvenance = await beginBuilderRpeProvenance(client);
     if (checkProvenance) {
-      const scope = await resolveExternalScheduleWorkspaceScope(req);
+      const scope = await resolveBuilderRpeWorkspace(client, req);
       rpe = { scope, actor: await lockProgramRpeActor(client, req, scope) };
     }
     await client.query("select set_config('lock_timeout',$1,true)", [timeout]);
@@ -3400,7 +3406,7 @@ async function assertProgramRpeTargets(client, actor, scope, ids) {
 async function checkFirstRpeSubmit(client, req, planId) {
   await lockExerciseReuse(client, req.exerciseReuseGuard);
   if (!await beginBuilderRpeProvenance(client)) return;
-  const scope = await resolveExternalScheduleWorkspaceScope(req);
+  const scope = await resolveBuilderRpeWorkspace(client, req);
   const actor = await lockProgramRpeActor(client, req, scope);
   const locked = await client.query("select id from plans.plans where id=$1 and status='draft' for update", [planId]);
   if (!locked.rowCount) return;
@@ -3441,7 +3447,7 @@ async function applyEditDraft(req, draftPlan, timing) {
     await lockExerciseReuse(client);
     const hasProvenance = await beginBuilderRpeProvenance(client);
     const nativeCheck = draftPlan.plan_type === "weekly" || hasProvenance;
-    const scope = nativeCheck ? await resolveExternalScheduleWorkspaceScope(req) : null;
+    const scope = nativeCheck ? await resolveBuilderRpeWorkspace(client, req) : null;
     const rpe = nativeCheck && (scope.type !== "platform" || hasProvenance) ? { scope, actor: await lockProgramRpeActor(client, req, scope) } : null;
     // Lock and re-read the draft's OWN plans.plans row fresh, inside this
     // transaction - the caller's draftPlan parameter was read before this
@@ -3474,7 +3480,7 @@ async function applyEditDraft(req, draftPlan, timing) {
       client = null;
       return { alreadyApplied: true };
     }
-    const source = await getEditablePlan(req, freshDraft.edit_source_plan_id);
+    const source = await getEditablePlan(req, freshDraft.edit_source_plan_id, client.query.bind(client));
     if (!source) throw new Error("Original program not found or not editable.");
     // "All athletes" for a published weekly batch (docs/ai/builder-batch-
     // edit-plan.md): every live member, the source included, FOR UPDATE in

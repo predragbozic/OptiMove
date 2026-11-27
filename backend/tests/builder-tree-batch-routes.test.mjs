@@ -19,13 +19,14 @@ if (needsModuleMocksRelaunch()) {
   mock.module("../src/db.js", { namedExports: { query, pool: { connect: async () => client } } });
   mock.module("../src/access.js", { namedExports: { athleteAccessPredicate: () => "false", athleteViewScopes: () => ({ clubIds: [], teamIds: [] }), programViewScopes: () => ({ clubIds: [], teamIds: [] }), canAccessAllAthletes: () => false, canAccessPlan: async () => true } });
   mock.module("../src/trainingLoadAccess.js", { namedExports: {
-    canManagePlanTrainingLoadInScope: () => false, isAthleteInWorkspaceScope: async () => false,
+    canManagePlanTrainingLoadInScope: () => false, externalScheduleScopeForWorkspace: () => ({ type: null }), isAthleteInWorkspaceScope: async () => false,
     resolveExternalScheduleWorkspaceScope: async () => ({ type: null }),
   } });
   mock.module("../src/programRpeSettingsAccess.js", { namedExports: {
     lockProgramRpeActor: async () => null, lockProgramRpeSettingsActor: async () => null,
     nativeProgramRpeScope: () => null, programRpeSettingsRightsStillHold: async () => false,
   } });
+  mock.module("../src/workspace.js", { namedExports: { resolveActiveWorkspaceReadOnly: async () => ({ workspace: null }) } });
   const { default: router, copyProgramTree, copyDaySessions, copySessionContent, copyWeeklyPlanTree } = await import("../src/routes/builder.js");
   const edit = router.stack.find((layer) => layer.route?.path === "/plans/:planId/edit").route.stack[0].handle;
 

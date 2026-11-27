@@ -602,8 +602,14 @@ test("v106 single first Submit refuses an explicit edit after the grant is remov
   } finally {
     await setNativeRpeGrant(true);
   }
-  const accepted = await submit();
-  assert.equal(accepted.status, 200, accepted.text);
+  const reserved = [];
+  try {
+    for (let i = 1; i < http.pool.options.max; i++) reserved.push(await http.pool.connect());
+    const accepted = await submit();
+    assert.equal(accepted.status, 200, accepted.text);
+  } finally {
+    for (const client of reserved) client.release();
+  }
   assert.equal((await db.query("select status from plans.plans where id=$1", [id])).rows[0].status, "active");
 });
 test("the first Submit platform exception requires a current workspace, holding and session", async () => {
