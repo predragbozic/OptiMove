@@ -46,6 +46,10 @@ test("v107 is additive for legacy writers and restores the catalogue on an unuse
     const legacy = await insertPlan(actor);
     const original = await catalogue(db);
     await checks("preflight");
+    await db.query("insert into public.schema_migrations(migration_name,checksum) values('migrations_v2/202612091000_fixture_collision.sql','collision')");
+    const collision = await db.query(await read("preflight"));
+    assert.equal(collision.rows[0].v107_pending, false);
+    await db.query("delete from public.schema_migrations where migration_name='migrations_v2/202612091000_fixture_collision.sql'");
     await fixture.applyThrough(prefix);
     await checks("postcheck");
     // Exact v106 INSERT column list shape: the new marker is never supplied.
@@ -64,7 +68,25 @@ test("v107 is additive for legacy writers and restores the catalogue on an unuse
     await fixture.applyThrough(prefix);
     await checks("postcheck");
     const destination = await insertPlan(actor);
-    await db.query(
+    await db.query("begin");
+    try {
+      await db.query("create role builder_rpe_v107_owner nosuperuser");
+      await db.query("grant usage on schema training_load to builder_rpe_v107_owner");
+      await db.query(`alter table ${baseline} owner to builder_rpe_v107_owner`);
+      await db.query(`alter table ${marker} owner to builder_rpe_v107_owner`);
+      await db.query("set local role builder_rpe_v107_owner");
+      const { rows: [owner] } = await db.query("select current_user as name, rolsuper from pg_roles where rolname=current_user");
+      assert.deepEqual(owner, { name: "builder_rpe_v107_owner", rolsuper: false });
+      await db.query(
+        `insert into ${baseline}(plan_id,origin,source_plan_id,source_updated_at,opening_tracking,opening_rpe,opening_verified)
+         values ($1,'copy',$2,now(),true,true,true)`, [destination,source],
+      );
+      assert.equal((await db.query(`select 1 from ${marker}`)).rowCount, 1);
+    } finally {
+      await db.query("rollback");
+    }
+    assert.equal((await db.query(`select 1 from ${marker}`)).rowCount, 0);
+        await db.query(
       `insert into ${baseline}(plan_id,origin,source_plan_id,source_updated_at,opening_tracking,opening_rpe,opening_verified)
        values ($1,'copy',$2,now(),true,true,true)`, [destination,source],
     );
