@@ -43,7 +43,7 @@ function fakeAction(dataset, value) {
 
 function resetState() {
   clearAllViewCache();
-  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-1" } };
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-1" }, permissions: ["load.view.team", "load.schedule.manage"] };
   state.trainingLoad = emptyTrainingLoadState();
   state.athletes = [];
   queried = {};
