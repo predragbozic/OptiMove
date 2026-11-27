@@ -11,7 +11,7 @@ const coachId = crypto.randomUUID();
 const otherCoachId = crypto.randomUUID();
 const athleteUserId = crypto.randomUUID();
 const coachSessionToken = crypto.randomUUID();
-const coachAuthz = { platformRoles: [], clubRoles: [], teamRoles: [], isIndependentCoach: true };
+const coachAuthz = { platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [], isIndependentCoach: true, capabilities: { coachWorkspace: true } };
 let database;
 let client;
 let pool;
