@@ -77,8 +77,8 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
     assert.ok(perms.STORABLE_PERMISSIONS.includes(word));
   }
   const testsScheduleBridge = "tests.schedule.manage";
-  assert.equal(perms.HONOURED_PERMISSIONS.includes(testsScheduleBridge), false);
-  assert.equal(perms.STORABLE_PERMISSIONS.includes(testsScheduleBridge), false);
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(testsScheduleBridge));
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(testsScheduleBridge));
   const exerciseWrites = ["exercises.add", "exercises.remove"];
   for (const word of exerciseWrites) assert.ok(perms.HONOURED_PERMISSIONS.includes(word) && perms.STORABLE_PERMISSIONS.includes(word));
   assert.ok(perms.HONOURED_PERMISSIONS.includes(builderRpe));
@@ -126,11 +126,9 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           const seededProgramAssignment = programAssignmentBridge.includes(word) && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
 
           const seededTestsSchedule = word === testsScheduleBridge && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
-          if (seededTestsSchedule) {
-            assert.equal(perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id }).permissions.includes(word), false);
-          }
+
           const expected = seededTestsSchedule || seededProgramEdit || seededProgramAssignment || rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities || seededDashboards || seededBuilderRpe || seededExerciseWrite ? true : r1;
-          if ((word === rosterDecide || word === estimatesManage || word === activitiesManage || word === dashboardsManage || word === builderRpe || word === programEdit || programAssignmentBridge.includes(word) || exerciseWrites.includes(word)) && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
+          if ((word === rosterDecide || word === estimatesManage || word === activitiesManage || word === dashboardsManage || word === builderRpe || word === programEdit || word === testsScheduleBridge || programAssignmentBridge.includes(word) || exerciseWrites.includes(word)) && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
             const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
             assert.equal(projection.permissions.includes(word), expected, `${name}: exposed ${word} on ${scopeName}`);
           }

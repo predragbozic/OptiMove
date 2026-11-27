@@ -232,6 +232,7 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "calendar.settings.manage": Object.freeze(["calendarSettingsService.js"]),
   // Roles V-4 (docs/ai/roles-v-steps-plan.md section 2.5): the Tests module (schedules; results and the per-athlete group).
   "tests.view": Object.freeze(["testsAccess.js"]),
+  "tests.schedule.manage": Object.freeze(["testsScheduleWriteAccess.js"]),
   "tests.results.view": Object.freeze(["testsAccess.js"]),
   // Roles V-6 (docs/ai/roles-v-steps-plan.md sections 2.7 and 13): dashboards (both routers and the pages service read
   // their data workspace there).
