@@ -29,6 +29,7 @@ const CAN_CALL = /\bcan\(\s*[A-Za-z_.?]+\s*,\s*"([a-z_.]+)"/g;
 const SQL_CHECKED = Object.freeze({
   "activityRosterCommands.js": Object.freeze(["load.roster.decide"]),
   "trainingActivityWriteAccess.js": Object.freeze(["load.activities.manage"]),
+  "metricEstimateAccess.js": Object.freeze(["load.estimates.manage"]),
   "externalScheduleWriteAccess.js": Object.freeze(["load.schedule.manage"]),
 });
 const GLOBAL_ONLY = new Set(["accounts.manage", "platform.admin"]);

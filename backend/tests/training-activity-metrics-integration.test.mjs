@@ -936,7 +936,7 @@ test("17. parallel RPE materialization and metric-event write for the SAME sessi
       try {
         await client.query("begin");
         const r = await materializeService.materializeNaturalKeyActivity(client, {
-          logicalSessionId, externalAssignmentId: null, athleteId, localDate: "2026-09-08", timezone: "UTC", startInstant: null,
+          logicalSessionId: logicalSessionId.toUpperCase(), externalAssignmentId: null, athleteId: athleteId.toUpperCase(), localDate: "2026-09-08", timezone: "UTC", startInstant: null,
           sessionName: "Session", ownerScope: "club", ownerIds: { clubId }, performedBy: coachUserId,
         }, {
           onLocked: async (c) => { firstPid = c.processID; signalFirstReached(); await firstBarrier; },
