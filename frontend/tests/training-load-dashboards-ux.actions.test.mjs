@@ -1779,6 +1779,7 @@ test("Dashboard controls require a current server grant even when dashboard data
   };
   await loadTrainingLoadAnalysis(renderTrainingLoad);
   assert.match(menu(), /training-load-analysis-rename-dashboard/);
+  await loadTrainingLoadAnalysis(renderTrainingLoad);
   granted = false;
   const frames = [];
   await loadTrainingLoadAnalysis(() => {
