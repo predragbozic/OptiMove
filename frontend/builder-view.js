@@ -19,6 +19,7 @@ import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import { ensureBuilderEvents } from "./builder-events-row.js";
+import { mountBuilderRpeReview } from "./builder-rpe-review.js";
 import { renderBuilderSessionsLockedHtml } from "./builder-sessions-locked.js";
 import { currentTemplateWeek, dayOfBlock, isWeeklyTemplateDraft, renderTemplateWeekStripHtml, templateWeekBlocks } from "./builder-weekly-template-view.js";
 import { renderWeeklyAssignModalHtml } from "./builder-weekly-assign-view.js";
@@ -395,6 +396,7 @@ export function renderBuilder() {
   preserveBuilderItemEdits(state.builder.draft);
   const scrollState = captureBuilderScrollState();
   renderBuilderInner();
+  void mountBuilderRpeReview(els.content);
   autosizeTextareas(els.content);
   restoreBuilderScrollState(scrollState);
   disablePendingMoveButtons();
