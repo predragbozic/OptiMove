@@ -1,0 +1,106 @@
+# Builder, Programs and Exercises Manage contract
+
+Proposal from the #788 merge `27f6418396c96d23757aa02f646d45d94075fff1`, for the Builder/Programs/Exercises stage of [R4 O7](roles-r4-contract.md). Keep the separate Dashboard stream and Training Load M-3 outside this packet. Reconfirm routes, migrations and deployed predecessor before each implementation. No slot is assigned. These are technical design clarifications and do not record a new owner approval.
+
+## Authority and sequence
+
+Native club and team staff must retain the current module View/use right, licence and requested resource relationship, and hold the relevant fixed Manage word at the **active native** scope. This adds a restriction to existing plan/athlete, template, exercise and media predicates. It does not grant access from a different workspace, a submitted owner, a view-only workspace or an inferred role. Preserve the exact existing platform and private-coach branches, athlete reads and external flows. Current access in [V-7](roles-v-steps-plan.md), [permissions.js](../../backend/src/permissions.js) and the existing [v84 registry](../../migrations_v2/202611201300_roles_v84_permission_roles.sql) is the authority baseline.
+
+1. **Program editing.** Bridge and expose `programs.edit`. The edit branch of Submit and the combined Builder exercise-creation branch are included. Combined branches enforce the new word that has shipped and the existing gates for the other operation until its own word is enforced.
+2. **Assignment and publication.** Bridge and expose `programs.assign` and `programs.publish` as a focused topic. They remain independent authorization checks and have separate negative evidence. Stage separately if compatibility cannot be proven together.
+3. **Program RPE settings.** Bridge and expose `programs.rpe_settings` for Builder plan settings and propagation. Keep external schedules on the existing M-2 word and boundary.
+4. **Exercise catalogue.** Bridge and expose `exercises.add` and `exercises.remove` with the Builder custom-exercise entry examined in the same packet. Exercise media follows as a separate provider/storage topic with `exercises.media.upload`. Review global Exercise Blocks and shared presets separately. The existing session-type catalogue authoring rules remain in place.
+
+Each bridge is independently rollable with subsequent words disabled. Do not stage hidden words in application projection or role editing before every path for that word is checked.
+
+## Programs route and effect matrix
+
+`/api/plans` has read-only GETs here. Preserve its athlete and staff read behavior. Inventory mounted methods of [Builder](../../backend/src/routes/builder.js) and [Templates](../../backend/src/routes/templates.js), including commands reached by dispatch or through a shared service.
+
+| Existing command under the indicated mount | Required checks and retained effects |
+| --- | --- |
+| Builder POST `/plans`, POST `/weekly-templates`, PATCH `/plans/:planId`, POST `/plans/:planId/edit` or `/duplicate`, DELETE `/plans/:planId` | `programs.edit` for content/draft structure, cleanup and deletion. Preserve existing source visibility and target ownership/access. A draft target continues through the existing athlete-scope checks. Creating or copying a draft has no assignment effect and uses Edit. `/duplicate` with `intent=assign` creates active copies, assigns them and records assignment notifications. Require both `programs.assign` and `programs.publish` for that branch before writing targets. Gate other combined operations by their actual effects. Recheck current owner, active workspace and permissions before disclosing an existing receipt. |
+| Builder plan `/blocks`, `/weeks`, `/weeks/:week/move`, and child block/session/node/item create, move, patch, delete and copy routes | `programs.edit` for destination plus existing visibility/reuse for source exercise or content. Day/block/session copy-into and node copy need independent source vs destination assertions. Builder `/nodes/:nodeId/exercises` also retains current exercise reuse rights. |
+| Builder POST `/plans/:planId/sync-batch` | Check actual nested operation and every affected plan/athlete before changes. Preserve sibling claim, atomicity and existing lifecycle. Inventory `respondWithDraft`: on flags that trigger `syncBatch`, the primary transaction commits first and the sync runs after it. Gate the primary write and later sync separately under their own clients and preserve their distinct failure results. Changing that two-phase behavior needs a separate contract decision. |
+| Builder POST `/plans/:planId/submit` | Active-plan edit draft applies to the existing active plan under `programs.edit`, with no new activation or assignment notification. Draft activation requires `programs.publish`. If that transaction actually edits siblings or assigns new athletes, also require the corresponding word for those writes. Inventory the non-batch empty-draft deletion before the activation transaction and batch emptiness cleanup inside it: gate their destructive side effect with edit before deletion. Preserve no-op/repeat and source-changed outcomes. |
+| Builder POST `/plans/:planId/assign-weekly`, Templates POST `/:planId/assignments` | `programs.assign` and existing source and target-athlete checks, in the same transaction as assignment. Account for assigned copies and any actual activation effect. Retain weekly slot lock, replacement confirmation, deduplicated durable notifications and post-commit realtime. Preserve ordinary partial success in Templates assignments. Resolve/authorize each athlete on the same client as its write and return the same neutral skipped outcome for an inaccessible or missing target, without exposing its name or existence. |
+| Templates PATCH `/:planId/metadata`, POST `/:planId/tags`, DELETE `/:planId/tags/:tagId` | `programs.edit` for shared canonical template mutations, preserving author/manager and library constraints. Inspect the publish-state fields of metadata updates and gate actual publication separately. Keep POST `/:planId/use` usage records and POST `/:planId/reviews` on their existing library/participant authority. |
+| Builder PATCH `/plans/:planId/training-load-settings`; POST to its `apply-to-training-sessions`, `turn-off-before-after`, `turn-off-all-rpe` children | `programs.rpe_settings`; recheck plan state/source and affected session scope under lock. Inventory equivalent changes through general plan/session PATCH or activation and explicitly include PATCH `/api/training-load/sessions/:sessionId/rpe-enabled` and PATCH `/api/training-load/sessions/:sessionId/training-load-enabled`. Both routes use the same existing `programs.rpe_settings` permission boundary and `plan_workspace_ownership` authority. Preserve the edit-draft cascade and personal behavior. An unresolved owner or unknown workspace grants no authority. Classify by effect so alternate endpoints cannot bypass the word. Preserve active/edit-draft and propagation semantics. |
+
+Use one client through the authoritative authorization, write and existing receipt path. Derive scope hints before entity locks. Take the shared R4 club ceiling before row locks, lock the actor in the agreed order and check the actual words and resource ownership. Preserve the Builder exercise-reuse namespace and existing plan, draft, sibling, weekly-slot and child lock order. Record the order of those resources before inserting R4 locks. Lock/recheck both role state and current plan context before accessing a protected result or committing. For multiple plans and targets, keep deterministic order and prove all-or-nothing refusals for operations already atomic. Preserve the Templates assignment partial-success contract. Source View is separate from destination Edit. Preserve existing idempotency keys, version conflicts, notification dedupe and reload behavior; no generic request ledger is proposed. Test stale authorization while waiting and prove an aborted command changes neither plans/assignments nor notifications, media references or receipts.
+
+## Exercise, media and preset routes
+
+- **Catalogue:** at [`/api/exercises`](../../backend/src/routes/exercises.js), POST `/` and `/:exerciseId/copy`, PATCH `/:exerciseId` and PUT `/:exerciseId/classification` use `exercises.add` for authorized canonical create/edit/classification. Protect canonical exercise tag attachment/removal under the shared-edit boundary after verifying whether the tag itself is administered separately. Copy keeps source visibility/sharing and target creation separate. POST archive/restore and DELETE `/:exerciseId` use `exercises.remove`, preserving any narrower current requirements. DELETE `/:exerciseId/permanent` keeps its current more restrictive authority and media/usage checks. Preserve personal POST hidden, POST/DELETE favorite and POST visible-marked read/lookup behavior. Builder POST `/nodes/:nodeId/custom-exercise` actually inserts `library.exercises` and a plan item with possible media. It must check the applicable `programs.edit`, `exercises.add` and exercise media word where it attaches media, and commit all effects together.
+- **Media:** [`/api/media`](../../backend/src/routes/mediaStorage.js) covers POST `/uploads`, GET `/uploads/:id`, POST `/uploads/:id/renew`, POST `/uploads/:id/complete` and DELETE `/uploads/:id`, plus canonical attachment through exercise writers. New native exercise reservations carry immutable originating workspace scope, declared purpose and intended effect, independent of the storage account shared across workspaces. Clip eligible legacy inflight reservations to a bounded drain window. Define which old writers can continue within it and which statuses/cleanup stay available after it. Check `exercises.media.upload` and current scope before reservation or URL minting, and again on the same transaction client as asset commit, receipt replay, status return or attachment. Keep provider calls outside database locks. Revoked or switched users cannot disclose status, renew or attach with the old scope. Preserve safe owner cleanup/cancellation after revocation without disclosing protected metadata or issuing another URL. A previously signed URL can still work within its lifetime; when finalization is denied, keep the object under the existing orphan/cleanup policy instead of exposing it as an exercise asset. Scope exercise media separately from program covers, downloads/access and `/api/admin/media` Drive import and storage administration.
+- **Presets and access:** [`/api/exercise-collections`](../../backend/src/routes/exerciseCollections.js) includes collection CRUD, single/bulk exercise-block moves and user grants. Before a separate release classify collection authoring under `exercise_lists.manage`, system block authority under global `exercises.blocks.manage`, and grant changes by their existing target/permission boundary. [`/api/taxonomy`](../../backend/src/routes/taxonomy.js) node presets, template-tag definitions and library-kind writers are a separate `presets.manage` contract. Preserve `presets.use` reads and existing session-type catalogue authority. Do not let a shared preset role mutate program- or exercise-owned content through attachment endpoints.
+
+## Evidence and rollout
+
+- Enumerate actual mounted methods and fixed per-command checks, including protected statuses/replays and indirect dispatch. Parameterize exact-scope native success, wrong scope/same-club other team, mixed account, missing View/use, missing applicable Manage, closed licence, view-only, current platform/private/athlete behavior and foreign/missing parity where the current route requires it. Check reads and ordinary permitted operations still work without unrelated words. Assert unchanged rows on a denied combined write.
+- Add real disposable HTTP and locked-state tests to existing `builder-tree-batch-routes.test.mjs`, `builder-weekly-assign.test.mjs`, `builder-weekly-slot-guard.test.mjs`, `builder-plan-assignment-notifications.test.mjs`, `program-access-batch-authorization.test.mjs` and `training-load-builder-edit-draft.test.mjs` as applicable. Keep `builder-exercise-access.test.mjs` and `media-storage-be1.test.mjs` baselines. Add missing exact route/permission cases as needed. Pin failures from dropping each fixed word, owner/target scope, owner recheck after waiting and replay authorization. Verify role removal racing Submit, copy and upload finalization, plus older tab retry. Pin media races where the same storage user switches teams mid-flight, permission disappears between provider verification and asset commit, and an old receipt/status/cancel is requested after revocation. Prove cleanup remains possible without metadata disclosure and no unauthorized asset/reference or duplicate receipt is written.
+- Browser regressions include `roles-v7-view-programs-exercises.test.mjs`, `builder-weekly-assign.test.mjs`, `builder-weekly-save.test.mjs` and appropriate exercise/Settings flows. Verify the existing View experience, visible allowed actions and server rejection regardless of browser state. Run full backend disposable, frontend-fast, build and affected E2E.
+- Pin the exact next deployed predecessor, permission bodies, grants and check registry when starting each bridge. If it needs a seed migration, request a slot then, preserve authored role state and audit revisions, and rehearse preflight/postcheck plus apply → rollback → identical relevant catalogue and data → reapply on isolated PG17. Record first checked use and refusal boundaries for real use, later migration, changed routines or staged seed. Prove old and bridge servers work on the migrated schema with sufficient existing rights and cannot edit/drop the staged seed. After all pre-bridge writers retire, rehearse bridge/exposure overlap with role removal, denied writes and denied replay, then role restoration. Require independent review and full gate. No runtime changes belong to this proposal.
+
+## As-built checkpoint for Program RPE settings
+
+The local RPE branch from 7d9ef14 wires current authorization to the direct staff
+changes below. The rollout requires a separate migration reservation and an exact
+deployed predecessor. The matrix describes the local runtime before that work.
+
+| Route | Effective change and lock order |
+| --- | --- |
+| Builder PATCH /plans/:planId/training-load-settings | Weekly draft defaults. Native ceiling and current actor before the draft plan lock. Confirm the stored plan owner and current Builder access on the mutation client. |
+| Builder POST /plans/:planId/training-load-settings/apply-to-training-sessions | Apply current locked defaults to the draft's existing T sessions. State and ownership checks match the default PATCH. |
+| Builder POST /plans/:planId/training-load-settings/turn-off-before-after | Turn tracking and RPE off for existing B/A sessions in the draft. |
+| Builder POST /plans/:planId/training-load-settings/turn-off-all-rpe | Turn only RPE off in the draft. |
+| Builder PATCH /sessions/:sessionId | The presence of either explicit flag selects the draft-only RPE write boundary. The locked session must still belong to that plan. Non-RPE changes keep their existing checks. |
+| Training Load PATCH /sessions/:sessionId/rpe-enabled and /training-load-enabled | Shared native ceiling, current actor and both View boundaries before the published-session lock. Match the stored plan owner. Preserve the existing-results confirmation and writePublishedSessionFlags cascade in the same transaction. |
+
+New sessions inherit the plan defaults through the established T-phase
+calculation. Ordinary copies preserve the source's effective flags. Workspace
+planned-RPE defaults, external schedules, athlete feedback and Calendar's
+independent alignment command keep their established authorization.
+
+### Pending indirect effects before exposure
+
+- Single new-draft Submit promotes existing settings without rewriting their
+  flag columns. To distinguish a previously staged policy edit from ordinary
+  inheritance at activation, define the baseline of a fresh draft from its
+  creation inputs and its inherited source or template. Audit the existing
+  creation paths for which baseline inputs remain recoverable. A retained
+  effect marker or persisted baseline may be necessary for drafts whose intent
+  cannot be inferred from current rows alone. Obtain a contract decision
+  before expanding storage.
+- Applying an edit draft overwrites the live plan defaults and replaces its
+  session tree. Under the draft and live-plan locks, compare the current live
+  defaults and retained logical sessions with the proposed values. Unchanged
+  defaults and unchanged retained sessions stay ordinary content edits.
+  The existing live quick-toggle cascade updates both copies, so that action
+  must not appear as a pending change on a later Save. Preserve established
+  session-removal and phase-move rules.
+- Live batch editing already computes per-sibling default and session changes
+  before applying them. Classify actual patches to the four RPE/tracking
+  columns from that plan and authorize every affected destination before
+  the first write. New inherited sessions retain their prescribed values.
+- Standalone sync and Submit's batch sync replace sibling trees and write
+  plan defaults. Compare each target's current effective settings to its
+  proposed settings. Use the batch's existing stable session correspondence
+  where it exists. For a whole-tree replacement that cannot identify retained
+  sessions unambiguously, agree on a comparison/intent representation before
+  shipping. A positional guess can turn an ordinary move or inherited copy
+  into an apparent policy change. Once classified, each changed destination
+  needs its own current ownership check before any sibling update.
+- The automatic sync requested through respondWithDraft runs after the main
+  mutation commits, with its own transaction. Guard that propagation on its
+  own client and preserve the committed primary outcome. An atomic Submit
+  that also syncs siblings authorizes every affected target inside its single
+  transaction before either change. Keep the exercise-reuse advisory and the
+  established draft, ordered live-plan, and child locks in their existing
+  order. Take the club ceiling and permission locks before row locks and
+  classify flags after obtaining the current plan/child state.
+
+Pin tests for omitted Manage, a changed workspace, a revoke while waiting,
+identical foreign/missing responses, no writes on a denied combined change,
+and ordinary unchanged flag inheritance. Include the exact previous build and
+both the bridge and exposure binaries in the final evidence.

@@ -26,6 +26,7 @@ import { materializePlannedRpeActivityForSubmit } from "../trainingActivityMater
 import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace, athleteOwnParticipationSql } from "../trainingActivityAccess.js";
 import { recordedByOf, recordedBySql } from "../trainingActivityResults.js";
 import { countSessionResults, writePublishedSessionFlags } from "../plannedSessionFlags.js";
+import { lockProgramRpeSettingsActor } from "../programRpeSettingsAccess.js";
 
 const router = Router();
 
@@ -623,8 +624,13 @@ router.patch("/sessions/:sessionId/rpe-enabled", closedTrainingLoadViewGate, tra
     const rpeEnabled = req.body.rpeEnabled;
     const confirmDisableWithResults = req.body?.confirmDisableWithResults === true;
 
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    if (!await lockProgramRpeSettingsActor(client, req, scope, { trainingLoadView: true })) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
 
     const sessionResult = await client.query(
       `select ps.id as session_id, ps.logical_session_id, ps.training_load_enabled, p.id as plan_id, p.athlete_id,
@@ -657,7 +663,6 @@ router.patch("/sessions/:sessionId/rpe-enabled", closedTrainingLoadViewGate, tra
     // resolved from the SAME single active-workspace read used everywhere
     // else in this file, never a second independent resolveActiveWorkspace
     // call that could disagree with itself mid-request.
-    const scope = await resolveExternalScheduleWorkspaceScope(req);
     const ownership = { owner_scope: session.owner_scope, owner_user_id: session.owner_user_id, owner_club_id: session.owner_club_id, owner_team_id: session.owner_team_id };
     if (!canManagePlanTrainingLoadInScope(scope, ownership)) {
       await client.query("rollback");
@@ -742,8 +747,13 @@ router.patch("/sessions/:sessionId/training-load-enabled", closedTrainingLoadVie
     const trainingLoadEnabled = req.body.trainingLoadEnabled;
     const confirmDisableWithResults = req.body?.confirmDisableWithResults === true;
 
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    if (!await lockProgramRpeSettingsActor(client, req, scope, { trainingLoadView: true })) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Training session not found." });
+    }
 
     const sessionResult = await client.query(
       `select ps.id as session_id, ps.logical_session_id, ps.rpe_enabled, p.id as plan_id, p.athlete_id,
@@ -767,7 +777,6 @@ router.patch("/sessions/:sessionId/training-load-enabled", closedTrainingLoadVie
     // above (see that route's own comment for the full reasoning) - never
     // the looser "does the active workspace merely cover this athlete"
     // check.
-    const scope = await resolveExternalScheduleWorkspaceScope(req);
     const ownership = { owner_scope: session.owner_scope, owner_user_id: session.owner_user_id, owner_club_id: session.owner_club_id, owner_team_id: session.owner_team_id };
     if (!canManagePlanTrainingLoadInScope(scope, ownership)) {
       await client.query("rollback");

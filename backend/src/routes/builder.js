@@ -9,7 +9,8 @@ import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
 import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSessionsOf, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
-import { isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
+import { canManagePlanTrainingLoadInScope, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
+import { lockProgramRpeSettingsActor, nativeProgramRpeScope } from "../programRpeSettingsAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
 
@@ -427,9 +428,10 @@ router.patch("/plans/:planId/training-load-settings", withBatchReuseGuard(async 
       return res.status(400).json({ error: "requestRpeDefault must be true or false." });
     }
 
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockDraftPlanOrReject(client, res, accessPlan.id);
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan.id, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     const trackTrainingLoadDefault = req.body?.trackTrainingLoadDefault !== undefined ? strictBoolean(req.body.trackTrainingLoadDefault) : plan.track_training_load_default;
@@ -465,9 +467,10 @@ router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", 
     if (!accessPlan) return;
     if (accessPlan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
 
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockDraftPlanOrReject(client, res, accessPlan.id);
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan.id, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     await client.query(
@@ -493,9 +496,10 @@ router.post("/plans/:planId/training-load-settings/turn-off-before-after", withB
     if (!accessPlan) return;
     if (accessPlan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
 
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockDraftPlanOrReject(client, res, accessPlan.id);
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan.id, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     await client.query(
@@ -521,9 +525,10 @@ router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", withBatchR
     if (!accessPlan) return;
     if (accessPlan.plan_type !== "weekly") return res.status(400).json({ error: "Training Load settings apply only to Weekly plans." });
 
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockDraftPlanOrReject(client, res, accessPlan.id);
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan.id, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     // Tracking itself is left untouched - this only ever turns RPE off,
@@ -2148,11 +2153,9 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
     }
     // trackingEnabled/rpeEnabled are a staging-only decision: Builder's
     // edit-draft session settings form is a staging area (nothing is
-    // "live" until Submit), so this route intentionally applies neither
-    // confirm-before-disable-with-results NOR the plan_workspace_ownership
-    // authorization the dedicated Training Load quick-toggle routes
-    // enforce - those extra safeguards only make sense once a change is
-    // about to affect a LIVE plan's real athletes. Reaching that same
+    // "live" until Submit). It checks the plan owner and staff permission
+    // without the existing-results confirmation for published sessions.
+    // Reaching that same
     // live plan through THIS route instead (Builder's general session
     // PATCH also allows editing an already-published plan directly, e.g.
     // renaming a session) would silently bypass both, so a request that
@@ -2220,9 +2223,10 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
       return await respondWithDraft(req, res, req.user, session.plan);
     }
 
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockDraftPlanOrReject(client, res, session.plan.id);
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, session.plan.id, "Program session not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     // The session row's own current values are ALSO re-read fresh under
@@ -2234,9 +2238,10 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
     // fallback (when this request doesn't mention them) never reads a
     // stale pre-lock snapshot either.
     const sessionResult = await client.query(
-      `select id, session_time, name, am_pm, bta, rpe_enabled, training_load_enabled
-       from plans.plan_sessions where id = $1 for update`,
-      [session.id],
+      `select ps.id, ps.session_time, ps.name, ps.am_pm, ps.bta, ps.rpe_enabled, ps.training_load_enabled
+       from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id
+       where ps.id=$1 and pd.plan_id=$2 for update of ps`,
+      [session.id, plan.id],
     );
     const freshSession = sessionResult.rows[0];
     if (!freshSession) {
@@ -4022,6 +4027,28 @@ function isEditableDraftPlan(plan) {
 // and the callers below need) on success. On rejection, sends the 409
 // itself and returns null - the caller's own responsibility is only to
 // `rollback` and return, since nothing has been written yet at this point.
+async function lockBuilderRpeDraft(client, req, res, scope, planId, missing) {
+  const actor = await lockProgramRpeSettingsActor(client, req, scope);
+  if (!actor) { res.status(404).json({ error: missing }); return null; }
+  const native = nativeProgramRpeScope(scope);
+  if (native) {
+    const { rows: [owner] } = await client.query(
+      "select * from training_load.plan_workspace_ownership where plan_id=$1", [planId],
+    );
+    if (!canManagePlanTrainingLoadInScope(scope, owner)) { res.status(404).json({ error: missing }); return null; }
+  }
+  const plan = await lockDraftPlanOrReject(client, res, planId);
+  if (!plan || !native) return plan;
+  const { rows: [owner] } = await client.query(
+    "select * from training_load.plan_workspace_ownership where plan_id=$1 for share", [planId],
+  );
+  if (!canManagePlanTrainingLoadInScope(scope, owner) || !await getEditablePlan(actor, planId, client.query.bind(client))) {
+    res.status(404).json({ error: missing });
+    return null;
+  }
+  return plan;
+}
+
 async function lockDraftPlanOrReject(client, res, planId) {
   const result = await client.query(
     `select id, plan_type, week_start, name, note, icon_url, color, visibility, is_template,
