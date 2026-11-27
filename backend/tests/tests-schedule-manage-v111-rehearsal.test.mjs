@@ -249,8 +249,10 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
     await client.query("rollback");
     assert.deepEqual(await marker(), firstUsed);
   } finally {
-    await previous?.close();
-    await current?.close();
-    await fixture.stop();
+    try {
+      await previous?.stop();
+    } finally {
+      try { await current?.stop(); } finally { await fixture.drop(); }
+    }
   }
 });
