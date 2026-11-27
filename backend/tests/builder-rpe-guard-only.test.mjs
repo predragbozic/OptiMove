@@ -131,6 +131,7 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
         const deadline = Date.now() + 4000;
         let blocked = false;
         while (!blocked && Date.now() < deadline) {
+          await db.client.query("select pg_stat_clear_snapshot()");
           const { rows: [state] } = await db.client.query(
             `select exists (
                select 1 from pg_stat_activity where datname=current_database()
