@@ -344,7 +344,21 @@ export async function assertBuilderRpeReplacementProvenance(client, targetId, re
   }
   const targetById = new Map(target.sessions.map(row => [row.id, row]));
   const replacementById = new Map(replacement.sessions.map(row => [row.id, row]));
-  const enabledTargets = enabled(target);
+  const removed = edit ? await client.query(
+    `select b.source_session_id as id, b.opening_tracking as tracking, b.opening_rpe as rpe
+       from training_load.builder_rpe_session_baselines b
+       join training_load.builder_rpe_plan_baselines p on p.plan_id=b.plan_id and p.source_plan_id=b.source_plan_id
+       join plans.plan_sessions source on source.id=b.source_session_id and source.logical_session_id=b.logical_session_id
+       where b.plan_id=$1 and b.source_plan_id=$2 and b.retained_from_opening
+         and not exists (
+           select 1 from plans.plan_sessions session join plans.plan_days day on day.id=session.plan_day_id
+           where day.plan_id=b.plan_id and session.logical_session_id=b.logical_session_id
+         )`, [replacementId, targetId],
+  ) : { rows: [] };
+  const enabledTargets = enabled(target).filter(row => {
+    const openings = removed.rows.filter(opening => opening.id === row.id);
+    return openings.length !== 1 || !sameRpe(row, openings[0]) || pairs.some(pair => pair.target_id === row.id);
+  });
   const enabledReplacements = enabled(replacement);
   const added = new Set();
   for (const row of enabledReplacements) {

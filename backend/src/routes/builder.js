@@ -3417,8 +3417,8 @@ async function checkFirstRpeSubmit(client, req, planId) {
   const locked = await client.query("select id from plans.plans where id=$1 and status='draft' for update", [planId]);
   if (!locked.rowCount) return;
   await lockRpeEditSessions(client, [planId], null);
-  await assertBuilderRpeActivationProvenance(client, planId);
   if (await hasBuilderRpeExplicitEffect(client, planId)) await assertProgramRpeTargets(client, actor, scope, [planId]);
+  await assertBuilderRpeActivationProvenance(client, planId);
 }
 
 async function hasBuilderRpeExplicitEffect(client, planId) {
