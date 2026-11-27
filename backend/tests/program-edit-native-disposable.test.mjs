@@ -83,6 +83,8 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
     assert.equal(other.status, 404, other.text);
     const authorInWrongTeam = await rename(foreignOwned, "Foreign even for the author");
     assert.equal(authorInWrongTeam.status, 404, authorInWrongTeam.text);
+    const missing = await rename(randomUUID(), "Foreign even for the author");
+    assert.deepEqual([authorInWrongTeam.status, authorInWrongTeam.body], [missing.status, missing.body]);
     assert.deepEqual(await digest(), initial);
 
     await sql.query("begin");

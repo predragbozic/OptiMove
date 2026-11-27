@@ -99,6 +99,8 @@ test("native Exercise content and lifecycle writes have independent staged permi
     assert.deepEqual(await stateDigest(), beforeBlocked);
     const publicWithForeignOwner = await targetWrite(ownedRemotePublic, "Public plan with another owner");
     assert.equal(publicWithForeignOwner.status, 404, publicWithForeignOwner.text);
+    const missingPublicTarget = await targetWrite(randomUUID(), "Public plan with another owner");
+    assert.deepEqual([publicWithForeignOwner.status, publicWithForeignOwner.body], [missingPublicTarget.status, missingPublicTarget.body]);
     assert.deepEqual(await stateDigest(), beforeBlocked);
 
     const changeAthleteView = async (grant) => {
