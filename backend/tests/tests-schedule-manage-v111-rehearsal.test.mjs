@@ -68,7 +68,7 @@ function roleData(client) {
 
 
 const previousBuild = "a715b1641b7afa8e683a0b2ea0ccaa9cf8851d36";
-const stagedBuild = "b532b304998e8feb5acf3d813d926aea80d95853";
+const stagedBuild = "519ad0107d0e1328de7ddb5689e87fec3f09d383";
 const migration = "202612131000";
 const word = "tests.schedule.manage";
 const read = name => readFile(new URL("../../docs/runbooks/tests-schedule-manage-v111-" + name + ".sql", import.meta.url), "utf8");
