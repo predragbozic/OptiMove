@@ -87,7 +87,7 @@ async function clubAdminItems(pa, items) {
 // Full lists for a current database: the VIEW seed and the seeded Calendar M-1 and schedules M-2 words.
 const VIEW_SEED = ["athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team",
   "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"];
-const TEAM_COACH_SCOPE_SEED = [...VIEW_SEED, "calendar.events.manage", "load.roster.decide", "load.schedule.manage", "load.estimates.manage"];
+const TEAM_COACH_SCOPE_SEED = [...VIEW_SEED, "calendar.events.manage", "load.roster.decide", "load.schedule.manage", "load.estimates.manage", "load.activities.manage"];
 const CLUB_ADMIN_SEED = ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign", "calendar.settings.manage", ...TEAM_COACH_SCOPE_SEED];
 
 // ---------------------------------------------------------------------------

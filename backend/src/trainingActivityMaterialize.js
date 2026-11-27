@@ -17,6 +17,7 @@
 import crypto from "crypto";
 import { pool, query } from "./db.js";
 import { isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
+import { lockActivityWriter, recordCheckedActivityWrite } from "./trainingActivityWriteAccess.js";
 
 function uuid() {
   return crypto.randomUUID();
@@ -290,6 +291,7 @@ export async function materializeActivityParticipant(scope, {
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await lockActivityWriter(client, scope);
 
     // AUTHORITATIVE identity resolution — for a natural-key call, the
     // client's own athleteId/localDate/timezone/startInstant/endInstant/
@@ -358,7 +360,7 @@ export async function materializeActivityParticipant(scope, {
       ownerScope = scope.ownerContext.ownerScope;
       ownerIds = { userId: scope.ownerContext.ownerUserId, clubId: scope.ownerContext.ownerClubId, teamId: scope.ownerContext.ownerTeamId };
     }
-    if (!(await isAthleteInWorkspaceScope(scope, effectiveAthleteId))) throw httpError(403, "That athlete is outside your access.");
+    if (!(await isAthleteInWorkspaceScope(scope, effectiveAthleteId, client.query.bind(client)))) throw httpError(403, "That athlete is outside your access.");
     athleteId = effectiveAthleteId; localDate = effectiveLocalDate; timezone = effectiveTimezone;
     startInstant = effectiveStartInstant; endInstant = effectiveEndInstant; durationMinutes = effectiveDurationMinutes;
 
@@ -456,6 +458,7 @@ export async function materializeActivityParticipant(scope, {
     }
 
     await client.query(`update training.activity_write_requests set result_activity_id=$1, result_participant_id=$2 where requester_key=$3 and request_key=$4`, [activityId, participantId, requesterKey, requestKey]);
+    await recordCheckedActivityWrite(client, scope);
     await client.query("commit");
     return { activityId, participantId, reused: false, matchStatus };
   } catch (error) {
@@ -492,31 +495,62 @@ function assertPresentationNameValid(name) {
   }
 }
 
+async function runActivityWrite(scope, operation) {
+  if (scope.type === null) throw httpError(403, "Forbidden");
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await lockActivityWriter(client, scope);
+    const result = await operation(client);
+    await recordCheckedActivityWrite(client, scope);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function materializeGroupFromExternalOccurrence(scope, { occurrenceId, activityTypeKey, name, performedBy }) {
-  if (scope.type === null) throw httpError(403, "Forbidden");
   assertPresentationNameValid(name);
-  await assertActivityTypeKeyValid(query, activityTypeKey);
-  const occ = await query(
-    `select es.owner_scope, es.owner_user_id, es.owner_club_id, es.owner_team_id
-     from training_load.external_schedule_occurrences eo join training_load.external_schedules es on es.id = eo.schedule_id
-     where eo.id = $1`,
-    [occurrenceId],
-  );
-  if (!occ.rowCount) throw httpError(404, "External occurrence not found.");
-  if (!canManageOwnerRow(scope, occ.rows[0])) throw httpError(404, "External occurrence not found.");
-  const r = await query(`select training.materialize_activity_group_from_external_occurrence($1,$2,$3,$4) as id`, [occurrenceId, activityTypeKey || null, name || null, performedBy]);
-  return r.rows[0].id;
+  return runActivityWrite(scope, async client => {
+    await assertActivityTypeKeyValid(client.query.bind(client), activityTypeKey);
+    const sql = `select es.owner_scope, es.owner_user_id, es.owner_club_id, es.owner_team_id
+                 from training_load.external_schedule_occurrences eo join training_load.external_schedules es on es.id=eo.schedule_id
+                 where eo.id=$1`;
+    const { rows: [owner] } = await client.query(sql, [occurrenceId]);
+    if (!owner || !canManageOwnerRow(scope, owner)) throw httpError(404, "External occurrence not found.");
+    // Lock the source before the sanctioned identity lock, as an existing
+    // schedule writer can already hold its row before materializing.
+    const { rows: [locked] } = await client.query(sql + " for share of es, eo", [occurrenceId]);
+    if (!locked || !canManageOwnerRow(scope, locked) || !sameActivityOwner(owner, locked)) {
+      throw httpError(404, "External occurrence not found.");
+    }
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1, 2))", [`activity-group-occurrence:${occurrenceId.toLowerCase()}`]);
+    const result = await client.query("select training.materialize_activity_group_from_external_occurrence($1,$2,$3,$4) as id",
+      [occurrenceId, activityTypeKey || null, name || null, performedBy]);
+    return result.rows[0].id;
+  });
 }
+
 export async function materializeGroupFromMetricEvent(scope, { eventId, activityTypeKey, name, performedBy }) {
-  if (scope.type === null) throw httpError(403, "Forbidden");
   assertPresentationNameValid(name);
-  await assertActivityTypeKeyValid(query, activityTypeKey);
-  const ev = await query(`select owner_scope, owner_user_id, owner_club_id, owner_team_id from training_load.metric_events where id = $1`, [eventId]);
-  if (!ev.rowCount) throw httpError(404, "Metric event not found.");
-  if (!canManageOwnerRow(scope, ev.rows[0])) throw httpError(404, "Metric event not found.");
-  const r = await query(`select training.materialize_activity_group_from_metric_event($1,$2,$3,$4) as id`, [eventId, activityTypeKey || null, name || null, performedBy]);
-  return r.rows[0].id;
+  return runActivityWrite(scope, async client => {
+    await assertActivityTypeKeyValid(client.query.bind(client), activityTypeKey);
+    const sql = "select owner_scope, owner_user_id, owner_club_id, owner_team_id from training_load.metric_events where id=$1";
+    const { rows: [owner] } = await client.query(sql, [eventId]);
+    if (!owner || !canManageOwnerRow(scope, owner)) throw httpError(404, "Metric event not found.");
+    const { rows: [locked] } = await client.query(sql + " for share", [eventId]);
+    if (!locked || !canManageOwnerRow(scope, locked) || !sameActivityOwner(owner, locked)) throw httpError(404, "Metric event not found.");
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1, 3))", [`activity-group-event:${eventId.toLowerCase()}`]);
+    const result = await client.query("select training.materialize_activity_group_from_metric_event($1,$2,$3,$4) as id",
+      [eventId, activityTypeKey || null, name || null, performedBy]);
+    return result.rows[0].id;
+  });
 }
+
 function canManageOwnerRow(scope, row) {
   if (scope.type === "platform") return true;
   if (scope.type === "club") return row.owner_scope === "club" && String(row.owner_club_id) === String(scope.clubId);
@@ -587,6 +621,7 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await lockActivityWriter(client, scope);
     await lockMatchSuggestionSourceIdentity(client, suggestionId);
     const sugRes = await client.query(
       `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
@@ -598,8 +633,14 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
     const sug = sugRes.rows[0];
     if (!sug) throw httpError(404, "Suggestion not found.");
     if (!canManageOwnerRow(scope, sug)) throw httpError(404, "Suggestion not found.");
-    if (sug.status !== "open") throw httpError(409, "Suggestion already resolved.");
     const sourceParticipantId = sug.source_participant_id;
+    await lockActivityParticipants(client, [sourceParticipantId, sug.candidate_participant_id]);
+    const source = await participantOwner(client, sourceParticipantId);
+    const candidate = await participantOwner(client, sug.candidate_participant_id);
+    if (!source || !candidate || !canManageOwnerRow(scope, source) || !canManageOwnerRow(scope, candidate) || !sameActivityOwner(source, candidate)) {
+      throw httpError(404, "Suggestion not found.");
+    }
+    if (sug.status !== "open") throw httpError(409, "Suggestion already resolved.");
     const mergeRes = await client.query(`select training.merge_activity_participants($1,$2,$3,$4) as id`, [sourceParticipantId, sug.candidate_participant_id, performedBy, reason || "accepted ambiguous match suggestion"]);
     await client.query(`update training.activity_match_suggestions set status='accepted', resolved_by_user_id=$1, resolved_at=now() where id=$2`, [performedBy, suggestionId]);
     // Round 5 fix: the shared serialization key introduced in Round 4 is
@@ -615,6 +656,7 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
     // SAME identity this call's own advisory lock (lockMatchSuggestion
     // SourceIdentity) already serializes on.
     await client.query(`update training.activity_match_suggestions set status='dismissed', resolved_by_user_id=$1, resolved_at=now() where activity_id=$2 and source_participant_id=$3 and id<>$4 and status='open'`, [performedBy, sug.activity_id, sourceParticipantId, suggestionId]);
+    await recordCheckedActivityWrite(client, scope);
     await client.query("commit");
     return { canonicalParticipantId: mergeRes.rows[0].id, sourceParticipantId };
   } catch (error) {
@@ -643,6 +685,7 @@ export async function dismissMatchSuggestion(scope, { suggestionId, performedBy 
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await lockActivityWriter(client, scope);
     await lockMatchSuggestionSourceIdentity(client, suggestionId);
     const sugRes = await client.query(
       `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
@@ -660,6 +703,7 @@ export async function dismissMatchSuggestion(scope, { suggestionId, performedBy 
       [performedBy, suggestionId],
     );
     if (!updated.rowCount) throw httpError(409, "Suggestion already resolved.");
+    await recordCheckedActivityWrite(client, scope);
     await client.query("commit");
     return { ok: true };
   } catch (error) {
@@ -700,87 +744,56 @@ function assertValidComponentMapping(componentStrategy, componentMapping) {
   }
 }
 
-// Authorized reparent/merge — both check the SOURCE participant's own
-// activity is within the caller's scope before doing anything (the
-// sanctioned SQL functions themselves additionally refuse a cross-owner-
-// scope move at the DB level, but a 404 here — never a 403 leaking that a
-// participant id exists — matches this app's existing not-yours-vs-
-// missing convention).
-//
-// Round 4 fix: reparent used to authorize ONLY the source — an
-// unauthorized or nonexistent TARGET activity was invisible to this
-// function entirely, so the DB function's own cross-owner-scope refusal
-// (which names both sides' owner UUIDs in its RAISE EXCEPTION message)
-// could be reached by an authorized caller pointing at someone else's
-// activity, and that raw message would then reach the client verbatim
-// via routes/trainingActivity.js's own P0001 -> 400 passthrough. The
-// target is now loaded and authorized here, with the SAME info-hiding 404
-// the source already gets, and the two sides' owner scopes are compared
-// HERE too — so an authorized-but-cross-scope target now gets a clean,
-// sanitized 400 from Node, and the DB's own cross-scope branch becomes an
-// unreachable-via-this-app defensive backstop only (never a real path a
-// client can trigger, so its own UUID-bearing message can never leak).
-export async function reparentActivityParticipant(scope, { participantId, toActivityId, performedBy, reason, componentStrategy, componentMapping }) {
-  if (scope.type === null) throw httpError(403, "Forbidden");
-  const strategy = componentStrategy || "none";
-  assertValidComponentMapping(strategy, componentMapping);
-
-  const p = await query(`select ap.id, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id from training.activity_participants ap join training.activities a on a.id = ap.activity_id where ap.id=$1`, [participantId]);
-  if (!p.rowCount) throw httpError(404, "Participant not found.");
-  if (!canManageOwnerRow(scope, p.rows[0])) throw httpError(404, "Participant not found.");
-
-  const target = await query(`select id, owner_scope, owner_user_id, owner_club_id, owner_team_id from training.activities where id=$1`, [toActivityId]);
-  if (!target.rowCount) throw httpError(404, "Target activity not found.");
-  if (!canManageOwnerRow(scope, target.rows[0])) throw httpError(404, "Target activity not found.");
-
-  const source = p.rows[0];
-  const to = target.rows[0];
-  const sameOwnerScope = source.owner_scope === to.owner_scope
-    && (source.owner_user_id || null) === (to.owner_user_id || null)
-    && (source.owner_club_id || null) === (to.owner_club_id || null)
-    && (source.owner_team_id || null) === (to.owner_team_id || null);
-  if (!sameOwnerScope) throw httpError(400, "Cannot reparent a participant across different owner scopes.");
-
-  await query(`select training.reparent_activity_participant($1,$2,$3,$4,$5,$6)`, [participantId, toActivityId, performedBy, reason || null, strategy, componentMapping ? JSON.stringify(componentMapping) : null]);
-  return { ok: true };
+async function lockActivityParticipants(client, ids) {
+  // Match v89: sorted participant identity locks precede activity and participant row locks.
+  for (const id of [...new Set(ids.map(value => value.toLowerCase()))].sort()) {
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1, 4))", [`activity-participant:${id}`]);
+  }
 }
 
-// Round 5 fix: this used to authorize only the SOURCE participant —
-// targetParticipantId was forwarded straight to
-// training.merge_activity_participants() untouched, so an unauthorized or
-// nonexistent target was invisible to this service layer entirely. Same
-// gap and same fix as reparentActivityParticipant's own Round 4
-// correction: the target participant (with its own activity's owner
-// fields) is now loaded and authorized with the SAME info-hiding 404 the
-// source already gets, and the two sides' owner scopes are compared here
-// and rejected with a clean, sanitized 400 BEFORE the DB is ever called —
-// so merge_activity_participants()'s own cross-owner-scope RAISE
-// EXCEPTION (which names both sides' owner UUIDs) becomes an
-// unreachable-via-this-app defensive backstop only, never a real leak
-// path an authorized caller could trigger by pointing at someone else's
-// participant. The DB function's own "same athlete" and "target must be
-// canonical" checks are left exactly as they are — those remain the
-// authoritative, last-resort protection regardless of caller.
+async function participantOwner(client, id) {
+  const { rows: [owner] } = await client.query(
+    `select a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
+     from training.activity_participants ap join training.activities a on a.id=ap.activity_id where ap.id=$1`, [id],
+  );
+  return owner;
+}
+
+function sameActivityOwner(left, right) {
+  return left.owner_scope === right.owner_scope && left.owner_user_id === right.owner_user_id
+    && left.owner_club_id === right.owner_club_id && left.owner_team_id === right.owner_team_id;
+}
+
+export async function reparentActivityParticipant(scope, { participantId, toActivityId, performedBy, reason, componentStrategy, componentMapping }) {
+  const strategy = componentStrategy || "none";
+  assertValidComponentMapping(strategy, componentMapping);
+  return runActivityWrite(scope, async client => {
+    await lockActivityParticipants(client, [participantId]);
+    const source = await participantOwner(client, participantId);
+    if (!source || !canManageOwnerRow(scope, source)) throw httpError(404, "Participant not found.");
+    const { rows: [target] } = await client.query(
+      "select owner_scope, owner_user_id, owner_club_id, owner_team_id from training.activities where id=$1", [toActivityId],
+    );
+    if (!target || !canManageOwnerRow(scope, target)) throw httpError(404, "Target activity not found.");
+    if (!sameActivityOwner(source, target)) throw httpError(400, "Cannot reparent a participant across different owner scopes.");
+    await client.query("select training.reparent_activity_participant($1,$2,$3,$4,$5,$6)",
+      [participantId, toActivityId, performedBy, reason || null, strategy, componentMapping ? JSON.stringify(componentMapping) : null]);
+    return { ok: true };
+  });
+}
+
 export async function mergeActivityParticipants(scope, { sourceParticipantId, targetParticipantId, performedBy, reason }) {
-  if (scope.type === null) throw httpError(403, "Forbidden");
-  const p = await query(`select ap.id, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id from training.activity_participants ap join training.activities a on a.id = ap.activity_id where ap.id=$1`, [sourceParticipantId]);
-  if (!p.rowCount) throw httpError(404, "Participant not found.");
-  if (!canManageOwnerRow(scope, p.rows[0])) throw httpError(404, "Participant not found.");
-
-  const t = await query(`select ap.id, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id from training.activity_participants ap join training.activities a on a.id = ap.activity_id where ap.id=$1`, [targetParticipantId]);
-  if (!t.rowCount) throw httpError(404, "Target participant not found.");
-  if (!canManageOwnerRow(scope, t.rows[0])) throw httpError(404, "Target participant not found.");
-
-  const source = p.rows[0];
-  const target = t.rows[0];
-  const sameOwnerScope = source.owner_scope === target.owner_scope
-    && (source.owner_user_id || null) === (target.owner_user_id || null)
-    && (source.owner_club_id || null) === (target.owner_club_id || null)
-    && (source.owner_team_id || null) === (target.owner_team_id || null);
-  if (!sameOwnerScope) throw httpError(400, "Cannot merge participants across different owner scopes.");
-
-  const r = await query(`select training.merge_activity_participants($1,$2,$3,$4) as id`, [sourceParticipantId, targetParticipantId, performedBy, reason || null]);
-  return { canonicalParticipantId: r.rows[0].id };
+  return runActivityWrite(scope, async client => {
+    await lockActivityParticipants(client, [sourceParticipantId, targetParticipantId]);
+    const source = await participantOwner(client, sourceParticipantId);
+    if (!source || !canManageOwnerRow(scope, source)) throw httpError(404, "Participant not found.");
+    const target = await participantOwner(client, targetParticipantId);
+    if (!target || !canManageOwnerRow(scope, target)) throw httpError(404, "Target participant not found.");
+    if (!sameActivityOwner(source, target)) throw httpError(400, "Cannot merge participants across different owner scopes.");
+    const result = await client.query("select training.merge_activity_participants($1,$2,$3,$4) as id",
+      [sourceParticipantId, targetParticipantId, performedBy, reason || null]);
+    return { canonicalParticipantId: result.rows[0].id };
+  });
 }
 
 // ---------------------------------------------------------------------

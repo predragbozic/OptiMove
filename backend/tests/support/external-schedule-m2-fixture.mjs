@@ -8,6 +8,7 @@ import { runMigrations } from "../../src/migrate.js";
 export const EXTERNAL_SCHEDULE_BRIDGE_MIGRATION = "202612011000_training_load_v99_schedule_manage_bridge.sql";
 const ROSTER_BRIDGE_MIGRATION = "202612031000_training_load_v101_roster_manage_bridge.sql";
 const ESTIMATE_BRIDGE_MIGRATION = "202612041000_training_load_v102_estimates_manage_bridge.sql";
+const ACTIVITIES_BRIDGE_MIGRATION = '202612051000_training_load_v103_activity_identity_manage_bridge.sql';
 const v98 = new URL("../../../migrations_v2/202611301000_calendar_v98_manage_permissions.sql", import.meta.url);
 
 // Curated schedule HTTP fixtures have the Roles v96 dependencies but no
@@ -23,6 +24,10 @@ export async function applyRosterBridgeForCuratedFixture(databaseUrl, { historic
 
 export async function applyEstimateBridgeForCuratedFixture(databaseUrl) {
   await applyTrainingLoadBridgeMigrations(databaseUrl, [EXTERNAL_SCHEDULE_BRIDGE_MIGRATION, ROSTER_BRIDGE_MIGRATION, ESTIMATE_BRIDGE_MIGRATION]);
+}
+
+export async function applyActivityIdentityBridgeForCuratedFixture(databaseUrl) {
+  await applyTrainingLoadBridgeMigrations(databaseUrl, [EXTERNAL_SCHEDULE_BRIDGE_MIGRATION, ROSTER_BRIDGE_MIGRATION, ESTIMATE_BRIDGE_MIGRATION, ACTIVITIES_BRIDGE_MIGRATION]);
 }
 
 async function applyTrainingLoadBridgeMigrations(databaseUrl, files, historicalRollback = false) {

@@ -25,6 +25,7 @@ import { createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposa
 import { makeBundle, standardAthletes, TZ as GPEXE_TZ } from "./_gpexe-fixtures.mjs";
 import { mappedBinding } from "./support/mapped-world.mjs";
 import { importGpexeBundle } from "../src/gpexeImportWriter.js";
+import { applyActivityIdentityBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -404,6 +405,7 @@ async function rowDigests(tables) {
 // ---------------------------------------------------------------------------
 before(async () => {
   db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "calendar", roleRead: true, migrations: MIGRATIONS });
+  await applyActivityIdentityBridgeForCuratedFixture(db.url);
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");

@@ -145,3 +145,8 @@ backend/scripts/training-load-m3a-v101-rehearsal.sh text eol=lf
 migrations_v2/202612041000_training_load_v102_estimates_manage_bridge.sql text eol=lf
 docs/runbooks/training-load-m3b-v102-*.sql text eol=lf
 backend/scripts/training-load-m3b-v102-rehearsal.sh text eol=lf
+
+migrations_v2/202612051000_training_load_v103_activity_identity_manage_bridge.sql text eol=lf
+docs/runbooks/training-load-m3c-v103*.sql text eol=lf
+backend/scripts/training-load-m3c-v103-rehearsal.sh text eol=lf
+backend/scripts/training-load-m3c-v103-rehearsal.ps1 text eol=lf

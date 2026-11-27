@@ -238,7 +238,7 @@ async function requireActivityWorkspace(req, res) {
     res.status(403).json({ error: "Forbidden" });
     return null;
   }
-  return scope;
+  return { ...scope, staffActorId: req.user.id };
 }
 
 // ------------------------------------------------------------

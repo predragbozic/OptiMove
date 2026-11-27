@@ -11,7 +11,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import http from "node:http";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { createClubHidesStandIn } from "./support/v53-club-hides-stand-in.mjs";
@@ -219,6 +220,7 @@ async function readMigrationFiles(names) {
 }
 
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
+import { applyActivityIdentityBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 
 let db, adminClient, migrationsDir;
 let server, apiBaseUrl;
@@ -236,6 +238,7 @@ before(async () => {
   migrationsDir = await writeMigrationsDir("primary", await readMigrationFiles(MIGRATIONS));
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
   await applyRoleReadMigrations(db.url);
+  await applyActivityIdentityBridgeForCuratedFixture(db.url);
   // v53's club hides table, empty (the definitions list reads it): see the helper.
   await createClubHidesStandIn(adminClient);
 
@@ -2306,4 +2309,127 @@ test("57. sibling suggestions sharing the SAME source identity still correctly s
     await Promise.allSettled([acceptPromise, dismissPromise]);
     monitor.release();
   }
+});
+test("M-3c: the native Manage check covers all seven staff routes and denies a prior receipt after revocation", async () => {
+  const { clubId, coachCookie } = await makeClubCoach("m3c-matrix");
+  const { athleteId } = await makeAthleteInClub(clubId);
+  const input = { requestKey: uid(), athleteId, localDate: "2026-09-08", timezone: "UTC" };
+  const base = "/api/training-activity";
+  const send = (route, body) => api(base + route, {method:"POST", cookie:coachCookie, body});
+  const created = await send("/materialize", input);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const before = await query("select count(*)::int as n from training.activity_write_requests");
+  assert.ok((await query("select first_checked_write_at from training_load.activity_identity_m3c_use where singleton")).rows[0].first_checked_write_at);
+
+  const id = crypto.randomUUID();
+  const word = "load.activities.manage";
+  const roles = ["00000000-0000-4000-8000-000000000842", "00000000-0000-4000-8000-000000000843"];
+  await adminClient.query("begin");
+  try {
+    await adminClient.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
+    await adminClient.query("set constraints all immediate");
+    await adminClient.query("delete from public.permission_role_items where role_id=any($1::uuid[]) and permission_word=$2", [roles, word]);
+    await adminClient.query("alter table public.permission_role_items enable trigger permission_role_items_guard");
+    await adminClient.query("commit");
+  } catch (error) {
+    await adminClient.query("rollback");
+    throw error;
+  }
+  try {
+    for (const [route, body] of [
+      [`/match-suggestions/${id}/accept`, {}],
+      [`/match-suggestions/${id}/dismiss`, {}],
+      [`/participants/${created.body.participantId}/reparent`, {toActivityId:id}],
+      [`/participants/${created.body.participantId}/merge`, {targetParticipantId:id}],
+      ["/materialize", input],
+      [`/materialize/external-occurrence/${id}`, {}],
+      [`/materialize/metric-event/${id}`, {}],
+    ]) {
+      assert.deepEqual(await send(route, body), {status:403, body:{error:"Forbidden"}}, route);
+    }
+    assert.deepEqual((await query("select count(*)::int as n from training.activity_write_requests")).rows, before.rows);
+  } finally {
+    await adminClient.query("begin");
+    try {
+      await adminClient.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
+      await adminClient.query("set constraints all immediate");
+      await adminClient.query("insert into public.permission_role_items (role_id,permission_word) select unnest($1::uuid[]),$2", [roles, word]);
+      await adminClient.query("alter table public.permission_role_items enable trigger permission_role_items_guard");
+      await adminClient.query("commit");
+    } catch (error) {
+      await adminClient.query("rollback");
+      throw error;
+    }
+  }
+  const replay = await send("/materialize", input);
+  assert.equal(replay.status, 201, JSON.stringify(replay.body));
+  assert.equal(replay.body.activityId, created.body.activityId);
+  assert.equal(replay.body.matchStatus, "replay");
+});
+
+
+const previousActivityServer = process.env.OPTIMOVE_M3C_PREVIOUS_SERVER;
+test("M-3c: the exact pre-bridge materialization receipt replays in the bridge", { skip: !previousActivityServer }, async () => {
+  const actual = execFileSync("git", ["-C", previousActivityServer, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  assert.match(actual, /^[0-9a-f]{40}$/);
+  assert.equal(actual, process.env.OPTIMOVE_M3C_PREVIOUS_SHA);
+  assert.equal(execFileSync("git", ["-C", previousActivityServer, "status", "--porcelain", "--untracked-files=no"], {encoding:"utf8"}).trim(), "");
+  const oldSrc = path.resolve(previousActivityServer, "backend/src");
+  const { app: oldApp } = await import(pathToFileURL(path.join(oldSrc, "server.js")));
+  const { pool: oldPool } = await import(pathToFileURL(path.join(oldSrc, "db.js")));
+  const oldServer = http.createServer(oldApp);
+  try {
+    assert.equal((await oldPool.query("select current_database() as db")).rows[0].db, db.name);
+    await new Promise(resolve => oldServer.listen(0, "127.0.0.1", resolve));
+    const {clubId, coachCookie} = await makeClubCoach("m3c-prior-replay");
+    const {athleteId} = await makeAthleteInClub(clubId);
+    const input = {requestKey:uid(), athleteId, localDate:"2026-09-08", timezone:"UTC"};
+    const route = "/api/training-activity/materialize";
+    const old = await fetch(`http://127.0.0.1:${oldServer.address().port}${route}`, {
+      method:"POST", headers:{"Content-Type":"application/json", Cookie:coachCookie}, body:JSON.stringify(input),
+    });
+    const result = await old.json();
+    assert.equal(old.status, 201, JSON.stringify(result));
+    const replay = await api(route, {method:"POST", cookie:coachCookie, body:input});
+    assert.deepEqual(replay, {status:201, body:{activityId:result.activityId, participantId:result.participantId, reused:true, matchStatus:"replay"}});
+    const {rows:[receipt]} = await query("select count(*)::int as n from training.activity_write_requests where request_key=$1", [input.requestKey]);
+    assert.equal(receipt.n, 1);
+  } finally {
+    oldServer.closeAllConnections();
+    if (oldServer.listening) await new Promise(resolve => oldServer.close(resolve));
+    await oldPool.end();
+  }
+});
+
+test("M-3c: suggestion acceptance hides a candidate in another owner scope before returning a resolved response", async () => {
+  const left = await makeClubCoach("m3c-owner-left");
+  const right = await makeClubCoach("m3c-owner-right");
+  const {athleteId} = await makeAthleteInClub(left.clubId);
+  const insert = async (clubId) => {
+    const {rows:[activity]} = await query(
+      `insert into training.activities (owner_scope, owner_club_id, name, occurred_local_date, timezone_snapshot, origin, lifecycle_state)
+       values ('club',$1,'Owner fixture','2026-09-08','UTC','manual','confirmed') returning id`, [clubId],
+    );
+    const {rows:[participant]} = await query(
+      `insert into training.activity_participants (activity_id,athlete_id,local_date,timezone_snapshot,participation_status)
+       values ($1,$2,'2026-09-08','UTC','participated') returning id`, [activity.id,athleteId],
+    );
+    return {activity:activity.id,participant:participant.id};
+  };
+  const source = await insert(left.clubId);
+  const target = await insert(right.clubId);
+  const {rows:[suggestion]} = await query(
+    `insert into training.activity_match_suggestions
+      (activity_id,source_participant_id,candidate_activity_id,candidate_participant_id,confidence,score_breakdown,policy_version,reason)
+     values ($1,$2,$3,$4,0.5,'{}',1,'owner fixture') returning id`,
+    [source.activity,source.participant,target.activity,target.participant],
+  );
+  const accept = id => api(`/api/training-activity/match-suggestions/${id}/accept`, {method:"POST", cookie:left.coachCookie});
+  const missing = await accept(crypto.randomUUID());
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await accept(suggestion.id), missing);
+  const {rows:[unchanged]} = await query("select status from training.activity_match_suggestions where id=$1", [suggestion.id]);
+  assert.equal(unchanged.status, "open");
+  await query("update training.activity_match_suggestions set status='dismissed',resolved_by_user_id=$2,resolved_at=now() where id=$1", [suggestion.id, left.coachId]);
+  assert.deepEqual(await accept(suggestion.id), missing);
 });
