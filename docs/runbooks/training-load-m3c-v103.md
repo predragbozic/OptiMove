@@ -12,3 +12,11 @@ Run the read-only preflight and require its four results. On a private PostgreSQ
 Apply on the owner's order, with the normal migration runner. Run the read-only postcheck. Compare the checksum and audited seed counts, check the body and initial null checked-use marker, and verify service health. Keep permission exposure in a separate release after every pre-bridge writer is confirmed retired.
 
 Drain applicable writers before rollback. Rollback refuses after first checked use, a later record, a changed permission body, an audited-layer change or changed staged permission items. It restores the audited v103 seed and v102 body. Unrelated native grants, role assignments and their receipts are preserved. Rehearse before any production action.
+
+## Exposure release
+
+After proving that the exact v103 bridge is deployed and every earlier writer has retired, expose the existing Activity Manage word in the Roles catalogue/editor and the native active-workspace permission projection. Both builds in this overlap use the same transactional SQL checks. This release has no migration. Its bridge rollback and exposure rollback boundaries remain distinct. An older writer that ignores the word is outside the rollback boundary after Roles can change it.
+
+The seven explicit activity identity commands have no browser callers in the reviewed tree. The existing Manage activities label is used by the Roles editor. Ordinary activity reads, athlete self-report, automatic materialization, roster decisions, estimates, manual measurement, Dashboard and Imports keep their existing paths. Recheck the caller inventory on the release base.
+
+Rehearse with the actual deployed bridge and the exposure build on the same isolated migrated database. Change the permission through real Roles requests. The same native coach loses only this word in /me and retains activity reads. Both binaries deny new writes and existing receipt replay while the permission is withdrawn, then honor the original receipt after restoration. Run the full release gate and an independent review before exposure.
