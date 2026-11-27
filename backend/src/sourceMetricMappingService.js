@@ -926,7 +926,8 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
         const scopedReceipt = authorizeTarget ? { authorizeTarget, action, requestHash } : null;
         found = await requestIsCommitted(ctx.userId, requestKey, scopedReceipt ? requests.find : requests.exists, scopedReceipt);
       } catch (error) {
-        if (authorizeTarget && error instanceof SourceMetricMappingError && [404, 409].includes(error.status)) throw error;
+        if (authorizeTarget && error instanceof SourceMetricMappingError
+            && (error.status === 404 || error.code === "request_key_reused")) throw error;
       }
       if (!found) throw refusal(503, "outcome_unknown", "The database did not confirm this request, and it could not be verified yet. Repeat it with the same requestKey.", { requestKey });
       return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget)), replayed: false, commitConfirmation: "verified_after_commit_error" };
