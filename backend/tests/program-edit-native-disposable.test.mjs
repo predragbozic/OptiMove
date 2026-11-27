@@ -20,7 +20,7 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
     await fixture.grantTeam(coach, team);
     await fixture.grantTeam(coach, otherTeam);
     await sql.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'team',$2)", [coach, team]);
-    async function planFor(sourceClub, sourceTeam) {
+    async function planFor(sourceClub, sourceTeam, creator = anotherCoach) {
       const user = await fixture.user("Assigned athlete");
       const code = "pe" + randomUUID().replaceAll("-", "");
       const { rows: [athlete] } = await sql.query(
@@ -31,13 +31,19 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
         "insert into public.athlete_memberships(athlete_id,membership_type,club_id,team_id,status) values($1,'team',$2,$3,'active')",
         [athlete.id, sourceClub, sourceTeam],
       );
-      return (await sql.query(
+      const plan = (await sql.query(
         "insert into plans.plans(plan_type,created_by_user_id,name,status,source_type,visibility,athlete_id,is_template,week_start) values('weekly',$1,'Original','draft','builder','private',$2,false,'2026-11-23') returning id",
-        [anotherCoach, athlete.id],
+        [creator, athlete.id],
       )).rows[0].id;
+      await sql.query(
+        "insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_team_id) values($1,'team',$2)",
+        [plan, sourceTeam],
+      );
+      return plan;
     }
     const local = await planFor(club, team);
     const foreign = await planFor(otherClub, otherTeam);
+    const foreignOwned = await planFor(otherClub, otherTeam, coach);
     assert.match(database.name, /^optimove_tests_/);
     const changeGrant = async grant => {
       const migration = "fixtures/program-edit-" + randomUUID();
@@ -66,7 +72,7 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
     const rename = (id, name) => server.api(cookie, "/api/builder/plans/" + id, { method: "PATCH", body: { name } });
     const digest = async () => (await sql.query(
       "select (select array_agg(name order by id) from plans.plans where id=any($1::uuid[])) as names,(select count(*)::int from plans.program_manage_v109_use) as marker",
-      [[local, foreign]],
+      [[local, foreign, foreignOwned]],
     )).rows[0];
     const initial = await digest();
     await grant(false);
@@ -75,6 +81,8 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
     await grant(true);
     const other = await rename(foreign, "Foreign");
     assert.equal(other.status, 404, other.text);
+    const authorInWrongTeam = await rename(foreignOwned, "Foreign even for the author");
+    assert.equal(authorInWrongTeam.status, 404, authorInWrongTeam.text);
     assert.deepEqual(await digest(), initial);
 
     await sql.query("begin");
@@ -105,6 +113,10 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
     const result = await rename(local, "Allowed");
     assert.equal(result.status, 200, result.text);
     assert.equal((await digest()).marker, 1);
+    const switched = await server.api(cookie, "/api/auth/workspace", { method: "PUT", body: { type: "team", scopeId: otherTeam } });
+    assert.equal(switched.status, 200, switched.text);
+    const validForeignOwner = await rename(foreignOwned, "Allowed now");
+    assert.equal(validForeignOwner.status, 200, validForeignOwner.text);
   } finally {
     await server?.stop();
     await sql.end();
