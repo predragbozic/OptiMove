@@ -31,20 +31,20 @@ export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = n
   await client.query("insert into training_load.builder_rpe_provenance_use default values on conflict do nothing");
 }
 
-async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, copies, retained = false }) {
+async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, sourcePlanIds = [sourcePlanId], copies, retained = false }) {
   if (!copies.size) return;
   const { rowCount: sessions } = await client.query(
     `insert into training_load.builder_rpe_session_baselines
        (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe)
-     select $1,dst.id,dst.logical_session_id,$2,src.id,$5,dst.training_load_enabled,dst.rpe_enabled
+     select $1,dst.id,dst.logical_session_id,sd.plan_id,src.id,$5,dst.training_load_enabled,dst.rpe_enabled
      from unnest($3::uuid[],$4::uuid[]) pair(source_id,target_id)
      join plans.plan_sessions src on src.id=pair.source_id
-     join plans.plan_days sd on sd.id=src.plan_day_id and sd.plan_id=$2
+     join plans.plan_days sd on sd.id=src.plan_day_id and sd.plan_id=any($2::uuid[])
      join plans.plan_sessions dst on dst.id=pair.target_id
      join plans.plan_days dd on dd.id=dst.plan_day_id and dd.plan_id=$1
      join training_load.builder_rpe_plan_baselines opening on opening.plan_id=dd.plan_id
      where (dst.training_load_enabled,dst.rpe_enabled) = (src.training_load_enabled,src.rpe_enabled)`,
-    [planId, sourcePlanId, [...copies.keys()], [...copies.values()], retained],
+    [planId, sourcePlanIds, [...copies.keys()], [...copies.values()], retained],
   );
   if (sessions !== copies.size) throw new Error("Builder RPE session copy does not match its source.");
 }
@@ -53,6 +53,41 @@ export async function recordBuilderRpeCopyIfTracked(client, copy) {
   if (!copy.copies.size) return;
   const opening = await client.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [copy.planId]);
   if (opening.rowCount) await recordBuilderRpeCopiedSessions(client, copy);
+}
+
+export async function recordBuilderRpeSyncedCopy(client, { planId, sourcePlanId, copies, lineage }) {
+  const inherited = new Map(copies);
+  for (const { source_id, target_id } of lineage) {
+    const inserted = inherited.get(source_id);
+    if (!inserted) throw new Error("The exact Builder RPE sync destination is missing.");
+    inherited.delete(source_id);
+    const { rowCount } = await client.query(
+      `insert into training_load.builder_rpe_session_baselines
+         (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe)
+       select $1,dst.id,dst.logical_session_id,$2,$3,old.opening_tracking,old.opening_rpe
+       from training_load.builder_rpe_session_baselines old
+       join plans.plan_sessions dst on dst.id=$5
+       join plans.plan_days d on d.id=dst.plan_day_id and d.plan_id=old.plan_id
+       where old.plan_id=$1 and old.session_id=$4`, [planId,sourcePlanId,source_id,target_id,inserted],
+    );
+    if (!rowCount) throw new Error("The exact Builder RPE sync opening is missing.");
+    await client.query(
+      `insert into training_load.builder_rpe_session_effects
+         (plan_id,session_id,changed_tracking,changed_rpe,effective_tracking,effective_rpe)
+       select $1,$5,pending.tracking,pending.rpe,dst.training_load_enabled,dst.rpe_enabled
+       from training_load.builder_rpe_session_baselines b
+       join plans.plan_sessions dst on dst.id=b.session_id
+       left join training_load.builder_rpe_session_effects src on src.plan_id=$2 and src.session_id=$3
+       left join training_load.builder_rpe_session_effects old on old.plan_id=$1 and old.session_id=$4
+       cross join lateral (
+         select dst.training_load_enabled<>b.opening_tracking and (coalesce(src.changed_tracking,false) or coalesce(old.changed_tracking,false)) as tracking,
+                dst.rpe_enabled<>b.opening_rpe and (coalesce(src.changed_rpe,false) or coalesce(old.changed_rpe,false)) as rpe
+       ) pending
+       where b.plan_id=$1 and b.session_id=$5 and (pending.tracking or pending.rpe)`,
+      [planId,sourcePlanId,source_id,target_id,inserted],
+    );
+  }
+  await recordBuilderRpeCopyIfTracked(client, { planId, sourcePlanId, copies: inherited });
 }
 
 // Existing drafts without exact baselines stay unclassified while exposure is closed.

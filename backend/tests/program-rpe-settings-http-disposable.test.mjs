@@ -700,6 +700,25 @@ test("first weekly batch Submit checks the current grant before activating any p
   assert.equal(node.status, 201, node.text);
   const changed = await http.api(coach.cookie, draftSession(primarySession), { method: "PATCH", body: { rpeEnabled: false } });
   assert.equal(changed.status, 200, changed.text);
+  const originalSiblingSession = await onlySession(sibling);
+  const originalSiblingFlags = await flags(originalSiblingSession);
+  await db.query("update plans.plan_sessions set logical_session_id=$2 where id=$1", [originalSiblingSession,randomUUID()]);
+  const partial = await http.api(coach.cookie, "/api/builder/plans/" + primary, {
+    method: "PATCH", body: { name: "Primary survives refused sync", syncBatch: true },
+  });
+  assert.equal(partial.status, 200, partial.text);
+  assert.equal(partial.body.plan.name, "Primary survives refused sync");
+  assert.match(partial.body.batchSyncMessage, /other plans did not take/);
+  assert.equal((await flags(originalSiblingSession)).rpe_enabled, true);
+  await db.query("update plans.plan_sessions set logical_session_id=$2 where id=$1", [originalSiblingSession,originalSiblingFlags.logical_session_id]);
+  const synced = await http.api(coach.cookie, "/api/builder/plans/" + primary + "/sync-batch", { method: "POST", body: {} });
+  assert.equal(synced.status, 200, synced.text);
+  const draftSiblingSession = await onlySession(sibling);
+  assert.notEqual(draftSiblingSession, originalSiblingSession);
+  assert.equal((await flags(draftSiblingSession)).rpe_enabled, false);
+  assert.equal((await db.query(
+    "select changed_rpe from training_load.builder_rpe_session_effects where plan_id=$1 and session_id=$2", [sibling,draftSiblingSession],
+  )).rows[0].changed_rpe, true);
   const submit = () => http.api(coach.cookie, "/api/builder/plans/" + primary + "/submit", { method: "POST", body: { syncBatch: true } });
   const statuses = async () => (await db.query("select status from plans.plans where id=any($1::uuid[])", [[primary,sibling]])).rows.map(row => row.status);
   await changeProgramRpeGrant(db, "club_admin", false);
@@ -707,7 +726,7 @@ test("first weekly batch Submit checks the current grant before activating any p
     const denied = await submit();
     assert.equal(denied.status, 404, denied.text);
     assert.deepEqual(await statuses(), ["draft","draft"]);
-    assert.equal((await flags(await onlySession(sibling))).rpe_enabled, true);
+    assert.equal((await flags(await onlySession(sibling))).rpe_enabled, false);
   } finally {
     await changeProgramRpeGrant(db, "club_admin", true);
   }
@@ -720,4 +739,45 @@ test("first weekly batch Submit checks the current grant before activating any p
     "select source_plan_id,source_session_id from training_load.builder_rpe_session_baselines where plan_id=$1 and session_id=$2", [sibling,copied],
   )).rows[0];
   assert.deepEqual(lineage, { source_plan_id: primary, source_session_id: primarySession });
+});
+test("assembled templates, duplicate weeks and group-day copies record the true inherited session IDs", async () => {
+  const recipes = [
+    await fixturePlan(athleteId, "active", "2027-08-02"),
+    await fixturePlan(athleteId, "active", "2027-08-09"),
+  ];
+  const saved = await http.api(coach.cookie, "/api/builder/weekly-templates", {
+    method: "POST", body: { name: "Assembled template", planIds: recipes.map(recipe => recipe.id) },
+  });
+  assert.equal(saved.status, 201, saved.text);
+  const templateId = saved.body.plan.id;
+  const inherited = async (planId) => (await db.query(
+    `select b.session_id,b.source_plan_id,b.source_session_id, d.block_index
+     from training_load.builder_rpe_session_baselines b
+     join plans.plan_sessions s on s.id=b.session_id
+     join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=b.plan_id
+     where b.plan_id=$1 order by d.block_index`, [planId],
+  )).rows;
+  const original = await inherited(templateId);
+  assert.deepEqual(original.map(row => [row.source_plan_id,row.source_session_id]), recipes.map(row => [row.id,row.sessionId]));
+  const duplicated = await http.api(coach.cookie, "/api/builder/plans/" + templateId + "/weeks", {
+    method: "POST", body: { copyFrom: 1 },
+  });
+  assert.equal(duplicated.status, 201, duplicated.text);
+  const copiedTemplateWeek = (await inherited(templateId))[2];
+  assert.equal(copiedTemplateWeek.source_plan_id, templateId);
+  assert.equal(copiedTemplateWeek.source_session_id, original[0].session_id);
+
+  const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);
+  const weekly = await http.api(coach.cookie, "/api/builder/plans/" + recipes[0].id + "/duplicate", {
+    method: "POST", body: { athleteIds: [athlete.athlete_id], weekStart: "2027-08-16" },
+  });
+  assert.equal(weekly.status, 201, weekly.text);
+  const weeklyId = weekly.body.plan.id;
+  const days = (await db.query("select id from plans.plan_days where plan_id=$1 order by day_order limit 2", [weeklyId])).rows;
+  const sourceWeekSession = (await inherited(weeklyId))[0];
+  const paste = await http.api(coach.cookie, "/api/builder/days/" + days[0].id + "/copy-into/" + days[1].id, { method: "POST", body: {} });
+  assert.equal(paste.status, 200, paste.text);
+  const pastedDay = (await inherited(weeklyId))[1];
+  assert.equal(pastedDay.source_plan_id, weeklyId);
+  assert.equal(pastedDay.source_session_id, sourceWeekSession.session_id);
 });
