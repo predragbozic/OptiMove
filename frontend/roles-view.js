@@ -22,7 +22,7 @@ const LABELS = Object.freeze({
   "presets.use": "Use tags and presets", "presets.manage": "Manage tags and presets", "exercise_lists.manage": "Manage exercise lists",
   "exercises.use": "Use exercises", "exercises.add": "Add exercises", "exercises.media.upload": "Upload exercise videos and pictures", "exercises.remove": "Remove exercises", "exercises.blocks.manage": "Manage exercise blocks",
   "calendar.view": "See the calendar", "calendar.events.manage": "Manage calendar events", "calendar.settings.manage": "Change calendar settings",
-  "load.view.team": "See the team's training load", "load.view.athlete": "See one athlete's training load", "load.schedule.manage": "Manage RPE session schedules",
+  "load.view.team": "See the team's training load", "load.view.athlete": "See one athlete's training load", "load.schedule.manage": "Manage RPE session schedules", "load.roster.decide": "Decide attendance and complete rosters",
   "load.roster.decide": "Decide who took part in a session", "load.estimates.manage": "Manage estimated values", "load.activities.manage": "Manage activities",
   "dashboards.view": "See dashboards", "dashboards.manage": "Manage dashboards",
   "import.check": "Look for new sessions to import", "import.link": "Link athletes to imported records", "import.approve": "Approve imports", "import.undo": "Undo imports",

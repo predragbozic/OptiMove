@@ -2319,8 +2319,19 @@ async function assertStagedRoleOperations(call) {
   assert.deepEqual((await defaultRole()).items, original.items);
 }
 
-test("M-3a: the bridge role editor keeps Roster Decide staged", async () => {
-  await assertStagedRoleOperations(api);
+test("M-3a exposure: a native team coach can lose roster controls without losing the roster read", async () => {
+  const s = await plainSession("Exposure roster controls", 1);
+  const read = () => api(`/api/training-activity/${s.activityId}/roster`, { method: "GET", cookie: s.coach.cookie });
+  const before = await read();
+  assert.equal(before.status, 200, before.text);
+  assert.equal(before.body.viewer.canDecideRoster, true);
+  await omitRosterPermission(s.clubId, "load.roster.decide");
+  const after = await read();
+  assert.equal(after.status, 200, after.text);
+  assert.equal(after.body.viewer.basis, before.body.viewer.basis);
+  assert.equal(after.body.viewer.canDecideRoster, false);
+  assert.equal(after.body.canComplete, false);
+  assert.deepEqual(after.body.athletes, before.body.athletes);
 });
 
 const previousServerRoot = process.env.OPTIMOVE_M3A_PREVIOUS_SERVER;

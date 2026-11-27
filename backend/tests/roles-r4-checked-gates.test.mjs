@@ -26,7 +26,10 @@ function files(dir) {
 const SOURCES = files(SRC).map((f) => ({ rel: path.relative(SRC, f).split(path.sep).join("/"), text: fs.readFileSync(f, "utf8") }));
 const CAN_CALL = /\bcan\(\s*[A-Za-z_.?]+\s*,\s*"([a-z_.]+)"/g;
 // The schedule writer rechecks the actual row under locks using the Postgres twin.
-const SQL_CHECKED = Object.freeze({ "externalScheduleWriteAccess.js": Object.freeze(["load.schedule.manage"]) });
+const SQL_CHECKED = Object.freeze({
+  "activityRosterCommands.js": Object.freeze(["load.roster.decide"]),
+  "externalScheduleWriteAccess.js": Object.freeze(["load.schedule.manage"]),
+});
 const GLOBAL_ONLY = new Set(["accounts.manage", "platform.admin"]);
 
 test("A1. every listed gate file checks its word through can() or its named transaction SQL check", () => {
@@ -91,7 +94,8 @@ export const WORKSPACE_BRANCH = new RegExp([
 // on an invitation's context and check the inviter's role rows; dashboardShellFilter.js and trainingLoadDashboardQuery.js
 // read the dashboard's data workspace (one of the five existing types, anything else refused).
 const REVIEWED = Object.freeze({
-  "activityRoster.js": 5,
+  "activityRoster.js": 6, // M-3a reads the active scope for roster write projection.
+  "activityRosterCommands.js": 3, // M-3a uses separate native club and team write paths.
   // V-2: the view branch reads only the athletes gate's scope (req.moduleView, can(athletes.view)), never an offered
   // workspace; a view workspace without the gate's pass stays `and false` (+3).
   "athleteRosterScope.js": 7,

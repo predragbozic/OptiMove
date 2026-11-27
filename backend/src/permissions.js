@@ -245,6 +245,7 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "load.view.athlete": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js"]),
   // Roles M-2: the transaction holds and rechecks the native scope before any external schedule write.
   "load.schedule.manage": Object.freeze(["externalScheduleWriteAccess.js"]),
+  "load.roster.decide": Object.freeze(["activityRosterCommands.js"]),
 });
 
 // The checked words as a list (R2's name, kept for its callers): the words /me may offer and the only words a role

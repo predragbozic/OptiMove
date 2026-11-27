@@ -453,7 +453,7 @@ export async function handleActivityRosterAction(action, { render }) {
     return true;
   }
 
-  if (!roster.data || !viewerCanDecide(roster.data)) return true;
+  if (!roster.data?.viewer?.basis) return true;
 
   // 6b-C1: estimates on a Participated · no device data row.
   if (type.startsWith("training-load-roster-estimate-")) {
@@ -469,6 +469,8 @@ export async function handleActivityRosterAction(action, { render }) {
   if (type === "training-load-roster-session-type" || type === "training-load-roster-athlete-type" || type.startsWith("training-load-roster-type-")) {
     return handleSessionTypeAction(action, { render, locked: bulkLocked(roster) });
   }
+
+  if (!viewerCanDecide(roster.data)) return true;
 
   // --- selection ---
   if (type === "training-load-roster-pick") {

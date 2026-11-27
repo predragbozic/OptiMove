@@ -566,6 +566,12 @@ export async function getActivityRoster(ctx, activityId) {
         canComplete: false,
       };
     }
+    const canDecideRoster = basis === "platform_admin" || Boolean((await client.query(
+      `select public.permission_word_honoured('load.roster.decide')
+        and public.user_has_permission($1, 'load.view.team', $2, $3)
+        and public.user_has_permission($1, 'load.roster.decide', $2, $3) as allowed`,
+      [ctx.userId, ctx.workspace.type, ctx.workspace.scopeId],
+    )).rows[0]?.allowed);
     return {
       activity: {
         id: String(activityId),
@@ -582,6 +588,7 @@ export async function getActivityRoster(ctx, activityId) {
       // ST-4: manual values are offered while their routes are on (MANUAL_VALUES_ENABLED, on unless "false").
       viewer: {
         basis,
+        canDecideRoster,
         ...(process.env.ESTIMATES_ENABLED === "true" ? { estimates: true } : {}),
         ...(process.env.MANUAL_VALUES_ENABLED !== "false" ? { manualValues: true } : {}),
       },
@@ -593,7 +600,7 @@ export async function getActivityRoster(ctx, activityId) {
       recordedOutsideRoster: snap.recordedOutsideRoster,
       reasons: snap.reasons.map((r) => ({ key: r.key, label: r.label })),
       counts: snap.counts,
-      canComplete: snap.counts.total > 0 && snap.counts.needsState === 0 && snap.completion.status !== "complete",
+      canComplete: canDecideRoster && snap.counts.total > 0 && snap.counts.needsState === 0 && snap.completion.status !== "complete",
     };
   });
 }
