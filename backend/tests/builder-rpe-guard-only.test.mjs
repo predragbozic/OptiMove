@@ -39,12 +39,34 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
       ?? "66220c1224abdbdc0eaa1a23fa8d53591064a98a");
     let descendant;
     let descendantOfLaterPublished;
+    let descendantWithInheritedDefault;
     try {
       const copied = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.before.id}/duplicate`, {
         method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-05-17" },
       });
       assert.equal(copied.status, 201, JSON.stringify(copied.body));
       descendant = copied.body.plan.id;
+      const derived = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.before.id}/duplicate`, {
+        method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-06-21" },
+      });
+      assert.equal(derived.status, 201, JSON.stringify(derived.body));
+      descendantWithInheritedDefault = derived.body.plan.id;
+      const originalSession = derived.body.blocks[0].sessions[0].id;
+      const addInherited = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/blocks/${derived.body.blocks[0].id}/sessions`, {
+        method: "POST", body: { name: "Born under copied defaults", bta: "T" },
+      });
+      assert.equal(addInherited.status, 201, JSON.stringify(addInherited.body));
+      const inherited = addInherited.body.blocks[0].sessions.find(row => row.id !== originalSession);
+      const node = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/sessions/${inherited.id}/nodes`, {
+        method: "POST", body: { nodeType: "domain", name: "Training content" },
+      });
+      assert.equal(node.status, 201, JSON.stringify(node.body));
+      const deleted = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/sessions/${originalSession}`, { method: "DELETE" });
+      assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+      const off = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${descendantWithInheritedDefault}/training-load-settings`, {
+        method: "PATCH", body: { trackTrainingLoadDefault: false, requestRpeDefault: false },
+      });
+      assert.equal(off.status, 200, JSON.stringify(off.body));
       const later = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.during.id}/duplicate`, {
         method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-06-14" },
       });
@@ -60,23 +82,23 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     try {
       const api = (path, options) => builderRpeFixtureApi(server, cookies.owner, path, options);
       const submit = id => api(`/api/builder/plans/${id}/submit`, { method: "POST" });
-      const ids = [...Object.values(cases).map(item => item.id), descendant, descendantOfLaterPublished, weeklyTemplateId, specificTemplateId];
+      const ids = [...Object.values(cases).map(item => item.id), descendant, descendantOfLaterPublished, descendantWithInheritedDefault, weeklyTemplateId, specificTemplateId];
       const before = await snapshot(ids);
-      for (const item of [cases.before, cases.editDraft, { id: descendant }, { id: descendantOfLaterPublished }]) {
+      for (const item of [cases.before, cases.editDraft, { id: descendant }, { id: descendantOfLaterPublished }, { id: descendantWithInheritedDefault }]) {
         const result = await submit(item.id);
         assert.equal(result.status, 409, JSON.stringify(result.body));
         assert.equal(result.body.code, "rpe_recovery_required");
         assert.deepEqual(await snapshot(ids), before);
       }
       const sourceDay = before.sessions.find(row => row.id === cases.before.sessionId).plan_day_id;
-      const targetDay = before.days.find(row => row.plan_id === cases.off.id).id;
+      const targetDay = before.sessions.find(row => row.id === cases.off.sessionId).plan_day_id;
       const samePlanDay = before.days.find(row => row.plan_id === cases.before.id && row.id !== sourceDay).id;
       const requestKeys = [randomUUID(), randomUUID()];
       const copies = [
         [`/api/builder/plans/${cases.before.id}/duplicate`, { athleteIds: [athleteCode], weekStart: "2027-05-24" }],
         [`/api/builder/sessions/${cases.before.sessionId}/copy-into/${targetDay}`, {}],
-        [`/api/builder/days/${sourceDay}/copy-into/${samePlanDay}`, {}],
-        [`/api/builder/blocks/${sourceDay}/copy-into/${targetDay}`, {}],
+        [`/api/builder/days/${sourceDay}/copy-into/${samePlanDay}`, { confirmOverwrite: true }],
+        [`/api/builder/blocks/${sourceDay}/copy-into/${targetDay}`, { confirmOverwrite: true }],
         ["/api/builder/weekly-templates", { name: "Unconfirmed copy", planIds: [cases.before.id] }],
         [`/api/builder/plans/${specificTemplateId}/duplicate`, { intent: "assign", athleteIds: [athleteCode], assignmentRequestId: requestKeys[0] }],
         [`/api/builder/plans/${weeklyTemplateId}/assign-weekly`, { athleteIds: [athleteCode], startDate: "2027-05-31", assignmentRequestId: requestKeys[1] }],
@@ -86,7 +108,7 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
       for (const [path, body] of copies) {
         const refused = await api(path, { method: "POST", body });
         assert.equal(refused.status, 409, path + " " + JSON.stringify(refused.body));
-        assert.match(refused.body.error, /Training Load settings/);
+        assert.match(refused.body.error, /Training Load settings/, path);
         assert.equal(await planCount(), priorCount);
         assert.deepEqual(await snapshot(ids), before);
       }
