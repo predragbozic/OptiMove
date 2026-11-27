@@ -3,7 +3,7 @@ import { pool, query } from "../db.js";
 import { assertExerciseReuseAllowed, lockExerciseReuse, withExerciseReuseTransaction } from "../exerciseAccess.js";
 import { canAccessAllAthletes, canAccessAthlete, canViewProgramsAt } from "../access.js";
 import { isPlatformAdministrator } from "../authz.js";
-import { assertProgramEditOwnership, lockProgramEditActor, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
+import { assertProgramAssignmentHeld, assertProgramEditOwnership, lockProgramEditActor, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
 import { createNotification } from "../notifications.js";
 import { NO_VIEWER_ID, coachModuleGate, handOnReadsRefuseWrites, viewEntryGate } from "../moduleView.js";
 import {
@@ -18,6 +18,9 @@ import {
   requireUsedProgramAccess,
   templateScopesForUser,
 } from "../programAccessPolicy.js";
+
+import { nativeProgramRpeScope } from "../programRpeSettingsAccess.js";
+import { isAthleteInWorkspaceScope } from "../trainingLoadAccess.js";
 
 const router = Router();
 
@@ -395,13 +398,16 @@ router.patch("/:planId/metadata", async (req, res, next) => {
       ? normalizeChoice(req.body?.subscriptionPeriod, ["month", "year"], "month")
       : null;
     const result = await withEditableTemplate(req, planId, true, async (client, current, writer) => {
-      // Publishing uses the existing policy, with the current account holdings.
-      const metadataPolicy = await resolveProgramMetadataPolicy(writer.sourceActor, {
+      // Only the current workspace can authorize a new publication.
+      const metadataPolicy = await resolveProgramMetadataPolicy(writer.actor, {
         scope: requestedScope,
         status: requestedStatus,
         athleteCanViewDirectly: booleanValue(req.body?.athleteCanViewDirectly, false),
       });
       if (!metadataPolicy.ok) throw refuseProgramEdit(403, metadataPolicy.error);
+      if (metadataPublishes(current, metadataPolicy)) {
+        await assertProgramAssignmentHeld(client, writer, { publishes: true });
+      }
       if (metadataPolicy.status === "active" &&
           ((current.library_scope || "my") !== metadataPolicy.scope ||
            (current.visibility || "private") !== metadataPolicy.visibility ||
@@ -609,42 +615,45 @@ router.post("/:planId/assignments", async (req, res, next) => {
     // a multi-role athlete+coach account must still pass here. Never gate on
     // the presence of athleteWorkspace/isAthlete.
     if (!req.authz?.capabilities?.coachWorkspace) return res.status(403).json({ error: "Coach access required." });
-    const plan = await loadAssignableTemplate(req, req.params.planId);
-    if (!plan) return res.status(404).json({ error: "Template not found." });
-    if (plan.can_assign_to_athlete === false) return res.status(403).json({ error: "This program cannot be assigned." });
-    // A weekly program template is never granted as library access: it is
-    // assigned from a date into the athletes' weekly plans
-    // (docs/ai/weekly-program-template-plan.md, Q3).
-    const weekly = await query(
-      `select count(*)::int as total, count(*) filter (where block_type = 'template_week_day')::int as weekly from plans.plan_days where plan_id = $1`,
-      [plan.id],
-    );
-    if (weekly.rows[0].total > 0 && weekly.rows[0].total === weekly.rows[0].weekly) {
-      return res.status(400).json({ error: "A weekly program is assigned from a date into the athletes' weekly plans.", code: "weekly_template_use_dated_assign" });
-    }
-
     const requestedIds = Array.isArray(req.body?.athleteIds) ? req.body.athleteIds.map(text).filter(Boolean) : [];
     const athleteIds = [...new Set(requestedIds)];
     if (!athleteIds.length) return res.status(400).json({ error: "Choose at least one athlete." });
 
-    const result = await withExerciseReuseTransaction(pool, req.user.id, [plan.id], async (runQuery) => {
-      const assigned = [];
+    const planId = req.params.planId;
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(planId)) {
+      return res.status(404).json({ error: "Template not found." });
+    }
+    let assignment;
+    const result = await withExerciseReuseTransaction(pool, req.user.id, [planId], async (runQuery, client) => {
+      const current = await loadAssignableTemplate(assignment.actor, planId, runQuery);
+      if (!current) throw refuseProgramEdit(404, "Template not found.");
+      if (current.can_assign_to_athlete === false) return { refusal: "disabled" };
+      const currentWeekly = (await runQuery(
+        `select count(*)::int as total, count(*) filter (where block_type = 'template_week_day')::int as weekly from plans.plan_days where plan_id = $1`,
+        [planId],
+      )).rows[0];
+      if (currentWeekly.total > 0 && currentWeekly.total === currentWeekly.weekly) return { refusal: "weekly" };
+
+      const assignable = [];
       const skipped = [];
       for (const athleteId of athleteIds) {
-        const athlete = await loadAssignableAthlete(athleteId);
-        if (!athlete) {
+        const athlete = await loadAssignableAthlete(athleteId, runQuery);
+        if (!athlete || !(await canAccessAthlete(runQuery, assignment.actor, athlete.id)) ||
+            (nativeProgramRpeScope(assignment.scope) && !await isAthleteInWorkspaceScope(assignment.scope, athlete.id, runQuery))) {
           skipped.push({ athleteId, reason: "Athlete not found." });
-          continue;
-        }
-        if (!(await canAccessAthlete(query, req, athlete.id))) {
-          skipped.push({ athleteId, athleteName: athlete.name, reason: "No access to this athlete." });
           continue;
         }
         if (!athlete.user_id) {
           skipped.push({ athleteId, athleteName: athlete.name, reason: "Athlete login is not enabled." });
           continue;
         }
-        const access = await assignProgramAccess(plan, athlete.user_id, runQuery);
+        assignable.push(athlete);
+      }
+
+      const assigned = [];
+      if (assignable.length) await assertExerciseReuseAllowed(client, req.user.id, { planIds: [planId] });
+      for (const athlete of assignable) {
+        const access = await assignProgramAccess(current, athlete.user_id, runQuery);
         assigned.push({
           athleteId: athlete.id,
           athleteCode: athlete.athlete_id || athlete.source_external_id,
@@ -653,9 +662,18 @@ router.post("/:planId/assignments", async (req, res, next) => {
           status: access.status,
         });
       }
-
       return { assigned, skipped };
+    }, {
+      beforePlanLock: async (client) => {
+        assignment = await lockProgramEditActor(client, req, { requireEdit: false });
+        await assertProgramAssignmentHeld(client, assignment, { assigns: true });
+      },
+      shouldCheck: () => false,
     });
+    if (result.refusal === "disabled") return res.status(403).json({ error: "This program cannot be assigned." });
+    if (result.refusal === "weekly") {
+      return res.status(400).json({ error: "A weekly program is assigned from a date into the athletes' weekly plans.", code: "weekly_template_use_dated_assign" });
+    }
     res.status(201).json(result);
   } catch (error) {
     next(error);
@@ -783,6 +801,19 @@ function normalizeLibraryScope(value) {
   return normalizeChoice(normalized, ["workspace", "my", "team", "club", "optimove", "marketplace"], "my");
 }
 
+const PUBLISHED_SCOPE_REACH = Object.freeze({ workspace: 0, my: 1, team: 2, club: 3, optimove: 4, marketplace: 4 });
+
+function metadataPublishes(current, next) {
+  if (next.status !== "active") return false;
+  if ((current.status || "active") !== "active" || (!current.athlete_can_view_directly && next.athleteCanViewDirectly)) return true;
+  const previousScope = current.library_scope || "my";
+  if (current.visibility !== "public" && next.visibility === "public") return true;
+  if (previousScope === next.scope) return false;
+  const previousReach = PUBLISHED_SCOPE_REACH[previousScope];
+  const nextReach = PUBLISHED_SCOPE_REACH[next.scope];
+  return previousReach === undefined || nextReach > previousReach || (nextReach === previousReach && nextReach === 4);
+}
+
 async function resolveProgramMetadataPolicy(req, requested) {
   const requestedScope = requested.scope || "my";
   const requestedStatus = requested.status || "draft";
@@ -858,8 +889,8 @@ function slugify(value) {
     .slice(0, 80) || `tag-${Date.now()}`;
 }
 
-async function loadAssignableTemplate(req, planId) {
-  const result = await query(
+async function loadAssignableTemplate(req, planId, runQuery = query) {
+  const result = await runQuery(
     `select id,
             access_model,
             access_duration_days,
@@ -883,8 +914,8 @@ async function loadAssignableTemplate(req, planId) {
   return result.rows[0] || null;
 }
 
-async function loadAssignableAthlete(athleteId) {
-  const result = await query(
+async function loadAssignableAthlete(athleteId, runQuery) {
+  const result = await runQuery(
     `select id,
             athlete_id,
             source_external_id,

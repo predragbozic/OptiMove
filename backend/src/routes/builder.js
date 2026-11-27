@@ -14,7 +14,7 @@ import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSe
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsOffered, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
-import { assertProgramEditHeld, assertProgramEditOwnership, combinedProgramEditIsChecked, lockProgramEditActor, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
+import { assertProgramAssignmentHeld, assertProgramEditHeld, assertProgramEditOwnership, combinedProgramEditIsChecked, lockProgramEditActor, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "../workspace.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
@@ -954,6 +954,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
     const writer = await lockProgramEditActor(client, req, { requireEdit: intent !== "assign" });
+    if (intent === "assign") await assertProgramAssignmentHeld(client, writer, { assigns: true, publishes: true });
     if (recordRpeOpening) {
       const expected = weeklyPlanOwnerScope ?? await resolveBuilderRpeWorkspace(client, req);
       const actor = await lockProgramRpeActor(client, req, expected);
@@ -1236,6 +1237,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     const sourceDefaults = (await client.query(
       "select track_training_load_default,request_rpe_default from plans.plans where id=$1", [source.id],
     )).rows[0];
+    await assertProgramAssignmentHeld(client, writer, { assigns: true });
     const claim = await claimAssignmentRequest(client, { id: assignmentRequestId, userId: req.user.id, sourcePlanId: source.id, payloadKey });
     if (claim.conflict || claim.failed) {
       await client.query("rollback");
@@ -1246,6 +1248,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         : { error: "Could not process this assignment request, please retry." });
     }
     if (claim.replay) {
+      if (claim.replay.created?.length) await assertProgramAssignmentHeld(client, writer, { publishes: true });
       await assertProgramEditAssignmentReplay(client, writer, assignmentRequestId, claim.replay, { dated: true });
       await client.query("commit");
       client.release();
@@ -1379,6 +1382,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
 
     const editedPlanIds = entries.filter(entry => entry.kind === "existing" && !entry.cannot && choice === "replace").map(entry => entry.planId);
     const removedPlanIds = entries.filter(entry => entry.kind === "new").flatMap(entry => entry.emptyPlanIds || []);
+    if (entries.some(entry => entry.kind === "new")) await assertProgramAssignmentHeld(client, writer, { publishes: true });
     const editIds = [...editedPlanIds, ...removedPlanIds];
     if (editIds.length) await assertProgramEditTargets(client, writer, editIds.map(id => ({ id })));
     const lockedSources = recordRpeOpening ? new Set((await client.query(
@@ -3466,7 +3470,19 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
     // Not actually part of a batch (or no longer owned/active) - the
     // caller falls back to its own plain single-plan activation using
     // this SAME locked source row, never a second independent lock.
+    if (sourceRow.status === "draft") {
+      await assertProgramAssignmentHeld(client, writer, { publishes: true });
+      await assertProgramPublishTargets(client, writer, [sourceRow]);
+    }
     return { sourceRow, activatedPlans: null };
+  }
+  const sourceHasContent = await (sourceRow.plan_type === "weekly"
+    ? planHasWeeklyTrainingContentWithClient(client, sourceRow.id)
+    : planHasBuilderContentWithClient(client, sourceRow.id));
+  const draftRows = [sourceRow, ...siblingRows].filter(row => row.status === "draft");
+  if (sourceHasContent && draftRows.length) {
+    await assertProgramAssignmentHeld(client, writer, { publishes: true });
+    await assertProgramPublishTargets(client, writer, draftRows);
   }
   if (siblingRows.length) await assertProgramEditTargets(client, writer, siblingRows);
   await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, checkProvenance ? {} : null);
@@ -3496,6 +3512,11 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
   }
 
   const remainingIds = [sourceRow.id, ...siblingRows.map((row) => row.id)].filter((id) => !deletedIds.includes(id));
+  const activatingRows = draftRows.filter(row => remainingIds.includes(row.id));
+  if (activatingRows.length) {
+    await assertProgramAssignmentHeld(client, writer, { publishes: true });
+    await assertProgramPublishTargets(client, writer, activatingRows);
+  }
   const updated = await client.query(
     `update plans.plans set status = 'active', updated_at = now()
      where id = any($1::uuid[]) and status = 'draft'
@@ -3650,8 +3671,29 @@ async function assertProgramRpeTargets(client, actor, scope, ids) {
   }
 }
 
+async function assertProgramPublishTargets(client, writer, targets) {
+  const runQuery = client.query.bind(client);
+  for (const { id } of targets) {
+    const plan = await getEditablePlan(writer.actor, id, runQuery);
+    if (!plan) throw refuseProgramEdit(404, "Draft program not found");
+    await assertProgramEditOwnership(client, writer.scope, plan);
+    if (nativeProgramRpeScope(writer.scope) && plan.athlete_uuid &&
+        !await isAthleteInWorkspaceScope(writer.scope, plan.athlete_uuid, runQuery)) {
+      throw refuseProgramEdit(404, "Draft program not found");
+    }
+  }
+}
+
 async function checkFirstRpeSubmit(client, req, planId, { emptyCheck = null } = {}) {
   await lockExerciseReuse(client, req.exerciseReuseGuard);
+  if (!emptyCheck) {
+    const writer = await lockProgramEditActor(client, req, { requireEdit: false });
+    const { rows: [target] } = await client.query("select id,status from plans.plans where id=$1 for update", [planId]);
+    if (target?.status === "draft") {
+      await assertProgramPublishTargets(client, writer, [target]);
+      await assertProgramAssignmentHeld(client, writer, { publishes: true });
+    }
+  }
   if (!await beginBuilderRpeProvenance(client)) {
     if (req.body?.rpeReviewToken !== undefined) throw refuseBuilderRpeRecovery();
     return;
@@ -3797,6 +3839,8 @@ async function applyEditDraft(req, draftPlan, timing) {
         return { sessionsLocked: locks };
       }
     }
+    const { rows: [lockedSource] } = await client.query("select status from plans.plans where id=$1", [source.id]);
+    if (lockedSource?.status !== "active") await assertProgramAssignmentHeld(client, writer, { publishes: true });
     await assertProgramEditTargets(client, writer, [freshDraft, source, ...(batch?.apply ?? []).map(member => ({ id: member.planId }))]);
     if (freshDraft.plan_type === "weekly") {
       if (hasProvenance) {
