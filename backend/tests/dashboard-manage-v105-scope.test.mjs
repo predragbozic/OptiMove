@@ -112,6 +112,21 @@ test("real Dashboard routes preserve standalone-team authorization and private o
     assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
     assert.equal((await server.api(viewer, path)).body.canCreateDashboard, true);
 
+    const targetPages = await server.api(viewer, `${targetPath}/pages`);
+    assert.equal(targetPages.status, 200, targetPages.text);
+    const home = targetPages.body.pages.find(page => page.is_home);
+    assert.ok(home);
+    const copyPath = `${targetPath}/pages/${home.id}/copy`;
+    const copyRequest = {
+      method: "POST", body: {
+        requestId: randomUUID(), requestIssuedAt: targetPages.body.requestIssuedAt,
+        expectedPagesRevision: targetPages.body.pagesRevision,
+        input: { name: "Receipt before role change", sourceRevision: home.revision, widgetRevisions: {} },
+      },
+    };
+    const receipt = await server.api(viewer, copyPath, copyRequest);
+    assert.equal(receipt.status, 200, receipt.text);
+
     const bridgeCommit = process.env.OPTIMOVE_DASHBOARDS_BRIDGE_SHA;
     if (bridgeCommit) {
       process.env.P1_PREVIOUS_BUILD_SHA = bridgeCommit;
@@ -146,7 +161,12 @@ test("real Dashboard routes preserve standalone-team authorization and private o
     assert.equal((await server.api(viewer, path)).body.canCreateDashboard, false);
     const offeredName = { expectedRevision: target.body.dashboard.revision, name: "Name granted after restore" };
     assert.equal((await server.api(viewer, targetPath, { method: "PATCH", body: offeredName })).status, 404);
+    const deniedReceipt = await server.api(viewer, copyPath, copyRequest);
+    assert.equal(deniedReceipt.status, 404, deniedReceipt.text);
     if (bridge) {
+      const oldDeniedReceipt = await bridgeApi(copyPath, copyRequest);
+      assert.equal(oldDeniedReceipt.status, 404);
+      assert.equal(await oldDeniedReceipt.text(), deniedReceipt.text);
       const denied = await bridgeApi(targetPath, { method: "PATCH", body: offeredName });
       const missing = await bridgeApi(`${path}/${randomUUID()}`, { method: "PATCH", body: offeredName });
       assert.equal(denied.status, 404);
@@ -159,6 +179,12 @@ test("real Dashboard routes preserve standalone-team authorization and private o
     assert.equal(restored.status, 200, restored.text);
     assert.deepEqual((await server.api(viewer, "/api/auth/me")).body.user.permissions, originalWords);
     assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
+    assert.deepEqual(await server.api(viewer, copyPath, copyRequest), receipt);
+    if (bridge) {
+      const bridgeReceipt = await bridgeApi(copyPath, copyRequest);
+      assert.equal(bridgeReceipt.status, 200);
+      assert.equal(await bridgeReceipt.text(), receipt.text);
+    }
     const written = await server.api(viewer, targetPath, { method: "PATCH", body: offeredName });
     assert.equal(written.status, 200, written.text);
     if (bridge) {
