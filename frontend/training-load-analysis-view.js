@@ -101,9 +101,15 @@ function canCreateDashboard() {
   return !readOnlyView() && state.trainingLoad.analysis.canCreateDashboard === true;
 }
 
+function canEditDashboard() {
+  const a = state.trainingLoad.analysis;
+  const d = a.dashboard;
+  return Boolean(d) && d.status !== "archived" && !d.is_template && !readOnlyView() && a.dashboardCanManage === true;
+}
+
 function canEdit() {
-  const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.status !== "archived" && !d.is_template && !readOnlyView() && state.trainingLoad.analysis.dashboardCanManage === true;
+  const a = state.trainingLoad.analysis;
+  return canEditDashboard() && (!a.pagesAvailable || a.pageCanManage === true);
 }
 
 // Archived dashboards may still be deleted by an authorized owner.
@@ -249,7 +255,7 @@ function renderDashboardMenuHtml() {
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu" role="menu" aria-label="Dashboard actions">
           ${menuItemHtml({ action: "training-load-analysis-print", label: "Export page as PDF" })}
-          ${canEdit() ? menuItemHtml({ action: "training-load-analysis-rename-dashboard", label: "Rename" }) : ""}
+          ${canEditDashboard() ? menuItemHtml({ action: "training-load-analysis-rename-dashboard", label: "Rename" }) : ""}
           ${!readOnlyView() && a.dashboard.status !== "archived" && !a.dashboard.is_template ? `
             ${isActive
               ? menuItemHtml({ action: "training-load-analysis-set-active", label: "Active dashboard", disabled: true })
@@ -257,10 +263,10 @@ function renderDashboardMenuHtml() {
           ` : ""}
           ${canEdit() ? `
             ${menuItemHtml({ action: "training-load-analysis-toggle-edit", label: a.editMode ? "Done editing layout" : "Edit layout" })}
-            ${menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true })}
           ` : ""}
+          ${canEditDashboard() ? menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true }) : ""}
           ${canDeleteDashboard() ? `
-            ${canEdit() ? `<div class="tl-menu-separator" role="separator"></div>` : ""}
+            ${canEditDashboard() ? `<div class="tl-menu-separator" role="separator"></div>` : ""}
             ${menuItemHtml({ action: "training-load-analysis-delete-dashboard", label: "Delete permanently", danger: true, disabled: a.saving })}
           ` : ""}
         </div>

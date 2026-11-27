@@ -31,7 +31,7 @@ export async function loadDashboardPages(render,{pageId=null}={}){
   if(personal&&personal.config===JSON.stringify(detail.page.period_config))model.period=personal.period;
   else if(detail.resolvedPeriod)model.period=detail.resolvedPeriod;
   model.pageResolvedPeriod=detail.resolvedPeriod??null;
-  resetAnalysisDashboardQuery();Object.assign(model,{pageRequestIssuedAt:detail.requestIssuedAt,pages:detail.pages,page:detail.page,pagesRevision:detail.pagesRevision,pageCanManage:detail.canManage,selectedPageId:choice.id,widgets:detail.widgets,dashboard:detail.dashboard,pageLoading:false,pageError:'',editMode:false,layoutDraft:null});
+  resetAnalysisDashboardQuery();Object.assign(model,{pageRequestIssuedAt:detail.requestIssuedAt,pages:detail.pages,page:detail.page,pagesRevision:detail.pagesRevision,pageCanManage:detail.canManage===true,selectedPageId:choice.id,widgets:detail.widgets,dashboard:detail.dashboard,pageLoading:false,pageError:'',editMode:false,layoutDraft:null});
   remember(dashboardId,choice.id);render?.();
  }catch{if(ticket===generation&&key(a().selectedDashboardId)===context){model.pageLoading=false;model.pageError='Pages could not be loaded. Reload the dashboard.';model.widgets=[];resetAnalysisDashboardQuery();render?.()}}
 }

@@ -404,3 +404,24 @@ test("server Dashboard capabilities hide writes and keep reading, export and act
   analysis.canCreateDashboard = true;
   assert.ok(rendered().querySelector('[data-action="training-load-analysis-clone-template"]'));
 });
+
+test("fresh Page capability alone can remove widget and layout controls while preserving dashboard reads and preferences", () => {
+  const analysis = setup("table", [row(12)]);
+  analysis.pagesAvailable = true;
+  analysis.selectedPageId = "page-1";
+  analysis.menu = "dashboard";
+  const actions = doc => ["add-widget", "toggle-edit"].map(action =>
+    doc.querySelector(`[data-action="training-load-analysis-${action}"]`));
+  for (const capability of [true, false, undefined]) {
+    analysis.pageCanManage = capability;
+    const document = rendered();
+    assert.equal(actions(document).every(Boolean), capability === true);
+    assert.equal(Boolean(document.querySelector(".tl-widget-menu-trigger")), capability === true);
+    assert.ok(document.querySelector('[data-action="training-load-analysis-rename-dashboard"]'));
+    assert.ok(document.querySelector('[data-action="training-load-analysis-print"]'));
+    assert.ok(document.querySelector('[data-action="training-load-analysis-set-active"]'));
+    assert.match(document.querySelector(".tl-analysis-widget").textContent, /12/);
+  }
+  analysis.pagesAvailable = false;
+  assert.ok(actions(rendered()).every(Boolean));
+});
