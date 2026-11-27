@@ -66,7 +66,7 @@ function roleData(client) {
 
 
 const previousBuild = "234e2eab4f7aea6376ddcdc26800bc516f6ec6e6";
-const stagedBuild = "248e49de36ca84812756ecaed08e4998d98cbb34";
+const stagedBuild = "aa7e62cbf9dcc4aaab538a83b7f9f16a08526a56";
 const migration = "202612111000";
 const bridgeWords = ["programs.edit"];
 const read = name => readFile(new URL(`../../docs/runbooks/program-edit-v109-${name}.sql`, import.meta.url), "utf8");
