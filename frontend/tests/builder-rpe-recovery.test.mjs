@@ -11,7 +11,7 @@ const { handleBuilderDraftAction } = await import("../builder-actions.js");
 const { closeBuilderRpeReview, currentBuilderRpeReview, mountBuilderRpeReview } = await import("../builder-rpe-review.js");
 
 const originalFetch = globalThis.fetch;
-const summary = { plans: 1, sessions: 3, trackingEnabledSessions: 2, rpeEnabledSessions: 1 };
+const summary = { plans: 1, sessions: 3, trackingEnabledSessions: 2, rpeEnabledSessions: 1, trackTrainingLoadDefault: false, requestRpeDefault: false };
 const reviewResponse = (review = {}) => new Response(JSON.stringify({
   code: "rpe_recovery_required",
   error: "Review needed",
@@ -59,6 +59,8 @@ test("eligible recovery renders a React dialog without exposing the token and ca
   assert.match(dialog.textContent, /Confirm Training Load settings/);
   assert.match(dialog.textContent, /this plan/);
   assert.match(dialog.textContent, /Tracking on2/);
+  assert.match(dialog.textContent, /Tracking for new sessionsOff/);
+  assert.match(dialog.textContent, /Request RPE for new sessionsOff/);
   assert.ok(!root().innerHTML.includes("opaque-review"));
   assert.equal(dialog.querySelector('[data-action="builder-rpe-review-confirm"]').disabled, false);
   await activate("builder-rpe-review-cancel");
@@ -124,13 +126,16 @@ test("expired or malformed reviews never offer confirmation", async () => {
     { expiresAt: "invalid" },
     { expiresAt: new Date(Date.now() - 1).toISOString() },
     { summary: { ...summary, rpeEnabledSessions: 9 } },
+    { summary: { ...summary, requestRpeDefault: "true" } },
+    { summary: { ...summary, trackTrainingLoadDefault: undefined } },
+    { summary: { ...summary, requestRpeDefault: true } },
     { scope: "all" },
   ]) {
     respond(() => reviewResponse(review));
     await activate("builder-batch-edit-only");
     assert.equal(currentBuilderRpeReview(), null);
   }
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 7);
 });
 
 test("a permission refusal after clicking Confirm leaves the open draft and original batch choice available", async () => {
@@ -145,4 +150,22 @@ test("a permission refusal after clicking Confirm leaves the open draft and orig
   assert.deepEqual(state.builder.batchEditChoice, { stage: "scope" });
   assert.equal(currentBuilderRpeReview(), null);
   assert.match(errors[0], /Reopen the draft/);
+});
+
+test("a draft without sessions still exposes both enabled plan defaults before confirming", async () => {
+  const defaultsOnly = {
+    plans: 1, sessions: 0, trackingEnabledSessions: 0, rpeEnabledSessions: 0,
+    trackTrainingLoadDefault: true, requestRpeDefault: true,
+  };
+  respond(() => reviewResponse({ summary: defaultsOnly }));
+  await activate("builder-batch-edit-only");
+  await mountBuilderRpeReview(root());
+  const dialog = root().querySelector("dialog[open]");
+  const fields = Object.fromEntries([...dialog.querySelectorAll("dl div")].map(row =>
+    [row.querySelector("dt").textContent, row.querySelector("dd").textContent]));
+  assert.equal(fields.Sessions, "0");
+  assert.equal(fields["Tracking on"], "0");
+  assert.equal(fields["RPE requested"], "0");
+  assert.equal(fields["Tracking for new sessions"], "On");
+  assert.equal(fields["Request RPE for new sessions"], "On");
 });

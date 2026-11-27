@@ -20,12 +20,14 @@ export function offerBuilderRpeReview(error, context, payload) {
   const { token, expiresAt, summary } = review;
   const expires = typeof expiresAt === "string" ? Date.parse(expiresAt) : NaN;
   if (typeof token !== "string" || !token.trim() || token.length > 4096 || !Number.isFinite(expires) || expires <= Date.now()) return false;
-  const { plans, sessions, trackingEnabledSessions, rpeEnabledSessions } = summary || {};
+  const { plans, sessions, trackingEnabledSessions, rpeEnabledSessions, trackTrainingLoadDefault, requestRpeDefault } = summary || {};
   if (![plans, sessions, trackingEnabledSessions, rpeEnabledSessions].every(value => Number.isSafeInteger(value) && value >= 0)
-    || plans < 1 || rpeEnabledSessions > trackingEnabledSessions || trackingEnabledSessions > sessions) return false;
+    || plans < 1 || rpeEnabledSessions > trackingEnabledSessions || trackingEnabledSessions > sessions
+    || typeof trackTrainingLoadDefault !== "boolean" || typeof requestRpeDefault !== "boolean"
+    || (requestRpeDefault && !trackTrainingLoadDefault)) return false;
   pendingByBuilder.set(context.builder, {
     context, payload: structuredClone(payload), scope: review.scope, token, expires, confirming: false,
-    summary: { plans, sessions, trackingEnabledSessions, rpeEnabledSessions },
+    summary: { plans, sessions, trackingEnabledSessions, rpeEnabledSessions, trackTrainingLoadDefault, requestRpeDefault },
   });
   return true;
 }

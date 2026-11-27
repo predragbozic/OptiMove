@@ -21,6 +21,8 @@ export function BuilderRpeReview({ summary, scope, confirming }) {
         <div><dt>Sessions</dt><dd>{summary.sessions}</dd></div>
         <div><dt>Tracking on</dt><dd>{summary.trackingEnabledSessions}</dd></div>
         <div><dt>RPE requested</dt><dd>{summary.rpeEnabledSessions}</dd></div>
+        <div><dt>Tracking for new sessions</dt><dd>{summary.trackTrainingLoadDefault ? "On" : "Off"}</dd></div>
+        <div><dt>Request RPE for new sessions</dt><dd>{summary.requestRpeDefault ? "On" : "Off"}</dd></div>
       </dl>
       <div className="builder-rpe-review-actions">
         <button type="button" className="plain-button" data-action="builder-rpe-review-cancel" disabled={confirming} autoFocus>Cancel</button>
