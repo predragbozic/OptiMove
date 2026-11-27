@@ -156,6 +156,7 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
     const cookie = await current.cookieFor(platform);
     const root = "/api/organization/roles";
     async function call(server, path, body) {
+      if (server.api) return server.api(cookie, path, { method: body ? "POST" : "GET", body });
       const response = await fetch(server.baseUrl + path, {
         method: body ? "POST" : "GET",
         headers: { cookie, ...(body ? { "content-type": "application/json" } : {}) },
