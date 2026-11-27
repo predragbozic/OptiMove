@@ -17,6 +17,7 @@ import pg from "pg";
 import { createDisposableDatabase, dropDisposableDatabase } from "./support/disposable-db.mjs";
 import { bootstrapLegacySnapshot } from "./support/legacy-bootstrap.mjs";
 import { runMigrations } from "../src/migrate.js";
+import { seedProgramRpeGrants } from "./support/program-rpe-grants.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = path.resolve(__dirname, "../../migrations_v2");
@@ -191,6 +192,7 @@ before(async () => {
   await runMigrations({ databaseUrl: db.url, migrationsRoot: MIGRATIONS });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await seedProgramRpeGrants(admin);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: the disposable database");
   process.env.DATABASE_URL = db.url;
   const serverModule = await import("../src/server.js");
@@ -539,7 +541,7 @@ test("13. a Save racing an athlete's RPE submit on a session the edit removes, b
       await waitForLockWait((r) => /training_load\.plan_workspace_ownership/.test(r.query));
       const before = await digestOf([a, b]);
       const saving = save(s.coach.cookie, draft.plan.id, { batchScope: "all" });
-      await waitForLockWait((r) => /plan_sessions where id = any/.test(r.query));
+      await waitForLockWait((r) => /ps\.logical_session_id, ps\.training_load_enabled, ps\.rpe_enabled, pd\.plan_id[\s\S]*for update of ps/.test(r.query));
       await holder.query("commit");
       const rated = await rating;
       assert.ok(rated.status < 300, rated.text);

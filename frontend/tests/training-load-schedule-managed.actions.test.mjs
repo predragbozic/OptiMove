@@ -23,6 +23,7 @@ const run = (dataset) => handleTrainingLoadAction(fakeAction(dataset), { renderT
 const SCHEDULE_ID = "5c000000-0000-4000-8000-000000000001";
 
 beforeEach(() => {
+  state.currentUser = { id: "coach-1", activeWorkspace: { type: "club", scopeId: "club-1" }, permissions: ["load.view.team", "load.schedule.manage"] };
   state.trainingLoad.scheduleForm = null;
   state.trainingLoad.scheduleDetail = { scheduleId: SCHEDULE_ID, schedule: { id: SCHEDULE_ID, eventName: "Morning RPE", status: "active" }, targets: [], loading: false, error: "" };
 });

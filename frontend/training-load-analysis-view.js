@@ -97,19 +97,25 @@ function readOnlyView() {
   return viewModuleOpen("dashboards");
 }
 
-function canEdit() {
-  const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.status !== "archived" && !d.is_template && !readOnlyView();
+function canCreateDashboard() {
+  return !readOnlyView() && state.trainingLoad.analysis.canCreateDashboard === true;
 }
 
-// Permanent delete is offered for any open dashboard except a system
-// template - including archived dashboards and club/team templates, which
-// canEdit() above excludes. Whether this account may actually MANAGE it is
-// the server's decision (canManageDashboardRow -> 403/404), exactly as for
-// Rename and Archive.
+function canEditDashboard() {
+  const a = state.trainingLoad.analysis;
+  const d = a.dashboard;
+  return Boolean(d) && d.status !== "archived" && !d.is_template && !readOnlyView() && a.dashboardCanManage === true;
+}
+
+function canEdit() {
+  const a = state.trainingLoad.analysis;
+  return canEditDashboard() && (!a.pagesAvailable || a.pageCanManage === true);
+}
+
+// Archived dashboards may still be deleted by an authorized owner.
 function canDeleteDashboard() {
   const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.owner_scope !== "system" && !readOnlyView();
+  return Boolean(d) && d.owner_scope !== "system" && !readOnlyView() && state.trainingLoad.analysis.dashboardCanManage === true;
 }
 
 // 3B3 UX slice: the "Choose activity" chip replaces the old raw Activity/
@@ -223,9 +229,9 @@ function renderDashboardPickerHtml() {
               </div>
             `).join("")}
           </div>
-          ${readOnlyView() ? "" : `<div class="tl-popover-footer">
+          ${canCreateDashboard() ? `<div class="tl-popover-footer">
             <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-new-dashboard"><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>New dashboard</span></button>
-          </div>`}
+          </div>` : ""}
         </div>
       ` : ""}
     </div>
@@ -249,16 +255,18 @@ function renderDashboardMenuHtml() {
         ${popoverBackdropHtml()}
         <div class="tl-popover tl-menu" role="menu" aria-label="Dashboard actions">
           ${menuItemHtml({ action: "training-load-analysis-print", label: "Export page as PDF" })}
-          ${canEdit() ? `
-            ${menuItemHtml({ action: "training-load-analysis-rename-dashboard", label: "Rename" })}
+          ${canEditDashboard() ? menuItemHtml({ action: "training-load-analysis-rename-dashboard", label: "Rename" }) : ""}
+          ${!readOnlyView() && a.dashboard.status !== "archived" && !a.dashboard.is_template ? `
             ${isActive
               ? menuItemHtml({ action: "training-load-analysis-set-active", label: "Active dashboard", disabled: true })
               : menuItemHtml({ action: "training-load-analysis-set-active", label: "Set as active" })}
-            ${menuItemHtml({ action: "training-load-analysis-toggle-edit", label: a.editMode ? "Done editing layout" : "Edit layout" })}
-            ${menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true })}
           ` : ""}
+          ${canEdit() ? `
+            ${menuItemHtml({ action: "training-load-analysis-toggle-edit", label: a.editMode ? "Done editing layout" : "Edit layout" })}
+          ` : ""}
+          ${canEditDashboard() ? menuItemHtml({ action: "training-load-analysis-archive", label: "Archive", danger: true }) : ""}
           ${canDeleteDashboard() ? `
-            ${canEdit() ? `<div class="tl-menu-separator" role="separator"></div>` : ""}
+            ${canEditDashboard() ? `<div class="tl-menu-separator" role="separator"></div>` : ""}
             ${menuItemHtml({ action: "training-load-analysis-delete-dashboard", label: "Delete permanently", danger: true, disabled: a.saving })}
           ` : ""}
         </div>
@@ -315,7 +323,7 @@ function renderLayoutBarHtml() {
 }
 
 function renderEmptyHtml() {
-  if (readOnlyView()) {
+  if (!canCreateDashboard()) {
     return `
     <section class="panel tl-analysis-empty">
       <p class="eyebrow">Dashboards</p>
@@ -598,7 +606,7 @@ function renderGridHtml() {
     </section>
     ${a.dashboard.is_template ? `
       <div class="tl-analysis-template-banner">
-        ${readOnlyView()
+        ${!canCreateDashboard()
           ? `<p class="tl-analysis-status is-unresolved">This is a template. It shows data only once someone with editing rights uses it.</p>`
           : `<p class="tl-analysis-status is-unresolved">This is a template. Clone it before querying or editing it.</p>
         <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-clone-template" data-template-id="${escapeAttr(a.dashboard.id)}">Use template</button>`}

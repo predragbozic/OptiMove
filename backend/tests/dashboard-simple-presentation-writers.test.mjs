@@ -25,6 +25,7 @@ if (needsModuleMocksRelaunch()) {
   } });
   mock.module("../src/trainingLoadDashboardAccess.js", { namedExports: {
     resolveActiveDataWorkspace: async request => request.pilotWorkspace ?? workspace,
+    dataWorkspaceForActiveWorkspace: () => workspace,
     canManageDashboardRow: (request, row) => row.owner_user_id === request.user.id,
     canViewDashboardRow: (request, row) => row.owner_scope === "system" || row.owner_user_id === request.user.id,
     dashboardManageBasis: () => "owner",
@@ -349,6 +350,37 @@ if (needsModuleMocksRelaunch()) {
       assert.equal(queryCalls.at(-1).parameters.length, parameterCount);
       assert.ok(!queryCalls.at(-1).sql.includes("presentation"));
     }
+  });
+
+  test("clone hides a foreign non-template and preserves the visible non-template refusal", async () => {
+    let source;
+    connectHandler = () => ({
+      async query(sql) {
+        if (sql === "begin" || sql === "rollback") return { rows: [] };
+        if (sql.includes("from training_load.dashboards") && sql.includes("for share")) return { rows: source ? [source] : [] };
+        throw new Error("The rejected clone must never write: " + sql);
+      },
+      release() {},
+    });
+    const clone = () => invokeRoute("post", "/:dashboardId/clone", {});
+    const missing = await clone();
+    assert.equal(missing.statusCode, 404);
+    source = { ...dashboard, owner_user_id: "30000000-0000-4000-8000-000000000099", is_template: false };
+    const foreign = await clone();
+    assert.deepEqual([foreign.statusCode, foreign.body], [missing.statusCode, missing.body]);
+    source = { ...dashboard, is_template: false };
+    const own = await clone();
+    assert.deepEqual([own.statusCode, own.body], [400, { error: "invalidRequest", message: "That dashboard is not a template." }]);
+  });
+
+  test("an authorized Legacy content write keeps the archived response", async () => {
+    queryHandler = async sql => {
+      if (sql.includes("from training_load.dashboards")) return { rows: [{ ...dashboard, status: "archived" }] };
+      throw new Error("Archived dashboard must never be written: " + sql);
+    };
+    const result = await invokeRoute("patch", "/:dashboardId/widgets/:widgetId", updateBody());
+    assert.equal(result.statusCode, 409);
+    assert.deepEqual(result.body, { error: "dashboardArchived" });
   });
 
   test("presentation is rejected historically with missing or off mode and outside the pilot", async () => {

@@ -1,3 +1,4 @@
+import { applyRosterBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // J20-C (migration v61): the attendance states of an import, saved right after its approval by the same user through
 // POST /api/training-load/gpexe/teams/:teamId/approvals/:approvalId/states. The roster bulk command bound to the approval
 // (origin 'import', origin_approval_id): the undo removes them as the import's own (v60); the window is
@@ -40,6 +41,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyRosterBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.SOURCE_CREDENTIAL_KEYS = (await import("../src/sourceCredentialCrypto.js")).generateKeyEntry(1);

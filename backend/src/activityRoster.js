@@ -276,7 +276,8 @@ async function readInSnapshot(fn) {
 // `deferGate`: a command asks for the v44 gate's answer instead of the 409,
 // because its requestKey replay must come first (a saved answer wins over the
 // present state); the read lets the 409 be thrown here.
-export async function resolveRosterTarget(client, ctx, activityId, { deferGate = false, viewScope = null } = {}) {
+// `deferApplicability` lets the estimate editor check current authority before applying either roster rule.
+export async function resolveRosterTarget(client, ctx, activityId, { deferGate = false, deferApplicability = false, viewScope = null } = {}) {
   const one = async (sql, params) => (await client.query(sql, params)).rows;
   const found = (await one(
     `select training.resolve_canonical_activity_id(id) as canonical_id from training.activities where id = $1`,
@@ -296,6 +297,7 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
     if (viewScope) throw notFound();
     const scope = activityScopeForWorkspace(ctx.workspace, { user: { id: ctx.userId } });
     if (scope.type !== null && canManageActivityInScope(scope, activity)) {
+      if (deferApplicability) return { canonicalId, activity, team: null, basis: null };
       throw new RosterError(409, "roster_not_applicable", "Only a team session has a roster.");
     }
     throw notFound();
@@ -312,6 +314,7 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
       || (viewScope.type === "club" && String(team.club_id) === viewScope.id)) ? "view" : null)
     : rosterBasisForWorkspace(ctx.workspace, ctx.authz, team);
   if (!basis) throw notFound();
+  if (deferApplicability) return { canonicalId, activity, team, basis };
   // A self-report activity (v44): the caller may decide on this team's
   // sessions, but this one holds one athlete's own result and has no roster.
   // Read only now, after the basis: a caller without one never pays for it.
@@ -566,6 +569,20 @@ export async function getActivityRoster(ctx, activityId) {
         canComplete: false,
       };
     }
+    const platform = basis === "platform_admin";
+    const estimatesEnabled = process.env.ESTIMATES_ENABLED === "true";
+    const rights = platform ? null : (await client.query(
+      `select permissions.can_view
+          and public.permission_word_honoured('load.roster.decide')
+          and public.user_has_permission($1, 'load.roster.decide', $2, $3) as can_decide_roster,
+        $4::boolean and permissions.can_view
+          and public.permission_word_honoured('load.estimates.manage')
+          and public.user_has_permission($1, 'load.estimates.manage', $2, $3) as can_estimate
+        from (select public.user_has_permission($1, 'load.view.team', $2, $3) as can_view) permissions`,
+      [ctx.userId, ctx.workspace.type, ctx.workspace.scopeId, estimatesEnabled],
+    )).rows[0];
+    const canDecideRoster = platform || rights?.can_decide_roster === true;
+    const canEstimate = estimatesEnabled && (platform || rights?.can_estimate === true);
     return {
       activity: {
         id: String(activityId),
@@ -577,12 +594,13 @@ export async function getActivityRoster(ctx, activityId) {
         ownerTeamId: String(activity.owner_team_id),
       },
       canonicalActivityId: canonicalId,
-      // 6b-C1: the estimate action is offered only while the save is on (ESTIMATES_ENABLED, metricEstimateService's own
-      // check, read here without importing it: that module imports this one). Off, the answer is as before.
+      // Both the roster editor and the Imports shortcut consume the estimate capability.
+      // The estimate proposal and writer recheck permission independently.
       // ST-4: manual values are offered while their routes are on (MANUAL_VALUES_ENABLED, on unless "false").
       viewer: {
         basis,
-        ...(process.env.ESTIMATES_ENABLED === "true" ? { estimates: true } : {}),
+        canDecideRoster,
+        ...(canEstimate ? { estimates: true } : {}),
         ...(process.env.MANUAL_VALUES_ENABLED !== "false" ? { manualValues: true } : {}),
       },
       completion: snap.completion,
@@ -593,7 +611,7 @@ export async function getActivityRoster(ctx, activityId) {
       recordedOutsideRoster: snap.recordedOutsideRoster,
       reasons: snap.reasons.map((r) => ({ key: r.key, label: r.label })),
       counts: snap.counts,
-      canComplete: snap.counts.total > 0 && snap.counts.needsState === 0 && snap.completion.status !== "complete",
+      canComplete: canDecideRoster && snap.counts.total > 0 && snap.counts.needsState === 0 && snap.completion.status !== "complete",
     };
   });
 }

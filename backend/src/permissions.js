@@ -235,14 +235,21 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "tests.results.view": Object.freeze(["testsAccess.js"]),
   // Roles V-6 (docs/ai/roles-v-steps-plan.md sections 2.7 and 13): dashboards (both routers and the pages service read
   // their data workspace there).
-  "dashboards.view": Object.freeze(["trainingLoadDashboardAccess.js"]),
+  "dashboards.view": Object.freeze(["trainingLoadDashboardAccess.js", "dashboardManageAccess.js"]),
+  "dashboards.manage": Object.freeze(["dashboardManageAccess.js"]),
   // Roles V-7 (the plan's "V-7 design"): Programs and Exercises. access.js holds the programs gates: programViewScopes
   // (the arrays of a plan's readers through its athlete) and canViewProgramsAt (coachModuleGate on the Builder, the
   // Program Library and the plan reads); routes/exercises.js holds the exercise library's coach gate.
-  "programs.view": Object.freeze(["access.js"]),
+  "programs.view": Object.freeze(["access.js", "programRpeSettingsAccess.js"]),
+  "programs.rpe_settings": Object.freeze(["programRpeSettingsAccess.js"]),
   "exercises.use": Object.freeze(["routes/exercises.js"]),
   "load.view.team": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js", "trainingLoadMetricsAccess.js"]),
   "load.view.athlete": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js"]),
+  // Roles M-2: the transaction holds and rechecks the native scope before any external schedule write.
+  "load.schedule.manage": Object.freeze(["externalScheduleWriteAccess.js"]),
+  "load.roster.decide": Object.freeze(["activityRosterCommands.js"]),
+  "load.activities.manage": Object.freeze(["trainingActivityWriteAccess.js"]),
+  "load.estimates.manage": Object.freeze(["metricEstimateAccess.js"]),
 });
 
 // The checked words as a list (R2's name, kept for its callers): the words /me may offer and the only words a role

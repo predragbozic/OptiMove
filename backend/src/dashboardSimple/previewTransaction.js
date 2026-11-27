@@ -11,7 +11,7 @@ function bounded(promise, milliseconds, error) {
     .finally(() => clearTimeout(timer));
 }
 
-export async function withPreviewTransaction({ pool, signal, onReleased = () => {}, checkoutTimeoutMs = 1000, transactionTimeoutMs = 5000, statementTimeoutMs = 3000 }, operation) {
+export async function withPreviewTransaction({ pool, signal, onReleased = () => {}, locks = false, checkoutTimeoutMs = 1000, transactionTimeoutMs = 5000, statementTimeoutMs = 3000 }, operation) {
   if (!pool || typeof pool.connect !== 'function' || typeof operation !== 'function' ||
       ![checkoutTimeoutMs, transactionTimeoutMs, statementTimeoutMs].every(value => Number.isSafeInteger(value) && value > 0) ||
       checkoutTimeoutMs > 5000 || transactionTimeoutMs > 5000 || statementTimeoutMs > 3000) throw new TypeError('Bounded preview transaction required');
@@ -59,7 +59,8 @@ export async function withPreviewTransaction({ pool, signal, onReleased = () => 
   try {
     check();
     begun = true;
-    await bounded(lifecycle.run(() => client.query('begin isolation level repeatable read read only')), Math.max(1, deadline - performance.now()), previewError('previewTimeout'));
+    await bounded(lifecycle.run(() => client.query(locks ? 'begin' : 'begin isolation level repeatable read read only')), Math.max(1, deadline - performance.now()), previewError('previewTimeout'));
+    if (locks) await bounded(lifecycle.run(() => client.query("set local lock_timeout = '1000ms'")), Math.max(1, deadline - performance.now()), previewError('previewTimeout'));
     const result = await bounded(lifecycle.run(() => operation(queryRunner)), Math.max(1, deadline - performance.now()), previewError('previewTimeout'));
     await bounded(lifecycle.run(() => queue), Math.max(1, deadline - performance.now()), previewError('previewTimeout'));
     check();

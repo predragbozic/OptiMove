@@ -19,6 +19,7 @@ import { preserveBuilderItemEdits } from "./builder-item-edits.js";
 import { renderBlockPickerModal, renderBuilderAthletePicker, renderBuilderInfoModal, renderCopyPlanModal, renderOverwriteDayConfirmHtml } from "./builder-modals.js";
 import { builderFiltersToggleState, renderBuilderAddedPanelContent, renderBuilderSectionOverlay } from "./builder-section.js";
 import { ensureBuilderEvents } from "./builder-events-row.js";
+import { mountBuilderRpeReview } from "./builder-rpe-review.js";
 import { renderBuilderSessionsLockedHtml } from "./builder-sessions-locked.js";
 import { currentTemplateWeek, dayOfBlock, isWeeklyTemplateDraft, renderTemplateWeekStripHtml, templateWeekBlocks } from "./builder-weekly-template-view.js";
 import { renderWeeklyAssignModalHtml } from "./builder-weekly-assign-view.js";
@@ -90,6 +91,7 @@ function builderStructureContext() {
     exerciseNodeLabel,
     findBuilderSession: (id) => findBuilderSession(state.builder.draft, id),
     selectedSessionId: state.builder.selectedSessionId,
+    canEditRpeSettings: state.builder.draft?.plan?.canEditRpeSettings === true,
     sessionLabel,
     inlineAddOpen: state.builder.inlineAddOpen,
     inlineAddType: state.builder.inlineAddType,
@@ -395,6 +397,7 @@ export function renderBuilder() {
   preserveBuilderItemEdits(state.builder.draft);
   const scrollState = captureBuilderScrollState();
   renderBuilderInner();
+  void mountBuilderRpeReview(els.content);
   autosizeTextareas(els.content);
   restoreBuilderScrollState(scrollState);
   disablePendingMoveButtons();
@@ -749,6 +752,7 @@ function renderBuilderInner() {
           <span class="builder-discard-status" data-builder-discard-status role="status" aria-live="polite" hidden></span>
         </div>
       </header>
+      ${draft.batchSyncMessage ? `<p class="muted" role="status">${escapeHtml(draft.batchSyncMessage)}</p>` : ""}
       ${renderBuilderSessionsLockedHtml()}
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex)

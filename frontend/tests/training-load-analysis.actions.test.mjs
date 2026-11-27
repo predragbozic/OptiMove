@@ -129,7 +129,7 @@ function widget(overrides = {}) {
 }
 
 function detail(overrides = {}) {
-  return { dashboard: dashboard(overrides.dashboard), widgets: overrides.widgets || [widget()] };
+  return { canManage: true, dashboard: dashboard(overrides.dashboard), widgets: overrides.widgets || [widget()] };
 }
 
 function renderTrainingLoad() {}
@@ -306,7 +306,7 @@ test("Analysis load selects active dashboard and queries it through the single b
   resetState();
   installFetchMock(async (call) => {
     if (call.url === "/api/training-load/dashboards") {
-      return { status: 200, body: { dashboards: [dashboard(), dashboard({ id: templateId, name: "Template", is_template: true })] } };
+      return { status: 200, body: { canCreateDashboard: true, dashboards: [dashboard(), dashboard({ id: templateId, name: "Template", is_template: true })] } };
     }
     if (call.url === "/api/training-load/dashboards/active") {
       return { status: 200, body: { activeDashboard: { dashboard_id: dashboardId } } };
@@ -342,6 +342,8 @@ test("Analysis load selects active dashboard and queries it through the single b
 test("a series bound to a catalog metric is labelled with that metric's name, never a generic Metric", () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   const metricSeries = { ...widget().series[0], built_in_series_key: null, display_label: null, metric_definition_id: "metric-totdist" };
   state.trainingLoad.analysis.widgets = [widget({ widget_type: "table", title: "Distance", series: [metricSeries] })];
   state.trainingLoad.analysis.queryResult = {
@@ -420,6 +422,8 @@ test("concurrent catalog requests share one load, and a late load never writes i
 test("Analysis renders real KPI and table results from the batch response", () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.widgets = [
     widget(),
     widget({
@@ -457,6 +461,8 @@ test("Analysis layout mode markup: move grip, drag and resize handles, and the w
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget({ y: 2, height: 3 })];
 
@@ -481,6 +487,8 @@ test("Analysis layout mode markup: move grip, drag and resize handles, and the w
 test("Analysis actions save active dashboard, runtime filters, widgets, series and atomic layout", async () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget(), widget({ id: secondWidgetId, title: "Duration", mobile_order: 2, x: 3 })];
   installFetchMock(async (call) => {
@@ -580,6 +588,8 @@ test("Analysis clears a failed context error when restoring cached values and ac
   resetState();
   const analysis = state.trainingLoad.analysis;
   analysis.dashboard = dashboard();
+  analysis.dashboardCanManage = true;
+  analysis.canCreateDashboard = true;
   analysis.selectedDashboardId = dashboardId;
   analysis.widgets = [widget()];
   analysis.period = { dateFrom: "2026-10-01", dateTo: "2026-10-07" };
@@ -609,6 +619,8 @@ for (const oldOutcome of ["success", "error"]) {
     resetState();
     const analysis = state.trainingLoad.analysis;
     analysis.dashboard = dashboard();
+  analysis.dashboardCanManage = true;
+  analysis.canCreateDashboard = true;
     analysis.selectedDashboardId = dashboardId;
     analysis.widgets = [widget()];
     analysis.period = { dateFrom: "2026-10-01", dateTo: "2026-10-07" };
@@ -644,7 +656,7 @@ for (const oldOutcome of ["success", "error"]) {
       assert.equal(analysis.queryError, "");
     } finally {
       finishOld?.({ status: 200, body: result(98765) });
-      finishList?.({ status: 200, body: { dashboards: [dashboard()] } });
+      finishList?.({ status: 200, body: { canCreateDashboard: true, dashboards: [dashboard()] } });
       await oldQuery;
       await handoff;
     }
@@ -657,6 +669,8 @@ async function verifyDashboardQueryTransition(kind, oldOutcome, settleAfterRetur
   resetState();
   const analysis = state.trainingLoad.analysis;
   analysis.dashboard = dashboard();
+  analysis.dashboardCanManage = true;
+  analysis.canCreateDashboard = true;
   analysis.selectedDashboardId = dashboardId;
   analysis.widgets = [widget()];
   const destination = dashboard({ id: templateId, is_template: kind === "template", status: kind === "archived" ? "archived" : "active" });
@@ -668,7 +682,7 @@ async function verifyDashboardQueryTransition(kind, oldOutcome, settleAfterRetur
   let queryCount = 0;
   const freshResult = { widgets: [{ widgetId, series: [{ seriesId, status: "ok", data: { current: [{ athleteId: null, bucketKey: "2026-10-01", unit: "AU", value: 42 }] } }] }] };
   installFetchMock(async call => {
-    if (call.url === `/api/training-load/dashboards/${templateId}`) return { status: 200, body: { dashboard: destination, widgets: [widget(), unresolved] } };
+    if (call.url === `/api/training-load/dashboards/${templateId}`) return { status: 200, body: { canManage: true, dashboard: destination, widgets: [widget(), unresolved] } };
     if (call.url === `/api/training-load/dashboards/${dashboardId}`) return { status: 200, body: detail() };
     if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) {
       queryCount += 1;
@@ -745,6 +759,8 @@ test("Analysis drag and resize stay local until one atomic layout save; cancel i
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
@@ -764,7 +780,7 @@ test("Analysis drag and resize stay local until one atomic layout save; cancel i
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}`) return { status: 200, body: detail({ dashboard: { revision: 4 } }) };
     if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) return { status: 200, body: { dashboardRevision: 4, widgets: [] } };
-    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { dashboards: [dashboard()] } };
+    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { canCreateDashboard: true, dashboards: [dashboard()] } };
     return { status: 404, body: { error: "unexpected" } };
   });
 
@@ -807,6 +823,8 @@ test("Analysis pointer drag/resize is disabled once the viewport matches the Ana
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   const originalMatchMedia = window.matchMedia;
@@ -825,6 +843,8 @@ test("Analysis pointer layout clamps widget type limits and the 12-column grid",
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [
     widget({ x: 10, width: 3, height: 3 }),
@@ -858,6 +878,8 @@ test("Analysis layout nudges overlapping widgets to the next free row", () => {
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [
     widget({ x: 0, y: 0, width: 4, height: 3 }),
@@ -877,6 +899,8 @@ test("Analysis drag and resize also accept mouse fallback events without pointer
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
@@ -899,6 +923,8 @@ test("Analysis drag can start from non-interactive card space in edit mode", () 
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
@@ -915,6 +941,8 @@ test("Analysis chart body controls never start a delegated or directly bound lay
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   const { widgetEl, listeners } = analysisElementStub(widgetId);
@@ -933,6 +961,8 @@ test("Analysis direct widget bindings start drag from the rendered card but igno
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
@@ -967,6 +997,8 @@ test("Analysis delegated DOM pointer flow changes local drag and resize draft wi
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget({ id: "widget-1", widget_type: "table", x: 0, y: 0, width: 3, height: 3 })];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
@@ -1000,6 +1032,8 @@ test("Analysis mouse fallback continues a pointer gesture without resetting it",
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget()];
   queried[".tl-analysis-grid"] = { getBoundingClientRect: () => ({ width: 1200 }) };
@@ -1017,6 +1051,8 @@ test("Analysis mobile ordering uses the local draft and stale layout revisions r
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.editMode = true;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget(), widget({ id: secondWidgetId, mobile_order: 2 })];
   installFetchMock(async (call) => {
@@ -1037,6 +1073,8 @@ test("Analysis mobile ordering uses the local draft and stale layout revisions r
 test("Analysis widget and series configuration uses revision-guarded endpoints", async () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.widgets = [widget(), widget({ id: secondWidgetId, mobile_order: 2 })];
   installFetchMock(async (call) => {
@@ -1079,7 +1117,7 @@ test("Analysis widget and series configuration uses revision-guarded endpoints",
     }
     if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "GET") return { status: 200, body: detail({ dashboard: { revision: 9 } }) };
     if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) return { status: 200, body: { dashboardRevision: 9, widgets: [] } };
-    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { dashboards: [dashboard()] } };
+    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { canCreateDashboard: true, dashboards: [dashboard()] } };
     return { status: 404, body: { error: "unexpected" } };
   });
 
@@ -1128,6 +1166,8 @@ test("Analysis widget and series configuration uses revision-guarded endpoints",
 test("Analysis metric picker filters catalog metadata and supports built-in binding", async () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.widgets = [widget()];
   installFetchMock(async (call) => {
     if (call.url.startsWith("/api/training-load/metrics/definitions")) return { status: 200, body: { rows: [{ id: metricId, key: "jump_height", label: "Jump height", short_label: "JH", unit: "cm", value_type: "number", scope_capabilities: ["session"] }], nextCursor: null } };
@@ -1138,7 +1178,7 @@ test("Analysis metric picker filters catalog metadata and supports built-in bind
     if (call.url === `/api/training-load/dashboards/${dashboardId}/widgets/${widgetId}/series/${seriesId}` && call.method === "DELETE") return { status: 200, body: detail({ dashboard: { revision: 5 } }) };
     if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "GET") return { status: 200, body: detail({ dashboard: { revision: 5 } }) };
     if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) return { status: 200, body: { dashboardRevision: 5, widgets: [] } };
-    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { dashboards: [dashboard()] } };
+    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { canCreateDashboard: true, dashboards: [dashboard()] } };
     return { status: 404, body: { error: "unexpected" } };
   });
 
@@ -1253,6 +1293,8 @@ test("clicking the From/To date field opens the native picker (app.js showPicker
 test("no raw Activity ID / Component ID text inputs remain in the Analysis toolbar", () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.widgets = [];
   const html = renderTrainingLoadAnalysisHtml();
   assert.doesNotMatch(html, /training-load-analysis-runtime-activity/);
@@ -1265,6 +1307,8 @@ test("no raw Activity ID / Component ID text inputs remain in the Analysis toolb
 test("no raw Activity ID / Component ID text inputs in the widget settings editor either - only a Clear override control once one is set", () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.widgets = [widget()];
   state.trainingLoad.analysis.editor = { open: true, widgetId, seriesId };
 
@@ -1282,6 +1326,8 @@ test("no raw Activity ID / Component ID text inputs in the widget settings edito
 test("once an activity is chosen, the toolbar shows its real name and date - never the UUID - and a Component select of its own components", () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.widgets = [];
   state.trainingLoad.analysis.runtimeFilter.activityId = activityId;
   state.trainingLoad.analysis.selectedActivity = { id: activityId, name: "Evening Recovery", date: "2026-09-09" };
@@ -1309,6 +1355,8 @@ test("Choose activity switches Training Load to the Calendar tab in picking mode
 test("Clear activity clears both the activity AND the component filter, then re-queries", async () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.runtimeFilter.activityId = activityId;
   state.trainingLoad.analysis.runtimeFilter.componentId = componentId;
@@ -1335,6 +1383,8 @@ test("Clear activity clears both the activity AND the component filter, then re-
 test("picking a component from the select re-queries with that component id", async () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.runtimeFilter.activityId = activityId;
   installFetchMock(async (call) => {
@@ -1353,6 +1403,8 @@ test("picking a component from the select re-queries with that component id", as
 test("Use template replaces Clone template and only shows while viewing a template dashboard", () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.widgets = [];
   let html = renderTrainingLoadAnalysisHtml();
   assert.doesNotMatch(html, />Use template</, "a non-template dashboard must never show the Use-template action");
@@ -1367,6 +1419,8 @@ test("Use template replaces Clone template and only shows while viewing a templa
 test("+ Add widget lives in the dashboard header and shows whenever the dashboard can be edited, even outside Edit mode", () => {
   resetState();
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.widgets = [];
   state.trainingLoad.analysis.editMode = false;
   let html = renderTrainingLoadAnalysisHtml();

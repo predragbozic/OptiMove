@@ -385,10 +385,10 @@ function stateLabel(athlete) {
   return athlete.state === "measured" && athlete.flags?.includes("corrected") ? `${label} · corrected` : label;
 }
 
-// Whether this viewer may decide (the read always comes with a basis; a
-// future read without one renders without actions — contract L7).
+// During overlap the bridge may omit the new capability. Its write checks
+// still apply, and an explicit refusal from the exposure server hides controls.
 export function viewerCanDecide(data) {
-  return Boolean(data?.viewer?.basis);
+  return Boolean(data?.viewer?.basis) && data.viewer.canDecideRoster !== false;
 }
 
 function technicalDetailsHtml(roster, athlete, outside = false) {
@@ -619,7 +619,7 @@ function rowPickerHtml(roster, athlete, reasons) {
   return `<div class="tl-roster-picker" role="group" aria-label="Choose a reason">${rowPickerBodyHtml(roster, athlete, reasons)}</div>`;
 }
 
-function rowActionsHtml(roster, athlete) {
+function rowActionsHtml(roster, athlete, canDecide) {
   const id = athlete.athleteId;
   const locked = rowLocked(roster, id);
   const dis = locked ? "disabled" : "";
@@ -629,11 +629,11 @@ function rowActionsHtml(roster, athlete) {
   const notice = roster.notices?.rows?.[id];
   const savedTag = notice?.tone === "saved" ? `<span class="tl-roster-tag is-saved">Saved</span>` : "";
   let buttons = "";
-  if (measuredAfterDecision(athlete)) {
+  if (canDecide && measuredAfterDecision(athlete)) {
     buttons = button("Use measured values", "training-load-roster-use-measured", attrs(), "primary-button tl-roster-button");
   } else if (athlete.state === "measured" || athlete.state === "measured_change_waiting" || athlete.state === "manual_values") {
     buttons = "";
-  } else if (athlete.decision && !isTwoStates(athlete)) {
+  } else if (canDecide && athlete.decision && !isTwoStates(athlete)) {
     if (roster.changing === id) {
       // The current state is not offered again; the other one, a new
       // reason for an absence, and the removal are (section 4).
@@ -647,17 +647,17 @@ function rowActionsHtml(roster, athlete) {
       ].join("");
     } else {
       buttons = button("Change", "training-load-roster-change", attrs(), "plain-button tl-roster-button tl-roster-change");
-      // 6b-C1: estimate the values of a Participated · no device data athlete (one decision at a time: a state first).
-      if (estimateOffered(roster.data, athlete) && roster.estimate?.athleteId !== id) {
-        const has = (athlete.values || []).some(isEstimateValue);
-        buttons += button(has ? "Change the estimate…" : "Estimate values…", "training-load-roster-estimate-open", `data-athlete-id="${escapeAttr(id)}" ${locked || estimateBusy(roster) ? "disabled" : ""}`);
-      }
+
     }
-  } else {
+  } else if (canDecide) {
     buttons = [
       button(DECISION_LABELS.participated_no_values, "training-load-roster-set", attrs("participated_no_values"), "primary-button tl-roster-button"),
       button(DECISION_LABELS.did_not_participate, "training-load-roster-absent", attrs()),
     ].join("");
+  }
+  if (!measuredAfterDecision(athlete) && athlete.decision && !isTwoStates(athlete) && roster.changing !== id && estimateOffered(roster.data, athlete) && roster.estimate?.athleteId !== id) {
+    const has = (athlete.values || []).some(isEstimateValue);
+    buttons += button(has ? "Change the estimate…" : "Estimate values…", "training-load-roster-estimate-open", `data-athlete-id="${escapeAttr(id)}" ${locked || estimateBusy(roster) ? "disabled" : ""}`);
   }
   // ST-4: enter values for an athlete without a device record, or correct a measured athlete's values. Not while the row is
   // being changed or another panel is open for it.
@@ -684,6 +684,7 @@ function athleteRowHtml(roster, athlete, columns, reasons, { outside = false, ca
   const view = outside ? { glyph: STATE_GLYPHS.measured, label: "Measured" } : { ...stateView(athlete), label: stateLabel(athlete) };
   if (isTwoStates(athlete)) view.label = "Two states";
   const notes = outside ? [] : rowNotes(athlete, reasons);
+  const canUseEditors = Boolean(roster.data?.viewer?.basis) && !roster.writeLock;
   const rowKey = `row:${athlete.athleteId}`;
   const selected = !outside && (roster.selected || []).includes(athlete.athleteId);
   const changed = !outside && (roster.changedRows || []).includes(athlete.athleteId);
@@ -711,18 +712,18 @@ function athleteRowHtml(roster, athlete, columns, reasons, { outside = false, ca
         }).join("")}
       </div>
       ${notes.length ? `<div class="tl-roster-row-notes">${notes.map((note) => `<p>${escapeHtml(note)}</p>`).join("")}</div>` : ""}
-      ${outside || !canDecide ? "" : rowActionsHtml(roster, athlete)}
+      ${outside || !canUseEditors ? "" : rowActionsHtml(roster, athlete, canDecide)}
       ${outside ? "" : noticeHtml(notice, { cls: "tl-roster-row-notice", roster })}
       ${outside ? "" : athleteTypeNoticeHtml(roster, athlete.athleteId)}
       ${outside || !canDecide ? "" : confirmHtml(roster, athlete)}
       ${outside || !canDecide ? "" : rowPickerHtml(roster, athlete, reasons)}
-      ${outside || !canDecide ? "" : renderEstimatePanelHtml(roster, athlete)}
-      ${outside || !canDecide ? "" : renderManualPanelHtml(roster, athlete)}
+      ${outside || !canUseEditors ? "" : renderEstimatePanelHtml(roster, athlete)}
+      ${outside || !canUseEditors ? "" : renderManualPanelHtml(roster, athlete)}
       <details class="tl-roster-row-more" ${disclosureAttrs(roster, rowKey)}>
         <summary>Details</summary>
         <div class="tl-roster-row-body">
           ${allValuesHtml(athlete)}
-          ${outside ? "" : athleteTypeControlHtml(roster, roster.data, athlete, canDecide, bulkLocked(roster))}
+          ${outside ? "" : athleteTypeControlHtml(roster, roster.data, athlete, canUseEditors, bulkLocked(roster))}
           ${technicalDetailsHtml(roster, athlete, outside)}
         </div>
       </details>
@@ -755,7 +756,7 @@ function rosterHeaderHtml(roster, data, activitySummary, canDecide) {
         <h4>${escapeHtml(activity.name || "Team session")}${sessionWhenLabel(activity) ? ` <span class="muted">· ${escapeHtml(sessionWhenLabel(activity))}</span>` : ""}</h4>
         <p>${escapeHtml(summary)}</p>
         <p class="muted">${canDecide ? "Each state is saved as soon as you choose it." : "Review the roster and the data recorded for this session."}</p>
-        ${sessionTypeHeaderHtml(roster, data, canDecide, bulkLocked(roster))}
+        ${sessionTypeHeaderHtml(roster, data, Boolean(data.viewer?.basis) && !roster.writeLock, bulkLocked(roster))}
       </div>
       ${status ? `<span class="tl-roster-status is-${completion}">${escapeHtml(status)}</span>` : ""}
     </header>

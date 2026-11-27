@@ -13,6 +13,7 @@ const { exerciseNodeLabel, sessionLabel } = await import("../builder-helpers.js"
 
 function baseContext(overrides = {}) {
   return {
+    canEditRpeSettings: true,
     clipboard: null,
     sessionQuickAdd: {},
     sessionLabel,
@@ -66,4 +67,11 @@ test("5. a session object missing trackingEnabled entirely (e.g. an older cached
   assert.match(html, /builder-session-tracking-toggle is-off/);
   const rpeButtonMatch = html.match(/<button[^>]*data-action="builder-toggle-session-rpe"[^>]*>/);
   assert.match(rpeButtonMatch[0], /disabled/);
+});
+
+test("a coach without the RPE capability sees status and can still edit the session name", () => {
+  const html = renderBuilderBlock(blockWithSession({ trackingEnabled: true, rpeEnabled: true }), "", "", true, baseContext({ canEditRpeSettings: false }));
+  assert.match(html, /Tracking on · RPE requested/);
+  assert.match(html, /name="name"/);
+  assert.doesNotMatch(html, /builder-session-(tracking|rpe)-toggle/);
 });

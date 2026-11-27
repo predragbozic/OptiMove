@@ -9,7 +9,7 @@ const R='/api/training-load/reference-tables';
 const post=(who,path,body)=>srv.api(who.cookie,path,{method:'POST',body});
 const person=async(label,setup=async()=>{})=>{const id=await F.user(label);await setup(id);return{id,cookie:await srv.cookieFor(id)}};
 before(async()=>{
- db=await createPagesDatabase({through:'202611291000',label:'references_http'});q=db.client;F=fixtures(q);
+ db=await createPagesDatabase({through:'202612071000',label:'references_http'});q=db.client;F=fixtures(q);
  process.env.DASHBOARD_REFERENCES_ENABLED='true';process.env.DASHBOARD_PAGES_ENABLED='true';srv=await startServer(db.url);
  A=await F.club('Ref Alpha');B=await F.club('Ref Beta');team=await F.team(A);
  admin=await person('refAdmin',id=>F.grantClub(id,A));coach=await person('refCoach',id=>F.grantTeam(id,team));

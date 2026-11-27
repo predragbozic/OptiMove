@@ -1,3 +1,4 @@
+import { applyActivityIdentityBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // An athlete reads her own recorded results (owner's decision 2026-11-16: all of them, read-only, nobody else's),
 // through the three real routes on a disposable database: GET /api/training-activity/:id, GET /api/training-activity
 // and GET /api/training-load/calendar in an athlete workspace. Her answer is a fixed list of fields; names and units
@@ -26,6 +27,7 @@ before(async () => {
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   assert.equal((await k.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyActivityIdentityBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   const serverModule = await import("../src/server.js");
   ({ createSession } = await import("../src/auth.js"));

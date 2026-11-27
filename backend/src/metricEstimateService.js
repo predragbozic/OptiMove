@@ -6,11 +6,11 @@
 // is the only writer of an estimate.
 //
 // Both routes are behind the server flag ESTIMATES_ENABLED (default off): off, both answer the router's identical 404.
-// Audience (rule 5): the activity's roster decider - resolveRosterTarget's basis in the active workspace (the read), and
-// training.lock_activity_decider's right under lock (the save). Everyone else gets the identical 404.
+// Audience: the existing active-workspace scope, with the current native View and Estimates Manage rights.
 //
 // The save is ONE transaction, in this lock order (contract rule 6, the import's order):
-//   1. training.lock_activity_decider(user, team, basis)      (42501 -> 403 not_a_team_coach)
+//   0. The shared club ceiling for native workspaces
+//   1. v54 training.lock_activity_decider, then the native permission actor and fixed permission checks
 //   2. the team's import lock, try-lock                        (taken by an import or check -> 409 try_again)
 //   3. the alias set's activity rows FOR KEY SHARE (lockAliasSet)
 //   3b. the (author, request key) advisory lock (v64's guard takes the same one)
@@ -18,12 +18,13 @@
 //   5. the event participant and its confirmed activity link (training.materialize_activity_group_from_metric_event)
 //   6. per variable: the estimate occasion, its one value, its provenance row (v63's guards; M3 supersedes an older
 //      estimate of the same variable)
-//   7. a bounded COMMIT; an unknown outcome is looked up by the request key on a new connection.
+//   7. a bounded COMMIT; a fresh checked transaction verifies an unknown outcome.
 // Nothing is written to a request table: the provenance rows carry the key and the hash (v64), and the answer is read
 // back from them, so a replay answers exactly what the save answered.
 import { pool } from "./db.js";
 import { tryLockTeamForImport } from "./gpexeImportWriter.js";
-import { RosterError, noRoster, resolveRosterTarget } from "./activityRoster.js";
+import { RosterError, resolveRosterTarget } from "./activityRoster.js";
+import { assertCanonicalEstimateOwner, assertEstimateRights, assertEstimateRoster, lockEstimateWriter } from "./metricEstimateAccess.js";
 import {
   COMMIT_ANSWER_TIMEOUT_MS, NOTHING_SAVED, OUTCOME_UNKNOWN, UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS,
   commitCertainlyRefused, lockAliasSet, requestHash, withinBound,
@@ -465,7 +466,9 @@ export async function getEstimateProposal(ctx, activityId, query) {
   try {
     await client.query("begin isolation level repeatable read read only");
     await client.query(`set local statement_timeout = '${READ_STATEMENT_TIMEOUT}'`);
-    const target = await resolveRosterTarget(client, ctx, activityId);
+    const target = await resolveRosterTarget(client, ctx, activityId, { deferApplicability: true });
+    await assertEstimateRights(client, ctx);
+    await assertEstimateRoster(client, target);
     const event = await importedEventOf(client, target.canonicalId);
     assertEventOfTeam(event, target.team);
     const ectx = await loadEstimateContext(client, { canonicalId: target.canonicalId, activity: target.activity, team: target.team, event, athleteId: input.athleteId });
@@ -583,7 +586,7 @@ async function readSaved(client, userId, requestKey) {
   };
 }
 
-async function findStoredResult(userId, requestKey, hash, ms) {
+async function findStoredResult(ctx, activityId, requestKey, hash, ms) {
   const deadline = Date.now() + ms;
   const left = () => Math.max(1, deadline - Date.now());
   const connecting = pool.connect();
@@ -604,10 +607,15 @@ async function findStoredResult(userId, requestKey, hash, ms) {
       await withinBound(fault, left());
     }
     const reading = (async () => {
-      await checker.query("begin read only");
-      await checker.query(`set local statement_timeout = ${Math.max(1, Math.floor(left()))}`);
-      const found = await readSaved(checker, userId, requestKey);
-      await checker.query("commit");
+      await checker.query("begin");
+      await checker.query(`set local statement_timeout = ${Math.floor(left())}`);
+      const target = await resolveRosterTarget(checker, ctx, activityId, { deferApplicability: true });
+      await lockEstimateWriter(checker, ctx, target);
+      if (!target.team) throw notFound();
+      const { canonicalId } = await lockAliasSet(checker, activityId);
+      await assertCanonicalEstimateOwner(checker, canonicalId, target);
+      const found = await readSaved(checker, ctx.userId, requestKey);
+      await checker.query("rollback");
       return found;
     })();
     reading.catch(() => {});
@@ -641,24 +649,18 @@ export async function saveEstimate(ctx, activityId, body) {
     await client.query("begin");
     await client.query(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
     await client.query(`set local statement_timeout = '${STATEMENT_TIMEOUT}'`);
-    const target = await resolveRosterTarget(client, ctx, activityId, { deferGate: true });
+    const target = await resolveRosterTarget(client, ctx, activityId, { deferApplicability: true });
+    if (testHooks.beforeRightsLock) await testHooks.beforeRightsLock({ client, target });
+    await lockEstimateWriter(client, ctx, target);
+    if (!target.team) await assertEstimateRoster(client, target);
     const teamId = String(target.team.id);
-    try {
-      await client.query(`select training.lock_activity_decider($1, $2, $3)`, [ctx.userId, teamId, target.basis]);
-    } catch (error) {
-      if (error?.code === "42501") throw new RosterError(403, "not_a_team_coach", "You may not decide on this team's roster.");
-      throw error;
-    }
     if (testHooks.beforeTeamLock) await testHooks.beforeTeamLock({ client, teamId });
     if (!(await tryLockTeamForImport(client, teamId))) {
       throw conflict("try_again", "An import or a search of this team is running. Try again in a moment.");
     }
     const aliasSet = await lockAliasSet(client, activityId);
     const canonicalId = aliasSet.canonicalId;
-    if (canonicalId !== target.canonicalId) {
-      const again = await resolveRosterTarget(client, ctx, canonicalId, { deferGate: true });
-      if (String(again.team.id) !== teamId || again.basis !== target.basis) throw notFound();
-    }
+    await assertCanonicalEstimateOwner(client, canonicalId, target);
     // The (author, key) lock v64's guard takes: two saves of one key on two teams' sessions (the team lock does not
     // serialise them) are decided one after the other, so the replay below sees the other's committed rows.
     await client.query(
@@ -676,8 +678,7 @@ export async function saveEstimate(ctx, activityId, body) {
     if (String(activityId) !== canonicalId) {
       throw conflict("activity_superseded", "This session was merged into another.", { canonicalActivityId: canonicalId });
     }
-    const gate = await client.query(`select coalesce(training.activity_has_roster($1), false) as has_roster`, [canonicalId]);
-    if (!gate.rows[0].has_roster) throw noRoster();
+    await assertEstimateRoster(client, target);
     const event = await importedEventOf(client, canonicalId);
     assertEventOfTeam(event, target.team);
     const ectx = await loadEstimateContext(client, { canonicalId, activity: target.activity, team: target.team, event, athleteId: input.athleteId });
@@ -763,6 +764,12 @@ export async function saveEstimate(ctx, activityId, body) {
     // The deferred checks (provenance, one value per occasion) answer here, before the COMMIT is sent.
     await client.query("set constraints all immediate");
     const saved = await readSaved(client, ctx.userId, input.requestKey);
+    if (target.basis !== "platform_admin") {
+      await client.query(
+        `update training_load.metric_estimate_m3b_use set first_checked_write_at = clock_timestamp()
+         where singleton and first_checked_write_at is null`,
+      );
+    }
     if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, canonicalId });
     commitSent = true;
     const committing = Promise.resolve().then(() => (testHooks.commit ? testHooks.commit(client) : client.query("commit")));
@@ -792,7 +799,7 @@ export async function saveEstimate(ctx, activityId, body) {
     client.release(true);
     let found = null;
     try {
-      found = await findStoredResult(ctx.userId, input.requestKey, hash, testHooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS);
+      found = await findStoredResult(ctx, activityId, input.requestKey, hash, testHooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS);
     } catch (checkError) {
       console.error(`[estimate] checking a save on activity ${activityId} after an unconfirmed COMMIT failed: ${checkError?.message}`);
     }

@@ -370,8 +370,8 @@ export function canViewDashboardRow(req, row, dataWorkspace) {
 // path (a raw SQL statement, a future caller) — this is a pre-check, not
 // a replacement.
 // ------------------------------------------------------------
-export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionId) {
-  const r = await query(
+export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionId, runQuery = query) {
+  const r = await runQuery(
     `select d.owner_scope, d.owner_user_id, d.owner_club_id, d.owner_team_id, d.state, ${calculatedDefinitionSql("d")} as calculated,
             (select to_jsonb(dv.*) -> 'calculation' ->> 'kind' from training_load.metric_definition_versions dv
               where dv.id = d.current_version_id) as calculation_kind
@@ -389,7 +389,7 @@ export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionI
   // v55 (O7): a team's dashboards may use the variables of the team's own club - an active team of an active club.
   // The same rule as the trigger, which stays the authoritative backstop; anything else answers like a foreign definition.
   if (def.owner_scope === "club" && dashboardRow.data_workspace_type === "team") {
-    const own = await query(
+    const own = await runQuery(
       `select 1 from public.teams t join public.clubs c on c.id = t.club_id
         where t.id = $1 and t.club_id = $2 and coalesce(t.is_active, true) and coalesce(c.is_active, true)`,
       [dashboardRow.data_workspace_scope_id, def.owner_club_id],
@@ -399,8 +399,8 @@ export async function isMetricVisibleToDashboard(dashboardRow, metricDefinitionI
   return { visible: false, def };
 }
 
-export async function isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId) {
-  const r = await query(
+export async function isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId, runQuery = query) {
+  const r = await runQuery(
     `select owner_scope, owner_user_id, owner_club_id, owner_team_id, state from training_load.metric_source_connections where id = $1`,
     [sourceConnectionId],
   );

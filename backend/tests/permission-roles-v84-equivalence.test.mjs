@@ -64,6 +64,21 @@ const scopesOf = () => ({
 
 test("31. old-vs-new: for every account of R1's matrix, every one of the 52 words and every scope, the new can(), the SQL twin and R1's can() agree - apart from the audited V and M seeds and roles.manage for a club's admin", async () => {
   const words = Object.keys(perms.PERMISSIONS);
+  const rosterDecide = "load.roster.decide";
+  const estimatesManage = "load.estimates.manage";
+  const activitiesManage = "load.activities.manage";
+  const dashboardsManage = "dashboards.manage";
+  const builderRpe = "programs.rpe_settings";
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(builderRpe));
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(builderRpe));
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(dashboardsManage));
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(dashboardsManage));
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(activitiesManage));
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(activitiesManage));
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(estimatesManage));
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(estimatesManage));
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(rosterDecide), "M-3a exposure checks the projected word");
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(rosterDecide), "M-3a exposure lets the role editor grant the word");
   let cells = 0, differences = 0;
   for (const [name, userId] of Object.entries(W.users)) {
     const ctx = await ctxOf(userId);
@@ -83,11 +98,23 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
             (word === "calendar.events.manage" && oracle.canR1(ctx, "org.view", scope))
             || (word === "calendar.settings.manage" && clubAdminHere)
           );
-          const stagedSchedule = word === "load.schedule.manage" && ctx.platformRoles.length === 0
+          const seededSchedule = word === "load.schedule.manage" && ctx.platformRoles.length === 0
+            && oracle.canR1(ctx, "org.view", scope);
+          // M-3a seeds both native basic roles. Exposure projects the checked word in native scopes.
+          const seededRoster = word === rosterDecide && ctx.platformRoles.length === 0
             && oracle.canR1(ctx, "org.view", scope);
           const rolesManage = word === "roles.manage" && clubAdminHere && ctx.platformRoles.length === 0;
-          const expected = rolesManage || seededView || seededCalendar || stagedSchedule ? true : r1;
-          if (expected !== r1 && !seededView && !seededCalendar && !stagedSchedule) differences++;
+          const seededEstimates = word === estimatesManage && ctx.platformRoles.length === 0
+            && oracle.canR1(ctx, "org.view", scope);
+          const seededActivities = word === activitiesManage && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
+          const seededDashboards = word === dashboardsManage && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
+          const seededBuilderRpe = word === builderRpe && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
+          const expected = rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities || seededDashboards || seededBuilderRpe ? true : r1;
+          if ((word === rosterDecide || word === estimatesManage || word === activitiesManage || word === dashboardsManage || word === builderRpe) && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
+            const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
+            assert.equal(projection.permissions.includes(word), expected, `${name}: exposed ${word} on ${scopeName}`);
+          }
+          if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster && !seededEstimates && !seededActivities && !seededDashboards && !seededBuilderRpe) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);
           assert.equal(sql, expected, `${name}: twin(${word}) on ${scopeName}`);
           cells++;

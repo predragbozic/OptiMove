@@ -137,3 +137,28 @@ backend/scripts/calendar-m1-v98-rehearsal.sh text eol=lf
 migrations_v2/202612011000_training_load_v99_schedule_manage_bridge.sql text eol=lf
 docs/runbooks/training-load-m2-v99-*.sql text eol=lf
 backend/scripts/training-load-m2-v99-rehearsal.sh text eol=lf
+
+migrations_v2/202612031000_training_load_v101_roster_manage_bridge.sql text eol=lf
+docs/runbooks/training-load-m3a-v101-*.sql text eol=lf
+backend/scripts/training-load-m3a-v101-rehearsal.sh text eol=lf
+
+migrations_v2/202612041000_training_load_v102_estimates_manage_bridge.sql text eol=lf
+docs/runbooks/training-load-m3b-v102-*.sql text eol=lf
+backend/scripts/training-load-m3b-v102-rehearsal.sh text eol=lf
+
+migrations_v2/202612051000_training_load_v103_activity_identity_manage_bridge.sql text eol=lf
+docs/runbooks/training-load-m3c-v103*.sql text eol=lf
+backend/scripts/training-load-m3c-v103-rehearsal.sh text eol=lf
+backend/scripts/training-load-m3c-v103-rehearsal.ps1 text eol=lf
+
+migrations_v2/202612071000_training_load_v105_dashboards_manage_bridge.sql text eol=lf
+docs/runbooks/dashboards-manage-v105-*.sql text eol=lf
+
+# Builder RPE provenance migration rehearsals use byte-exact SQL.
+docs/runbooks/builder-rpe-v106-*.sql text eol=lf
+migrations_v2/202612081000_training_load_v106_builder_rpe_provenance.sql text eol=lf
+backend/scripts/builder-rpe-v106-rehearsal.* text eol=lf
+
+migrations_v2/202612091000_training_load_v107_builder_rpe_copy_attestation.sql text eol=lf
+docs/runbooks/builder-rpe-v107-*.sql text eol=lf
+backend/scripts/builder-rpe-v107-rehearsal.* text eol=lf

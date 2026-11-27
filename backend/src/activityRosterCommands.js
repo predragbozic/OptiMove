@@ -7,7 +7,9 @@
 // log row per completion revision, the automatic complete -> needs_review).
 //
 // Every command is ONE transaction with this lock order (v26 header):
-//   1. training.lock_activity_decider(user, team, basis)   (42501 -> 403 not_a_team_coach)
+//   0. Staff writes in a native workspace: shared club ceiling
+//   1. training.lock_activity_decider(user, team, basis) (42501 -> 403 not_a_team_coach),
+//      then staff native permission rows and a fresh check of View and Roster Decide
 //   2. the team import lock (gpexeImportWriter.lockTeamForImport) — a
 //      decision and an import of the same team never interleave, so the
 //      "measured is never overridden" check cannot miss an uncommitted import
@@ -16,7 +18,7 @@
 //   5. Complete only: training.lock_roster_completions(canonical, exclusive)
 //   6. completion rows FOR UPDATE, ascending
 //   7. the requestKey across the alias set, then checks, then writes, the
-//      request row last.
+//      request row, then the staff bridge marker before COMMIT.
 // Before 1 the addressed activity, the team and the caller's basis in the
 // ACTIVE workspace are resolved exactly as the roster read does
 // (resolveRosterTarget): everything outside that path is the read's
@@ -33,6 +35,7 @@
 import crypto from "node:crypto";
 import pg from "pg";
 import { pool } from "./db.js";
+import { lockClubCeiling } from "./clubCeilingLock.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 import {
   RosterError, decisionView, loadRosterSnapshot, noRoster, publicAthlete, resolveRosterTarget,
@@ -252,10 +255,57 @@ function completionFromRow(row) {
   return row ? { status: row.status, revision: row.revision } : { status: "not_complete", revision: 0 };
 }
 
+
+async function lockRosterDecider(client, ctx, target, staffWrite) {
+  const teamId = String(target.team.id);
+  const scopeType = ctx.workspace?.type;
+  const scopeId = ctx.workspace?.scopeId;
+  const clubId = String(target.team.club_id);
+  const checkNative = staffWrite && (scopeType === "club" || scopeType === "team");
+  if (checkNative) await lockClubCeiling(client, [clubId], "shared");
+
+  try {
+    await client.query("select training.lock_activity_decider($1, $2, $3)", [ctx.userId, teamId, target.basis]);
+  } catch (error) {
+    if (error?.code === "42501") throw rosterWriterRefused();
+    throw error;
+  }
+  if (!checkNative) return;
+
+  // The existing lock holds the owner team and club, then the user and their native holding.
+  const owner = (await client.query("select club_id from public.teams where id = $1", [teamId])).rows[0];
+  if (String(owner?.club_id) !== clubId) throw notFound();
+  await client.query("select public.lock_permission_actor($1, $2, $3)", [ctx.userId, scopeType, scopeId]);
+  const rights = (await client.query(
+    `select public.permission_word_honoured('load.roster.decide')
+      and public.user_has_permission($1, 'load.view.team', $2, $3)
+      and public.user_has_permission($1, 'load.roster.decide', $2, $3) as allowed`,
+    [ctx.userId, scopeType, scopeId],
+  )).rows[0];
+  if (!rights?.allowed) throw rosterWriterRefused();
+}
+
+function rosterWriterRefused() {
+  return new RosterError(403, "not_a_team_coach", "You may not decide on this team's roster.");
+}
+
+async function assertSameRosterOwner(client, canonicalId, target, allowRemoved = false) {
+  const owner = (await client.query(
+    "select owner_scope, owner_team_id from training.activities where id = $1",
+    [canonicalId],
+  )).rows[0];
+  if (!owner && allowRemoved) return;
+  if (owner?.owner_scope !== "team" || String(owner.owner_team_id) !== String(target.team.id)) throw notFound();
+}
+
+function runStaffRosterCommand(ctx, activityId, validated, apply) {
+  return runRosterCommand(ctx, activityId, validated, apply, null, true);
+}
+
 // `origin` (J20-C, v61): an import's own states name the approval they belong to ({ origin: "import", approvalId }); every
 // other command is a plain roster request. The origin is part of the canonical body, so a key used on one route is
 // request_key_reused on the other.
-async function runRosterCommand(ctx, activityId, { requestKey, canonical }, apply, origin = null) {
+async function runRosterCommand(ctx, activityId, { requestKey, canonical }, apply, origin = null, staffWrite = false) {
   const hash = requestHash(canonical);
   const operation = canonical.operation;
   const client = await pool.connect();
@@ -280,12 +330,7 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     if (origin && String(origin.teamId) !== teamId) throw notFound();
     if (testHooks.beforeLocks) await testHooks.beforeLocks({ client, operation });
 
-    try {
-      await client.query(`select training.lock_activity_decider($1, $2, $3)`, [ctx.userId, teamId, target.basis]);
-    } catch (error) {
-      if (error?.code === "42501") throw new RosterError(403, "not_a_team_coach", "You may not decide on this team's roster.");
-      throw error;
-    }
+    await lockRosterDecider(client, ctx, target, staffWrite);
     await lockTeamForImport(client, teamId);
     if (operation === "complete") await client.query(`select training.lock_roster_team($1, true)`, [teamId]);
     const aliasSet = await lockAliasSet(client, activityId);
@@ -294,7 +339,11 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     // have moved the session to another canonical activity: the caller's
     // right is checked again on that one before anything about it (its id,
     // a stored answer) is answered. Another team is the identical 404.
-    if (canonicalId !== target.canonicalId) {
+    if (staffWrite) {
+      // Undo may remove a session while this command waits for the import mutex.
+      // For the same id keep the existing roster-not-applicable response in that case.
+      await assertSameRosterOwner(client, canonicalId, target, canonicalId === target.canonicalId);
+    } else if (canonicalId !== target.canonicalId) {
       const again = await resolveRosterTarget(client, ctx, canonicalId, { deferGate: true });
       if (String(again.team.id) !== teamId || again.basis !== target.basis) throw notFound();
     }
@@ -357,6 +406,12 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
         [requestId, canonicalId, requestKey, hash, operation, ctx.userId, JSON.stringify(result)],
       );
     }
+    if (staffWrite) {
+      await client.query(
+        `update training_load.activity_roster_m3a_use set first_checked_write_at = clock_timestamp()
+         where singleton and first_checked_write_at is null`,
+      );
+    }
     if (testHooks.beforeCommit) await testHooks.beforeCommit({ client, operation, canonicalId });
     commitSent = true;
     const committing = Promise.resolve().then(() => (testHooks.commit ? testHooks.commit(client) : client.query("commit")));
@@ -385,7 +440,8 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
     client.release(true);
     let found = null;
     try {
-      found = await findStoredResult(canonicalId, requestKey, hash, ctx.userId, testHooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS);
+      found = await findStoredResult(canonicalId, requestKey, hash, ctx.userId, testHooks.checkTimeoutMs ?? UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS,
+        staffWrite ? { ctx, activityId } : null);
     } catch (checkError) {
       console.error(`[roster] checking ${operation} on activity ${activityId} after an unconfirmed COMMIT failed: ${checkError?.message}`);
     }
@@ -399,11 +455,28 @@ async function runRosterCommand(ctx, activityId, { requestKey, canonical }, appl
   }
 }
 
+
+async function readCheckedRosterReceipt(client, { ctx, activityId }, requestKey) {
+  await client.query("begin");
+  await client.query(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
+  const target = await resolveRosterTarget(client, ctx, activityId, { deferGate: true });
+  await lockRosterDecider(client, ctx, target, true);
+  const aliasSet = await lockAliasSet(client, activityId);
+  await assertSameRosterOwner(client, aliasSet.canonicalId, target);
+  const row = (await client.query(
+    `select request_hash, performed_by_user_id, result from training.activity_roster_requests
+     where activity_id = any($1::uuid[]) and request_key = $2`,
+    [aliasSet.aliasIds, requestKey],
+  )).rows[0];
+  await client.query("rollback");
+  return row;
+}
+
 // Is the request committed? Bounded as a whole: getting a connection and the
 // query share one deadline; a connection that arrives after the deadline is
 // destroyed at once, and one whose query did not answer in time is
 // destroyed instead of returned.
-async function findStoredResult(canonicalId, requestKey, hash, userId, ms) {
+async function findStoredResult(canonicalId, requestKey, hash, userId, ms, staff = null) {
   if (!canonicalId) return null;
   const deadline = Date.now() + ms;
   const left = () => Math.max(1, deadline - Date.now());
@@ -423,6 +496,12 @@ async function findStoredResult(canonicalId, requestKey, hash, userId, ms) {
       const fault = Promise.resolve().then(() => testHooks.checkFault(checker));
       fault.catch(() => {});
       await withinBound(fault, left());
+    }
+    if (staff) {
+      const answer = readCheckedRosterReceipt(checker, staff, requestKey);
+      answer.catch(() => {});
+      const row = await withinBound(answer, left());
+      return row && row.request_hash === hash && String(row.performed_by_user_id) === String(userId) ? row.result : null;
     }
     const answer = checker.query({
       text: `select request_hash, performed_by_user_id, result from training.activity_roster_requests
@@ -544,12 +623,12 @@ async function applySingle(cmd, canonical, kind) {
 
 export function decideAthlete(ctx, activityId, athleteId, body) {
   const validated = validateDecide(body, athleteId);
-  return runRosterCommand(ctx, activityId, validated, (cmd, canonical) => applySingle(cmd, canonical, canonical.kind));
+  return runStaffRosterCommand(ctx, activityId, validated, (cmd, canonical) => applySingle(cmd, canonical, canonical.kind));
 }
 
 export function clearAthleteDecision(ctx, activityId, athleteId, body) {
   const validated = validateClear(body, athleteId);
-  return runRosterCommand(ctx, activityId, validated, (cmd, canonical) => applySingle(cmd, canonical, "cleared"));
+  return runStaffRosterCommand(ctx, activityId, validated, (cmd, canonical) => applySingle(cmd, canonical, "cleared"));
 }
 
 // One kind and reason for 1 to 60 athletes: every athlete is checked first, any refusal refuses the whole request.
@@ -579,7 +658,7 @@ async function applyBulk(cmd, canonical) {
 
 export function decideAthletesBulk(ctx, activityId, body) {
   const validated = validateBulk(body);
-  return runRosterCommand(ctx, activityId, validated, applyBulk);
+  return runStaffRosterCommand(ctx, activityId, validated, applyBulk);
 }
 
 // J20-C (v61): the attendance states an import writes, right after its approval and by the same user. The same bulk
@@ -616,7 +695,7 @@ export async function decideImportStates(ctx, teamId, approvalId, body) {
 // ---------------------------------------------------------------------------
 export function completeRoster(ctx, activityId, body) {
   const validated = validateComplete(body);
-  return runRosterCommand(ctx, activityId, validated, async (cmd, canonical) => {
+  return runStaffRosterCommand(ctx, activityId, validated, async (cmd, canonical) => {
     const stored = completionFromRow(cmd.snap.completionRow);
     if (canonical.expectedRevision !== stored.revision) throw conflict("revision_changed", "The roster changed since you opened it.", { revision: stored.revision });
     if (stored.status === "complete" && !cmd.snap.inputChanged) throw conflict("already_complete", "This session is already complete.", { revision: stored.revision });
@@ -659,7 +738,7 @@ export function completeRoster(ctx, activityId, body) {
 
 export function reopenRoster(ctx, activityId, body) {
   const validated = validateReopen(body);
-  return runRosterCommand(ctx, activityId, validated, async (cmd, canonical) => {
+  return runStaffRosterCommand(ctx, activityId, validated, async (cmd, canonical) => {
     const stored = completionFromRow(cmd.snap.completionRow);
     if (canonical.expectedRevision !== stored.revision) throw conflict("revision_changed", "The roster changed since you opened it.", { revision: stored.revision });
     if (stored.status === "not_complete") throw conflict("not_complete", "This session is not complete.", { revision: stored.revision });

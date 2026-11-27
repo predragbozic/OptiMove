@@ -63,6 +63,7 @@ export function DashboardPageStrip({ pages, selectedPageId, page, busy, canManag
         <summary aria-label="Page actions" title="Page actions" aria-disabled={busy} onClick={event => { event.preventDefault(); if(busy) return; const next=!menu.current.open; menu.current.open=next; onMenuOpenChange?.(next); }}>⋯</summary>
         <div className="tl-compact-page-menu-items" onClick={closeMenu}>
           <button type="button" data-action="training-load-pages-rename" disabled={busy}>Rename page</button>
+          <button type="button" data-action="training-load-pages-copy-page" disabled={busy}>Copy page</button>
           <button type="button" data-action="training-load-pages-defaults" disabled={busy}>Default period</button>
           {!page.is_home && <>
             <button type="button" data-action="training-load-pages-up" disabled={busy || page.position <= 1}>Move left</button>

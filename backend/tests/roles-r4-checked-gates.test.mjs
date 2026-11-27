@@ -1,6 +1,6 @@
 // Roles R4-1 (docs/ai/roles-r4-contract.md sections 4 and 13): two static proofs over backend/src.
 //   A. "Checked means every gate" (7b's static half): every word of ENFORCED_PERMISSIONS is checked by can() in each
-//      gate file it lists, and every can() call with a literal word in backend/src names a listed word from a listed
+//      gate file it lists (or the named transaction SQL check), and every can() call with a literal word in backend/src names a listed word from a listed
 //      file - except the two global-only words (accounts.manage, platform.admin), which R2's test 17-honoured pins to
 //      GLOBAL_SCOPE call sites. A word moves into the list only with every gate of its module (section 4).
 //   B. The standing rule of R4-1 (.claude/rules/backend-security.md, "Workspace types"): every branch on a workspace
@@ -25,9 +25,16 @@ function files(dir) {
 }
 const SOURCES = files(SRC).map((f) => ({ rel: path.relative(SRC, f).split(path.sep).join("/"), text: fs.readFileSync(f, "utf8") }));
 const CAN_CALL = /\bcan\(\s*[A-Za-z_.?]+\s*,\s*"([a-z_.]+)"/g;
+// The schedule writer rechecks the actual row under locks using the Postgres twin.
+const SQL_CHECKED = Object.freeze({
+  "activityRosterCommands.js": Object.freeze(["load.roster.decide"]),
+  "trainingActivityWriteAccess.js": Object.freeze(["load.activities.manage"]),
+  "metricEstimateAccess.js": Object.freeze(["load.estimates.manage"]),
+  "externalScheduleWriteAccess.js": Object.freeze(["load.schedule.manage"]),
+});
 const GLOBAL_ONLY = new Set(["accounts.manage", "platform.admin"]);
 
-test("A1. every listed gate file checks its word through can()", () => {
+test("A1. every listed gate file checks its word through can() or its named transaction SQL check", () => {
   for (const [word, gates] of Object.entries(ENFORCED_PERMISSIONS)) {
     assert.ok(Object.hasOwn(PERMISSIONS, word), word);
     assert.ok(gates.length > 0, `${word} lists its gates`);
@@ -35,7 +42,9 @@ test("A1. every listed gate file checks its word through can()", () => {
       const src = SOURCES.find((s) => s.rel === gate);
       assert.ok(src, `${word}: gate file ${gate} exists`);
       const words = [...src.text.matchAll(CAN_CALL)].map((m) => m[1]);
-      assert.ok(words.includes(word), `${word}: ${gate} calls can() with it`);
+      const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1, '([a-z_.]+)', \$2, \$3\)/g)].map((m) => m[1]);
+      words.push(...sqlWords.filter((checked) => SQL_CHECKED[gate]?.includes(checked)));
+      assert.ok(words.includes(word), `${word}: ${gate} checks the word`);
     }
   }
 });
@@ -87,7 +96,8 @@ export const WORKSPACE_BRANCH = new RegExp([
 // on an invitation's context and check the inviter's role rows; dashboardShellFilter.js and trainingLoadDashboardQuery.js
 // read the dashboard's data workspace (one of the five existing types, anything else refused).
 const REVIEWED = Object.freeze({
-  "activityRoster.js": 5,
+  "activityRoster.js": 6, // M-3a reads the active scope for roster write projection.
+  "activityRosterCommands.js": 2, // M-3a checks native View and Roster Decide at the request-bound scope under lock.
   // V-2: the view branch reads only the athletes gate's scope (req.moduleView, can(athletes.view)), never an offered
   // workspace; a view workspace without the gate's pass stays `and false` (+3).
   "athleteRosterScope.js": 7,
@@ -105,9 +115,10 @@ const REVIEWED = Object.freeze({
   "canonicalVariableAdminService.js": 2,
   "clubCeilingLock.js": 2,
   // P3 owner contract: both helpers explicitly close every workspace except club/team.
+  "dashboardManageAccess.js": 4, // native owner/workspace scopes, standalone team, and scoped edit capability
   "dashboardPages/service.js": 2, // Page scope consistency and athlete Training Load licence
   "dashboardReferences/access.js": 1,
-  "dashboardReferences/bindingRouter.js": 1, // athlete/cohort groupBy validation, not a workspace authority
+  "dashboardReferences/bindingRouter.js": 2, // grouping validation and rechecking the same active workspace before a protected write
   "dashboardReferences/query.js": 1,
   "dashboardReferences/router.js": 1, // team picker narrows to the active team
   "dashboardReferences/preview.js": 2, // athlete/cohort grouping only; authorization stays in the existing query route
@@ -118,6 +129,7 @@ const REVIEWED = Object.freeze({
   "inviteContext.js": 6,
   "joinLinkContext.js": 5,
   "mediaStorage.js": 2,
+  "metricEstimateAccess.js": 1, // M-3b classifies only the request-bound native workspace before locking.
   // V-0 (docs/ai/roles-v-steps-plan.md 3): canView maps a workspace to the scope can() is asked at (platform, private,
   // the old club / team rows, the view types) and viewReadScope to a view workspace's data context; never an offer, and
   // the entry gate lets a view workspace reach only a module's listed reads.
@@ -133,7 +145,8 @@ const REVIEWED = Object.freeze({
   // coach path asks athletes.view at (its own resolved club / team workspace).
   "positionService.js": 11,
   "routes/auth.js": 1,
-  "routes/builder.js": 4,
+  "programRpeSettingsAccess.js": 4, // revalidates an existing native workspace for an RPE write
+  "routes/builder.js": 10, // existing visibility plus scoped direct and indirect RPE effects
   "routes/calendar.js": 1,
   "routes/gpexeImport.js": 3,
   "routes/organization.js": 22, // R4-2: the view branch of GET /, its fail-closed filter and the members rule (+3)
@@ -155,7 +168,7 @@ const REVIEWED = Object.freeze({
   // V-6: dashboards.view at a coach workspace's own club or team (an old role row), and the club / team data workspace
   // that load.view.athlete is asked for (+2); a view workspace is read through viewReadScope (the gate's), never offered.
   "trainingLoadDashboardAccess.js": 10,
-  "trainingLoadDashboardCatalog.js": 3,
+  "trainingLoadDashboardCatalog.js": 4, // preserves the Legacy explicit club/team clone destination
   "trainingLoadDashboardQuery.js": 13,
   "trainingLoadDashboardWidgets.js": 1,
   "trainingLoadMetricsAccess.js": 16,

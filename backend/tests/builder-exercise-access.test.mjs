@@ -712,7 +712,8 @@ test("same-plan edit round trip retains revoked prescriptions but cannot increas
     where day.plan_id=$1`, [draftId])).rows[0];
   assert.equal((await request(`/api/builder/items/${item.id}`, { sets: "7" }, { method: "PATCH" })).status, 200);
   const extraId = (await client.query("insert into plans.plan_items (plan_session_id,plan_node_id,item_type,exercise_id,title) values ($1,$2,'exercise',$3,'Injected duplicate') returning id", [item.plan_session_id, item.plan_node_id, item.exercise_id])).rows[0].id;
-  assert.equal((await request(`/api/builder/plans/${draftId}/submit`)).status, 409);
+  const rejected = await request(`/api/builder/plans/${draftId}/submit`);
+  assert.equal(rejected.status, 409, JSON.stringify(rejected.body));
   await client.query("delete from plans.plan_items where id=$1", [extraId]);
   const applied = await request(`/api/builder/plans/${draftId}/submit`);
   assert.equal(applied.status, 200, JSON.stringify(applied.body));

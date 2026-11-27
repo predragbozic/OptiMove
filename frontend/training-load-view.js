@@ -1,3 +1,4 @@
+import { canManageExternalSchedules } from "./permission-nav.js";
 import { state } from "./state.js";
 import { addDaysIso, escapeAttr, escapeHtml, formatDate, formatDayMonth, formatWeekday, initialsFor, localDateIso, localDateIsoInTimeZone, localMonthIsoInTimeZone, monthMatrixIso } from "./utils.js";
 import { ICON_CHECK, ICON_X } from "./builder-structure.js";
@@ -773,16 +774,18 @@ function renderScheduleCollectionStatusHtml() {
 }
 
 export function renderTrainingLoadScheduleHtml() {
-  const overlayOpen = Boolean(state.trainingLoad.scheduleForm || state.trainingLoad.scheduleDetail);
+  const canManage = canManageExternalSchedules();
+  const formOpen = canManage && state.trainingLoad.scheduleForm;
+  const overlayOpen = Boolean(formOpen || state.trainingLoad.scheduleDetail);
   return `
     ${!overlayOpen ? renderPlannedRpeMasterToggleHtml() : ""}
     ${!overlayOpen ? renderScheduleCollectionStatusHtml() : ""}
-    <div class="training-load-schedule-toolbar">
+    ${canManage ? `<div class="training-load-schedule-toolbar">
       <button type="button" class="plain-button" data-action="training-load-open-schedule-form">New RPE session</button>
-    </div>
-    ${state.trainingLoad.scheduleForm ? renderExternalScheduleFormHtml() : ""}
-    ${!state.trainingLoad.scheduleForm && state.trainingLoad.scheduleDetail ? renderExternalScheduleDetailHtml() : ""}
-    ${!state.trainingLoad.scheduleForm && !state.trainingLoad.scheduleDetail ? renderScheduleWeeklyCalendarHtml() : ""}
+    </div>` : ""}
+    ${formOpen ? renderExternalScheduleFormHtml() : ""}
+    ${!formOpen && state.trainingLoad.scheduleDetail ? renderExternalScheduleDetailHtml() : ""}
+    ${!overlayOpen ? renderScheduleWeeklyCalendarHtml() : ""}
   `;
 }
 
@@ -1320,6 +1323,7 @@ export function renderExternalScheduleDetailHtml() {
   if (detail.error) return `<p class="builder-error">${escapeHtml(detail.error)}</p>`;
   const { schedule, targets } = detail;
   if (!schedule) return "";
+  const canManage = canManageExternalSchedules();
   return `
     <section class="panel training-load-schedule-detail">
       <button type="button" class="plain-button compact-button" data-action="training-load-close-external-schedule">&larr; Back to schedule</button>
@@ -1332,11 +1336,11 @@ export function renderExternalScheduleDetailHtml() {
       ${schedule.status === "cancelled"
         ? `
         <p class="muted">Cancelled - read-only. Historical results, if any, remain available in Athletes.</p>
-        <div class="tests-schedule-actions">
+        ${canManage ? `<div class="tests-schedule-actions">
           <button type="button" class="plain-button compact-button" data-action="training-load-external-schedule-again" data-schedule-id="${escapeAttr(schedule.id)}">Schedule again</button>
-        </div>
+        </div>` : ""}
       `
-        : `
+        : canManage ? `
         <div class="tests-schedule-actions">
           <button type="button" class="plain-button compact-button" data-action="training-load-open-edit-external-schedule" data-schedule-id="${escapeAttr(schedule.id)}">Edit</button>
           ${schedule.status === "active"
@@ -1345,7 +1349,7 @@ export function renderExternalScheduleDetailHtml() {
           <button type="button" class="plain-button compact-button" data-action="training-load-external-schedule-again" data-schedule-id="${escapeAttr(schedule.id)}">Schedule again</button>
           <button type="button" class="plain-button compact-button training-load-cancel-button" data-action="training-load-set-external-schedule-status" data-schedule-id="${escapeAttr(schedule.id)}" data-status="cancel">Cancel</button>
         </div>
-      `}
+      ` : ""}
     </section>
   `;
 }

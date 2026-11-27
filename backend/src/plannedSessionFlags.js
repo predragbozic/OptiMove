@@ -44,7 +44,7 @@ export async function writePublishedSessionFlags(client, { sessions, trainingLoa
   }
   if (!Array.isArray(sessions) || !sessions.length) return { draftSessionUpdated: false, draftSessionsUpdated: 0 };
   const draftSessionResult = await client.query(
-    `select ps2.id
+    `select ps2.id, ps2.training_load_enabled, ps2.rpe_enabled
      from plans.plans d
      join plans.plan_days pd2 on pd2.plan_id = d.id
      join plans.plan_sessions ps2 on ps2.plan_day_id = pd2.id
@@ -71,7 +71,11 @@ export async function writePublishedSessionFlags(client, { sessions, trainingLoa
   const draftSessionsKeptRpeOff = rpeEnabled === true
     ? written.rows.filter((row) => draftIds.has(String(row.id)) && row.rpe_enabled !== true).length
     : 0;
-  return { draftSessionUpdated: draftIds.size > 0, draftSessionsUpdated: draftIds.size, draftSessionsKeptRpeOff };
+  const draftFlagsChanged = draftSessionResult.rows.some(row => {
+    const tracking = trainingLoadEnabled ?? row.training_load_enabled;
+    return tracking !== row.training_load_enabled || ((rpeEnabled ?? row.rpe_enabled) && tracking) !== row.rpe_enabled;
+  });
+  return { draftSessionUpdated: draftIds.size > 0, draftSessionsUpdated: draftIds.size, draftSessionsKeptRpeOff, draftFlagsChanged };
 }
 
 // The submitted planned results of one logical session (the quick toggles'

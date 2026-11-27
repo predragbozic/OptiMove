@@ -76,8 +76,10 @@ test("1. a club's admin changes Team coach for the club; Imports shows closed an
       assert.match(await imports.textContent(), /Not in your club's licence/);
       assert.equal(await imports.locator("[data-role-word]").count(), 0, "folded");
     }
-    const box = firstChangeable(editor);
-    const word = await box.getAttribute("data-role-word");
+    const box = editor.getByRole("checkbox", { name: "Manage estimated values", exact: true });
+    assert.equal(await box.getAttribute("data-role-word"), "load.estimates.manage");
+    assert.equal(await box.isChecked(), true);
+    const word = "load.estimates.manage";
     await box.uncheck();
     const save = page.locator("[data-club-roles-save]");
     await save.locator("textarea").fill("Coaches do not need this here");

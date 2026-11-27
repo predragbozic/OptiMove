@@ -102,6 +102,15 @@ const writes = () => requests.filter((r) => r.method !== "GET");
 const gets = () => requests.filter((r) => r.method === "GET");
 const html = () => renderActivityRosterHtml(state.trainingLoad.calendar.roster);
 
+test("a native viewer without Roster Decide keeps roster data and independent measurement controls", async () => {
+  await openRoster({ get: () => ({ status: 200, body: payload({ viewer: { basis: "team_coach", canDecideRoster: false, manualValues: true } }) }) });
+  assert.match(html(), /Ivan Marković/);
+  assert.match(html(), /training-load-roster-manual-open/);
+  assert.doesNotMatch(html(), /data-action="training-load-roster-(?:set|absent|pick|complete|reopen)"/);
+  await act("training-load-roster-set", { athleteId: "ath-1", kind: "participated_no_values" });
+  assert.deepEqual(writes(), []);
+});
+
 test("Participated · no device data saves at once with expectedDecisionId null, shows Saved and rereads the roster", async () => {
   const roster = await openRoster({ onWrite: () => ({ status: 200, body: { decision: { id: "d-new" }, athlete: {}, completion: {} } }) });
   assert.match(html(), /Each state is saved as soon as you choose it/);

@@ -22,7 +22,7 @@ export async function openAs(browser, world, role, width = WIDTHS.desktop, { has
   page.on("pageerror", (e) => pageErrors.push(String(e)));
   await page.goto(world.baseUrl);
   // The app polls, so the network never goes idle: the signed-in shell is the ready signal.
-  await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Sign out", exact: true }).waitFor({ timeout: 20_000 });
   return { context, page, account, pageErrors };
 }
 

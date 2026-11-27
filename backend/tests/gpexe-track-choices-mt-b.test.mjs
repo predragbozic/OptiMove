@@ -1,6 +1,7 @@
 // MT-B: applying a track choice (plan section 12) - the mapper, the preview and its hash, the coach projection, the batch, the
 // roster, preview_changed, a stale choice after an import, the CLI path, and L1-L4 of MT-A's GO; disposable databases.
 import { after, before, test } from "node:test";
+import { applyEstimateBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 import assert from "node:assert/strict";
 import http from "node:http";
 import pg from "pg";
@@ -33,10 +34,11 @@ let choices;
 let preview;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mtb", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")) });
+  db = await createGpexeDisposableDb({ roleRead: true, baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mtb", migrations: GPEXE_TEST_MIGRATIONS.filter((m) => !m.includes("app_error_events")) });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyEstimateBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.ESTIMATES_ENABLED = "true";

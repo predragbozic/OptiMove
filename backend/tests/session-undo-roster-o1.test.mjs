@@ -1,3 +1,4 @@
+import { applyRosterBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // O1 of J20 (migration v60): the undo of an imported session also removes its roster work. What the import itself wrote
 // (requests with origin 'import') never blocks; later roster work is removed only with a confirmation of exactly the list
 // the administrator saw (its fingerprint, compared under the team's import lock). Through the real server on a disposable
@@ -348,6 +349,10 @@ test("0. (first: it needs a database without import-origin rows) the rollback re
 // ---------------------------------------------------------------------------
 // The undo with roster work
 // ---------------------------------------------------------------------------
+test("0a. apply the current staff bridge after the historical rollback check", async () => {
+  await applyRosterBridgeForCuratedFixture(db.url);
+});
+
 test("1. states the import wrote never block: the preview lists them apart, the undo removes them without a confirmation, and the log records them", async () => {
   const team = await setupTeam();
   const s = await importSession(team, 9601);
