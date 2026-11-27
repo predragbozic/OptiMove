@@ -159,21 +159,44 @@ test("unchanged retained sessions save without Manage; a real retained flag delt
   assert.equal((await flags(pending.rows[0].id)).rpe_enabled, true, "refusal preserves the open edit draft");
 });
 
-test("ordinary single Submit with inherited flags still publishes without Manage", async () => {
-  const fresh = await fixturePlan(athleteId, "draft", "2026-12-07");
-  const node = await http.api(coach.cookie, draftSession(fresh.sessionId) + "/nodes", { method: "POST", body: { nodeType: "section", name: "Warm-up" } });
-  assert.equal(node.status, 201, node.text);
-  const submitted = await http.api(coach.cookie, "/api/builder/plans/" + fresh.id + "/submit", { method: "POST", body: {} });
-  assert.equal(submitted.status, 200, submitted.text);
-  assert.equal((await db.query("select status from plans.plans where id=$1", [fresh.id])).rows[0].status, "active");
-});
+test("ordinary Submit publishes tracked inheritance without Manage and holds an unproven older draft", async () => {
+  const legacy = await fixturePlan(athleteId, "draft", "2026-12-07");
+  const node = async (id) => http.api(coach.cookie, draftSession(id) + "/nodes", {
+    method: "POST", body: { nodeType: "section", name: "Warm-up" },
+  });
+  const submit = id => http.api(coach.cookie, "/api/builder/plans/" + id + "/submit", { method: "POST", body: {} });
+  const status = async id => (await db.query("select status from plans.plans where id=$1", [id])).rows[0].status;
+  assert.equal((await node(legacy.sessionId)).status, 201);
+  const unproven = await submit(legacy.id);
+  assert.equal(unproven.status, 409, unproven.text);
+  assert.equal(unproven.body.code, "rpe_recovery_required");
+  assert.equal(await status(legacy.id), "draft");
+  assert.equal((await flags(legacy.sessionId)).rpe_enabled, true);
 
+  const origin = await fixturePlan(athleteId, "active", "2027-08-02");
+  const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);
+  const duplicate = await http.api(coach.cookie, "/api/builder/plans/" + origin.id + "/duplicate", {
+    method: "POST", body: { athleteIds: [athlete.athlete_id], weekStart: "2027-08-09" },
+  });
+  assert.equal(duplicate.status, 201, duplicate.text);
+  const draft = duplicate.body.plan.id;
+  const { rows: [session] } = await db.query(
+    "select s.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where d.plan_id=$1", [draft],
+  );
+  assert.equal((await flags(session.id)).rpe_enabled, true);
+  assert.equal((await node(session.id)).status, 201);
+  const submitted = await submit(draft);
+  assert.equal(submitted.status, 200, submitted.text);
+  assert.equal(await status(draft), "active");
+});
 test("exact weekly batch default differences require rights on every target before sync or Submit", async () => {
   const source = await fixturePlan(athleteId, "draft", "2026-12-14");
   const eligible = await fixturePlan(athleteId, "draft", "2026-12-21");
   const foreign = await fixturePlan(athleteId, "draft", "2026-12-28", B);
   const batch = randomUUID();
   const ids = [source.id, eligible.id, foreign.id];
+  await db.query("update plans.plan_sessions set training_load_enabled=false,rpe_enabled=false where id=any($1::uuid[])",
+    [[source.sessionId, eligible.sessionId, foreign.sessionId]]);
   await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [batch, ids]);
   const sync = (path, body) => http.api(coach.cookie, "/api/builder/plans/" + source.id + path, { method: "POST", body });
   const equal = await sync("/sync-batch", {});
