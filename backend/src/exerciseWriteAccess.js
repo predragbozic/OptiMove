@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { loadAuthorizationContext } from "./authz.js";
+import { computeCapabilities, loadAuthorizationContext } from "./authz.js";
 import { clubOfScope, lockClubCeiling } from "./clubCeilingLock.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
 
@@ -45,6 +45,7 @@ export async function lockExerciseWriter(client, req, expected, word, dependentW
   let authz, resolution;
   try {
     authz = await loadAuthorizationContext(user, runQuery);
+    authz.capabilities = computeCapabilities(authz);
     resolution = await resolveActiveWorkspaceReadOnly(userId, authz, runQuery);
   } finally {
     await pending;
