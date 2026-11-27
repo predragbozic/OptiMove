@@ -384,3 +384,21 @@ test('conflicted ratio with zero included occasions stays visible in saved and p
   const preview=renderSimpleEditorHtml({open:true,step:3,athletes:[],selectedMetric:{label:'Intensity'},preview:{status:'valid',normalizedWidget:a.widgets[0],widgetResult:a.queryResult.widgets[0]}});
   assert.match(preview,/Conflict/);assert.doesNotMatch(preview,/No sessions with a value/);
 });
+
+test("server Dashboard capabilities hide writes and keep reading, export and active preference", () => {
+  const analysis = setup("table", [row(12)]);
+  analysis.dashboardCanManage = false;
+  analysis.canCreateDashboard = false;
+  analysis.menu = "dashboard";
+  const document = rendered();
+  for (const action of ["add-widget", "rename-dashboard", "toggle-edit", "archive", "delete-dashboard"]) {
+    assert.equal(document.querySelector(`[data-action="training-load-analysis-${action}"]`), null, action);
+  }
+  assert.match(document.querySelector(".tl-analysis-widget").textContent, /12/);
+  assert.ok(document.querySelector('[data-action="training-load-analysis-print"]'));
+  assert.ok(document.querySelector('[data-action="training-load-analysis-set-active"]'));
+  analysis.dashboard.is_template = true;
+  assert.equal(rendered().querySelector('[data-action="training-load-analysis-clone-template"]'), null);
+  analysis.canCreateDashboard = true;
+  assert.ok(rendered().querySelector('[data-action="training-load-analysis-clone-template"]'));
+});

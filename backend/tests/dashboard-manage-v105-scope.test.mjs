@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import pg from "pg";
-import { buildDatabase, fixtures, startServer } from "./support/permission-roles-world.mjs";
+import { buildDatabase, fixtures, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 
 const v105 = "202612071000_training_load_v105_dashboards_manage_bridge.sql";
 const path = "/api/training-load/dashboards";
@@ -93,6 +93,44 @@ test("real Dashboard routes preserve standalone-team authorization and private o
     } finally {
       await sql.query(original);
     }
+
+    const scopedTeam = await f.team(club, "Dashboard scope team");
+    const scopedCoach = await f.user("Dashboard Manage assignment coach");
+    await f.grantTeam(scopedCoach, scopedTeam);
+    await selectWorkspace(sql, scopedCoach, "team", scopedTeam);
+    const viewer = await server.cookieFor(scopedCoach);
+    const target = await server.api(viewer, path, { method: "POST", body: { name: "Dashboard reversible role", ownerScope: "team", ownerTeamId: scopedTeam } });
+    assert.equal(target.status, 201, target.text);
+    const targetPath = `${path}/${target.body.dashboard.id}`;
+    const catalog = await server.api(platformCookie, `/api/organization/roles/catalog?clubId=${club}`);
+    const permission = catalog.body.permissions.find(item => item.word === "dashboards.manage");
+    assert.deepEqual([permission?.storable, permission?.honoured, permission?.checked], [true, true, true]);
+    const originalWords = (await server.api(viewer, "/api/auth/me")).body.user.permissions;
+    assert.ok(originalWords.includes("dashboards.manage"));
+    assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
+    assert.equal((await server.api(viewer, path)).body.canCreateDashboard, true);
+
+    const change = (expectedRevision, effect) => server.api(platformCookie, `/api/organization/roles/${ROLE_IDS.team_coach}/clubs/${club}/version`, {
+      method: "POST", body: { requestKey: randomUUID(), expectedRevision, reason: "Adjust Dashboard Manage", ...effect },
+    });
+    const removed = await change(null, { remove: ["dashboards.manage"] });
+    assert.equal(removed.status, 200, removed.text);
+    assert.deepEqual((await server.api(viewer, "/api/auth/me")).body.user.permissions, originalWords.filter(word => word !== "dashboards.manage"));
+    const detail = await server.api(viewer, targetPath);
+    assert.equal(detail.status, 200, detail.text);
+    assert.equal(detail.body.canManage, false);
+    assert.equal((await server.api(viewer, `${targetPath}/pages`)).body.canManage, false);
+    assert.equal((await server.api(viewer, path)).body.canCreateDashboard, false);
+    const offeredName = { expectedRevision: target.body.dashboard.revision, name: "Name granted after restore" };
+    assert.equal((await server.api(viewer, targetPath, { method: "PATCH", body: offeredName })).status, 404);
+    assert.equal((await server.api(viewer, `${path}/active`, { method: "POST", body: { dashboardId: target.body.dashboard.id } })).status, 200);
+    assert.equal((await server.api(viewer, `${path}/active`, { method: "DELETE" })).status, 200);
+    const restored = await change(removed.body.role.version.revision, { add: ["dashboards.manage"] });
+    assert.equal(restored.status, 200, restored.text);
+    assert.deepEqual((await server.api(viewer, "/api/auth/me")).body.user.permissions, originalWords);
+    assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
+    assert.equal((await server.api(viewer, targetPath, { method: "PATCH", body: offeredName })).status, 200);
+
   } finally {
     await server?.stop();
     if (priorFlag === undefined) delete process.env.DASHBOARD_PAGES_ENABLED;

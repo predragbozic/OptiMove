@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isPlatformAdministrator, loadAuthorizationContext } from "./authz.js";
 import { lockClubCeiling } from "./clubCeilingLock.js";
+import { can, PermissionsUnavailableError } from "./permissions.js";
 
 function nativeScope(type, id) {
   return (type === "club" || type === "team") && id ? { type, id: String(id).toLowerCase() } : null;
@@ -86,4 +87,15 @@ export async function markDashboardManageWrite(query, actor, scopes) {
   await query(
     "update training_load.dashboards_manage_v105_use set first_checked_write_at = clock_timestamp() where singleton and first_checked_write_at is null",
   );
+}
+
+export function dashboardManageOffered(actor, workspace, dashboard = null) {
+  if (!workspace?.type || workspace.view) return false;
+  const scopes = [dashboardWorkspaceWriteScope(workspace), dashboardOwnerWriteScope(dashboard)].filter(Boolean);
+  try {
+    return scopes.every(scope => can(actor.authz, "dashboards.view", scope) && can(actor.authz, "dashboards.manage", scope));
+  } catch (error) {
+    if (error instanceof PermissionsUnavailableError) return false;
+    throw error;
+  }
 }

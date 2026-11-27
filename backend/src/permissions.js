@@ -235,7 +235,8 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "tests.results.view": Object.freeze(["testsAccess.js"]),
   // Roles V-6 (docs/ai/roles-v-steps-plan.md sections 2.7 and 13): dashboards (both routers and the pages service read
   // their data workspace there).
-  "dashboards.view": Object.freeze(["trainingLoadDashboardAccess.js"]),
+  "dashboards.view": Object.freeze(["trainingLoadDashboardAccess.js", "dashboardManageAccess.js"]),
+  "dashboards.manage": Object.freeze(["dashboardManageAccess.js"]),
   // Roles V-7 (the plan's "V-7 design"): Programs and Exercises. access.js holds the programs gates: programViewScopes
   // (the arrays of a plan's readers through its athlete) and canViewProgramsAt (coachModuleGate on the Builder, the
   // Program Library and the plan reads); routes/exercises.js holds the exercise library's coach gate.

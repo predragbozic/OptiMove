@@ -52,3 +52,20 @@ The test rehearses identical catalogue and audited seed on application,
 rollback and reapplication, then runs a prior Page-copy receipt through the
 bridge and verifies a real committed native copy makes rollback refuse.
 Exact previous-build evidence belongs in the frozen release packet.
+
+## Exposure after retirement
+
+The exposure release registers the existing **Manage dashboards** word in
+Settings → Roles → Dashboards → Manage. Dashboard list, detail and Pages
+return the server's scoped capability for the current viewer. Removing
+Manage hides creating, copying and editing controls wherever those writes
+use the native scope. View, queries, export and eligible personal active
+selection keep their current rules. Simple remains on its platform pilot
+and keeps its separate feature settings. The write and receipt guards in
+the bridge remain authoritative during and after exposure.
+
+Before exposing the word, repeat role grant/revoke against the exact live
+bridge beside the exposure candidate. Confirm that native reads and
+authorized personal preferences continue, both builds refuse a new write
+after removal, and restoration resumes writing. No additional migration
+or runtime flag change belongs to exposure.

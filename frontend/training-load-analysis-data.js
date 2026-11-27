@@ -201,6 +201,7 @@ function applyDashboardDetail(detail) {
     analysis.editMode = false;
   }
   analysis.dashboard = detail.dashboard;
+  analysis.dashboardCanManage = detail.canManage;
   analysis.simplePreview = detail.simplePreview === true;
   analysis.chartShapes = detail.chartShapes === true;
   analysis.pagesAvailable = detail.pagesAvailable === true;
@@ -252,6 +253,7 @@ export async function loadDashboards(onPainted) {
     applyData: (data) => {
       if (generation !== dashboardsGeneration) return;
       analysis.dashboards = data.dashboards || [];
+      analysis.canCreateDashboard = data.canCreateDashboard;
       analysis.listLoading = false;
       onPainted?.();
     },

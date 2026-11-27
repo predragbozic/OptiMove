@@ -115,7 +115,7 @@ const REVIEWED = Object.freeze({
   "canonicalVariableAdminService.js": 2,
   "clubCeilingLock.js": 2,
   // P3 owner contract: both helpers explicitly close every workspace except club/team.
-  "dashboardManageAccess.js": 3, // native owner/workspace scopes and standalone team without a club ceiling
+  "dashboardManageAccess.js": 4, // native owner/workspace scopes, standalone team, and scoped edit capability
   "dashboardPages/service.js": 2, // Page scope consistency and athlete Training Load licence
   "dashboardReferences/access.js": 1,
   "dashboardReferences/bindingRouter.js": 2, // grouping validation and rechecking the same active workspace before a protected write

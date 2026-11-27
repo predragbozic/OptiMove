@@ -23,7 +23,7 @@ import { resolveTemplateSeriesBatchForWorkspace } from "./trainingLoadDashboardW
 import { isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
 import { calculatedDefinitionSql } from "./calculatedValues.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
-import { dashboardWorkspaceWriteScope, dashboardOwnerWriteScope, lockDashboardManageCeilings, dashboardManageRightsStillHold, lockDashboardActor, loadDashboardWriteActor, markDashboardManageWrite } from "./dashboardManageAccess.js";
+import { dashboardManageOffered, dashboardWorkspaceWriteScope, dashboardOwnerWriteScope, lockDashboardManageCeilings, dashboardManageRightsStillHold, lockDashboardActor, loadDashboardWriteActor, markDashboardManageWrite } from "./dashboardManageAccess.js";
 
 function httpError(status, message, code) {
   const e = new Error(message);
@@ -120,7 +120,7 @@ export async function listDashboards(req, dataWorkspace, { includeTemplates = tr
      order by d.updated_at desc`,
     params,
   );
-  return { dashboards: r.rows };
+  return { dashboards: r.rows, canCreateDashboard: dashboardManageOffered(req, dataWorkspace) };
 }
 
 export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
@@ -149,6 +149,7 @@ export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
   }
   return {
     dashboard,
+    canManage: canManageDashboardRow(req, dashboard) && dashboardManageOffered(req, dataWorkspace, dashboard),
     widgets: widgets.rows.map((w) => ({ ...w, series: seriesByWidget.get(w.id) || [] })),
   };
 }
