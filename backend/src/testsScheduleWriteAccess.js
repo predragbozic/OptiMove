@@ -54,27 +54,46 @@ export async function lockTestsScheduleCreateAccess(client, req, owner) {
 
 // Existing schedules may be administered through a holding outside the current
 // native workspace. Check the destination and preserve that holding's scope.
-export async function lockTestsScheduleMutation(client, req, scheduleId) {
+const scheduleLocks = Object.freeze({
+  update: "for update",
+  link: "for no key update",
+  reminder: "for share",
+});
+
+async function lockExistingSchedule(client, req, scheduleId, mode) {
   const { rows: [hint] } = await client.query(
     "select owner_scope, owner_user_id, owner_club_id, owner_team_id from tests.test_schedules where id=$1",
     [scheduleId],
   );
-  if (!hint || !canManageSchedule(req, hint)) return null;
+  if (!hint) return { status: 404 };
+  if (!canManageSchedule(req, hint)) return { status: 403 };
 
   let writeRequest = req;
   if (hint.owner_scope !== "user" && !isPlatformAdministrator(req.authz)) {
     const scopeId = hint.owner_scope === "club" ? hint.owner_club_id : hint.owner_team_id;
-    if (!await lockScheduleDestination(client, req, hint.owner_scope, scopeId)) return null;
+    if (!await lockScheduleDestination(client, req, hint.owner_scope, scopeId)) return { status: 403 };
     const authz = await loadAuthorizationContext(req.user, client.query.bind(client));
     writeRequest = { user: req.user, authz };
   }
 
   const { rows: [schedule] } = await client.query(
-    "select * from tests.test_schedules where id=$1 for update",
+    `select s.*, v.name as test_name
+     from tests.test_schedules s join tests.test_versions v on v.id=s.test_version_id
+     where s.id=$1 ${scheduleLocks[mode]} of s`,
     [scheduleId],
   );
-  if (!schedule || schedule.owner_scope !== hint.owner_scope || schedule.owner_user_id !== hint.owner_user_id
+  if (!schedule) return { status: 404 };
+  if (schedule.owner_scope !== hint.owner_scope || schedule.owner_user_id !== hint.owner_user_id
       || schedule.owner_club_id !== hint.owner_club_id || schedule.owner_team_id !== hint.owner_team_id
-      || !canManageSchedule(writeRequest, schedule)) return null;
+      || !canManageSchedule(writeRequest, schedule)) return { status: 403 };
   return { schedule, writeRequest };
+}
+
+export async function lockTestsScheduleMutation(client, req, scheduleId, { link = false } = {}) {
+  const result = await lockExistingSchedule(client, req, scheduleId, link ? "link" : "update");
+  return result.schedule ? result : null;
+}
+
+export function lockTestsScheduleReminder(client, req, scheduleId) {
+  return lockExistingSchedule(client, req, scheduleId, "reminder");
 }

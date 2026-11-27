@@ -20,46 +20,7 @@ import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 import { asActor } from "./support/permission-roles-world.mjs";
-
-
-// Tests-only seed for the future bridge. The marker exists only in this fixture
-// and the word remains unavailable through the production Settings API.
-async function stageScheduleManageForTest(client) {
-  const { rows: [previous] } = await client.query(
-    "select prosrc from pg_proc where oid='public.permission_word_honoured(text)'::regprocedure",
-  );
-  await client.query("begin");
-  try {
-    await client.query(`
-      create or replace function public.permission_word_honoured(p_word text)
-      returns boolean language sql immutable set search_path=pg_catalog,public as $fixture$
-      ${previous.prosrc.replace("select p_word in (", "select p_word in ('tests.schedule.manage', ")}
-      $fixture$
-    `);
-    await client.query(`
-      update public.permission_roles set revision=revision+1,updated_at=now()
-      where basic_key in ('club_admin','team_coach')
-    `);
-    await client.query(`
-      insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_added)
-      select id,revision,'migration','test-tests-schedule-manage',array['tests.schedule.manage']
-      from public.permission_roles where basic_key in ('club_admin','team_coach')
-    `);
-    await client.query(`
-      insert into public.permission_role_items(role_id,permission_word)
-      select id,'tests.schedule.manage' from public.permission_roles where basic_key in ('club_admin','team_coach')
-    `);
-    await client.query(
-      "insert into public.schema_migrations(migration_name,checksum,runner_version) values ('test-tests-schedule-manage',$1,'fixture')",
-      ["0".repeat(64)],
-    );
-    await client.query("commit");
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  }
-}
-
+import { stageScheduleManageForTest } from "./support/tests-schedule-manage-fixture.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.resolve(__dirname, "../../migrations_v2/202608220900_tests_v42_schema.sql");
@@ -1441,6 +1402,8 @@ test("Manage: edits and deletes honor the destination holding, including delegat
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.body.schedule.ownerScope, "team");
   const path = `/api/tests/schedules/${created.body.schedule.id}`;
+  const issued = await api(`${path}/link`, { method: "POST", cookie: coach });
+  assert.equal(issued.status, 201, JSON.stringify(issued.body));
   const missing = "/api/tests/schedules/00000000-0000-0000-0000-000000000000";
   const patch = (cookie, status = "paused", target = path) => api(target, { method: "PATCH", cookie, body: { status } });
   const remove = (cookie, target = path) => api(target, { method: "DELETE", cookie });
@@ -1519,7 +1482,28 @@ test("Manage: edits and deletes honor the destination holding, including delegat
       [version.id, platformId, items.words],
     );
   });
-  assert.equal((await api(path, { cookie: coach })).status, 200, "View stays available when Manage is removed");
+  const deniedIssue = await api(`${path}/link`, { method: "POST", cookie: coach });
+  const absentIssue = await api(`${missing}/link`, { method: "POST", cookie: coach });
+  assert.deepEqual(deniedIssue, absentIssue);
+  const revoke = (cookie, id) => api(`/api/tests/links/${id}/revoke`, { method: "POST", cookie });
+  assert.deepEqual(await revoke(coach, issued.body.link.id), await revoke(coach, crypto.randomUUID()));
+  const detail = await api(path, { cookie: coach });
+  assert.equal(detail.status, 200, "View stays available when Manage is removed");
+  assert.deepEqual(detail.body.link, issued.body.link, "native View retains the already-issued token");
+  const rotated = await api(`${path}/link`, { method: "POST", cookie: destination.coachCookie });
+  assert.equal(rotated.status, 201, JSON.stringify(rotated.body));
+  assert.notEqual(rotated.body.link.publicToken, issued.body.link.publicToken);
+  const { rows: links } = await query(
+    "select id,status,auth_mode from tests.test_access_links where schedule_id=$1 order by status",
+    [created.body.schedule.id],
+  );
+  assert.deepEqual(links, [
+    { id: rotated.body.link.id, status: "active", auth_mode: "authenticated_group" },
+    { id: issued.body.link.id, status: "revoked", auth_mode: "authenticated_group" },
+  ]);
+  assert.deepEqual(await revoke(destination.coachCookie, rotated.body.link.id), { status: 200, body: { ok: true } });
+  assert.deepEqual(await revoke(destination.coachCookie, rotated.body.link.id), { status: 200, body: { ok: true } });
+  assert.equal((await api(path, { cookie: coach })).body.link, null);
   assert.deepEqual(await patch(coach), await patch(coach, "paused", missing));
   assert.deepEqual(await remove(coach), await remove(coach, missing));
   assert.deepEqual((await unchanged()).rows, before);

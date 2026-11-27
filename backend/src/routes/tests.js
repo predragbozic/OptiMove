@@ -10,7 +10,7 @@ import {
   viewScopeReadsSchedule,
 } from "../testsAccess.js";
 import { canView, viewEntryGate } from "../moduleView.js";
-import { lockTestsScheduleCreateAccess, lockTestsScheduleMutation } from "../testsScheduleWriteAccess.js";
+import { lockTestsScheduleCreateAccess, lockTestsScheduleMutation, lockTestsScheduleReminder } from "../testsScheduleWriteAccess.js";
 import { ensureCurrentOccurrence, assignmentIsOpen, loadAthleteTodayTestAssignments } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -1305,6 +1305,7 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
         [schedule.id],
       ),
       // Roles V-4: a view workspace's read never reads the link (its token is never in a view answer).
+      // Native detail retains an issued token under View. Narrowing that read is a separate product decision.
       req.moduleView ? Promise.resolve({ rows: [] }) : query(`select id, public_token, status, created_at from tests.test_access_links where schedule_id = $1 and link_kind = 'schedule' and status = 'active'`, [schedule.id]),
       loadScheduleActivity(query, schedule.id),
       loadNotificationRules(query, schedule.id),
@@ -2007,12 +2008,25 @@ router.post("/schedules/:scheduleId/link", async (req, res, next) => {
   const client = await pool.connect();
   try {
     if (!requireCoachWorkspace(req, res)) return;
-    const schedule = await loadManageableSchedule(req, req.params.scheduleId);
-    if (!schedule) {
+    await client.query("begin");
+    const mutation = await lockTestsScheduleMutation(client, req, req.params.scheduleId, { link: true });
+    if (!mutation) {
+      await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
-    await client.query("begin");
-    await client.query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where schedule_id = $1 and link_kind = 'schedule' and status = 'active'`, [schedule.id, req.user.id]);
+    const { schedule } = mutation;
+    // Preserve schedule-first ordering without blocking the foreign key
+    // check of a link insert by the previous binary during rollout.
+    const { rows: activeLinks } = await client.query(
+      `select id from tests.test_access_links
+       where schedule_id=$1 and link_kind='schedule' and status='active' order by id for update`,
+      [schedule.id],
+    );
+    await client.query(
+      `update tests.test_access_links set status='revoked', revoked_at=now(), revoked_by_user_id=$2
+       where id=any($1::uuid[])`,
+      [activeLinks.map(({ id }) => id), req.user.id],
+    );
     const publicToken = crypto.randomBytes(24).toString("base64url");
     const inserted = await client.query(
       `insert into tests.test_access_links (link_kind, schedule_id, auth_mode, public_token, created_by_user_id)
@@ -2030,16 +2044,34 @@ router.post("/schedules/:scheduleId/link", async (req, res, next) => {
 });
 
 router.post("/links/:linkId/revoke", async (req, res, next) => {
+  if (!requireCoachWorkspace(req, res)) return;
+  const client = await pool.connect();
   try {
-    if (!requireCoachWorkspace(req, res)) return;
-    const linkResult = await query(`select * from tests.test_access_links where id = $1`, [req.params.linkId]);
-    const link = linkResult.rows[0];
-    if (!link) return res.status(404).json({ error: "Link not found." });
-    const schedule = link.schedule_id ? await loadManageableSchedule(req, link.schedule_id) : null;
-    if (!schedule) return res.status(404).json({ error: "Link not found." });
-    await query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where id = $1 and status = 'active'`, [link.id, req.user.id]);
+    await client.query("begin");
+    const { rows: [hint] } = await client.query(
+      "select schedule_id from tests.test_access_links where id=$1",
+      [req.params.linkId],
+    );
+    const mutation = hint?.schedule_id
+      ? await lockTestsScheduleMutation(client, req, hint.schedule_id, { link: true })
+      : null;
+    const link = mutation ? (await client.query(
+      "select id from tests.test_access_links where id=$1 and schedule_id=$2 for update",
+      [req.params.linkId, mutation.schedule.id],
+    )).rows[0] : null;
+    if (!link) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Link not found." });
+    }
+    await client.query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where id = $1 and status = 'active'`, [link.id, req.user.id]);
+    await client.query("commit");
     res.json({ ok: true });
-  } catch (error) { next(error); }
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
+  }
 });
 
 // ------------------------------------------------------------
@@ -2080,25 +2112,12 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
   try {
     await client.query("begin");
 
-    // Lock + re-read the schedule FIRST - a concurrent PATCH/DELETE (both
-    // take `for update` on this same row) queues behind our `for share`
-    // (or vice versa), so nothing about this schedule's status can change
-    // out from under the rest of this call.
-    const scheduleResult = await client.query(
-      `select sch.*, tv.name as test_name from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1 for share`,
-      [req.params.scheduleId],
-    );
-    const schedule = scheduleResult.rows[0];
+    const { schedule, status } = await lockTestsScheduleReminder(client, req, req.params.scheduleId);
     if (!schedule) {
       await client.query("rollback");
-      return res.status(404).json({ error: "Schedule not found." });
-    }
-    // Explicit 403 (not the info-hiding 404 most of this file's other
-    // routes use for "not found or not yours") - the schedule genuinely
-    // exists, the coach just isn't allowed to act on it.
-    if (!canManageSchedule(req, schedule)) {
-      await client.query("rollback");
-      return res.status(403).json({ error: "Forbidden" });
+      // Existing reminder behavior distinguishes an unavailable schedule
+      // from an existing schedule the caller cannot act on.
+      return res.status(status).json({ error: status === 404 ? "Schedule not found." : "Forbidden" });
     }
     // Schedule-level gates - checked ONCE, under the lock above, not per
     // assignment: a cancelled schedule's assignments are frozen history
