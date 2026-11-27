@@ -1601,14 +1601,12 @@ export async function handleBuilderDraftAction(action, handlers) {
         method: "POST",
         body: JSON.stringify(confirming ? { ...payload, rpeReviewToken: review.token } : payload),
       });
+      // A successful Submit removed this draft, even if the user navigated meanwhile.
+      invalidateBuilderDraftsCache();
       if (confirming) {
         closeBuilderRpeReview(review);
         if (!matchesBuilderRpeReview(context)) return true;
       }
-      // This plan has left 'draft' status either way - the cached drafts
-      // list (see loadBuilderDrafts) must never keep showing it once the
-      // user next lands on that empty-state picker.
-      invalidateBuilderDraftsCache();
       state.builder.sessionsLocked = null;
       if (result?.deleted && result?.empty) {
         await exitBuilderToPlanContext(draft.plan, handlers);

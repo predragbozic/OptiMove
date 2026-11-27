@@ -10,6 +10,8 @@ const { emptyBuilderState, state } = await import("../state.js");
 const { handleBuilderDraftAction } = await import("../builder-actions.js");
 const { closeBuilderRpeReview, currentBuilderRpeReview, mountBuilderRpeReview } = await import("../builder-rpe-review.js");
 
+const { buildContextKey, getCacheEntry, setCacheData } = await import("../view-cache.js");
+
 const originalFetch = globalThis.fetch;
 const summary = { plans: 1, sessions: 3, trackingEnabledSessions: 2, rpeEnabledSessions: 1, trackTrainingLoadDefault: false, requestRpeDefault: false };
 const reviewResponse = (review = {}) => new Response(JSON.stringify({
@@ -168,4 +170,25 @@ test("a draft without sessions still exposes both enabled plan defaults before c
   assert.equal(fields["RPE requested"], "0");
   assert.equal(fields["Tracking for new sessions"], "On");
   assert.equal(fields["Request RPE for new sessions"], "On");
+});
+
+test("an acknowledged save invalidates drafts even when the user navigated during the request", async () => {
+  const key = buildContextKey([state.currentUser.id]);
+  setCacheData("builderDrafts", key, [{ id: "draft-1" }]);
+  let resolveAck, requestSent;
+  const sent = new Promise(resolve => { requestSent = resolve; });
+  respond(body => {
+    if (!body.rpeReviewToken) return reviewResponse();
+    requestSent();
+    return new Promise(resolve => { resolveAck = resolve; });
+  });
+  await activate("builder-batch-edit-only");
+  const saving = activate("builder-rpe-review-confirm");
+  await sent;
+  state.activeTab = "home";
+  resolveAck(new Response(JSON.stringify({ plan: { id: "original" } }), { status: 200 }));
+  await saving;
+  assert.equal(state.activeTab, "home");
+  assert.ok(!getCacheEntry("builderDrafts", key));
+  assert.equal(currentBuilderRpeReview(), null);
 });
