@@ -125,3 +125,46 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
     }
   });
 }
+
+test("a native team coach sees separate Add and Archive actions after a Roles change", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "team_coach", WIDTHS.phone);
+  const admin = await browser.newContext();
+  const platform = world.accounts.find(account => account.role === "platform_admin");
+  await admin.addCookies([{ name: "optimove_session", value: platform.sessionToken, url: world.baseUrl }]);
+  const rolePath = R + "/00000000-0000-4000-8000-000000000843";
+  const openLibrary = async () => {
+    await navTo(page, '[data-library-tab="exercises"]');
+    await page.getByText("Native Coach Exercise").first().waitFor();
+  };
+  const save = async (revision, items) => {
+    const response = await request(admin, world, rolePath + "/change", {
+      method: "POST", body: { expectedRevision: revision, requestKey: crypto.randomUUID(), reason: "Exercise grant browser fixture", items },
+    });
+    assert.equal(response.status, 200, response.text);
+    return JSON.parse(response.text).role;
+  };
+  try {
+    const created = await request(context, world, "/api/exercises", { method: "POST", body: { name: "Native Coach Exercise" } });
+    assert.equal(created.status, 201, created.text);
+    await openLibrary();
+    await page.locator('[data-action="exercise-add-open"]').first().waitFor({ state: "visible" });
+    assert.ok(await page.locator('[data-action="exercise-copy-open"]').count());
+    assert.ok(await page.locator('[data-action="exercise-archive"]').count());
+
+    const prior = await request(admin, world, rolePath);
+    assert.equal(prior.status, 200, prior.text);
+    const role = JSON.parse(prior.text);
+    const withoutAdd = await save(role.revision, role.items.filter(word => word !== "exercises.add"));
+    try {
+      await page.reload();
+      await openLibrary();
+      assert.equal(await page.locator('[data-action="exercise-add-open"], [data-action="exercise-copy-open"], [data-action="exercise-edit-open"]').count(), 0);
+      assert.ok(await page.locator('[data-action="exercise-archive"]').count());
+      assert.ok(await page.locator('[data-action="exercise-toggle-favorite"]').count());
+      assert.deepEqual(pageErrors, []);
+    } finally { await save(withoutAdd.revision, role.items); }
+  } finally {
+    await admin.close();
+    await context.close();
+  }
+});

@@ -116,7 +116,7 @@ test("5. the exercise library is read only: no add, edit, copy, favourite, mark,
   const empty = libraryData();
   empty.exercises = [];
   assert.equal(WRITE_ACTIONS.test(renderExerciseLibraryHtml(empty)), false, "the empty state offers no Add");
-  as(CLUB_WS, ALL);
+  as(CLUB_WS, [...ALL, "exercises.add", "exercises.remove"]);
   const coach = renderExerciseLibraryHtml(libraryData());
   assert.ok(coach.includes('data-action="exercise-add-open"') && coach.includes('data-action="exercise-toggle-favorite"'));
 });
