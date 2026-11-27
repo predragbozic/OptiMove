@@ -31384,3 +31384,45 @@ body.athlete-questions-prompt-open {
 .tl-reference-layout aside li > span { color: var(--muted,#607080); font-size: 12px; padding-inline: 10px; }
 .tl-reference-workspace table th:first-child { position: sticky; left: 0; z-index: 2; background: var(--surface,#fff); }
 .tl-reference-workspace table thead th { font-size: 13px; }
+
+/* Builder confirmation for legacy Training Load settings */
+.builder-rpe-review {
+  width: min(28rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  padding: 1.25rem;
+  color: inherit;
+}
+
+.builder-rpe-review::backdrop {
+  background: rgb(10 26 42 / 55%);
+}
+
+.builder-rpe-review h2 {
+  margin: 0 0 .5rem;
+}
+
+.builder-rpe-review dl {
+  display: grid;
+  gap: .5rem;
+  margin: 1rem 0;
+}
+
+.builder-rpe-review dl div,
+.builder-rpe-review-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .75rem;
+}
+
+.builder-rpe-review dd {
+  margin: 0;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.builder-rpe-review-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}

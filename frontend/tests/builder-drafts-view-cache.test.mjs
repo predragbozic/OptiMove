@@ -153,9 +153,14 @@ test("8. draft-list-membership mutations (create/delete/submit) still invalidate
   // defined earlier in this file.
   const submitHandlerIndex = builderActionsSource.indexOf('if (type === "builder-submit-plan")');
   assert.ok(submitHandlerIndex >= 0);
-  const submitHandlerBody = builderActionsSource.slice(submitHandlerIndex, submitHandlerIndex + 1900);
-  assert.match(submitHandlerBody, /\/submit`/);
-  assert.ok(submitHandlerBody.includes("invalidateBuilderDraftsCache()"), "submitting a draft (it leaves 'draft' status) must invalidate the cached drafts list");
+  const nextHandlerIndex = builderActionsSource.indexOf('if (type === "builder-cancel")', submitHandlerIndex);
+  assert.ok(nextHandlerIndex > submitHandlerIndex);
+  const submitHandlerBody = builderActionsSource.slice(submitHandlerIndex, nextHandlerIndex);
+  const success = submitHandlerBody.slice(submitHandlerBody.indexOf("/submit`"), submitHandlerBody.indexOf("state.builder.sessionsLocked = null"));
+  assert.match(success, /\/submit`/);
+  const invalidate = success.indexOf("invalidateBuilderDraftsCache()");
+  const contextChanged = success.indexOf("if (!matchesBuilderRpeReview(context)) return true");
+  assert.ok(invalidate >= 0 && contextChanged > invalidate, "a successful Submit must invalidate drafts even if the user navigated before it returned");
 });
 
 test("9. duplicating a plan (/duplicate) invalidates the cached drafts list, since it always creates a new status='draft' row", () => {

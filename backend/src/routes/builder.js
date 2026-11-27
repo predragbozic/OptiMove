@@ -3,6 +3,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
+import { confirmBuilderRpeRecovery, refuseBuilderRpeRecovery } from "../builderRpeRecovery.js";
 import { assertBuilderRpeActivationProvenance, assertBuilderRpeCopyProvenance, assertBuilderRpeReplacementProvenance, beginBuilderRpeProvenance, hasBuilderRpeSiblingLineage, inspectBuilderRpeSubmitEffects, listBuilderRpeExplicitSessions, listBuilderRpeSiblingLineage, recordBuilderRpeCopyIfTracked, recordBuilderRpeNewLogicalCopies, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening, recordBuilderRpeSyncedCopy, recordBuilderRpeUse } from "../builderRpeProvenance.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
@@ -762,6 +763,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
       return timing.json(response);
     }
     const shouldSyncBatch = wantsBatchSync(req, plan);
+    if (shouldSyncBatch && req.body?.rpeReviewToken !== undefined) throw refuseBuilderRpeRecovery();
     // Non-batch: the empty-draft check stays its OWN separate, quick
     // transaction (removeEmptyDraftOnSubmit, unchanged) - a single plan
     // has no sibling to diverge from, so there is no cross-plan
@@ -849,7 +851,9 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
       client.release();
     }
     if (error?.code === "program_rpe_scope") return res.status(404).json({ error: "Draft program not found" });
-    if (["rpe_sibling_unmatched", "rpe_recovery_required"].includes(error?.code)) return res.status(409).json({ error: error.message, code: error.code });
+    if (["rpe_sibling_unmatched", "rpe_recovery_required"].includes(error?.code)) {
+      return res.status(409).json({ error: error.message, code: error.code, ...(error.review ? { review: error.review } : {}) });
+    }
     next(error);
   }
 }));
@@ -2944,7 +2948,9 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
       : { rows: [{ id: plan.id }] };
     const deletedIds = [];
     for (const target of targets.rows) {
-      await checkFirstRpeSubmit(client, req, target.id);
+      await checkFirstRpeSubmit(client, req, target.id, { emptyCheck: () => plan.plan_type === "weekly"
+        ? planHasWeeklyTrainingContentWithClient(client, target.id)
+        : planHasBuilderContentWithClient(client, target.id) });
       const eligible = await client.query(
         "select 1 from plans.plans where id=$1 and status='draft' and source_type='builder' and not coalesce(is_edit_draft,false) for update", [target.id],
       );
@@ -2955,6 +2961,10 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
       if (hasContent) continue;
       await deletePlanTreeWithClient(client, target.id);
       deletedIds.push(target.id);
+    }
+    if (!deletedIds.length) {
+      await client.query("rollback");
+      return null;
     }
     await client.query("commit");
     if (!deletedIds.includes(plan.id)) return null;
@@ -3430,16 +3440,31 @@ async function assertProgramRpeTargets(client, actor, scope, ids) {
   }
 }
 
-async function checkFirstRpeSubmit(client, req, planId) {
+async function checkFirstRpeSubmit(client, req, planId, { emptyCheck = null } = {}) {
   await lockExerciseReuse(client, req.exerciseReuseGuard);
-  if (!await beginBuilderRpeProvenance(client)) return;
+  if (!await beginBuilderRpeProvenance(client)) {
+    if (req.body?.rpeReviewToken !== undefined) throw refuseBuilderRpeRecovery();
+    return;
+  }
   const scope = await resolveBuilderRpeWorkspace(client, req);
   const actor = await lockProgramRpeActor(client, req, scope);
   const locked = await client.query("select id from plans.plans where id=$1 and status='draft' for update", [planId]);
-  if (!locked.rowCount) return;
+  if (!locked.rowCount) {
+    if (req.body?.rpeReviewToken !== undefined) throw refuseBuilderRpeRecovery();
+    return;
+  }
   await lockRpeEditSessions(client, [planId], null);
   if (await hasBuilderRpeExplicitEffect(client, planId)) await assertProgramRpeTargets(client, actor, scope, [planId]);
-  await assertBuilderRpeActivationProvenance(client, planId);
+  if (emptyCheck) {
+    if (await emptyCheck()) return;
+    if (req.body?.rpeReviewToken !== undefined) throw refuseBuilderRpeRecovery();
+    return await assertBuilderRpeActivationProvenance(client, planId);
+  }
+  await confirmBuilderRpeRecovery(client, req, { scope, draftId: planId, targetId: planId, operation: "activate" }, {
+    check: () => assertBuilderRpeActivationProvenance(client, planId),
+    authorize: () => assertProgramRpeTargets(client, actor, scope, [planId]),
+    markUse: () => recordBuilderRpeUse(client),
+  });
 }
 
 async function hasBuilderRpeExplicitEffect(client, planId) {
@@ -3516,6 +3541,7 @@ async function applyEditDraft(req, draftPlan, timing) {
     // ascending id - the one order every multi-plan caller uses - never the
     // source alone first. Otherwise the source alone, as before.
     const wantsAll = req.body?.batchScope === "all" && freshDraft.plan_type === "weekly" && source.builder_batch_id;
+    if (req.body?.rpeReviewToken !== undefined && (req.body?.batchScope === "all" || !hasProvenance)) throw refuseBuilderRpeRecovery();
     let batch = null;
     let rpeSessions;
     if (wantsAll) {
@@ -3597,7 +3623,13 @@ async function applyEditDraft(req, draftPlan, timing) {
       if (effects.changed && rpe) await assertProgramRpeTargets(client, rpe.actor, scope, [source.id]);
     }
     if (hasProvenance) {
-      await assertBuilderRpeReplacementProvenance(client, source.id, freshDraft.id, { edit: true });
+      const check = () => assertBuilderRpeReplacementProvenance(client, source.id, freshDraft.id, { edit: true });
+      if (wantsAll || req.body?.batchScope === "all") await check();
+      else await confirmBuilderRpeRecovery(client, req, { scope, draftId: freshDraft.id, targetId: source.id, operation: "edit" }, {
+        check,
+        authorize: () => assertProgramRpeTargets(client, rpe?.actor, scope, [freshDraft.id, source.id].sort()),
+        markUse: () => recordBuilderRpeUse(client),
+      });
     }
     const retained = await client.query(`select item.exercise_id, count(*)::integer as uses
       from plans.plan_items item join plans.plan_sessions session on session.id = item.plan_session_id
