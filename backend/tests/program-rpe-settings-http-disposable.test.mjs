@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import * as fsp from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
 import { fixtures, key, startServer } from "./support/permission-roles-world.mjs";
 import { changeProgramRpeGrant } from "./support/program-rpe-grants.mjs";
@@ -167,9 +167,25 @@ test("ordinary Submit publishes tracked inheritance without Manage and holds an 
   const submit = id => http.api(coach.cookie, "/api/builder/plans/" + id + "/submit", { method: "POST", body: {} });
   const status = async id => (await db.query("select status from plans.plans where id=$1", [id])).rows[0].status;
   assert.equal((await node(legacy.sessionId)).status, 201);
-  const unproven = await submit(legacy.id);
-  assert.equal(unproven.status, 409, unproven.text);
-  assert.equal(unproven.body.code, "rpe_recovery_required");
+  const originalKey = process.env.BUILDER_RPE_REVIEW_SIGNING_KEY;
+  try {
+    delete process.env.BUILDER_RPE_REVIEW_SIGNING_KEY;
+    const withoutKey = await submit(legacy.id);
+    assert.equal(withoutKey.status, 409, withoutKey.text);
+    assert.equal(withoutKey.body.code, "rpe_recovery_required");
+    assert.equal(withoutKey.body.review, undefined);
+    process.env.BUILDER_RPE_REVIEW_SIGNING_KEY = randomBytes(32).toString("hex");
+    const withoutManage = await submit(legacy.id);
+    assert.deepEqual(withoutManage.body, withoutKey.body);
+    assert.equal(withoutManage.status, 409, withoutManage.text);
+    const attemptedReview = await http.api(coach.cookie, "/api/builder/plans/" + legacy.id + "/submit", {
+      method: "POST", body: { rpeReviewToken: "stale" },
+    });
+    assert.deepEqual([attemptedReview.status, attemptedReview.body], [404, { error: "Draft program not found" }]);
+  } finally {
+    if (originalKey === undefined) delete process.env.BUILDER_RPE_REVIEW_SIGNING_KEY;
+    else process.env.BUILDER_RPE_REVIEW_SIGNING_KEY = originalKey;
+  }
   assert.equal(await status(legacy.id), "draft");
   assert.equal((await flags(legacy.sessionId)).rpe_enabled, true);
 

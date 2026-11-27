@@ -56,8 +56,14 @@ export async function confirmBuilderRpeRecovery(client, req, context, { check, a
     return;
   }
 
-  await authorize();
   const secret = signingKey();
+  if (!secret && supplied === undefined) throw refuseBuilderRpeRecovery();
+  try {
+    await authorize();
+  } catch (error) {
+    if (supplied === undefined && error?.code === "program_rpe_scope") throw refuseBuilderRpeRecovery();
+    throw error;
+  }
   if (!secret || !req.sessionToken || req.body?.batchScope === "all") throw refuseBuilderRpeRecovery();
   const { rows: [session] } = await client.query(
     "select id from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share",
