@@ -186,9 +186,10 @@ test("Programs Assign and Publish stage independently of Edit and preserve previ
       assert.equal(me.status, 200, me.text);
       for (const word of bridgeWords) assert.equal(me.body.user.permissions.includes(word), false);
     }
+    const athleteLogin = await fixtures(client).user("Program assignment recipient");
     const { rows: [athlete] } = await client.query(`insert into public.athletes
-      (athlete_id,source_external_id,first_name,last_name,full_name,is_active)
-      values('v110-rehearsal','v110-rehearsal','Old','Athlete','Old Athlete',true) returning id,athlete_id`);
+      (user_id,athlete_id,source_external_id,first_name,last_name,full_name,is_active)
+      values($1,'v110-rehearsal','v110-rehearsal','Old','Athlete','Old Athlete',true) returning id,athlete_id`, [athleteLogin]);
     await client.query(`insert into public.athlete_memberships(athlete_id,membership_type,club_id,team_id,status)
       values($1,'team',$2,$3,'active')`, [athlete.id,club,team]);
     const duplicatePath = `/api/builder/plans/${template.id}/duplicate`;
@@ -205,7 +206,43 @@ test("Programs Assign and Publish stage independently of Edit and preserve previ
     );
     assert.deepEqual(typed, { edited_plan_ids: [], removed_plan_ids: [], scope_type: "team", scope_id: team });
     assert.equal(await marker(), 0);
-    await client.query("insert into plans.program_assign_publish_v110_use (singleton) values (true)");
+    const currentReplay = await current.api(versionCookie, duplicatePath, { method: "POST", body: request });
+    assert.equal(currentReplay.status, 201, currentReplay.text);
+    assert.deepEqual(currentReplay.body.assignments, first.body.assignments);
+    assert.equal(await marker(), 0, "replay of an older successful assignment does not claim new use");
+    const skip = await current.api(versionCookie, `/api/templates/${template.id}/assignments`, {
+      method: "POST", body: { athleteIds: [key()] },
+    });
+    assert.equal(skip.status, 201, skip.text);
+    assert.deepEqual(skip.body.assigned, []);
+    assert.equal(await marker(), 0, "all targets skipped does not claim a grant");
+
+    const explicitPlatform = await current.api(platformCookie, duplicatePath, {
+      method: "POST", body: { ...request, assignmentRequestId: key() },
+    });
+    assert.equal(explicitPlatform.status, 201, explicitPlatform.text);
+    assert.equal(await marker(), 0, "a genuine platform assignment does not count as native use");
+    const guardedRequest = { ...request, assignmentRequestId: key() };
+    const state = async () => (await client.query(`select
+      (select count(*)::int from plans.plans where athlete_id=$1) as plans,
+      (select count(*)::int from public.builder_assignment_requests where id=$2) as receipts,
+      (select count(*)::int from plans.program_edit_v109_assignment_evidence where request_id=$2) as edit_evidence,
+      (select count(*)::int from public.app_notifications) as notifications`,
+    [athlete.id,guardedRequest.assignmentRequestId])).rows[0];
+    const beforeMarkedWrite = await state();
+    await client.query("alter table plans.program_assign_publish_v110_use add constraint fixture_abort_marker check(false) not valid");
+    try {
+      const rejected = await current.api(versionCookie, duplicatePath, { method: "POST", body: guardedRequest });
+      assert.equal(rejected.status, 500, rejected.text);
+      assert.deepEqual(await state(), beforeMarkedWrite, "marker failure rolls back the native assignment and effects");
+      assert.equal(await marker(), 0);
+    } finally {
+      await client.query("alter table plans.program_assign_publish_v110_use drop constraint fixture_abort_marker");
+    }
+    const guarded = await current.api(versionCookie, duplicatePath, { method: "POST", body: guardedRequest });
+    assert.equal(guarded.status, 201, guarded.text);
+    assert.equal(await marker(), 1);
+    assert.deepEqual(await state(), { ...beforeMarkedWrite, plans: beforeMarkedWrite.plans + 1, receipts: 1, edit_evidence: 1, notifications: beforeMarkedWrite.notifications + 1 });
     for (const action of ["delete from", "truncate", "update"]) {
       const command = action + " plans.program_assign_publish_v110_use" + (action === "update" ? " set first_used_at=now()" : "");
       await assert.rejects(client.query(command), /first-use evidence is immutable/);

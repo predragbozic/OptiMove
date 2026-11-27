@@ -8,10 +8,50 @@ import { prepareProgramAssignmentWords } from "./support/program-assignment-gran
 const assign = "programs.assign";
 const publish = "programs.publish";
 const edit = "programs.edit";
-const v109 = "202612111000_programs_v109_edit_bridge.sql";
+const v110 = "202612121000_programs_v110_assign_publish_bridge.sql";
+
+async function recordRequest(pool, work) {
+  const recorded = [];
+  const realQueries = new Map();
+  const observe = (client) => {
+    if (realQueries.has(client)) return;
+    const query = client.query;
+    realQueries.set(client, query);
+    client.query = function (statement, ...args) {
+      recorded.push({ client, sql: String(typeof statement === "string" ? statement : statement?.text).replace(/\s+/g, " "), params: args[0] });
+      return query.call(client, statement, ...args);
+    };
+  };
+  pool.on("acquire", observe);
+  try {
+    return { response: await work(), recorded };
+  } finally {
+    pool.off("acquire", observe);
+    for (const [client, query] of realQueries) client.query = query;
+  }
+}
+
+const reuseLock = entry => entry.sql.includes("hashtextextended('exercise_collections'");
+const provenanceLock = entry => entry.params?.[0] === "builder-rpe-provenance-v106";
+const ceilingLock = entry => entry.sql.includes("select public.lock_club_ceiling(");
+const permissionCheck = word => entry => entry.sql.includes("public.user_has_permission") && entry.params?.[3]?.includes(word);
+const statement = fragment => entry => entry.sql.includes(fragment);
+const firstUse = statement("insert into plans.program_assign_publish_v110_use");
+function assertLockOrder(recorded, ...steps) {
+  const marker = recorded.find(firstUse);
+  assert.ok(marker, "the request records native first use");
+  const sameClient = recorded.filter(entry => entry.client === marker.client);
+  const beforeMarker = sameClient.slice(0, sameClient.indexOf(marker) + 1);
+  const begin = beforeMarker.findLastIndex(entry => /^begin(?: |$)/i.test(entry.sql));
+  assert.ok(begin >= 0, "the checked work has a transaction");
+  const transaction = sameClient.slice(begin);
+  const positions = [...steps, firstUse, statement("commit")].map(step => transaction.findIndex(step));
+  assert.ok(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1])),
+    JSON.stringify({ positions, sql: transaction.map(entry => entry.sql) }));
+}
 
 test("native assignments keep Assign and Publish separate and check scope before replay", async () => {
-  const database = await buildDatabase({ label: "program_assign_checkpoint", upTo: v109 });
+  const database = await buildDatabase({ label: "program_assign_checkpoint", upTo: v110 });
   const sql = new pg.Client({ connectionString: database.url });
   let server;
   const priorDatabase = process.env.DATABASE_URL;
@@ -60,6 +100,8 @@ test("native assignments keep Assign and Publish separate and check scope before
     assert.equal((await post(assignmentPath, { athleteIds: [own.id] })).status, 403);
     assert.deepEqual(await effects(), { active: 0, requests: 0, notifications: 0, grants: 0 });
 
+    assert.equal((await sql.query("select 1 from plans.program_assign_publish_v110_use")).rowCount, 0);
+
     await stage([assign]);
     const noPublish = await post(duplicatePath, publishRequest);
     assert.equal(noPublish.status, 403, noPublish.text);
@@ -74,7 +116,10 @@ test("native assignments keep Assign and Publish separate and check scope before
       "select to_jsonb(p) as snapshot from plans.plans p where p.id=$1", [source],
     )).rows[0].snapshot;
     const beforeGrant = await savedSource();
-    const explicit = await post(assignmentPath, { athleteIds: [own.id, foreign.id, missing] });
+    const { response: explicit, recorded: templateSql } = await recordRequest(server.pool,
+      () => post(assignmentPath, { athleteIds: [own.id, foreign.id, missing] }));
+    assertLockOrder(templateSql, reuseLock, ceilingLock, permissionCheck(assign),
+      statement("from plans.plans where id = any($1::uuid[]) order by id for update"), statement("insert into library.program_access"));
     assert.equal(explicit.status, 201, explicit.text);
     assert.equal(explicit.body.assigned.length, 1);
     assert.equal(explicit.body.assigned[0].athleteId, own.id);
@@ -114,7 +159,9 @@ test("native assignments keep Assign and Publish separate and check scope before
     const foreignResponse = await post(duplicatePath, { ...publishRequest, athleteIds: [foreign.external] });
     assert.equal(foreignResponse.status, 409, foreignResponse.text);
     assert.match(foreignResponse.body.error, /Your workspace changed/);
-    const published = await post(duplicatePath, publishRequest);
+    const { response: published, recorded: duplicateSql } = await recordRequest(server.pool, () => post(duplicatePath, publishRequest));
+    assertLockOrder(duplicateSql, reuseLock, provenanceLock, ceilingLock, permissionCheck(publish),
+      statement("insert into public.builder_assignment_requests"), statement("insert into plans.plans"));
     assert.equal(published.status, 201, published.text);
     assert.deepEqual(await effects(), { active: 1, requests: 1, notifications: 1, grants: 1 });
     await stage([assign]);
@@ -148,7 +195,9 @@ test("native assignments keep Assign and Publish separate and check scope before
     assert.equal((await post(weeklyPath, cleanup)).status, 403);
     assert.equal(await scratchStatus(), "draft");
     assert.equal(await weeklyReceipts(), 0);
-    const placed = await post(weeklyPath, first);
+    const { response: placed, recorded: weeklySql } = await recordRequest(server.pool, () => post(weeklyPath, first));
+    assertLockOrder(weeklySql, reuseLock, provenanceLock, ceilingLock, permissionCheck(assign),
+      statement("insert into public.builder_assignment_requests"), permissionCheck(publish), statement("insert into plans.plans"));
     assert.equal(placed.status, 201, placed.text);
     assert.equal(placed.body.created.length, 1);
     const target = placed.body.created[0].planId;
@@ -269,7 +318,9 @@ test("native assignments keep Assign and Publish separate and check scope before
     assert.equal((await metadata("published", "my", "Publication denied")).status, 403);
     assert.deepEqual(await savedMetadata(), { status: "draft", library_scope: "workspace", note: "Held as draft" });
     await stage([publish, edit]);
-    const activated = await metadata("published", "my", "Now published");
+    const { response: activated, recorded: metadataSql } = await recordRequest(server.pool, () => metadata("published", "my", "Now published"));
+    assertLockOrder(metadataSql, reuseLock, ceilingLock, statement("from plans.plans where id=$1 for update"),
+      permissionCheck(publish), statement("update plans.plans set library_scope"), statement("insert into plans.program_manage_v109_use"));
     assert.equal(activated.status, 200, activated.text);
     assert.deepEqual(await savedMetadata(), { status: "active", library_scope: "my", note: "Now published" });
     await stage([edit]);
@@ -309,38 +360,10 @@ test("native assignments keep Assign and Publish separate and check scope before
     assert.equal(await planStatus(ordinary.plan.id), "draft");
     assert.equal(await weeklyNotifications(), initialNotificationCount);
     await stage([publish]);
-    const recorded = [];
-    const realQueries = new Map();
-    const observe = (client) => {
-      if (realQueries.has(client)) return;
-      const query = client.query;
-      realQueries.set(client, query);
-      client.query = function (statement, ...args) {
-        recorded.push({ client, sql: String(typeof statement === "string" ? statement : statement?.text).replace(/\s+/g, " "), params: args[0] });
-        return query.call(client, statement, ...args);
-      };
-    };
-    server.pool.on("acquire", observe);
-    try {
-      const published = await submit(ordinary.plan.id);
-      assert.equal(published.status, 200, published.text);
-    } finally {
-      server.pool.off("acquire", observe);
-      for (const [client, query] of realQueries) client.query = query;
-    }
-    const publishStatement = recorded.find(entry => entry.sql.includes("public.user_has_permission")
-      && entry.params?.[3]?.includes("programs.publish"));
-    assert.ok(publishStatement, "the recording contains the native Publish check");
-    const statements = recorded.filter(entry => entry.client === publishStatement.client);
-    const reuse = statements.findIndex(entry => entry.sql.includes("hashtextextended('exercise_collections'"));
-    const provenance = statements.findIndex(entry => entry.params?.[0] === "builder-rpe-provenance-v106");
-    const ceiling = statements.findIndex(entry => entry.sql.includes("select public.lock_club_ceiling("));
-    const targetLock = statements.findIndex(entry => entry.sql.includes("from plans.plans where id=$1 for update"));
-    const publishCheck = statements.indexOf(publishStatement);
-    const activation = statements.findIndex(entry => entry.sql.includes("update plans.plans set status = 'active'"));
-    assert.ok(reuse >= 0 && reuse < provenance && provenance < ceiling && ceiling < targetLock
-      && targetLock < publishCheck && publishCheck < activation,
-    JSON.stringify({ reuse, provenance, ceiling, targetLock, publishCheck, activation }));
+    const { response: publishedSingle, recorded: submitSql } = await recordRequest(server.pool, () => submit(ordinary.plan.id));
+    assert.equal(publishedSingle.status, 200, publishedSingle.text);
+    assertLockOrder(submitSql, reuseLock, provenanceLock, ceilingLock, statement("from plans.plans where id=$1 for update"),
+      permissionCheck(publish), statement("update plans.plans set status = 'active'"));
     assert.equal(await planStatus(ordinary.plan.id), "active");
     assert.equal(await weeklyNotifications(), initialNotificationCount + 1);
     await stage([]);
@@ -391,7 +414,9 @@ test("native assignments keep Assign and Publish separate and check scope before
     assert.equal(await weeklyNotifications(), initialNotificationCount + 1);
     await sql.query("update public.athlete_memberships set status='paused' where athlete_id=$1 and team_id=$2", [ownSecond.id, otherTeam]);
     await sql.query("update public.athlete_memberships set status='active' where athlete_id=$1 and team_id=$2", [ownSecond.id, team]);
-    const publishedBatch = await submit(batchDraft.plan.id, { syncBatch: true });
+    const { response: publishedBatch, recorded: batchSql } = await recordRequest(server.pool, () => submit(batchDraft.plan.id, { syncBatch: true }));
+    assertLockOrder(batchSql, provenanceLock, ceilingLock, statement("from plans.plans where id = $1 for update"),
+      permissionCheck(publish), statement("update plans.plans set status = 'active'"));
     assert.equal(publishedBatch.status, 200, publishedBatch.text);
     assert.deepEqual(await batchStatus(), ["active", "active"]);
     assert.equal(await weeklyNotifications(), initialNotificationCount + 3);

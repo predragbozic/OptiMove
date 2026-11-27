@@ -48,6 +48,13 @@ export async function assertProgramAssignmentHeld(client, writer, { assigns = fa
   if (rights?.allowed !== true) throw refuseProgramEdit();
 }
 
+export async function recordProgramAssignmentUse(client, writer) {
+  if (!nativeProgramRpeScope(writer.scope)) return;
+  await client.query(
+    "insert into plans.program_assign_publish_v110_use(singleton) values(true) on conflict(singleton) do nothing",
+  );
+}
+
 export function assertProgramEditHeld(writer) {
   if (!writer.canEdit) throw refuseProgramEdit();
 }

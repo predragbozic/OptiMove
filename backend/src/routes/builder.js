@@ -14,7 +14,7 @@ import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSe
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsOffered, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
-import { assertProgramAssignmentHeld, assertProgramEditHeld, assertProgramEditOwnership, combinedProgramEditIsChecked, lockProgramEditActor, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
+import { assertProgramAssignmentHeld, assertProgramEditHeld, assertProgramEditOwnership, combinedProgramEditIsChecked, lockProgramEditActor, recordProgramAssignmentUse, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "../workspace.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
@@ -792,6 +792,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
     // for the SAME plan id always serializes correctly against it,
     // whichever of the two reaches the row first.
     let activatedPlans;
+    let activationWriter;
     if (shouldSyncBatch) {
       const result = await timing.measure("batch", () => syncAndActivateBatchWithClient(client, plan, req, req.exerciseReuseGuard));
       if (result.emptyDraftResponse) {
@@ -800,6 +801,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
         client = null;
         return timing.json(result.emptyDraftResponse);
       }
+      activationWriter = result.writer;
       if (result.activatedPlans !== null) {
         activatedPlans = result.activatedPlans;
       } else {
@@ -818,7 +820,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
         activatedPlans = updated.rows;
       }
     } else {
-      await checkFirstRpeSubmit(client, req, plan.id);
+      activationWriter = await checkFirstRpeSubmit(client, req, plan.id);
       const updated = await client.query(
         `update plans.plans set status = 'active', updated_at = now()
          where id = $1 and status = 'draft'
@@ -829,6 +831,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
     }
     await assertExerciseReuseAllowed(client, req.user.id, { planIds: activatedPlans.map((activated) => activated.id), guard: req.exerciseReuseGuard });
     const notifiedUserIds = await timing.measure("notifications", () => notifyPlanAssignments(client, activatedPlans, req.user.id));
+    if (activatedPlans.length) await recordProgramAssignmentUse(client, activationWriter);
     await client.query("commit");
     client.release();
     client = null;
@@ -1135,6 +1138,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         [assignmentRequestId, JSON.stringify({ planId: createdIds[0], assignments })],
       );
       await recordProgramEditAssignmentEvidence(client, writer, assignmentRequestId, [], []);
+      if (assignedPlans.length) await recordProgramAssignmentUse(client, writer);
     }
     await recordProgramEditUse(client, intent !== "assign" && writer.checked);
     await client.query("commit");
@@ -1467,6 +1471,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     );
     await recordProgramEditAssignmentEvidence(client, writer, assignmentRequestId, editedPlanIds, removedPlanIds);
     await recordProgramEditUse(client, editIds.length > 0 && writer.checked);
+    if (created.length || replaced.length) await recordProgramAssignmentUse(client, writer);
     await client.query("commit");
     client.release();
     client = null;
@@ -3474,7 +3479,7 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
       await assertProgramAssignmentHeld(client, writer, { publishes: true });
       await assertProgramPublishTargets(client, writer, [sourceRow]);
     }
-    return { sourceRow, activatedPlans: null };
+    return { sourceRow, writer, activatedPlans: null };
   }
   const sourceHasContent = await (sourceRow.plan_type === "weekly"
     ? planHasWeeklyTrainingContentWithClient(client, sourceRow.id)
@@ -3523,7 +3528,7 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
      returning id, athlete_id, name, plan_type, week_start`,
     [remainingIds],
   );
-  return { activatedPlans: updated.rows };
+  return { activatedPlans: updated.rows, writer };
 }
 
 // Under the plan locks of applyEditDraft: classify every other live member
@@ -3687,8 +3692,8 @@ async function assertProgramPublishTargets(client, writer, targets) {
 async function checkFirstRpeSubmit(client, req, planId, { emptyCheck = null } = {}) {
   await lockExerciseReuse(client, req.exerciseReuseGuard);
   const hasProvenance = await beginBuilderRpeProvenance(client);
-  if (!emptyCheck) {
-    const writer = await lockProgramEditActor(client, req, { requireEdit: false });
+  const writer = emptyCheck ? null : await lockProgramEditActor(client, req, { requireEdit: false });
+  if (writer) {
     const { rows: [target] } = await client.query("select id,status from plans.plans where id=$1 for update", [planId]);
     if (target?.status === "draft") {
       await assertProgramPublishTargets(client, writer, [target]);
@@ -3697,14 +3702,14 @@ async function checkFirstRpeSubmit(client, req, planId, { emptyCheck = null } = 
   }
   if (!hasProvenance) {
     if (req.body?.rpeReviewToken !== undefined) throw refuseBuilderRpeRecovery();
-    return;
+    return writer;
   }
   const scope = await resolveBuilderRpeWorkspace(client, req);
   const actor = await lockProgramRpeActor(client, req, scope);
   const locked = await client.query("select id from plans.plans where id=$1 and status='draft' for update", [planId]);
   if (!locked.rowCount) {
     if (req.body?.rpeReviewToken !== undefined) throw refuseBuilderRpeRecovery();
-    return;
+    return writer;
   }
   await lockRpeEditSessions(client, [planId], null);
   if (await hasBuilderRpeExplicitEffect(client, planId)) await assertProgramRpeTargets(client, actor, scope, [planId]);
@@ -3718,6 +3723,7 @@ async function checkFirstRpeSubmit(client, req, planId, { emptyCheck = null } = 
     authorize: () => assertProgramRpeTargets(client, actor, scope, [planId]),
     markUse: () => recordBuilderRpeUse(client),
   });
+  return writer;
 }
 
 async function hasBuilderRpeExplicitEffect(client, planId) {
@@ -3841,7 +3847,11 @@ async function applyEditDraft(req, draftPlan, timing) {
       }
     }
     const { rows: [lockedSource] } = await client.query("select status from plans.plans where id=$1", [source.id]);
-    if (lockedSource?.status !== "active") await assertProgramAssignmentHeld(client, writer, { publishes: true });
+    const reactivates = lockedSource?.status !== "active";
+    if (reactivates) {
+      await assertProgramAssignmentHeld(client, writer, { publishes: true });
+      await assertProgramPublishTargets(client, writer, [source]);
+    }
     await assertProgramEditTargets(client, writer, [freshDraft, source, ...(batch?.apply ?? []).map(member => ({ id: member.planId }))]);
     if (freshDraft.plan_type === "weekly") {
       if (hasProvenance) {
@@ -3942,6 +3952,7 @@ async function applyEditDraft(req, draftPlan, timing) {
     await timing.measure("apply_delete", () => deleteBuilderPlanContent(client, freshDraft.id));
     await client.query("delete from plans.plans where id = $1", [freshDraft.id]);
     await recordProgramEditUse(client, writer.checked);
+    if (reactivates) await recordProgramAssignmentUse(client, writer);
     await client.query("commit");
     committed = true;
     client.release();

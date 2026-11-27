@@ -3,7 +3,7 @@ import { pool, query } from "../db.js";
 import { assertExerciseReuseAllowed, lockExerciseReuse, withExerciseReuseTransaction } from "../exerciseAccess.js";
 import { canAccessAllAthletes, canAccessAthlete, canViewProgramsAt } from "../access.js";
 import { isPlatformAdministrator } from "../authz.js";
-import { assertProgramAssignmentHeld, assertProgramEditOwnership, lockProgramEditActor, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
+import { assertProgramAssignmentHeld, assertProgramEditOwnership, lockProgramEditActor, recordProgramAssignmentUse, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
 import { createNotification } from "../notifications.js";
 import { NO_VIEWER_ID, coachModuleGate, handOnReadsRefuseWrites, viewEntryGate } from "../moduleView.js";
 import {
@@ -365,6 +365,7 @@ async function withEditableTemplate(req, planId, exerciseReuse, write) {
     await assertProgramEditOwnership(client, writer.scope, plan);
     const outcome = await write(client, plan, writer);
     await recordProgramEditUse(client, outcome?.rowCount !== 0 && writer.checked);
+    if (outcome?.publishes && outcome.rowCount) await recordProgramAssignmentUse(client, writer);
     await client.query("commit");
     return outcome;
   } catch (error) {
@@ -405,7 +406,8 @@ router.patch("/:planId/metadata", async (req, res, next) => {
         athleteCanViewDirectly: booleanValue(req.body?.athleteCanViewDirectly, false),
       });
       if (!metadataPolicy.ok) throw refuseProgramEdit(403, metadataPolicy.error);
-      if (metadataPublishes(current, metadataPolicy)) {
+      const publishes = metadataPublishes(current, metadataPolicy);
+      if (publishes) {
         await assertProgramAssignmentHeld(client, writer, { publishes: true });
       }
       if (metadataPolicy.status === "active" &&
@@ -415,7 +417,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
            (current.status || "active") !== "active")) {
         await assertExerciseReuseAllowed(client, req.user.id, { planIds: [planId] });
       }
-      return client.query(
+      const saved = await client.query(
         `
         update plans.plans
         set library_scope = $2,
@@ -462,6 +464,7 @@ router.patch("/:planId/metadata", async (req, res, next) => {
           description,
         ],
       );
+      return { ...saved, publishes };
     });
     if (!result.rows[0]) return res.status(404).json({ error: "Template not found." });
     res.json({ ok: true, planId: result.rows[0].id });
@@ -662,6 +665,7 @@ router.post("/:planId/assignments", async (req, res, next) => {
           status: access.status,
         });
       }
+      if (assigned.length) await recordProgramAssignmentUse(client, assignment);
       return { assigned, skipped };
     }, {
       beforePlanLock: async (client) => {
