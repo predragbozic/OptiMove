@@ -97,6 +97,7 @@ const AUTH_FIXTURE_SQL = `
 // list route's own filters.
 const LIBRARY_FIXTURE_SQL = `
   create schema library;
+  create table library.exercise_manage_v108_use(singleton boolean primary key);
 
   create table library.exercises (
     id uuid primary key default gen_random_uuid(),

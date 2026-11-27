@@ -5,7 +5,7 @@ import pg from "pg";
 import { buildDatabase, fixtures, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 
 test("native Exercise content and lifecycle writes have independent staged permission checks", async () => {
-  const database = await buildDatabase({ label: "exercise_manage", upTo: "all" });
+  const database = await buildDatabase({ label: "exercise_manage", upTo: "202612091000_training_load_v107_builder_rpe_copy_attestation.sql" });
   const sql = new pg.Client({ connectionString: database.url });
   let server;
   try {
@@ -40,6 +40,7 @@ test("native Exercise content and lifecycle writes have independent staged permi
     const staged = functionRow.definition.replace("'exercises.use'", "'exercises.use','exercises.add','exercises.remove'");
     assert.notEqual(staged, functionRow.definition);
     const fixtureMigration = "fixtures/exercise-write-" + randomUUID();
+    await sql.query("create table library.exercise_manage_v108_use(singleton boolean primary key)");
     await sql.query("begin");
     try {
       await sql.query("select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive')");

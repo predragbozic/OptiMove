@@ -82,3 +82,12 @@ export async function lockExerciseWriter(client, req, expected, word, dependentW
   );
   return rights?.allowed === true;
 }
+
+export async function recordExerciseWriterUse(client, workspace) {
+  if (workspace?.type !== "club" && workspace?.type !== "team") return;
+  await client.query(
+    `insert into library.exercise_manage_v108_use(singleton)
+     select true where not exists(select 1 from library.exercise_manage_v108_use)
+     on conflict do nothing`,
+  );
+}

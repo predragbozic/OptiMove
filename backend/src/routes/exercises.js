@@ -9,7 +9,7 @@ import { deleteUnreferencedExercise } from "../exerciseDeletion.js";
 import { loadLockedExercisePreviews } from "../exerciseBlocks.js";
 import { NO_VIEWER_ID, coachModuleGate, viewEntryGate } from "../moduleView.js";
 import { can } from "../permissions.js";
-import { lockExerciseWriter, resolveExerciseWriteWorkspace } from "../exerciseWriteAccess.js";
+import { lockExerciseWriter, recordExerciseWriterUse, resolveExerciseWriteWorkspace } from "../exerciseWriteAccess.js";
 
 const router = Router();
 
@@ -668,6 +668,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       await runQuery("rollback");
       return res.status(404).json({ error: "Exercise not found." });
     }
+    await recordExerciseWriterUse(client, workspace);
     await runQuery("commit");
     if (req.exerciseAdmin) console.info(JSON.stringify({ event: "exercise.save", actor: userId, exercise: finalId, operation: copying ? "copy" : exerciseId ? "edit" : "create" }));
     res.status(exerciseId ? 200 : 201).json({
@@ -781,6 +782,7 @@ async function setExerciseActive(req, res, next, active) {
       return res.status(403).json({ error: "Only an owner or platform administrator can archive this exercise." });
     }
     await client.query("update library.exercises set is_active=$2,updated_at=now() where id=$1", [exercise.id, active]);
+    await recordExerciseWriterUse(client, workspace);
     await client.query("commit");
     console.info(JSON.stringify({ event: "exercise.lifecycle", actor: req.user.id, exercise: exercise.id, active, administrator: req.exerciseAdmin }));
     res.json({ id: exercise.id, isActive: active, archived: !active });
