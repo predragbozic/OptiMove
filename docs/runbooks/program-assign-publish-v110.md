@@ -1,6 +1,6 @@
 # Programs Assign and Publish v110 bridge
 
-Provisional slot and rehearsal predecessor. Confirm the production registry and the exact deployed Programs Edit release before freezing. The draft uses v109 runtime checkpoint `765b782106b220edf23866e72d57ef095459c896` as the previous binary and pins the v109 migration bytes.
+The rehearsal pins the Programs Edit exposure release 58762744039fa00577d50926c50b1cacfcf3b6ea as the previous binary. The v110 preflight verifies the exact v109 migration bytes.
 
 ## Authority and seed
 

@@ -65,7 +65,7 @@ function roleData(client) {
 }
 
 
-const previousBuild = "765b782106b220edf23866e72d57ef095459c896";
+const previousBuild = "58762744039fa00577d50926c50b1cacfcf3b6ea";
 const migration = "202612121000";
 const bridgeWords = ["programs.assign", "programs.publish"];
 const read = name => readFile(new URL(`../../docs/runbooks/program-assign-publish-v110-${name}.sql`, import.meta.url), "utf8");
