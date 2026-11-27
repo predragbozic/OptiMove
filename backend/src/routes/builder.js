@@ -9,6 +9,7 @@ import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySes
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
 import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess.js";
+import { exerciseProgramActor, lockExerciseWriter, recordExerciseWriterUse, resolveExerciseWriteWorkspace } from "../exerciseWriteAccess.js";
 import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSessionsOf, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
@@ -2676,16 +2677,25 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
     const name = text(req.body?.name);
     if (!name) return res.status(400).json({ error: "Custom exercise name is required." });
     const dose = doseFields(req.body);
-    mediaSelections(req.body||{});
+    const selections = mediaSelections(req.body || {});
+    const workspace = await resolveExerciseWriteWorkspace(req, query);
+    const dependentWords = ["programs.view", "programs.edit"];
+    if (Object.values(selections).some(selection => selection.source === "asset" || selection.url)) {
+      dependentWords.push("exercises.media.upload");
+    }
     client=await pool.connect();const runQuery=client.query.bind(client);
     await runQuery('begin isolation level read committed');
     await runQuery("set local statement_timeout='10s'");await lockExerciseReuse(client,req.exerciseReuseGuard);
+    const actor = await lockExerciseWriter(client, req, workspace, "exercises.add", dependentWords);
+    if (!actor) {
+      throw Object.assign(new Error("Forbidden"), { status: 403 });
+    }
     // Match DELETE/apply: plan before child node, exercise and media locks.
     const lockedPlan=await runQuery('select id from plans.plans where id=$1 for no key update',[node.plan.id]);
     if(!lockedPlan.rowCount)throw Object.assign(new Error('Program not found'),{status:404});
     const target=await runQuery('select id from plans.plan_nodes where id=$1 for update',[node.id]);
     if(!target.rowCount)throw Object.assign(new Error('Program node not found'),{status:404});
-    if(!await canAccessPlan(runQuery,req,node.plan.id,{editable:true}))throw Object.assign(new Error('Forbidden'),{status:403});
+    if(!await canAccessPlan(runQuery,exerciseProgramActor(actor),node.plan.id,{editable:true}))throw Object.assign(new Error('Forbidden'),{status:403});
     const created = await runQuery(
       `insert into library.exercises (owner_scope, owner_user_id, created_by_user_id, exercise_code, slug, name, instruction, image_url, video_url, is_active)
        values ('user', $1, $1, concat('CUSTOM-', substring(gen_random_uuid()::text from 1 for 8)), concat('custom-', gen_random_uuid()), $2, $3, $4, $5, true)
@@ -2693,7 +2703,7 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
       [req.user.id, name, nullableText(req.body?.instruction), nullableText(req.body?.imageUrl), nullableText(req.body?.videoUrl)],
     );
     const exercise = created.rows[0];
-    await bindExerciseMedia(client,req,exercise.id,req.body||{},{creating:true});
+    await bindExerciseMedia(client, { ...req, authz: actor.authz, user: actor.user }, exercise.id, req.body || {}, { creating: true });
     const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order",runQuery);
     const ancestry = await getNodeAncestryMeta(node,runQuery);
     const insertedItem=await runQuery(
@@ -2714,6 +2724,7 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
     await snapshotExerciseMedia(runQuery,exercise.id,insertedItem.rows[0].id);
+    await recordExerciseWriterUse(client, actor.workspace);
     await runQuery('commit');client.release();client=null;
     return await respondWithDraft(req, res, req.user, node.plan, { status: 201 });
   } catch (error) { if(client)await client.query('rollback').catch(()=>{});next(error); } finally {client?.release();}
