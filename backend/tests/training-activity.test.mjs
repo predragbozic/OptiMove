@@ -2433,3 +2433,107 @@ test("M-3c: suggestion acceptance hides a candidate in another owner scope befor
   await query("update training.activity_match_suggestions set status='dismissed',resolved_by_user_id=$2,resolved_at=now() where id=$1", [suggestion.id, left.coachId]);
   assert.deepEqual(await accept(suggestion.id), missing);
 });
+
+test("M-3c: accept records the lock order and checks candidate ownership after waiting for its identity lock", async () => {
+  const native = await makeClubCoach("m3c-lock-order");
+  const foreign = await makeClubCoach("m3c-foreign-owner");
+  const fixture = await makeSharedActivityWithTwoSuggestionGroups(native.clubId);
+  const candidate = fixture.candidateA1.participantId;
+  const {rows:[foreignActivity]} = await query(
+    `insert into training.activities (owner_scope,owner_club_id,name,occurred_local_date,timezone_snapshot,origin,lifecycle_state)
+     values ('club',$1,'Competing owner','2026-09-08','UTC','manual','confirmed') returning id`, [foreign.clubId],
+  );
+  const scope = { type: "club", clubId: native.clubId, staffActorId: native.coachId };
+  const statements = [];
+  const observer = new pg.Client({ connectionString: db.url });
+  const useClient = pool.connect.bind(pool);
+  let observeWait;
+  const beforeCandidateWait = new Promise(resolve => { observeWait = resolve; });
+  let accepting;
+  await observer.connect();
+  try {
+    await observer.query("begin");
+    await observer.query("select pg_advisory_xact_lock(hashtextextended($1, 4))", [`activity-participant:${candidate}`]);
+    pool.connect = async function () {
+      const client = await useClient();
+      const original = client.query;
+      const release = client.release;
+      client.query = function (sql, params) {
+        statements.push({sql, params});
+        const result = original.call(client, sql, params);
+        if (params?.[0] === `activity-participant:${candidate}` && sql.includes("hashtextextended($1, 4)")) observeWait();
+        return result;
+      };
+      client.release = function (...args) {
+        client.query = original;
+        client.release = release;
+        return release.apply(client, args);
+      };
+      return client;
+    };
+    accepting = materializeService.acceptMatchSuggestion(scope, {suggestionId:fixture.s1a, performedBy:native.coachId});
+    accepting.catch(() => {});
+    await Promise.race([
+      beforeCandidateWait,
+      accepting.then(() => { throw new Error("accept returned before reaching the candidate identity lock"); }),
+    ]);
+    await observer.query("select set_config('training.allow_reparent_write','on',true)");
+    await observer.query("update training.activity_participants set activity_id=$1 where id=$2", [foreignActivity.id,candidate]);
+    await observer.query("commit");
+    await assert.rejects(accepting, error => error.httpStatus === 404 && error.message === "Suggestion not found.");
+  } finally {
+    pool.connect = useClient;
+    await observer.query("rollback").catch(() => {});
+    await observer.end();
+    await Promise.allSettled([accepting]);
+  }
+  const order = [
+    "select public.lock_club_ceiling", "select id from public.clubs", "select public.lock_permission_actor",
+    "public.user_has_permission", "hashtextextended($1, 5)", "for update of ms", "hashtextextended($1, 4)",
+    "from training.activity_participants ap", "rollback",
+  ];
+  const indexes = order.map(pattern => statements.findIndex(({sql}) => sql.includes(pattern)));
+  assert.ok(indexes.every((index, i) => index >= 0 && (i === 0 || index > indexes[i - 1])), JSON.stringify(indexes));
+  assert.deepEqual(statements.filter(({sql}) => sql.includes("hashtextextended($1, 4)")).map(({params}) => params[0]),
+    [fixture.participantAId, candidate].sort().map(id => `activity-participant:${id}`));
+  assert.ok(!statements.some(({sql}) => sql.includes("merge_activity_participants") || sql.startsWith("update")));
+  const {rows:[suggestion]} = await query("select status from training.activity_match_suggestions where id=$1", [fixture.s1a]);
+  assert.equal(suggestion.status, "open");
+});
+
+test("M-3c: a direct team coach writes team-owned activity only in the exact active team", async () => {
+  const club = await makeClubCoach("m3c-direct-team");
+  const {athleteId} = await makeAthleteInClub(club.clubId);
+  const {rows:[team]} = await query("insert into public.teams (club_id,name) values ($1,'Direct team') returning id", [club.clubId]);
+  await query("insert into public.athlete_memberships (athlete_id,club_id,team_id,membership_type,status) values ($1,$2,$3,'team','active')",
+    [athleteId,club.clubId,team.id]);
+  const {rows:[otherTeam]} = await query("insert into public.teams (club_id,name) values ($1,'Other team') returning id", [club.clubId]);
+  const direct = await makeUser();
+  for (const id of [team.id,otherTeam.id]) {
+    await query("insert into public.user_team_roles (user_id,team_id,role) values ($1,$2,'team_coach')", [direct,id]);
+  }
+  await grantClubAdmin(direct, club.clubId);
+  await setActiveWorkspace(direct, "team", team.id);
+  const directCookie = await loginCookie(direct);
+  const create = (day) => api("/api/training-activity/materialize", {
+    method:"POST", cookie:directCookie, body:{requestKey:uid(),athleteId,localDate:day,timezone:"UTC"},
+  });
+  const source = await create("2026-09-08");
+  assert.equal(source.status, 201, JSON.stringify(source.body));
+  const {rows:[target]} = await query(
+    "insert into training.activities (owner_scope,owner_team_id,name,occurred_local_date,timezone_snapshot,origin,lifecycle_state) values ('team',$1,'Empty destination','2026-09-09','UTC','manual','confirmed') returning id", [team.id],
+  );
+  const request = id => api(`/api/training-activity/participants/${id}/reparent`, {
+    method:"POST", cookie:directCookie,body:{toActivityId:target.id},
+  });
+  const owner = await query("select owner_scope,owner_team_id from training.activities where id=$1",[source.body.activityId]);
+  assert.deepEqual(owner.rows, [{owner_scope:"team",owner_team_id:team.id}]);
+  for (const [type, id] of [["club",club.clubId],["team",otherTeam.id]]) {
+    await setActiveWorkspace(direct,type,id);
+    const missing = await request(crypto.randomUUID());
+    assert.equal(missing.status,404);
+    assert.deepEqual(await request(source.body.participantId),missing);
+  }
+  await setActiveWorkspace(direct,"team",team.id);
+  assert.deepEqual(await request(source.body.participantId),{status:200,body:{ok:true}});
+});
