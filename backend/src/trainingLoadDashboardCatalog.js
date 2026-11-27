@@ -36,7 +36,12 @@ function ownerScopeForCreate(ctx) {
   return dashboardOwnerWriteScope({ owner_scope: ctx.ownerScope, owner_club_id: ctx.ownerClubId, owner_team_id: ctx.ownerTeamId });
 }
 
-async function authorizeLegacyDashboardActor(runQuery, req, dataWorkspace, manageScopes, deny, viewOnly = []) {
+function dashboardDestinationDenied(ctx) {
+  return httpError(403, ctx.ownerScope === "club" ? "That club is outside your access."
+    : ctx.ownerScope === "team" ? "That team is outside your access." : "No active workspace.");
+}
+
+async function authorizeLegacyDashboardActor(runQuery, req, dataWorkspace, manageScopes, deny, { viewOnly = [], denyDestination } = {}) {
   const scopes = await lockDashboardManageCeilings(runQuery, [...manageScopes, ...viewOnly]);
   await lockDashboardActor(runQuery, req);
   const actor = await loadDashboardWriteActor(runQuery, req);
@@ -48,7 +53,10 @@ async function authorizeLegacyDashboardActor(runQuery, req, dataWorkspace, manag
     if (freshWorkspace.dataWorkspaceType !== dataWorkspace.dataWorkspaceType ||
         String(freshWorkspace.dataWorkspaceScopeId) !== String(dataWorkspace.dataWorkspaceScopeId)) throw deny();
   }
-  if (!await dashboardManageRightsStillHold(runQuery, actor, scopes, { viewOnly })) throw deny();
+  if (!await dashboardManageRightsStillHold(runQuery, actor, scopes, {
+    viewOnly,
+    refuse: ({ manage }) => { if (manage && denyDestination) throw denyDestination(); return false; },
+  })) throw deny();
   return { actor, freshWorkspace };
 }
 
@@ -195,8 +203,7 @@ export async function createDashboard(req, body) {
   const workspace = ctx.ownerScope === "user" ? await resolveActiveDataWorkspace(req) : null;
   const scope = ownerScopeForCreate(ctx) ?? dashboardWorkspaceWriteScope(workspace);
   if (!scope) return insert(query);
-  const deny = () => httpError(403, ctx.ownerScope === "club" ? "That club is outside your access."
-    : ctx.ownerScope === "team" ? "That team is outside your access." : "No active workspace.");
+  const deny = () => dashboardDestinationDenied(ctx);
   return legacyDashboardTransaction(async runQuery => {
     const { actor, freshWorkspace } = await authorizeLegacyDashboardActor(runQuery, req, workspace, [scope], deny);
     if ((await resolveDashboardCreateContext(actor, body, freshWorkspace)).error) throw deny();
@@ -380,7 +387,9 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       const destination = ownerScopeForCreate(target) ?? sourceScope;
       const viewOnly = sourceScope && (sourceScope.type !== destination?.type || sourceScope.id !== destination?.id) ? [sourceScope] : [];
       const deny = () => httpError(404, "Template not found.");
-      const locked = await authorizeLegacyDashboardActor(runQuery, req, dataWorkspace, [destination].filter(Boolean), deny, viewOnly);
+      const locked = await authorizeLegacyDashboardActor(runQuery, req, dataWorkspace, [destination].filter(Boolean), deny, {
+        viewOnly, denyDestination: () => dashboardDestinationDenied(target),
+      });
       actor = locked.actor;
       workspace = locked.freshWorkspace;
     }

@@ -60,7 +60,7 @@ export async function loadDashboardWriteActor(query, req) {
 
 // Evaluate this after the ceiling and identity locks, on the same client as
 // the write or receipt lookup. Existing owner checks still limit every route.
-export async function dashboardManageRightsStillHold(query, actor, scopes, { viewOnly = [] } = {}) {
+export async function dashboardManageRightsStillHold(query, actor, scopes, { viewOnly = [], refuse = () => false } = {}) {
   if (!scopes) return false;
   if (isPlatformAdministrator(actor.authz)) return true;
   for (const scope of scopes) {
@@ -70,7 +70,7 @@ export async function dashboardManageRightsStillHold(query, actor, scopes, { vie
       "select public.user_has_permission($1,'dashboards.view',$2,$3) and (not $4::boolean or (public.permission_word_honoured('dashboards.manage') and public.user_has_permission($1,'dashboards.manage',$2,$3))) as allowed",
       [actor.user.id, scope.type, scope.id, manage],
     );
-    if (rights?.allowed !== true) return false;
+    if (rights?.allowed !== true) return refuse({ manage });
   }
   return true;
 }

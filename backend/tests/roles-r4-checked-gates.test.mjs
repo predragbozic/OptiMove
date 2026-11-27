@@ -113,9 +113,10 @@ const REVIEWED = Object.freeze({
   "canonicalVariableAdminService.js": 2,
   "clubCeilingLock.js": 2,
   // P3 owner contract: both helpers explicitly close every workspace except club/team.
+  "dashboardManageAccess.js": 2, // converts native owner and workspace scopes for the write lock, without granting a workspace
   "dashboardPages/service.js": 2, // Page scope consistency and athlete Training Load licence
   "dashboardReferences/access.js": 1,
-  "dashboardReferences/bindingRouter.js": 1, // athlete/cohort groupBy validation, not a workspace authority
+  "dashboardReferences/bindingRouter.js": 2, // grouping validation and rechecking the same active workspace before a protected write
   "dashboardReferences/query.js": 1,
   "dashboardReferences/router.js": 1, // team picker narrows to the active team
   "dashboardReferences/preview.js": 2, // athlete/cohort grouping only; authorization stays in the existing query route
@@ -164,7 +165,7 @@ const REVIEWED = Object.freeze({
   // V-6: dashboards.view at a coach workspace's own club or team (an old role row), and the club / team data workspace
   // that load.view.athlete is asked for (+2); a view workspace is read through viewReadScope (the gate's), never offered.
   "trainingLoadDashboardAccess.js": 10,
-  "trainingLoadDashboardCatalog.js": 3,
+  "trainingLoadDashboardCatalog.js": 4, // preserves the Legacy explicit club/team clone destination
   "trainingLoadDashboardQuery.js": 13,
   "trainingLoadDashboardWidgets.js": 1,
   "trainingLoadMetricsAccess.js": 16,
