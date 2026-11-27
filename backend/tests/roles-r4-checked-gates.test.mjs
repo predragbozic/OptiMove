@@ -152,6 +152,7 @@ const REVIEWED = Object.freeze({
   "positionService.js": 11,
   "routes/auth.js": 1,
   "exerciseWriteAccess.js": 8, // Exercise bridge rechecks existing workspace and narrows Builder's target scope.
+  "programEditAccess.js": 5, // active scoped writer and exact persisted plan owner, no workspace offers
   "programRpeSettingsAccess.js": 4, // revalidates an existing native workspace for an RPE write
   "routes/builder.js": 10, // existing visibility plus scoped direct and indirect RPE effects
   "routes/calendar.js": 1,

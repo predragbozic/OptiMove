@@ -38,10 +38,10 @@ before(async () => {
     create table public.permission_club_role_version_items (version_id uuid);
     create table public.permission_custom_role_items (custom_role_id uuid);
     create table public.club_permission_ceiling (club_id uuid);
-    create function public.permission_club_closed_modules(uuid) returns text[] language sql as $ select '{}'::text[] $;
+    create function public.permission_club_closed_modules(uuid) returns text[] language sql as $program_edit_fixture$ select '{}'::text[] $program_edit_fixture$;
     create function public.permission_user_holdings(uuid)
       returns table(scope_type text, scope_id uuid, role_id uuid, assignment_id uuid, expires_at timestamptz, club_id uuid, custom_role_id uuid, words text[])
-      language sql as $ select null::text,null::uuid,null::uuid,null::uuid,null::timestamptz,null::uuid,null::uuid,null::text[] where false $;
+      language sql as $program_edit_fixture$ select null::text,null::uuid,null::uuid,null::uuid,null::timestamptz,null::uuid,null::uuid,null::text[] where false $program_edit_fixture$;
     create table plans.program_edit_v109_assignment_evidence (
       request_id uuid primary key, edited_plan_ids uuid[], removed_plan_ids uuid[], scope_type text, scope_id uuid
     );
