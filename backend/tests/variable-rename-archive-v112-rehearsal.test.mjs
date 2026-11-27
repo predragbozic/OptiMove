@@ -269,9 +269,9 @@ test("v112 old and current Settings and native variable operations share an exac
     await change(current, "archive", { requestKey: key(), reason: "Checked archive" });
     await change(current, "restore", { requestKey: key() });
     const [final] = (await client.query(
-      "select label, icon_key, archived_at from training_load.metric_definitions where id=$1", [id],
+      "select label, icon_url, state from training_load.metric_definitions where id=$1", [id],
     )).rows;
-    assert.deepEqual(final, { label: "Checked name", icon_key: nextIcon, archived_at: null });
+    assert.deepEqual(final, { label: "Checked name", icon_url: "icon:" + nextIcon, state: "active" });
     assert.deepEqual(await marker(), firstUsed);
     await assert.rejects(client.query(await read("rollback")), /refuses checked Variables Rename and Archive writer use/);
     await client.query("rollback");
