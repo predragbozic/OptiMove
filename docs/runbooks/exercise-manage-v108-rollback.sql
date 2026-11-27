@@ -139,7 +139,7 @@ create or replace function public.permission_word_honoured(p_word text) returns 
                       'variables.view', 'calendar.events.manage', 'calendar.settings.manage', 'load.schedule.manage', 'load.roster.decide', 'load.estimates.manage', 'load.activities.manage', 'dashboards.manage', 'programs.rpe_settings')
   $$;
 
-do $ begin
+do $$ begin
   if exists (select 1 from (values
     ('public.permission_role_items','permission_role_items_guard'),
     ('public.permission_roles','permission_roles_guard'),
