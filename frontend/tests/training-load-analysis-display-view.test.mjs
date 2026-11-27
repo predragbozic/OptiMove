@@ -7,6 +7,8 @@ import { emptyTrainingLoadState, state } from "../state.js";
 function setup(type, current, { config = { schemaVersion: 1 }, comparison = [], resultStatus = "ok" } = {}) {
   state.trainingLoad = emptyTrainingLoadState();
   const analysis = state.trainingLoad.analysis;
+  analysis.dashboardCanManage = true;
+  analysis.canCreateDashboard = true;
   analysis.dashboard = { id: "dashboard-1", name: "Legacy dashboard", status: "active", is_template: false };
   analysis.widgets = [{ id: "widget-1", widget_type: type, title: "Legacy widget", width: 4, height: 3, x: 0, y: 0, mobile_order: 1, group_by: "cohort", display_config: config, series: [{ id: "series-1", built_in_series_key: "srpe", resolution_status: "resolved", source_policy: "not_applicable", display_label: "sRPE" }] }];
   analysis.period = { dateFrom: "2026-10-01", dateTo: "2026-10-14" };
@@ -383,4 +385,43 @@ test('conflicted ratio with zero included occasions stays visible in saved and p
   const {renderSimpleEditorHtml}=await import('../training-load-simple-view.js');
   const preview=renderSimpleEditorHtml({open:true,step:3,athletes:[],selectedMetric:{label:'Intensity'},preview:{status:'valid',normalizedWidget:a.widgets[0],widgetResult:a.queryResult.widgets[0]}});
   assert.match(preview,/Conflict/);assert.doesNotMatch(preview,/No sessions with a value/);
+});
+
+test("server Dashboard capabilities hide writes and keep reading, export and active preference", () => {
+  const analysis = setup("table", [row(12)]);
+  analysis.dashboardCanManage = false;
+  analysis.canCreateDashboard = false;
+  analysis.menu = "dashboard";
+  const document = rendered();
+  for (const action of ["add-widget", "rename-dashboard", "toggle-edit", "archive", "delete-dashboard"]) {
+    assert.equal(document.querySelector(`[data-action="training-load-analysis-${action}"]`), null, action);
+  }
+  assert.match(document.querySelector(".tl-analysis-widget").textContent, /12/);
+  assert.ok(document.querySelector('[data-action="training-load-analysis-print"]'));
+  assert.ok(document.querySelector('[data-action="training-load-analysis-set-active"]'));
+  analysis.dashboard.is_template = true;
+  assert.equal(rendered().querySelector('[data-action="training-load-analysis-clone-template"]'), null);
+  analysis.canCreateDashboard = true;
+  assert.ok(rendered().querySelector('[data-action="training-load-analysis-clone-template"]'));
+});
+
+test("fresh Page capability alone can remove widget and layout controls while preserving dashboard reads and preferences", () => {
+  const analysis = setup("table", [row(12)]);
+  analysis.pagesAvailable = true;
+  analysis.selectedPageId = "page-1";
+  analysis.menu = "dashboard";
+  const actions = doc => ["add-widget", "toggle-edit"].map(action =>
+    doc.querySelector(`[data-action="training-load-analysis-${action}"]`));
+  for (const capability of [true, false, undefined]) {
+    analysis.pageCanManage = capability;
+    const document = rendered();
+    for (const control of actions(document)) assert.equal(Boolean(control), capability === true);
+    assert.equal(Boolean(document.querySelector(".tl-widget-menu-trigger")), capability === true);
+    assert.ok(document.querySelector('[data-action="training-load-analysis-rename-dashboard"]'));
+    assert.ok(document.querySelector('[data-action="training-load-analysis-print"]'));
+    assert.ok(document.querySelector('[data-action="training-load-analysis-set-active"]'));
+    assert.match(document.querySelector(".tl-analysis-widget").textContent, /12/);
+  }
+  analysis.pagesAvailable = false;
+  assert.ok(actions(rendered()).every(Boolean));
 });

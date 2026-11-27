@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isPlatformAdministrator, loadAuthorizationContext } from "./authz.js";
 import { DASHBOARD_MANAGE_WRITE_MARKER_SQL } from "./dashboardManageWriteMarker.js";
 import { lockClubCeiling } from "./clubCeilingLock.js";
+import { can, PermissionsUnavailableError } from "./permissions.js";
 
 function nativeScope(type, id) {
   return (type === "club" || type === "team") && id ? { type, id: String(id).toLowerCase() } : null;
@@ -89,4 +90,15 @@ export function shouldMarkDashboardManageWrite(actor, scopes) {
 export async function markDashboardManageWrite(query, actor, scopes) {
   if (!shouldMarkDashboardManageWrite(actor, scopes)) return;
   await query(DASHBOARD_MANAGE_WRITE_MARKER_SQL);
+}
+
+export function dashboardManageOffered(actor, workspace, dashboard = null) {
+  if (!workspace?.type || workspace.view) return false;
+  const scopes = [dashboardWorkspaceWriteScope(workspace), dashboardOwnerWriteScope(dashboard)].filter(Boolean);
+  try {
+    return scopes.every(scope => can(actor.authz, "dashboards.view", scope) && can(actor.authz, "dashboards.manage", scope));
+  } catch (error) {
+    if (error instanceof PermissionsUnavailableError) return false;
+    throw error;
+  }
 }

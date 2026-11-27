@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import pg from "pg";
-import { buildDatabase, fixtures, startServer } from "./support/permission-roles-world.mjs";
+import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
+import { buildDatabase, fixtures, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 
 const v105 = "202612071000_training_load_v105_dashboards_manage_bridge.sql";
 const path = "/api/training-load/dashboards";
@@ -18,9 +19,10 @@ async function selectWorkspace(db, userId, type, scopeId = null) {
 test("real Dashboard routes preserve standalone-team authorization and private ownership while checking native writes", async () => {
   const database = await buildDatabase({ label: "dashboard_manage_scope", upTo: v105 });
   const sql = new pg.Client({ connectionString: database.url });
-  let server;
+  let server, bridge;
   const priorFlag = process.env.DASHBOARD_PAGES_ENABLED;
   const priorDatabase = process.env.DATABASE_URL;
+  const priorBuild = process.env.P1_PREVIOUS_BUILD_SHA;
   try {
     await sql.connect();
     const f = fixtures(sql);
@@ -93,8 +95,133 @@ test("real Dashboard routes preserve standalone-team authorization and private o
     } finally {
       await sql.query(original);
     }
+
+    const scopedTeam = await f.team(club, "Dashboard scope team");
+    const scopedCoach = await f.user("Dashboard Manage assignment coach");
+    await f.grantTeam(scopedCoach, scopedTeam);
+    await selectWorkspace(sql, scopedCoach, "team", scopedTeam);
+    const viewer = await server.cookieFor(scopedCoach);
+    const target = await server.api(viewer, path, { method: "POST", body: { name: "Dashboard reversible role", ownerScope: "team", ownerTeamId: scopedTeam } });
+    assert.equal(target.status, 201, target.text);
+    const targetPath = `${path}/${target.body.dashboard.id}`;
+    const catalog = await server.api(platformCookie, `/api/organization/roles/catalog?clubId=${club}`);
+    const permission = catalog.body.permissions.find(item => item.word === "dashboards.manage");
+    assert.deepEqual([permission?.storable, permission?.honoured, permission?.checked], [true, true, true]);
+    const originalWords = (await server.api(viewer, "/api/auth/me")).body.user.permissions;
+    assert.ok(originalWords.includes("dashboards.manage"));
+    assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
+    assert.equal((await server.api(viewer, path)).body.canCreateDashboard, true);
+
+    const targetPages = await server.api(viewer, `${targetPath}/pages`);
+    assert.equal(targetPages.status, 200, targetPages.text);
+    const home = targetPages.body.pages.find(page => page.is_home);
+    assert.ok(home);
+    const copyPath = `${targetPath}/pages/${home.id}/copy`;
+    const copyRequest = {
+      method: "POST", body: {
+        requestId: randomUUID(), requestIssuedAt: targetPages.body.requestIssuedAt,
+        expectedPagesRevision: targetPages.body.pagesRevision,
+        input: { name: "Receipt before role change", sourceRevision: home.revision, widgetRevisions: {} },
+      },
+    };
+    const receipt = await server.api(viewer, copyPath, copyRequest);
+    assert.equal(receipt.status, 200, receipt.text);
+
+    const bridgeCommit = process.env.OPTIMOVE_DASHBOARDS_BRIDGE_SHA;
+    if (bridgeCommit) {
+      process.env.P1_PREVIOUS_BUILD_SHA = bridgeCommit;
+      bridge = await previousDashboardServer(database.url, { DASHBOARD_PAGES_ENABLED: "true" });
+      assert.equal(bridge.commit, bridgeCommit);
+      console.log("Exact Dashboard Manage bridge build:", bridge.commit);
+    }
+    const bridgeApi = (target, options = {}, cookie = viewer) => fetch(bridge.baseUrl + target, {
+      method: options.method,
+      headers: { Cookie: cookie, ...(options.body ? { "Content-Type": "application/json" } : {}) },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+    if (bridge) {
+      const me = await bridgeApi("/api/auth/me");
+      assert.equal(me.status, 200);
+      assert.ok(!(await me.json()).user.permissions.includes("dashboards.manage"));
+      const before = await bridgeApi(targetPath);
+      assert.equal(before.status, 200);
+      assert.equal((await before.json()).canManage, undefined);
+    }
+
+    const rolePath = `/api/organization/roles/${ROLE_IDS.team_coach}/clubs/${club}/version`;
+    const roleRequest = (expectedRevision, effect) => ({
+      method: "POST", body: { requestKey: randomUUID(), expectedRevision, reason: "Adjust Dashboard Manage", ...effect },
+    });
+    const removeRequest = roleRequest(null, { remove: ["dashboards.manage"] });
+    const removed = await server.api(platformCookie, rolePath, removeRequest);
+    assert.equal(removed.status, 200, removed.text);
+    if (bridge) {
+      const evidence = async () => (await sql.query(`
+        select (select count(*)::int from public.permission_club_role_versions v where v.club_id=$1 and v.system_role_id=$2) as versions,
+               (select count(*)::int from public.permission_club_role_version_changes c join public.permission_club_role_versions v on v.id=c.version_id
+                where v.club_id=$1 and v.system_role_id=$2) as audit,
+               (select count(*)::int from public.permission_requests r where r.requested_by_user_id=$3 and r.request_key=$4) as receipts
+      `, [club, ROLE_IDS.team_coach, platform, removeRequest.body.requestKey])).rows[0];
+      assert.deepEqual(await evidence(), { versions: 1, audit: 1, receipts: 1 });
+      const replay = await bridgeApi(rolePath, removeRequest, platformCookie);
+      assert.equal(replay.status, 200);
+      const { replayed, role } = await replay.json();
+      assert.equal(replayed, true);
+      assert.deepEqual(role.version, removed.body.role.version);
+      assert.deepEqual(await evidence(), { versions: 1, audit: 1, receipts: 1 });
+    }
+    assert.deepEqual((await server.api(viewer, "/api/auth/me")).body.user.permissions, originalWords.filter(word => word !== "dashboards.manage"));
+    const detail = await server.api(viewer, targetPath);
+    assert.equal(detail.status, 200, detail.text);
+    assert.equal(detail.body.canManage, false);
+    assert.equal((await server.api(viewer, `${targetPath}/pages`)).body.canManage, false);
+    assert.equal((await server.api(viewer, path)).body.canCreateDashboard, false);
+    const offeredName = { expectedRevision: target.body.dashboard.revision, name: "Name granted after restore" };
+    assert.equal((await server.api(viewer, targetPath, { method: "PATCH", body: offeredName })).status, 404);
+    const deniedReceipt = await server.api(viewer, copyPath, copyRequest);
+    assert.equal(deniedReceipt.status, 404, deniedReceipt.text);
+    if (bridge) {
+      const oldDeniedReceipt = await bridgeApi(copyPath, copyRequest);
+      assert.equal(oldDeniedReceipt.status, 404);
+      assert.equal(await oldDeniedReceipt.text(), deniedReceipt.text);
+      const denied = await bridgeApi(targetPath, { method: "PATCH", body: offeredName });
+      const missing = await bridgeApi(`${path}/${randomUUID()}`, { method: "PATCH", body: offeredName });
+      assert.equal(denied.status, 404);
+      assert.equal(missing.status, 404);
+      assert.equal(await denied.text(), await missing.text());
+    }
+    assert.equal((await server.api(viewer, `${path}/active`, { method: "POST", body: { dashboardId: target.body.dashboard.id } })).status, 200);
+    assert.equal((await server.api(viewer, `${path}/active`, { method: "DELETE" })).status, 200);
+    const restored = await server.api(platformCookie, rolePath, roleRequest(removed.body.role.version.revision, { add: ["dashboards.manage"] }));
+    assert.equal(restored.status, 200, restored.text);
+    assert.deepEqual((await server.api(viewer, "/api/auth/me")).body.user.permissions, originalWords);
+    assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
+    assert.deepEqual(await server.api(viewer, copyPath, copyRequest), receipt);
+    if (bridge) {
+      const bridgeReceipt = await bridgeApi(copyPath, copyRequest);
+      assert.equal(bridgeReceipt.status, 200);
+      assert.equal(await bridgeReceipt.text(), receipt.text);
+    }
+    const written = await server.api(viewer, targetPath, { method: "PATCH", body: offeredName });
+    assert.equal(written.status, 200, written.text);
+    if (bridge) {
+      const visible = await bridgeApi(targetPath);
+      assert.equal(visible.status, 200);
+      const latest = (await visible.json()).dashboard;
+      assert.equal(latest.name, offeredName.name);
+      const bridgeWrite = await bridgeApi(targetPath, {
+        method: "PATCH", body: { name: "Written by the bridge after restore", expectedRevision: latest.revision },
+      });
+      assert.equal(bridgeWrite.status, 200, await bridgeWrite.text());
+      const read = await server.api(viewer, targetPath);
+      assert.equal(read.body.dashboard.name, "Written by the bridge after restore");
+    }
+
   } finally {
+    await bridge?.stop();
     await server?.stop();
+    if (priorBuild === undefined) delete process.env.P1_PREVIOUS_BUILD_SHA;
+    else process.env.P1_PREVIOUS_BUILD_SHA = priorBuild;
     if (priorFlag === undefined) delete process.env.DASHBOARD_PAGES_ENABLED;
     else process.env.DASHBOARD_PAGES_ENABLED = priorFlag;
     if (priorDatabase === undefined) delete process.env.DATABASE_URL;

@@ -54,11 +54,11 @@ function dashboard(overrides = {}) {
   return { id: dashboardId, name: "Load board", description: "", status: "active", is_template: false, revision: 3, default_filter: { athleteIds: ["persisted-athlete"] }, ...overrides };
 }
 function detail() {
-  return { dashboard: dashboard(), widgets: [] };
+  return { canManage: true, dashboard: dashboard(), widgets: [] };
 }
 function dashboardsResponder() {
   return (call) => {
-    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { dashboards: [dashboard()] } };
+    if (call.url === "/api/training-load/dashboards") return { status: 200, body: { canCreateDashboard: true, dashboards: [dashboard()] } };
     if (call.url === "/api/training-load/dashboards/active") return { status: 200, body: { dashboardId } };
     if (call.url === `/api/training-load/dashboards/${dashboardId}`) return { status: 200, body: detail() };
     if (call.url === `/api/training-load/dashboards/${dashboardId}/query`) return { status: 200, body: { dashboardRevision: 3, widgets: [] } };
@@ -115,6 +115,8 @@ test("clearing the runtime activity in Dashboards also never touches the persist
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.runtimeFilter = { athleteIds: [], activityId, componentId: "comp-a" };
   state.trainingLoad.analysis.selectedActivity = { id: activityId, name: "Evening Recovery", date: "2026-09-09" };
   installFetchMock(dashboardsResponder());
@@ -196,6 +198,8 @@ test("the Dashboards runtime activity/component filter keeps working while the s
   state.trainingLoad.section = "analysis";
   state.trainingLoad.analysis.selectedDashboardId = dashboardId;
   state.trainingLoad.analysis.dashboard = dashboard();
+  state.trainingLoad.analysis.dashboardCanManage = true;
+  state.trainingLoad.analysis.canCreateDashboard = true;
   state.trainingLoad.analysis.runtimeFilter = { athleteIds: [], activityId, componentId: "" };
   state.trainingLoad.analysis.selectedActivity = { id: activityId, name: "Evening Recovery", date: "2026-09-09" };
   state.trainingLoad.analysis.componentOptions = [{ id: "comp-a", name: "Warm-up" }];

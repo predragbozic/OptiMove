@@ -79,7 +79,7 @@ test("2. the Dashboards view of a view workspace offers no write: no New dashboa
   const a = state.trainingLoad.analysis;
   const show = (ws, words, extra = {}) => {
     as(ws, words);
-    Object.assign(a, { dashboards: [dashboard()], dashboard: dashboard(extra), selectedDashboardId: DASH, widgets: [widget], queryResult: restricted,
+    Object.assign(a, { canCreateDashboard: ws === CLUB_WS, dashboardCanManage: ws === CLUB_WS, dashboards: [dashboard()], dashboard: dashboard(extra), selectedDashboardId: DASH, widgets: [widget], queryResult: restricted,
       picker: { ...a.picker, open: true, search: "" }, menu: "dashboard", editMode: false, pagesAvailable: false, listLoading: false });
     return actions(render(renderTrainingLoadAnalysisHtml));
   };

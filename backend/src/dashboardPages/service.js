@@ -17,7 +17,7 @@ import {canViewDashboardRow,canManageDashboardRow,dashboardWidgetsForViewer,dash
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
-import {dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor,markDashboardManageWrite} from '../dashboardManageAccess.js';
+import {dashboardManageOffered,dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor,markDashboardManageWrite} from '../dashboardManageAccess.js';
 
 export const pageError=(code='notFound',status=404)=>Object.assign(new Error(code),{code,httpStatus:status,status});
 const requestWindow=7*24*60*60*1000;
@@ -82,7 +82,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const pages=(await q('select * from training_load.dashboard_pages where dashboard_id=$1 order by position,id',[dashboardId])).rows;
    if(pageId&&!pages.some(p=>p.id.toLowerCase()===pageId.toLowerCase()))throw pageError();
    const shown=dashboardNamedAthletesAllowed(target.req,target.workspace)?{pages}:redactDashboardAthleteFilters({pages});
-   return {requestIssuedAt:new Date(now()).toISOString(),pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard)};
+   return {requestIssuedAt:new Date(now()).toISOString(),pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard)&&dashboardManageOffered(target.req,target.workspace,target.dashboard)};
   });
  }
  async function mutate({req,dashboardId,pageId=null,operation,body}){
@@ -126,7 +126,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const full={dashboard:target.dashboard,page,pages,widgets:dashboardWidgetsForViewer(target.req,widgets).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}))};
    // Roles V-6: without load.view.athlete the filters' athletes are not returned (dashboard, pages, widgets).
    const shown=dashboardNamedAthletesAllowed(target.req,target.workspace)?full:redactDashboardAthleteFilters(full);
-   return {requestIssuedAt:new Date(now()).toISOString(),dashboard:shown.dashboard,page:shown.page,resolvedPeriod:page.period_config?resolvePeriod(page.period_config,new Date(now()).toISOString()):null,pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard),widgets:shown.widgets};
+   return {requestIssuedAt:new Date(now()).toISOString(),dashboard:shown.dashboard,page:shown.page,resolvedPeriod:page.period_config?resolvePeriod(page.period_config,new Date(now()).toISOString()):null,pages:shown.pages,pagesRevision:target.dashboard.pages_revision,canManage:target.dashboard.status==='active'&&canManageDashboardRow(target.req,target.dashboard)&&dashboardManageOffered(target.req,target.workspace,target.dashboard),widgets:shown.widgets};
   });
  }
  async function queryPage({req,dashboardId,pageId,body}){

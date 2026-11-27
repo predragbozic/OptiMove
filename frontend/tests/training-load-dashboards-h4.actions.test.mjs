@@ -91,6 +91,8 @@ function onDashboards(initialWidget = widget()) {
   a.dashboards = [dashboard()];
   a.selectedDashboardId = dashboardId;
   a.dashboard = dashboard();
+  a.dashboardCanManage = true;
+  a.canCreateDashboard = true;
   a.widgets = [structuredClone(initialWidget)];
   a.period = { dateFrom: "2026-09-01", dateTo: "2026-09-17" };
   return a;

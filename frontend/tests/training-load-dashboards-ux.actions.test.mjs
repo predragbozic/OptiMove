@@ -85,10 +85,10 @@ function responder({ widgets = [widget()], extra = () => null } = {}) {
   return (call) => {
     const handled = extra(call);
     if (handled) return handled;
-    if (call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards() } };
+    if (call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { canCreateDashboard: true, dashboards: allDashboards() } };
     if (call.url === "/api/training-load/dashboards/active") return { status: 200, body: { activeDashboard: { dashboard_id: dashboardId } } };
-    if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "GET") return { status: 200, body: { dashboard: dashboard(), widgets } };
-    if (call.url === `/api/training-load/dashboards/${otherId}` && call.method === "GET") return { status: 200, body: { dashboard: dashboard({ id: otherId, name: "Sprint board" }), widgets: [] } };
+    if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "GET") return { status: 200, body: { canManage: true, dashboard: dashboard(), widgets } };
+    if (call.url === `/api/training-load/dashboards/${otherId}` && call.method === "GET") return { status: 200, body: { canManage: true, dashboard: dashboard({ id: otherId, name: "Sprint board" }), widgets: [] } };
     if (call.url.endsWith("/query")) return { status: 200, body: { dashboardRevision: 3, widgets: [] } };
     if (call.url.startsWith("/api/training-load/metrics/definitions")) return { status: 200, body: { rows: [{ id: metricId, key: "jump_height", label: "Jump height", short_label: "JH", unit: "cm", value_type: "number", scope_capabilities: ["session"] }], nextCursor: null } };
     if (call.url.startsWith("/api/training-load/metrics/")) return { status: 200, body: { rows: [] } };
@@ -101,6 +101,8 @@ function loadedDashboard() {
   a.activeDashboardId = dashboardId;
   a.selectedDashboardId = dashboardId;
   a.dashboard = dashboard();
+  a.dashboardCanManage = true;
+  a.canCreateDashboard = true;
   a.widgets = [widget()];
   ensureAnalysisPeriod();
 }
@@ -168,6 +170,7 @@ test("typing in the picker search filters live (per keystroke via setTrainingLoa
 test("the empty state offers New dashboard + Choose dashboard (the picker), not the old Create/focus actions", () => {
   resetState();
   state.trainingLoad.analysis.dashboards = allDashboards();
+  state.trainingLoad.analysis.canCreateDashboard = true;
   const html = renderTrainingLoadAnalysisHtml();
   assert.match(html, /No dashboard selected/);
   assert.match(html, /data-action="training-load-analysis-new-dashboard"/);
@@ -274,11 +277,12 @@ test("the default period is the 28-day preset; choosing a preset rewrites From/T
 test("New dashboard is a dialog: an empty name is refused without a request, a valid one POSTs name+description with ownerScope user, closes the dialog and selects the new dashboard", async () => {
   resetState();
   state.trainingLoad.analysis.dashboards = allDashboards();
+  state.trainingLoad.analysis.canCreateDashboard = true;
   installFetchMock(responder({
     extra: (call) => {
       if (call.url === "/api/training-load/dashboards" && call.method === "POST") {
         assert.deepEqual(call.body, { name: "Readiness", description: "Morning check", ownerScope: "user", isTemplate: false });
-        return { status: 201, body: { dashboard: dashboard({ id: otherId, name: "Readiness" }) } };
+        return { status: 201, body: { canManage: true, dashboard: dashboard({ id: otherId, name: "Readiness" }) } };
       }
       return null;
     },
@@ -311,6 +315,7 @@ test("New dashboard is a dialog: an empty name is refused without a request, a v
 test("a form submit reads the live inputs (Enter before any change event), and a server error keeps the dialog open with the message", async () => {
   resetState();
   state.trainingLoad.analysis.dashboards = allDashboards();
+  state.trainingLoad.analysis.canCreateDashboard = true;
   installFetchMock(responder({
     extra: (call) => (call.url === "/api/training-load/dashboards" && call.method === "POST" ? { status: 409, body: { error: "conflict", message: "A dashboard with this name already exists." } } : null),
   }));
@@ -339,7 +344,7 @@ test("Rename from the dashboard menu PATCHes name with expectedRevision and does
     extra: (call) => {
       if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "PATCH") {
         assert.deepEqual(call.body, { expectedRevision: 3, name: "Load board v2" });
-        return { status: 200, body: { dashboard: dashboard({ name: "Load board v2", revision: 4 }) } };
+        return { status: 200, body: { canManage: true, dashboard: dashboard({ name: "Load board v2", revision: 4 }) } };
       }
       return null;
     },
@@ -663,7 +668,7 @@ test("new widget: when the series POST fails, the just-created empty widget is D
     extra: (call) => {
       if (call.url.endsWith("/widgets") && call.method === "POST") { log.push("create"); return { status: 201, body: { widgetId: newWidgetId, dashboardRevision: 4 } }; }
       if (call.url.endsWith(`/widgets/${newWidgetId}/series`) && call.method === "POST") { log.push("series"); return { status: 400, body: { error: "invalidRequest", message: "Unknown or inactive builtInSeriesKey." } }; }
-      if (call.url.endsWith(`/widgets/${newWidgetId}`) && call.method === "DELETE") { log.push("rollback"); assert.deepEqual(call.body, { expectedWidgetRevision: 1 }); return { status: 200, body: { dashboard: dashboard({ revision: 5 }) } }; }
+      if (call.url.endsWith(`/widgets/${newWidgetId}`) && call.method === "DELETE") { log.push("rollback"); assert.deepEqual(call.body, { expectedWidgetRevision: 1 }); return { status: 200, body: { canManage: true, dashboard: dashboard({ revision: 5 }) } }; }
       return null;
     },
   }));
@@ -1155,7 +1160,7 @@ test("confirming DELETEs the open dashboard with its revision; when it was the A
       }
       // After the delete the server has no active selection and no longer lists it.
       if (deleted && call.url === "/api/training-load/dashboards/active") return { status: 200, body: { activeDashboard: null } };
-      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
+      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { canCreateDashboard: true, dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
       return null;
     },
   }));
@@ -1186,7 +1191,7 @@ test("deleting an open dashboard that was NOT the active one lands on the remain
   installFetchMock(responder({
     extra: (call) => {
       if (call.url === `/api/training-load/dashboards/${otherId}` && call.method === "DELETE") { deleted = true; return { status: 200, body: { deleted: true, dashboardId: otherId } }; }
-      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards().filter((d) => d.id !== otherId) } };
+      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { canCreateDashboard: true, dashboards: allDashboards().filter((d) => d.id !== otherId) } };
       return null;
     },
   }));
@@ -1243,7 +1248,7 @@ test("a dashboard picked while the DELETE is still in flight stays open - the de
         return gate.then(() => { deleted = true; return { status: 200, body: { deleted: true, dashboardId } }; });
       }
       if (deleted && call.url === "/api/training-load/dashboards/active") return { status: 200, body: { activeDashboard: null } };
-      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
+      if (deleted && call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { canCreateDashboard: true, dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
       return null;
     },
   }));
@@ -1269,7 +1274,7 @@ test("a 404 on delete means the dashboard is already gone: the same cleanup as a
     extra: (call) => {
       if (call.method === "DELETE") return { status: 404, body: { error: "notFound" } };
       if (call.url === "/api/training-load/dashboards/active") return { status: 200, body: { activeDashboard: null } };
-      if (call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
+      if (call.url.startsWith("/api/training-load/dashboards?")) return { status: 200, body: { canCreateDashboard: true, dashboards: allDashboards().filter((d) => d.id !== dashboardId) } };
       return null;
     },
   }));
@@ -1434,7 +1439,7 @@ test("H2 Save layout PUTs the draft once and leaves layout mode with a notice; a
   let layoutStatus = 200;
   installFetchMock(responder({
     extra: (call) => call.url.endsWith("/layout")
-      ? (layoutStatus === 200 ? { status: 200, body: { dashboard: dashboard({ revision: 4 }) } } : { status: 409, body: { error: "staleRevision" } })
+      ? (layoutStatus === 200 ? { status: 200, body: { canManage: true, dashboard: dashboard({ revision: 4 }) } } : { status: 409, body: { error: "staleRevision" } })
       : null,
   }));
   const a = state.trainingLoad.analysis;
@@ -1530,7 +1535,7 @@ test("H2 layout mode belongs to one dashboard: the dashboard just created while 
   loadedDashboard();
   installFetchMock(responder({
     extra: (call) => call.method === "POST" && call.url === "/api/training-load/dashboards"
-      ? { status: 201, body: { dashboard: dashboard({ id: otherId, name: "Sprint board" }) } }
+      ? { status: 201, body: { canManage: true, dashboard: dashboard({ id: otherId, name: "Sprint board" }) } }
       : null,
   }));
   const a = state.trainingLoad.analysis;
@@ -1625,7 +1630,7 @@ test("H2 (review): an open widget menu stacks above the next widgets' controls a
 test("H2 (review): Archive and Delete permanently ask their own question first - an unsaved layout survives when either question is declined, and is discarded only when both are accepted", async () => {
   resetState();
   loadedDashboard();
-  installFetchMock(responder({ extra: (call) => (call.url.endsWith("/archive") ? { status: 200, body: { dashboard: dashboard({ status: "archived" }) } } : null) }));
+  installFetchMock(responder({ extra: (call) => (call.url.endsWith("/archive") ? { status: 200, body: { canManage: true, dashboard: dashboard({ status: "archived" }) } } : null) }));
   const a = state.trainingLoad.analysis;
   try {
     for (const action of ["training-load-analysis-archive", "training-load-analysis-delete-dashboard"]) {
@@ -1752,4 +1757,39 @@ test("H2 (owner review): re-clicking the active Dashboards tab with a moved widg
   } finally {
     window.confirm = () => true;
   }
+});
+
+test("Dashboard controls require a current server grant even when dashboard data is cached", async () => {
+  resetState();
+  let granted = true;
+  installFetchMock(responder({
+    extra: (call) => {
+      if (call.url.startsWith("/api/training-load/dashboards?")) {
+        return { status: 200, body: { dashboards: allDashboards(), ...(granted ? { canCreateDashboard: true } : {}) } };
+      }
+      if (call.url === `/api/training-load/dashboards/${dashboardId}` && call.method === "GET") {
+        return { status: 200, body: { dashboard: dashboard(), widgets: [widget()], ...(granted ? { canManage: true } : {}) } };
+      }
+      return null;
+    },
+  }));
+  const menu = () => {
+    state.trainingLoad.analysis.menu = "dashboard";
+    return renderTrainingLoadAnalysisHtml();
+  };
+  await loadTrainingLoadAnalysis(renderTrainingLoad);
+  assert.match(menu(), /training-load-analysis-rename-dashboard/);
+  await loadTrainingLoadAnalysis(renderTrainingLoad);
+  granted = false;
+  const frames = [];
+  await loadTrainingLoadAnalysis(() => {
+    const a = state.trainingLoad.analysis;
+    frames.push({ canCreate: a.canCreateDashboard, canManage: a.dashboardCanManage });
+  });
+  assert.equal(frames.every(frame => !frame.canCreate && !frame.canManage), true);
+  assert.equal(state.trainingLoad.analysis.dashboardCanManage, false);
+  const view = menu();
+  assert.doesNotMatch(view, /training-load-analysis-rename-dashboard/);
+  assert.match(view, /training-load-analysis-print/);
+  assert.match(view, /training-load-analysis-set-active/);
 });
