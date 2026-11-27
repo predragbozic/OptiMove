@@ -2959,6 +2959,10 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
       await deletePlanTreeWithClient(client, target.id);
       deletedIds.push(target.id);
     }
+    if (!deletedIds.length) {
+      await client.query("rollback");
+      return null;
+    }
     await client.query("commit");
     if (!deletedIds.includes(plan.id)) return null;
     return {

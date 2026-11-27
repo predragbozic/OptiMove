@@ -62,7 +62,7 @@ test("an explicit recovery review preserves and then publishes a legacy draft in
       request.rpeReviewToken = renewed.body.review.token;
       await db.client.query("update public.user_team_roles set is_active=false where user_id=$1 and team_id=$2", [owner, team]);
       const revoked = await submit(cases.before.id, request);
-      assert.equal(revoked.status, 404, revoked.text);
+      assert.equal(revoked.status, 403, revoked.text);
       assert.equal(revoked.body.review, undefined);
       assert.deepEqual(await snapshot(ids), changed);
       await db.client.query("update public.user_team_roles set is_active=true where user_id=$1 and team_id=$2", [owner, team]);
@@ -75,6 +75,7 @@ test("an explicit recovery review preserves and then publishes a legacy draft in
       assert.equal(after.sessions[0].rpe_enabled, true);
       assert.equal(after.plan_baselines.length, 0);
       assert.equal(after.session_baselines.length, 0);
+      assert.equal(after.first_use.length, 1);
       const replay = await submit(cases.before.id, request);
       assert.equal(replay.status, 409, replay.text);
       assert.deepEqual(await snapshot([cases.before.id]), after);
