@@ -1,3 +1,4 @@
+import { canWriteExercise } from "./permission-nav.js";
 import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes, renderImage, renderMediaImage } from "./media.js";
 import { renderExerciseThumb } from "./exercise-view-modes.js";
 import { exerciseText, planItemText } from "./exercise-text.js";
@@ -126,8 +127,8 @@ export function renderExerciseDetailHtml({ item, itemId, ids, getItemById }) {
             <h3>${escapeHtml(title)}</h3>
             ${hierarchy ? `<div class="breadcrumb">${escapeHtml(hierarchy)}</div>` : ""}
           </div>
-          ${exerciseId && item.can_edit === true ? `<button class="plain-button compact-button" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exerciseId)}">Edit</button>` : ""}
-          ${exerciseId && item.can_copy === true ? `<button class="plain-button compact-button" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exerciseId)}">Copy</button>` : ""}
+          ${exerciseId && item.can_edit === true && canWriteExercise("exercises.add") ? `<button class="plain-button compact-button" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exerciseId)}">Edit</button>` : ""}
+          ${exerciseId && item.can_copy === true && canWriteExercise("exercises.add") ? `<button class="plain-button compact-button" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exerciseId)}">Copy</button>` : ""}
         </div>
 
         <div class="exercise-detail-layout">

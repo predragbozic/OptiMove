@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 import { renderExerciseLibraryHtml, renderExerciseOwnerOptions } from "../exercise-library.js";
 import { exerciseSearchUrl } from "../exercise-data.js";
-import { state, emptyExerciseFilters, emptyExerciseOptions } from "../state.js";
+import { renderBuilderSectionOverlay } from "../builder-section.js";
+import { state, emptyBuilderState, emptyExerciseFilters, emptyExerciseOptions } from "../state.js";
 import { clearAllViewCache } from "../view-cache.js";
 
 const initialDom = new JSDOM("<body></body>");
@@ -141,4 +142,49 @@ test("mobile header constrains the workspace label and keeps status on its own r
   assert.match(css, /\.workspace-toggle-label\s*\{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap/s);
   assert.match(css, /grid-template-columns: 40px minmax\(0, 1fr\) repeat\(3, 40px\)/);
   assert.match(css, /\.topbar-actions \.status-pill\s*\{[^}]*grid-column: 1 \/ -1/s);
+});
+
+test("native Add and Remove control separate Exercise actions in all library views", () => {
+  const dom = setup();
+  try {
+    const active = { id: "owned", name: "Own exercise", owner_scope: "user", can_copy: true, can_edit: true };
+    const render = (view, exercise = active) => renderExerciseLibraryHtml({
+      exercises: [exercise], itemIds: ["item"], markedExerciseIds: new Set(),
+      search: { view, filters: {}, options: {} }, tagEditor: {},
+    });
+    for (const view of ["details", "tile", "big", "list"]) {
+      state.currentUser.activeWorkspace = { type: "team", scopeId: "active-team" };
+      state.currentUser.permissions = ["exercises.use", "exercises.add"];
+      const add = render(view);
+      assert.match(add, /exercise-add-open/);
+      assert.match(add, /exercise-copy-open/);
+      assert.match(add, /exercise-edit-open/);
+      assert.doesNotMatch(add, /exercise-archive|exercise-restore/);
+      assert.doesNotMatch(render(view, { ...active, can_copy: false }), /exercise-copy-open/);
+
+      state.currentUser.permissions = ["exercises.use", "exercises.remove"];
+      const remove = render(view);
+      assert.doesNotMatch(remove, /exercise-add-open|exercise-copy-open|exercise-edit-open/);
+      assert.match(remove, /exercise-archive/);
+      assert.match(render(view, { ...active, is_active: false }), /exercise-restore/);
+      assert.match(remove, /exercise-toggle-favorite|exercise-classification/);
+    }
+  } finally {
+    dom.window.close();
+  }
+});
+
+test("Builder keeps library selection when custom exercise creation is unavailable", () => {
+  const builder = { ...emptyBuilderState(), customExerciseOpen: true };
+  const state = {
+    builder, exerciseSearch: { options: emptyExerciseOptions() }, tagEditor: {}, markedExerciseIds: new Set(),
+    currentUser: { activeWorkspace: { type: "club", scopeId: "active-club" }, permissions: ["exercises.use"] },
+  };
+  const render = () => renderBuilderSectionOverlay(state, { id: "section", name: "Warm-up", items: [] });
+  const read = render();
+  assert.match(read, /Search exercises/);
+  assert.doesNotMatch(read, /builder-open-custom-exercise|data-builder-form="add-custom-exercise"/);
+  state.currentUser.permissions.push("exercises.add");
+  assert.match(render(), /builder-open-custom-exercise/);
+  assert.match(render(), /data-builder-form="add-custom-exercise"/);
 });

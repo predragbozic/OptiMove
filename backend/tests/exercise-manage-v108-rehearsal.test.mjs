@@ -73,7 +73,7 @@ const read = name => readFile(new URL(`../../docs/runbooks/exercise-manage-v108-
 test("Exercises Add and Remove maintain old Settings and writes, and rollback only before use", async () => {
   const fixture = await createPagesDatabase({ through: "202612091000", label: "exercise_v108" });
   const { client } = fixture;
-  let current, previous;
+  let current, previous, stagedServer;
   try {
     const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'team',$4),($3,'team',$4)", [platform,coach,versionCoach,team]);
@@ -128,18 +128,20 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
 
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, previousBuild);
+    const stagedBuild = process.env.OPTIMOVE_EXERCISE_EXPOSURE_PREVIOUS ?? "bcd57cf2dec70457bbd8b3da3a3bd150929c8ea1";
+    stagedServer = await previousDashboardServer(fixture.url, {}, stagedBuild);
     const platformCookie = await current.cookieFor(platform);
     const customCookie = await current.cookieFor(coach);
     const versionCookie = await current.cookieFor(versionCoach);
-    const previousPost = async (cookie, path, body) => {
-      const response = await fetch(previous.baseUrl + path, {
+    const post = async (server, cookie, path, body) => {
+      const response = await fetch(server.baseUrl + path, {
         method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body),
       });
       const text = await response.text();
       return { status: response.status, body: JSON.parse(text), text };
     };
 
-    const legacy = await previousPost(versionCookie, "/api/exercises", { name: "Old binary exercise" });
+    const legacy = await post(previous, versionCookie, "/api/exercises", { name: "Old binary exercise" });
     assert.equal(legacy.status, 201, legacy.text);
     const marker = () => client.query("select 1 from library.exercise_manage_v108_use").then(result => result.rowCount);
     assert.equal(await marker(), 0);
@@ -149,8 +151,8 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
     const versionPath = root + "/" + roleId + "/clubs/" + club + "/version";
     const customPath = root + "/users/" + coach + "/clubs/" + club + "/custom";
     for (const send of [
-      (path, body) => previousPost(platformCookie, path, body),
-      (path, body) => current.api(platformCookie, path, { method: "POST", body }),
+      (path, body) => post(previous, platformCookie, path, body),
+      (path, body) => post(stagedServer, platformCookie, path, body),
     ]) {
       const { rows: [roles] } = await client.query(`select
         (select revision from public.permission_roles where id=$1) as role_revision,
@@ -174,6 +176,63 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
       assert.equal(allowed.status, 200, allowed.text);
     }
     const check = (cookie, path, method, body) => current.api(cookie, path, { method, body });
+    const available = async (cookie, words) => {
+      const me = await check(cookie, "/api/auth/me", "GET");
+      assert.equal(me.status, 200, me.text);
+      assert.deepEqual(bridgeWords.filter(word => me.body.user.permissions.includes(word)), words);
+    };
+    const catalog = await check(platformCookie, root + "/catalog?clubId=" + club, "GET");
+    assert.equal(catalog.status, 200, catalog.text);
+    for (const word of bridgeWords) assert.equal(catalog.body.permissions.find(entry => entry.word === word)?.checked, true);
+    assert.equal(catalog.body.permissions.find(entry => entry.word === "exercises.media.upload")?.checked, false);
+    const revise = async (path, input) => {
+      const body = { requestKey: key(), reason: "Exercise exposure grant", ...input };
+      const response = await check(platformCookie, path, "POST", body);
+      assert.equal(response.status, 200, response.text);
+      const changed = await roleData(client);
+      const replay = await post(stagedServer, platformCookie, path, body);
+      assert.equal(replay.status, 200, replay.text);
+      assert.equal(replay.body.replayed, true);
+      const receiptValues = Object.keys(replay.body).filter(name => name !== "replayed");
+      assert.ok(receiptValues.length > 0);
+      for (const name of receiptValues) assert.deepEqual(replay.body[name], response.body[name]);
+      assert.deepEqual(await roleData(client), changed);
+    };
+    const layers = [
+      { path: versionPath, cookie: versionCookie, id: versionId, kind: "version", intent: {} },
+      { path: customPath, cookie: customCookie, id: customId, kind: "custom",
+        intent: { roleId, scopeType: "team", scopeId: team } },
+    ];
+    const revision = async ({ id, kind }) => {
+      const sql = kind === "version"
+        ? "select revision from public.permission_club_role_versions where id=$1"
+        : "select revision from public.permission_custom_roles where id=$1";
+      return (await client.query(sql, [id])).rows[0].revision;
+    };
+    const system = () => client.query(
+      "select revision,array(select permission_word from public.permission_role_items where role_id=$1 order by 1) as items from public.permission_roles where id=$1", [roleId],
+    ).then(({ rows }) => rows[0]);
+    const original = await system();
+    await revise(roleChange, { expectedRevision: original.revision, items: original.items.filter(word => !bridgeWords.includes(word)) });
+    const reduced = await system();
+    assert.ok(bridgeWords.every(word => !reduced.items.includes(word)));
+    await revise(roleChange, { expectedRevision: reduced.revision, items: original.items });
+    assert.deepEqual((await system()).items, original.items);
+    for (const layer of layers) {
+      await available(layer.cookie, bridgeWords);
+      const owned = await post(previous, layer.cookie, "/api/exercises", { name: "Owned exercise for revocation" });
+      assert.equal(owned.status, 201, owned.text);
+      await revise(layer.path, { ...layer.intent, expectedRevision: await revision(layer), remove: bridgeWords });
+      await available(layer.cookie, []);
+      const denied = await check(layer.cookie, "/api/exercises", "POST", { name: "Revoked writer" });
+      assert.equal(denied.status, 403, denied.text);
+      const archiveDenied = await check(layer.cookie, "/api/exercises/" + owned.body.id + "/archive", "POST");
+      assert.equal(archiveDenied.status, 403, archiveDenied.text);
+      const { rows: [unchanged] } = await client.query("select is_active from library.exercises where id=$1", [owned.body.id]);
+      assert.equal(unchanged.is_active, true);
+      await revise(layer.path, { ...layer.intent, expectedRevision: await revision(layer), add: bridgeWords });
+      await available(layer.cookie, bridgeWords);
+    }
     const forbidden = await check(customCookie, "/api/exercises/" + legacy.body.id, "PATCH", { name: "Other owner's exercise" });
     assert.equal(forbidden.status, 404, forbidden.text);
     assert.equal(await marker(), 0);
@@ -192,7 +251,7 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
     await assert.rejects(client.query(rollback), /checked Exercise writer use/);
     await client.query("rollback");
   } finally {
-    try { await previous?.stop(); } finally {
+    try { await Promise.all([previous?.stop(), stagedServer?.stop()]); } finally {
       try { await current?.stop(); } finally { await fixture.drop(); }
     }
   }

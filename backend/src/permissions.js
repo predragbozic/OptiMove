@@ -140,7 +140,7 @@ export const PERMISSION_GROUPS = Object.freeze([
   ]),
   group("exercises", "Exercises", [
     ["use", "Use", ["exercises.use"]],
-    ["add", "Add (with media)", ["exercises.add", "exercises.media.upload"]],
+    ["add", "Add", ["exercises.add", "exercises.media.upload"]],
     ["full", "Full", ["exercises.remove"]],
   ]),
   group("presets", "Tags and presets", [
@@ -243,6 +243,8 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "programs.view": Object.freeze(["access.js", "programRpeSettingsAccess.js"]),
   "programs.rpe_settings": Object.freeze(["programRpeSettingsAccess.js"]),
   "exercises.use": Object.freeze(["routes/exercises.js"]),
+  "exercises.add": Object.freeze(["routes/exercises.js", "routes/builder.js"]),
+  "exercises.remove": Object.freeze(["routes/exercises.js"]),
   "load.view.team": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js", "trainingLoadMetricsAccess.js"]),
   "load.view.athlete": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js"]),
   // Roles M-2: the transaction holds and rechecks the native scope before any external schedule write.
