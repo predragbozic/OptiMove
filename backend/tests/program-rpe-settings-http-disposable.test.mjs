@@ -173,10 +173,10 @@ test("ordinary Submit publishes tracked inheritance without Manage and holds an 
   assert.equal(await status(legacy.id), "draft");
   assert.equal((await flags(legacy.sessionId)).rpe_enabled, true);
 
-  const origin = await fixturePlan(athleteId, "active", "2027-08-02");
+  const origin = await fixturePlan(athleteId, "active", "2027-10-04");
   const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);
   const duplicate = await http.api(coach.cookie, "/api/builder/plans/" + origin.id + "/duplicate", {
-    method: "POST", body: { athleteIds: [athlete.athlete_id], weekStart: "2027-08-09" },
+    method: "POST", body: { athleteIds: [athlete.athlete_id], weekStart: "2027-10-11" },
   });
   assert.equal(duplicate.status, 201, duplicate.text);
   const draft = duplicate.body.plan.id;
