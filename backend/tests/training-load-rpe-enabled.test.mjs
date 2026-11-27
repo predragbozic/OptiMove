@@ -122,7 +122,7 @@ function addDaysIso(iso, days) {
   return isoDate(d);
 }
 
-async function makeRealWeeklyPlan(coachId, athleteId, overrides = {}) {
+async function makeRealWeeklyPlan({ coachId, clubId }, athleteId, overrides = {}) {
   const planResult = await query(
     `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, status, source_type, visibility, week_start)
      values ('weekly', $1, $2, 'TL rpe-enabled regression plan', 'active', 'builder', 'private', $3)
@@ -131,6 +131,7 @@ async function makeRealWeeklyPlan(coachId, athleteId, overrides = {}) {
   );
   const planId = planResult.rows[0].id;
   cleanupPlanIds.add(planId);
+  await query(`insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_club_id) values ($1,'club',$2)`, [planId, clubId]);
   return planId;
 }
 // Training Activity Integration 2A hardening: a genuine, not-yet-submitted
@@ -140,7 +141,7 @@ async function makeRealWeeklyPlan(coachId, athleteId, overrides = {}) {
 // rpeEnabled change against; every other field (name/time/amPm/bta)
 // remains editable on either a draft OR an already-published/active plan,
 // exactly as makeRealWeeklyPlan above still produces.
-async function makeRealDraftWeeklyPlan(coachId, athleteId, overrides = {}) {
+async function makeRealDraftWeeklyPlan({ coachId, clubId }, athleteId, overrides = {}) {
   const planResult = await query(
     `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, status, source_type, visibility, week_start)
      values ('weekly', $1, $2, 'TL rpe-enabled regression draft', 'draft', 'builder', 'private', $3)
@@ -149,6 +150,7 @@ async function makeRealDraftWeeklyPlan(coachId, athleteId, overrides = {}) {
   );
   const planId = planResult.rows[0].id;
   cleanupPlanIds.add(planId);
+  await query(`insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_club_id) values ($1,'club',$2)`, [planId, clubId]);
   return planId;
 }
 async function makeRealDay(planId, date, dayOrder) {
@@ -202,7 +204,7 @@ async function sessionRow(sessionId) {
 test("A1. trackingEnabled/rpeEnabled are rejected (409, notDraft) on an already-published/active plan, and change zero rows", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, true, true, "07:30");
 
@@ -229,7 +231,7 @@ test("A1. trackingEnabled/rpeEnabled are rejected (409, notDraft) on an already-
 test("A2. PATCH with no rpeEnabled key leaves the existing value untouched - a partial update never silently re-enables/disables it", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false);
 
@@ -241,7 +243,7 @@ test("A2. PATCH with no rpeEnabled key leaves the existing value untouched - a p
 test("A3. PATCH with rpeEnabled: true re-enables a previously disabled session that is already tracked in Training Load - on a genuine draft plan", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   // trainingLoadEnabled=true, rpeEnabled=false - "tracked, RPE off", the
   // one real starting state re-enabling RPE alone is meaningful for.
@@ -255,7 +257,7 @@ test("A3. PATCH with rpeEnabled: true re-enables a previously disabled session t
 test("A4. PATCH with rpeEnabled: true on a session NOT tracked in Training Load is forced back to false - RPE can never outrun tracking (on a genuine draft plan)", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, false);
 
@@ -271,7 +273,7 @@ test("A4. PATCH with rpeEnabled: true on a session NOT tracked in Training Load 
 test("A5. trackingEnabled/rpeEnabled ARE permitted on an OPEN EDIT-DRAFT of an otherwise-active plan (POST /plans/:planId/edit)", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const livePlanId = await makeRealWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
   await makeRealSession(dayId, "Mobility session", "AM", 0, true, true);
 
@@ -301,7 +303,7 @@ test("A5. trackingEnabled/rpeEnabled ARE permitted on an OPEN EDIT-DRAFT of an o
 test("A6. PATCH {trackingEnabled} alone preserves a pre-existing name and session_time", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Gym session", "PM", 0, false, false, "18:15");
 
@@ -316,7 +318,7 @@ test("A6. PATCH {trackingEnabled} alone preserves a pre-existing name and sessio
 test("A7. PATCH {rpeEnabled} alone preserves a pre-existing name and session_time", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Recovery session", "AM", 0, false, true, "06:45");
 
@@ -331,7 +333,7 @@ test("A7. PATCH {rpeEnabled} alone preserves a pre-existing name and session_tim
 test("A8. PATCH {name} alone preserves a pre-existing session_time, and PATCH {time} alone preserves a pre-existing name", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Original name", "AM", 0, false, false, "08:00");
 
@@ -364,7 +366,7 @@ const NON_BOOLEAN_VALUES = [
 test("A9. PATCH {trackingEnabled: <non-boolean>} is a controlled 400 for every non-boolean JSON type, and changes zero rows", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, false);
 
@@ -379,7 +381,7 @@ test("A9. PATCH {trackingEnabled: <non-boolean>} is a controlled 400 for every n
 test("A10. PATCH {rpeEnabled: <non-boolean>} is a controlled 400 for every non-boolean JSON type, and changes zero rows", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const planId = await makeRealDraftWeeklyPlan(coach.coachId, athlete.athleteId);
+  const planId = await makeRealDraftWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(planId, TODAY, dayOrderForDate(TODAY));
   const sessionId = await makeRealSession(dayId, "Mobility session", "AM", 0, false, true);
 
@@ -400,7 +402,7 @@ test("A10. PATCH {rpeEnabled: <non-boolean>} is a controlled 400 for every non-b
 test("B1. the live -> edit-draft -> live round trip (POST /plans/:planId/edit then /submit) preserves rpe_enabled = false the whole way through", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const livePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const livePlanId = await makeRealWeeklyPlan(coach, athlete.athleteId);
   const dayId = await makeRealDay(livePlanId, TODAY, dayOrderForDate(TODAY));
   await makeRealSession(dayId, "Recovery session", "AM", 0, false);
 
@@ -429,7 +431,7 @@ test("B2. duplicating a weekly plan to a NEW athlete (POST /plans/:planId/duplic
   const coach = await makeCoachWithClub();
   const sourceAthlete = await makeAthleteInClub(coach.clubId);
   const targetAthlete = await makeAthleteInClub(coach.clubId);
-  const sourcePlanId = await makeRealWeeklyPlan(coach.coachId, sourceAthlete.athleteId);
+  const sourcePlanId = await makeRealWeeklyPlan(coach, sourceAthlete.athleteId);
   const dayId = await makeRealDay(sourcePlanId, WEEK_START, 1);
   await makeRealSession(dayId, "Recovery session", "AM", 0, false);
 
@@ -454,11 +456,11 @@ test("B2. duplicating a weekly plan to a NEW athlete (POST /plans/:planId/duplic
 test("B3. the standalone session-copy endpoint (POST /sessions/:sessionId/copy-into/:targetDayId) copies rpe_enabled from the source session", async () => {
   const coach = await makeCoachWithClub();
   const athlete = await makeAthleteInClub(coach.clubId);
-  const sourcePlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId);
+  const sourcePlanId = await makeRealWeeklyPlan(coach, athlete.athleteId);
   const sourceDayId = await makeRealDay(sourcePlanId, TODAY, dayOrderForDate(TODAY));
   const sourceSessionId = await makeRealSession(sourceDayId, "Rehab session", "PM", 0, false);
 
-  const targetPlanId = await makeRealWeeklyPlan(coach.coachId, athlete.athleteId, { weekStart: addDaysIso(WEEK_START, 14) });
+  const targetPlanId = await makeRealWeeklyPlan(coach, athlete.athleteId, { weekStart: addDaysIso(WEEK_START, 14) });
   const targetDayId = await makeRealDay(targetPlanId, TODAY, dayOrderForDate(TODAY));
 
   const copyRes = await api(`/api/builder/sessions/${sourceSessionId}/copy-into/${targetDayId}`, { method: "POST", cookie: coach.cookie });

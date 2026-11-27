@@ -431,7 +431,7 @@ router.patch("/plans/:planId/training-load-settings", withBatchReuseGuard(async 
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan.id, "Draft program not found");
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     const trackTrainingLoadDefault = req.body?.trackTrainingLoadDefault !== undefined ? strictBoolean(req.body.trackTrainingLoadDefault) : plan.track_training_load_default;
@@ -470,7 +470,7 @@ router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", 
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan.id, "Draft program not found");
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     await client.query(
@@ -499,7 +499,7 @@ router.post("/plans/:planId/training-load-settings/turn-off-before-after", withB
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan.id, "Draft program not found");
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     await client.query(
@@ -528,7 +528,7 @@ router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", withBatchR
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan.id, "Draft program not found");
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     // Tracking itself is left untouched - this only ever turns RPE off,
@@ -2230,7 +2230,7 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
-    const plan = await lockBuilderRpeDraft(client, req, res, scope, session.plan.id, "Program session not found");
+    const plan = await lockBuilderRpeDraft(client, req, res, scope, session.plan, "Program session not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     // The session row's own current values are ALSO re-read fresh under
@@ -2937,7 +2937,8 @@ async function syncBatchContentWithClient(client, sourceRow, siblingRows, guard 
 async function prepareWeeklyRpeSync(client, sourcePlan, req, guard) {
   if (sourcePlan?.plan_type !== "weekly" || !sourcePlan.builder_batch_id) return null;
   const scope = await resolveExternalScheduleWorkspaceScope(req);
-  if (!nativeProgramRpeScope(scope)) return null;
+  if (scope.type === "platform") return null;
+  if (!nativeProgramRpeScope(scope)) return { scope, actor: await lockProgramRpeActor(client, req, scope) };
   // Match edit-draft Saves: take exercise reuse before the role and plan
   // locks. Restore the original plan-lock wait before claiming members;
   // the copy phase keeps its own existing reuse timeout.
@@ -3167,7 +3168,7 @@ async function lockRpeEditSessions(client, liveIds, draftId) {
 }
 
 async function assertProgramRpeTargets(client, actor, scope, ids) {
-  if (!ids.length || !nativeProgramRpeScope(scope)) return;
+  if (!ids.length || scope.type === "platform") return;
   const refuse = () => Object.assign(new Error("Draft program not found"), { status: 404, code: "program_rpe_scope" });
   if (!await programRpeSettingsRightsStillHold(client, actor, scope)) throw refuse();
   const { rows } = await client.query(
@@ -3202,7 +3203,7 @@ async function applyEditDraft(req, draftPlan, timing) {
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client);
-    const rpe = scope && nativeProgramRpeScope(scope) ? { scope, actor: await lockProgramRpeActor(client, req, scope) } : null;
+    const rpe = scope && scope.type !== "platform" ? { scope, actor: await lockProgramRpeActor(client, req, scope) } : null;
     // Lock and re-read the draft's OWN plans.plans row fresh, inside this
     // transaction - the caller's draftPlan parameter was read before this
     // transaction (often before the whole request started - POST /plans/
@@ -4123,22 +4124,30 @@ function isEditableDraftPlan(plan) {
 // and the callers below need) on success. On rejection, sends the 409
 // itself and returns null - the caller's own responsibility is only to
 // `rollback` and return, since nothing has been written yet at this point.
-async function lockBuilderRpeDraft(client, req, res, scope, planId, missing) {
+function mayChangeDraftRpe(scope, planType, owner) {
+  // Only weekly plans have authoritative workspace ownership today. Keep the existing
+  // private nonweekly route before exposure when there is no ownership snapshot at all.
+  if (!owner && scope.type === "private_coach" && planType !== "weekly") return true;
+  return canManagePlanTrainingLoadInScope(scope, owner);
+}
+
+async function lockBuilderRpeDraft(client, req, res, scope, accessPlan, missing) {
+  const planId = accessPlan.id;
   const actor = await lockProgramRpeSettingsActor(client, req, scope);
   if (!actor) { res.status(404).json({ error: missing }); return null; }
-  const native = nativeProgramRpeScope(scope);
-  if (native) {
+  const checkOwner = scope.type !== "platform";
+  if (checkOwner) {
     const { rows: [owner] } = await client.query(
       "select * from training_load.plan_workspace_ownership where plan_id=$1", [planId],
     );
-    if (!canManagePlanTrainingLoadInScope(scope, owner)) { res.status(404).json({ error: missing }); return null; }
+    if (!mayChangeDraftRpe(scope, accessPlan.plan_type, owner)) { res.status(404).json({ error: missing }); return null; }
   }
   const plan = await lockDraftPlanOrReject(client, res, planId);
-  if (!plan || !native) return plan;
+  if (!plan || !checkOwner) return plan;
   const { rows: [owner] } = await client.query(
     "select * from training_load.plan_workspace_ownership where plan_id=$1 for share", [planId],
   );
-  if (!canManagePlanTrainingLoadInScope(scope, owner) || !await getEditablePlan(actor, planId, client.query.bind(client))) {
+  if (!mayChangeDraftRpe(scope, plan.plan_type, owner) || !await getEditablePlan(actor, planId, client.query.bind(client))) {
     res.status(404).json({ error: missing });
     return null;
   }

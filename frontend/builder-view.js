@@ -749,6 +749,7 @@ function renderBuilderInner() {
           <span class="builder-discard-status" data-builder-discard-status role="status" aria-live="polite" hidden></span>
         </div>
       </header>
+      ${draft.batchSyncMessage ? `<p class="muted" role="status">${escapeHtml(draft.batchSyncMessage)}</p>` : ""}
       ${renderBuilderSessionsLockedHtml()}
       ${state.builder.assignResult ? renderBuilderAssignResultBanner(state.builder.assignResult) : ""}
       ${hasBatch ? renderBuilderBatchSwitcher(batchPlans, batchIndex)

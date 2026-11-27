@@ -116,3 +116,14 @@ Unmatched additions and stale deleted-source rows, non-weekly copy legs,
 first activation without a trustworthy creation baseline and whole-tree
 session replacements remain open for the narrow provenance contract.
 No role exposure is implied by this partial implementation.
+
+Private coaching applies the stored owner even when the signed-in coach
+created a club or team plan. For weekly RPE effects it admits the genuine
+user-owned plan only, and checks each affected plan before live Submit or
+batch sync. An explicit platform workspace retains its existing override.
+For a legacy nonweekly session without a workspace ownership row, the
+existing private editor can still change that session directly before
+exposure. Never use that fallback when an ownership row names another
+owner. Nonweekly direct and propagated settings need authoritative
+ownership and provenance before the role word is exposed. A refused
+post-commit batch shows its plain status below the draft header.

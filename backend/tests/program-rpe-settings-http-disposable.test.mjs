@@ -3,44 +3,17 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
 import { fixtures, key, startServer } from "./support/permission-roles-world.mjs";
+import { changeProgramRpeGrant } from "./support/program-rpe-grants.mjs";
 
 let project, db, http, A, B, coach, viewer, plan, live, athleteId;
-const word = "programs.rpe_settings";
-
-async function changeClubAdminRpeGrant(add) {
-  const fixtureName = "migrations_v2/test-only-programs-rpe-" + randomUUID() + ".sql";
-  assert.match(project.name, /^optimove_tests_/);
-  await db.query("begin");
-  try {
-    await db.query("select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive')");
-    if (add && !(await db.query("select public.permission_word_honoured($1) as ready", [word])).rows[0].ready) {
-      const { definition } = (await db.query("select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as definition")).rows[0];
-      const staged = definition.replace("'programs.view'", "'programs.view', 'programs.rpe_settings'");
-      assert.notEqual(staged, definition);
-      await db.query(staged);
-    }
-    const role = (await db.query("update public.permission_roles set revision=revision+1,updated_at=now() where basic_key='club_admin' returning id,revision")).rows[0];
-    if (add) {
-      await db.query("insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_added) values($1,$2,'migration',$3,array[$4]::text[])", [role.id, role.revision, fixtureName, word]);
-      await db.query("insert into public.permission_role_items(role_id,permission_word) values($1,$2)", [role.id, word]);
-    } else {
-      await db.query("insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_removed) values($1,$2,'migration',$3,array[$4]::text[])", [role.id, role.revision, fixtureName, word]);
-      await db.query("delete from public.permission_role_items where role_id=$1 and permission_word=$2", [role.id, word]);
-    }
-    await db.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values($1,repeat('0',64),'test')", [fixtureName]);
-    await db.query("commit");
-  } catch (error) {
-    await db.query("rollback");
-    throw error;
-  }
-}
 
 async function fixturePlan(athleteId, status, weekStart, ownerClub = A) {
   const { id } = (await db.query(
     "insert into plans.plans(plan_type,created_by_user_id,athlete_id,name,status,source_type,visibility,week_start) values ('weekly',$1,$2,'Test plan',$3,'builder','private',$4) returning id",
     [coach.id, athleteId, status, weekStart],
   )).rows[0];
-  await db.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_club_id) values($1,'club',$2)", [id, ownerClub]);
+  if (ownerClub) await db.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_club_id) values($1,'club',$2)", [id, ownerClub]);
+  else await db.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_user_id) values($1,'user',$2)", [id, coach.id]);
   const dayId = (await db.query("insert into plans.plan_days(plan_id,date,day_order,block_index) values($1,$2,1,1) returning id", [id, weekStart])).rows[0].id;
   const sessionId = (await db.query("insert into plans.plan_sessions(plan_day_id,name,bta,rpe_enabled,training_load_enabled) values($1,'Test session','T',true,true) returning id", [dayId])).rows[0].id;
   return { id, sessionId };
@@ -49,8 +22,7 @@ async function fixturePlan(athleteId, status, weekStart, ownerClub = A) {
 before(async () => {
   project = await createPagesDatabase({ through: "999999999999", label: "programs_rpe" });
   db = project.client;
-  const ready = (await db.query("select public.permission_word_honoured($1) as ready", [word])).rows[0].ready;
-  if (!ready) await changeClubAdminRpeGrant(true);
+  await changeProgramRpeGrant(db, "club_admin", true);
   const f = fixtures(db);
   A = await f.club();
   B = await f.club();
@@ -138,7 +110,7 @@ test("view-only and a coach in the other club cannot write through any direct ac
 });
 
 test("an exact owner without Manage gets identical missing responses while ordinary program edits still work", async () => {
-  await changeClubAdminRpeGrant(false);
+  await changeProgramRpeGrant(db, "club_admin", false);
   await assertRefused(coach);
   assert.equal((await http.api(coach.cookie, "/api/builder/plans/" + plan.id)).status, 200);
   const renamed = await http.api(coach.cookie, "/api/builder/plans/" + plan.id, { method: "PATCH", body: { name: "Ordinary Builder rename" } });
@@ -198,7 +170,7 @@ test("exact weekly batch default differences require rights on every target befo
   const sync = (path, body) => http.api(coach.cookie, "/api/builder/plans/" + source.id + path, { method: "POST", body });
   const equal = await sync("/sync-batch", {});
   assert.equal(equal.status, 200, equal.text);
-  await changeClubAdminRpeGrant(true);
+  await changeProgramRpeGrant(db, "club_admin", true);
   await db.query("update plans.plans set track_training_load_default=true,request_rpe_default=true where id=$1", [source.id]);
   const snapshot = async () => (await db.query("select id,name,status,track_training_load_default,request_rpe_default,updated_at from plans.plans where id=any($1::uuid[]) order by id", [ids])).rows;
   const before = await snapshot();
@@ -241,4 +213,59 @@ test("live batch Submit checks the exact sibling chosen for a retained-session u
   assert.deepEqual(await flags(source.sessionId), sourceBefore);
   assert.deepEqual(await flags(other.sessionId), siblingBefore);
   assert.equal((await flags(pending.rows[0].id)).rpe_enabled, false);
+});
+
+test("private coaching rejects native-owned RPE effects even when the actor created the plan", async () => {
+  await fixtures(db).grantIndependent(coach.id);
+  const nativeDraft = await fixturePlan(athleteId, "draft", "2027-01-18");
+  const nativeLive = await fixturePlan(athleteId, "active", "2027-01-25");
+  const ownPrivate = await fixturePlan(athleteId, "draft", "2027-02-01", null);
+  const sibling = await fixturePlan(athleteId, "draft", "2027-02-08");
+  const { id: program } = (await db.query(
+    "insert into plans.plans(plan_type,created_by_user_id,name,status,source_type,visibility,is_template) values('program',$1,'Private program','draft','builder','private',true) returning id",
+    [coach.id],
+  )).rows[0];
+  const { id: day } = (await db.query("insert into plans.plan_days(plan_id,date,day_order,block_index) values($1,'2027-02-15',1,0) returning id", [program])).rows[0];
+  const { id: programSession } = (await db.query("insert into plans.plan_sessions(plan_day_id,name,bta,rpe_enabled,training_load_enabled) values($1,'Private session','T',true,true) returning id", [day])).rows[0];
+  const edit = await openEditDraft(nativeLive.id);
+  const edited = (await db.query(
+    "update plans.plan_sessions ps set rpe_enabled=false from plans.plan_days pd where pd.plan_id=$1 and pd.id=ps.plan_day_id returning ps.id", [edit],
+  )).rows[0];
+  const batch = randomUUID();
+  await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [batch, [nativeDraft.id, sibling.id]]);
+  await db.query("update plans.plans set track_training_load_default=true,request_rpe_default=true where id=$1", [nativeDraft.id]);
+
+  await db.query("update public.user_workspace_preferences set workspace_type='private_coach',scope_id=null where user_id=$1", [coach.id]);
+  try {
+    const snapshot = async () => (await db.query(
+      "select id,name,status,track_training_load_default,request_rpe_default,updated_at from plans.plans where id=any($1::uuid[]) order by id",
+      [[nativeDraft.id, nativeLive.id, sibling.id, edit]],
+    )).rows;
+    const before = await snapshot();
+    const liveBefore = await flags(nativeLive.sessionId);
+    for (const [method, path, body] of [
+      ["PATCH", settings(nativeDraft.id), { requestRpeDefault: false }],
+      ["PATCH", draftSession(nativeDraft.sessionId), { rpeEnabled: false }],
+      ["POST", "/api/builder/plans/" + edit + "/submit", {}],
+      ["POST", "/api/builder/plans/" + nativeDraft.id + "/sync-batch", {}],
+      ["POST", "/api/builder/plans/" + nativeDraft.id + "/submit", { syncBatch: true }],
+    ]) {
+      const denied = await http.api(coach.cookie, path, { method, body });
+      assert.equal(denied.status, 404, path + " " + denied.text);
+      assert.deepEqual(await snapshot(), before);
+      assert.deepEqual(await flags(nativeLive.sessionId), liveBefore);
+      assert.equal((await flags(edited.id)).rpe_enabled, false);
+    }
+    const own = await http.api(coach.cookie, settings(ownPrivate.id), { method: "PATCH", body: { trackTrainingLoadDefault: true, requestRpeDefault: true } });
+    assert.equal(own.status, 200, own.text);
+    assert.equal((await db.query("select 1 from training_load.plan_workspace_ownership where plan_id=$1", [program])).rowCount, 0);
+    const legacy = await http.api(coach.cookie, draftSession(programSession), { method: "PATCH", body: { rpeEnabled: false } });
+    assert.equal(legacy.status, 200, legacy.text);
+    assert.equal((await flags(programSession)).rpe_enabled, false);
+    const normal = await http.api(coach.cookie, "/api/builder/plans/" + nativeDraft.id, { method: "PATCH", body: { name: "Ordinary private edit" } });
+    assert.equal(normal.status, 200, normal.text);
+    assert.equal(normal.body.plan.name, "Ordinary private edit");
+  } finally {
+    await db.query("update public.user_workspace_preferences set workspace_type='club',scope_id=$1 where user_id=$2", [A, coach.id]);
+  }
 });
