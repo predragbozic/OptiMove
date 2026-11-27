@@ -37,6 +37,7 @@ export async function loadDashboardPages(render,{pageId=null}={}){
 }
 export async function selectDashboardPage(id,render){
  if(id===a().selectedPageId)return;
+ if(a().pageForm?.operation==='copyPage')a().pageForm=null;
  resetAnalysisDashboardQuery();a().widgets=[];a().selectedPageId=id;
  await loadDashboardPages(render,{pageId:id});await queryAnalysisDashboard(render,{force:true});
 }
@@ -45,19 +46,19 @@ export async function mutateDashboardPage(operation,input,pageId,render){
  if(model.pageSaving)return;
  if(!model.pagePending&&!model.pageRequestIssuedAt){model.pageError='Reload the dashboard before making this change.';render?.();return;}
  const body=model.pagePending?.body??{requestId:crypto.randomUUID(),requestIssuedAt:model.pageRequestIssuedAt,expectedPagesRevision:model.pagesRevision,input,...(['rename','defaults'].includes(operation)?{operation}:{})};
- const path=pageApiPath(dashboardId,pageId)+(operation==='reorder'?'/reorder':'');
+ const path=pageApiPath(dashboardId,pageId)+(operation==='reorder'?'/reorder':operation==='copyPage'?'/copy':'');
  const method=operation==='delete'?'DELETE':['rename','defaults'].includes(operation)?'PATCH':'POST';
  model.pagePending={body,operation,pageId,path,method};model.pageSaving=true;model.pageError='';render?.();
  try{
   const response=await api(path,{method,body:JSON.stringify(body)});
   if(key(a().selectedDashboardId)!==context)return;
   model.pagePending=null;model.pageSaving=false;model.pageForm=null;
-  await loadDashboardPages(render,{pageId:operation==='create'?response.receipt.pageId:operation==='delete'?null:model.selectedPageId});
+  await loadDashboardPages(render,{pageId:['create','copyPage'].includes(operation)?response.receipt.pageId:operation==='delete'?null:model.selectedPageId});
   await queryAnalysisDashboard(render,{force:true});
  }catch(error){
   if(key(a().selectedDashboardId)!==context)return;
   model.pageSaving=false;
-  if(error.status>=400&&error.status<500){model.pagePending=null;model.pageError=error.message==='conflict'?'A page with that name already exists. Choose a different name.':error.message==='pageNotEmpty'?'This page still has widgets. Remove them before deleting the page.':error.message==='pageLimit'?'This dashboard has 20 pages. Delete an empty page before adding another.':error.status===409?'This page changed or cannot be updated. Reload it before trying again.':'This page could not be updated. Check your choices and try again.'}
+  if(error.status>=400&&error.status<500){model.pagePending=null;model.pageError=error.message==='conflict'?'A page with that name already exists. Choose a different name.':error.message==='pageCopyConfigurationUnavailable'?'A saved widget configuration cannot be copied. Review the widgets on the source page.':error.message==='pageNotEmpty'?'This page still has widgets. Remove them before deleting the page.':error.message==='pageLimit'?'This dashboard has 20 pages. Delete an empty page before adding another.':error.status===409?'This page changed or cannot be updated. Reload it before trying again.':'This page could not be updated. Check your choices and try again.'}
   else model.pageError='The update is not confirmed. Check it before making another change.';
   render?.();
  }
@@ -88,13 +89,19 @@ export async function handleDashboardPageAction(action,render){
   model.pageSaving=true;render();
   try{
    const response=await api(pageApiPath(model.selectedDashboardId)+'/requests/'+encodeURIComponent(pending.body.requestId));
-   if(response.status==='recorded'){model.pagePending=null;model.pageForm=null;model.pageSaving=false;await loadDashboardPages(render);await queryAnalysisDashboard(render,{force:true})}
+   if(response.status==='recorded'){model.pagePending=null;model.pageForm=null;model.pageSaving=false;await loadDashboardPages(render,{pageId:pending.operation==='copyPage'?response.receipt.pageId:null});await queryAnalysisDashboard(render,{force:true})}
    else {model.pageSaving=false;if(pending.kind==='copy')await copyDashboardPageWidget(pending.widgetId,pending.destinationPageId,render);else await mutateDashboardPage(pending.operation,pending.body.input,pending.pageId,render)}
   }catch{model.pageSaving=false;model.pageError='The update is still not confirmed. Check again before making another change.';render()}
  }
  else if(type==='training-load-pages-open-copy'){const widget=model.widgets.find(w=>w.id===action.dataset.widgetId);if(widget){model.pageForm={operation:'copy',widgetId:widget.id,name:widget.title,destinationPageId:model.pages.find(p=>p.id!==model.selectedPageId)?.id??model.selectedPageId};model.menu='';render()}}
  else if(type==='training-load-pages-destination')model.pageForm.destinationPageId=action.value;
  else if(type==='training-load-pages-create'){model.pageForm={operation:'create',name:'',preset:'last_28_days'};render()}
+ else if(type==='training-load-pages-copy-page'){
+  model.pageForm={operation:'copyPage',name:[...model.page.name].slice(0,73).join('')+' (copy)',
+   sourceRevision:model.page.revision,
+   widgetRevisions:Object.fromEntries(model.widgets.map(widget=>[widget.id,widget.revision]))};
+  render();
+ }
  else if(type==='training-load-pages-defaults'){model.pageForm={operation:'defaults',name:model.page.name,preset:model.page.period_config?.mode==='relative'?model.page.period_config.preset:'unchanged'};render()}
  else if(type==='training-load-pages-rename'){model.pageForm={operation:'rename',name:model.page.name};render()}
  else if(type==='training-load-pages-delete'){model.pageForm={operation:'delete',name:model.page.name};render()}
@@ -102,9 +109,13 @@ export async function handleDashboardPageAction(action,render){
  else if(type==='training-load-pages-preset')model.pageForm.preset=action.value;
  else if(type==='training-load-pages-cancel'){model.pageForm=null;render()}
  else if(type==='training-load-pages-save'){
-  const f=model.pageForm;if(['create','rename'].includes(f.operation)&&!f.name.trim()){model.pageError='Choose a page name before saving.';render();return true;}if(f.operation==='copy'){await copyDashboardPageWidget(f.widgetId,f.destinationPageId,render);return true;}
+  const f=model.pageForm;if(['create','rename','copyPage'].includes(f.operation)&&!f.name.trim()){model.pageError='Choose a page name before saving.';render();return true;}if(f.operation==='copy'){await copyDashboardPageWidget(f.widgetId,f.destinationPageId,render);return true;}
   const input=f.operation==='delete'?{}:f.operation==='defaults'?{expectedDefaultsRevision:model.page.defaults_revision,defaultFilter:model.page.default_filter,period:f.preset==='unchanged'?model.page.period_config:f.preset==='dashboard'?null:{schemaVersion:1,mode:'relative',preset:f.preset,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}}:{name:f.name};
   if(f.operation==='create')input.period={schemaVersion:1,mode:'relative',preset:f.preset,timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone};
+  if(f.operation==='copyPage'){
+   input.sourceRevision=f.sourceRevision;
+   input.widgetRevisions=f.widgetRevisions;
+  }
   await mutateDashboardPage(f.operation,input,f.operation==='create'?null:model.selectedPageId,render);
  }else if(type==='training-load-pages-up'||type==='training-load-pages-down'){
   const pages=model.pages.slice().sort((x,y)=>x.position-y.position);const i=pages.findIndex(p=>p.id===model.selectedPageId),j=i+(type.endsWith('-up')?-1:1);
