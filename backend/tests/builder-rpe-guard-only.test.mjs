@@ -178,6 +178,20 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
       assert.equal(afterSourceChange.status, 200, JSON.stringify(afterSourceChange.body));
       const copiedAfterChange = (await snapshot([cases.off.id])).sessions.find(row => row.id !== cases.off.sessionId);
       assert.deepEqual([copiedAfterChange.training_load_enabled, copiedAfterChange.rpe_enabled], [false, false]);
+      const verifiedEdit = await api(`/api/builder/plans/${legacyActive.id}/edit`, { method: "POST" });
+      assert.equal(verifiedEdit.status, 200, JSON.stringify(verifiedEdit.body));
+      const editId = verifiedEdit.body.plan.id;
+      const addVerifiedDefault = await api(`/api/builder/blocks/${verifiedEdit.body.blocks[0].id}/sessions`, {
+        method: "POST", body: { name: "Inherits verified live defaults", bta: "T" },
+      });
+      assert.equal(addVerifiedDefault.status, 201, JSON.stringify(addVerifiedDefault.body));
+      const sessionWithDefaults = addVerifiedDefault.body.blocks[0].sessions.find(row => row.name === "Inherits verified live defaults");
+      const { session_baselines: openings } = await snapshot([editId]);
+      const opening = openings.find(row => row.session_id === sessionWithDefaults.id);
+      assert.deepEqual([opening.opening_verified, opening.opening_tracking, opening.opening_rpe], [true, true, true]);
+      assert.equal((await submit(editId)).status, 200);
+      const current = (await snapshot([legacyActive.id])).sessions.find(row => row.name === "Inherits verified live defaults");
+      assert.deepEqual([current.training_load_enabled, current.rpe_enabled], [true, true]);
       const off = await submit(cases.off.id);
       assert.equal(off.status, 200, JSON.stringify(off.body));
       const established = await createBuilderRpeFixtureDraft(api, athleteCode, "2027-05-03", { enable: true });

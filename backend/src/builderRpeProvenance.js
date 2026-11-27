@@ -434,7 +434,7 @@ export async function assertBuilderRpeReplacementProvenance(client, targetId, re
   const added = new Set();
   for (const row of enabledReplacements) {
     if (!edit || pairs.some(pair => pair.source_id === row.id)) continue;
-    if (provesRpeChange({ tracking: false, rpe: false }, row)) added.add(row.id);
+    if (provesEnabledRpe(row)) added.add(row.id);
   }
   for (const row of [...enabledTargets, ...enabledReplacements.filter(item => !added.has(item.id))]) {
     const matches = pairs.filter(pair => pair.target_id === row.id || pair.source_id === row.id);
