@@ -393,3 +393,102 @@ test("v106 records a real opening, exact session lineage and effective settings 
   }
   assert.equal((await db.query("select 1 from training_load.builder_rpe_provenance_use")).rowCount, 1);
 });
+
+
+test("v106 captures new plan, new session and inherited copy independently of explicit settings", async () => {
+  const created = await http.api(coach.cookie, "/api/builder/plans", {
+    method: "POST", body: { planType: "program", name: "New provenance program" },
+  });
+  assert.equal(created.status, 201, created.text);
+  const planId = created.body.plan.id;
+  const { rows: [opening] } = await db.query("select * from training_load.builder_rpe_plan_baselines where plan_id=$1", [planId]);
+  assert.equal(opening.origin, "created");
+  assert.equal(opening.owner_club_id, A);
+  assert.equal(opening.source_plan_id, null);
+  const { rows: [day] } = await db.query(
+    "insert into plans.plan_days(plan_id,date,day_order,block_index) values($1,'2027-03-20',1,1) returning id", [planId],
+  );
+  const session = await http.api(coach.cookie, "/api/builder/blocks/" + day.id + "/sessions", {
+    method: "POST", body: { name: "New training", bta: "T" },
+  });
+  assert.equal(session.status, 201, session.text);
+  const getLineage = async () => (await db.query(
+    "select session_id,source_session_id,source_plan_id,opening_tracking,opening_rpe from training_load.builder_rpe_session_baselines where plan_id=$1",
+    [planId],
+  )).rows;
+  const [newSession] = await getLineage();
+  assert.equal(newSession.source_session_id, null);
+  const weekly = await fixturePlan(athleteId, "active", "2027-03-29");
+  const sourceFlags = await flags(weekly.sessionId);
+  for (let copies = 0; copies < 2; copies++) {
+    const copied = await http.api(coach.cookie, "/api/builder/sessions/" + weekly.sessionId + "/copy-into/" + day.id, {
+      method: "POST", body: {},
+    });
+    assert.equal(copied.status, 200, copied.text);
+  }
+  const inherited = (await getLineage()).filter(row => row.session_id !== newSession.session_id);
+  assert.equal(inherited.length, 2);
+  for (const row of inherited) {
+    assert.equal(row.source_session_id, weekly.sessionId);
+    assert.equal(row.source_plan_id, weekly.id);
+    assert.deepEqual([row.opening_tracking, row.opening_rpe], [sourceFlags.training_load_enabled, sourceFlags.rpe_enabled]);
+  }
+  assert.equal((await db.query("select 1 from training_load.builder_rpe_session_effects where plan_id=$1", [planId])).rowCount, 0);
+});
+
+test("v106 bulk commands record unchanged inheritance separately from their actual effects", async () => {
+  const source = await fixturePlan(athleteId, "active", "2027-03-22");
+  await db.query("update plans.plans set track_training_load_default=true,request_rpe_default=true where id=$1", [source.id]);
+  const draftId = await openEditDraft(source.id);
+  const run = async (operation) => {
+    const result = await http.api(coach.cookie, settings(draftId) + "/" + operation, { method: "POST", body: {} });
+    assert.equal(result.status, 200, result.text);
+  };
+  const effects = async () => (await db.query(
+    "select changed_tracking,changed_rpe,effective_tracking,effective_rpe from training_load.builder_rpe_session_effects where plan_id=$1",
+    [draftId],
+  )).rows;
+  await run("turn-off-before-after");
+  assert.deepEqual(await effects(), []);
+  await run("turn-off-all-rpe");
+  assert.deepEqual(await effects(), [
+    { changed_tracking: false, changed_rpe: true, effective_tracking: true, effective_rpe: false },
+  ]);
+  await run("apply-to-training-sessions");
+  assert.deepEqual(await effects(), []);
+});
+
+
+test("v106 nonweekly Submit rechecks the grant for a recorded effect under the exact stored owner", async () => {
+  const { rows: [program] } = await db.query(
+    "insert into plans.plans(plan_type,created_by_user_id,name,status,source_type,visibility,is_template) values('program',$1,'Submit provenance','active','builder','private',true) returning id",
+    [coach.id],
+  );
+  await db.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_club_id) values($1,'club',$2)", [program.id, A]);
+  const { rows: [day] } = await db.query("insert into plans.plan_days(plan_id,date,day_order,block_index) values($1,'2027-03-25',1,1) returning id", [program.id]);
+  const { rows: [source] } = await db.query(
+    "insert into plans.plan_sessions(plan_day_id,name,bta,rpe_enabled,training_load_enabled) values($1,'Training','T',true,true) returning id", [day.id],
+  );
+  const draftId = await openEditDraft(program.id);
+  const { rows: [lineage] } = await db.query("select session_id from training_load.builder_rpe_session_baselines where plan_id=$1 and source_session_id=$2", [draftId, source.id]);
+  const edit = await http.api(coach.cookie, draftSession(lineage.session_id), { method: "PATCH", body: { rpeEnabled: false } });
+  assert.equal(edit.status, 200, edit.text);
+  const submit = () => http.api(coach.cookie, "/api/builder/plans/" + draftId + "/submit", { method: "POST", body: {} });
+  await changeProgramRpeGrant(db, "club_admin", false);
+  try {
+    const refused = await submit();
+    assert.equal(refused.status, 404, refused.text);
+    assert.equal((await flags(source.id)).rpe_enabled, true);
+    assert.equal((await flags(lineage.session_id)).rpe_enabled, false);
+  } finally {
+    await changeProgramRpeGrant(db, "club_admin", true);
+  }
+  const saved = await submit();
+  assert.equal(saved.status, 200, saved.text);
+  assert.equal((await db.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [draftId])).rowCount, 0);
+  const { rows: [published] } = await db.query(
+    "select ps.rpe_enabled,ps.training_load_enabled from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id where pd.plan_id=$1",
+    [program.id],
+  );
+  assert.deepEqual(published, { rpe_enabled: false, training_load_enabled: true });
+});

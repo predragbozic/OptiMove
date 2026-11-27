@@ -3,7 +3,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
-import { beginBuilderRpeProvenance, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect } from "../builderRpeProvenance.js";
+import { beginBuilderRpeProvenance, inspectBuilderRpeSubmitEffects, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening } from "../builderRpeProvenance.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -473,15 +473,27 @@ router.post("/plans/:planId/training-load-settings/apply-to-training-sessions", 
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    const recordRpeEffects = await beginBuilderRpeProvenance(client);
     const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
-    await client.query(
-      `update plans.plan_sessions ps set training_load_enabled = $2, rpe_enabled = $3, updated_at = now()
-       from plans.plan_days pd
-       where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.bta = 'T'`,
+    const changes = await client.query(
+      `with before as materialized (
+         select ps.id, ps.training_load_enabled, ps.rpe_enabled
+         from plans.plan_sessions ps join plans.plan_days pd on ps.plan_day_id=pd.id
+         where pd.plan_id=$1 and ps.bta = 'T' order by ps.id for update of ps
+       )
+       update plans.plan_sessions ps set training_load_enabled = $2, rpe_enabled = $3, updated_at=now()
+       from before where ps.id=before.id
+       returning ps.id, before.training_load_enabled, before.rpe_enabled,
+                 ps.training_load_enabled as tracking_after, ps.rpe_enabled as rpe_after`,
       [plan.id, Boolean(plan.track_training_load_default), Boolean(plan.track_training_load_default) && Boolean(plan.request_rpe_default)],
     );
+    if (recordRpeEffects) {
+      for (const row of changes.rows) {
+        await recordBuilderRpeSessionEffect(client, plan.id, row, { trackingEnabled: row.tracking_after, rpeEnabled: row.rpe_after });
+      }
+    }
     await client.query("commit");
     client.release();
     client = null;
@@ -502,15 +514,27 @@ router.post("/plans/:planId/training-load-settings/turn-off-before-after", withB
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    const recordRpeEffects = await beginBuilderRpeProvenance(client);
     const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
-    await client.query(
-      `update plans.plan_sessions ps set training_load_enabled = false, rpe_enabled = false, updated_at = now()
-       from plans.plan_days pd
-       where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.bta in ('B', 'A')`,
+    const changes = await client.query(
+      `with before as materialized (
+         select ps.id, ps.training_load_enabled, ps.rpe_enabled
+         from plans.plan_sessions ps join plans.plan_days pd on ps.plan_day_id=pd.id
+         where pd.plan_id=$1 and ps.bta in ('B', 'A') order by ps.id for update of ps
+       )
+       update plans.plan_sessions ps set training_load_enabled = false, rpe_enabled = false, updated_at=now()
+       from before where ps.id=before.id
+       returning ps.id, before.training_load_enabled, before.rpe_enabled,
+                 ps.training_load_enabled as tracking_after, ps.rpe_enabled as rpe_after`,
       [plan.id],
     );
+    if (recordRpeEffects) {
+      for (const row of changes.rows) {
+        await recordBuilderRpeSessionEffect(client, plan.id, row, { trackingEnabled: row.tracking_after, rpeEnabled: row.rpe_after });
+      }
+    }
     await client.query("commit");
     client.release();
     client = null;
@@ -531,17 +555,29 @@ router.post("/plans/:planId/training-load-settings/turn-off-all-rpe", withBatchR
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    const recordRpeEffects = await beginBuilderRpeProvenance(client);
     const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
     // Tracking itself is left untouched - this only ever turns RPE off,
     // exactly as labeled; a session that was tracked stays tracked.
-    await client.query(
-      `update plans.plan_sessions ps set rpe_enabled = false, updated_at = now()
-       from plans.plan_days pd
-       where ps.plan_day_id = pd.id and pd.plan_id = $1 and ps.rpe_enabled = true`,
+    const changes = await client.query(
+      `with before as materialized (
+         select ps.id, ps.training_load_enabled, ps.rpe_enabled
+         from plans.plan_sessions ps join plans.plan_days pd on ps.plan_day_id=pd.id
+         where pd.plan_id=$1 and ps.rpe_enabled = true order by ps.id for update of ps
+       )
+       update plans.plan_sessions ps set rpe_enabled = false, updated_at=now()
+       from before where ps.id=before.id
+       returning ps.id, before.training_load_enabled, before.rpe_enabled,
+                 ps.training_load_enabled as tracking_after, ps.rpe_enabled as rpe_after`,
       [plan.id],
     );
+    if (recordRpeEffects) {
+      for (const row of changes.rows) {
+        await recordBuilderRpeSessionEffect(client, plan.id, row, { trackingEnabled: row.tracking_after, rpeEnabled: row.rpe_after });
+      }
+    }
     await client.query("commit");
     client.release();
     client = null;
@@ -604,16 +640,41 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     // doesn't (see findAthleteOutsideScope's own comment) - otherwise a
     // coach in Club A could target an athlete who only belongs to Club B
     // and have that athlete's plan silently stamped owner_club_id=Club A.
-    let planOwner = null;
+    let ownerScope = null;
     if (planType === "weekly") {
       const scope = await resolveWeeklyPlanOwnerScope(req, res);
       if (!scope) return;
       const outsider = await findAthleteOutsideScope(scope, targets);
       if (outsider) return res.status(403).json({ error: `Athlete ${outsider.externalId || outsider.id} is outside your current workspace.` });
-      planOwner = scope.ownerContext;
+      ownerScope = scope;
     }
     client = await pool.connect();
     await client.query("begin");
+    const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    let recordedOwner = ownerScope?.ownerContext;
+    if (recordRpeOpening) {
+      const expected = ownerScope ?? await resolveExternalScheduleWorkspaceScope(req);
+      const actor = await lockProgramRpeActor(client, req, expected);
+      let targetsAllowed = false;
+      if (actor) {
+        const targetChecks = [];
+        for (const target of targets) {
+          if (target?.id) targetChecks.push(await isAthleteInWorkspaceScope(expected, target.id, client.query.bind(client)));
+        }
+        targetsAllowed = targetChecks.every(Boolean);
+        if (targetsAllowed) recordedOwner = expected.ownerContext;
+      }
+      if (!actor || !targetsAllowed) {
+        if (ownerScope) {
+          await client.query("rollback");
+          client.release();
+          client = null;
+          return res.status(409).json({ error: "Your workspace changed. Open the plan again." });
+        }
+        recordedOwner = null;
+      }
+    }
+
     if (planType === "weekly") {
       const conflicts = [];
       for (const target of targets) {
@@ -635,9 +696,10 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
         [planType, req.user.id, target?.id || null, name, nullableText(req.body?.note), nullableText(req.body?.iconUrl), nullableText(req.body?.color), nullableText(req.body?.coverImageUrl), isTemplate, weekStart, batchId],
       );
       createdIds.push(created.rows[0].id);
-      if (planType === "weekly") {
-        await createWeeklyDays(client, created.rows[0].id, weekStart);
-        await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
+      if (planType === "weekly") await createWeeklyDays(client, created.rows[0].id, weekStart);
+      if (recordedOwner) {
+        await insertPlanOwnershipSnapshot(client, created.rows[0].id, recordedOwner);
+        if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: created.rows[0].id });
       }
       if (weeklyTemplateWeeks) await insertTemplateWeeks(client, created.rows[0].id, 1, weeklyTemplateWeeks);
     }
@@ -2027,7 +2089,20 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
     );
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const recordRpeOpening = await beginBuilderRpeProvenance(client);
     await lockCopyTargetPlan(client,target.plan.id,{dayId:target.id});
+    const { rows: [currentSource] } = await client.query(
+      `select ps.training_load_enabled, ps.rpe_enabled
+       from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id
+       where ps.id=$1 and pd.plan_id=$2`,
+      [source.id, source.plan.id],
+    );
+    if (!currentSource) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(404).json({ error: "Source session not found." });
+    }
     const created = await client.query(
       // session_time/rpe_enabled/training_load_enabled: content
       // properties, always copied unconditionally (session_time was
@@ -2035,10 +2110,11 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
       // specific time on every standalone session copy).
       `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
        values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
-      [target.id, source.am_pm, source.bta, source.session_time, nextOrderResult.rows[0].next_order, source.name, source.rpe_enabled, source.training_load_enabled],
+      [target.id, source.am_pm, source.bta, source.session_time, nextOrderResult.rows[0].next_order, source.name, currentSource.rpe_enabled, currentSource.training_load_enabled],
     );
     await copySessionContent(client, source.id, created.rows[0].id);
     await assertExerciseReuseAllowed(client, req.user.id, { sessionIds: [created.rows[0].id], guard: req.exerciseReuseGuard });
+    if (recordRpeOpening) await recordBuilderRpeSessionOpening(client, target.plan.id, created.rows[0].id, source);
     await client.query("commit");
     client.release();
     client = null;
@@ -2086,6 +2162,7 @@ router.post("/blocks/:blockId/sessions", withBatchReuseGuard(async (req, res, ne
     // unblocked) - never a stale in-between snapshot either way.
     client = await pool.connect();
     await client.query("begin");
+    const recordRpeOpening = await beginBuilderRpeProvenance(client);
     const planResult = await client.query(
       `select id, track_training_load_default, request_rpe_default from plans.plans where id = $1 for update`,
       [block.plan.id],
@@ -2129,10 +2206,11 @@ router.post("/blocks/:blockId/sessions", withBatchReuseGuard(async (req, res, ne
     // re-deriving it here.
     const trackingEnabled = bta === "T" && Boolean(plan.track_training_load_default);
     const rpeEnabled = trackingEnabled && Boolean(plan.request_rpe_default);
-    await client.query(
-      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, training_load_enabled, rpe_enabled) values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    const { rows: [created] } = await client.query(
+      `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, training_load_enabled, rpe_enabled) values ($1, $2, $3, $4, $5, $6, $7, $8) returning id`,
       [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), bta, sessionTimeValue(req.body?.time), order, nullableText(req.body?.name), trackingEnabled, rpeEnabled],
     );
+    if (recordRpeOpening) await recordBuilderRpeSessionOpening(client, plan.id, created.id);
     await client.query("commit");
     client.release();
     client = null;
@@ -3201,11 +3279,13 @@ async function applyEditDraft(req, draftPlan, timing) {
   let client;
   let committed = false;
   try {
-    const scope = draftPlan.plan_type === "weekly" ? await resolveExternalScheduleWorkspaceScope(req) : null;
+    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client);
-    const rpe = scope && scope.type !== "platform" ? { scope, actor: await lockProgramRpeActor(client, req, scope) } : null;
+    const hasProvenance = await beginBuilderRpeProvenance(client);
+    const nativeCheck = draftPlan.plan_type === "weekly" || hasProvenance;
+    const rpe = nativeCheck && scope.type !== "platform" ? { scope, actor: await lockProgramRpeActor(client, req, scope) } : null;
     // Lock and re-read the draft's OWN plans.plans row fresh, inside this
     // transaction - the caller's draftPlan parameter was read before this
     // transaction (often before the whole request started - POST /plans/
@@ -3262,7 +3342,7 @@ async function applyEditDraft(req, draftPlan, timing) {
         client = null;
         return { sourceChanged: true };
       }
-      if (rpe) rpeSessions = await lockRpeEditSessions(client, [source.id, ...locked.siblingRows.map(row => row.id)], freshDraft.id);
+      if (rpe || hasProvenance) rpeSessions = await lockRpeEditSessions(client, [source.id, ...locked.siblingRows.map(row => row.id)], freshDraft.id);
       const locks = await sourceSessionsLocked(client, source, freshDraft);
       if (locks) {
         await client.query("rollback");
@@ -3279,7 +3359,7 @@ async function applyEditDraft(req, draftPlan, timing) {
       }
     } else {
       await client.query("select id from plans.plans where id=$1 for update", [source.id]);
-      if (rpe) rpeSessions = await lockRpeEditSessions(client, [source.id], freshDraft.id);
+      if (rpe || hasProvenance) rpeSessions = await lockRpeEditSessions(client, [source.id], freshDraft.id);
       const locks = await sourceSessionsLocked(client, source, freshDraft);
       if (locks) {
         await client.query("rollback");
@@ -3288,7 +3368,18 @@ async function applyEditDraft(req, draftPlan, timing) {
         return { sessionsLocked: locks };
       }
     }
-    await checkEditedRpeEffects(client, rpe, source, freshDraft, rpeSessions, batch);
+    if (freshDraft.plan_type === "weekly") {
+      await checkEditedRpeEffects(client, rpe, source, freshDraft, rpeSessions, batch);
+    } else if (hasProvenance) {
+      const effects = await inspectBuilderRpeSubmitEffects(client, source.id, freshDraft.id);
+      if (effects.sourceChanged) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return { sourceChanged: true };
+      }
+      if (effects.changed && rpe) await assertProgramRpeTargets(client, rpe.actor, scope, [source.id]);
+    }
     const retained = await client.query(`select item.exercise_id, count(*)::integer as uses
       from plans.plan_items item join plans.plan_sessions session on session.id = item.plan_session_id
       join plans.plan_days day on day.id = session.plan_day_id

@@ -26,8 +26,8 @@ export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = n
   if (copies.size) {
     const { rowCount: sessions } = await client.query(
       `insert into training_load.builder_rpe_session_baselines
-         (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe)
-       select $1,dst.id,dst.logical_session_id,$2,src.id,dst.training_load_enabled,dst.rpe_enabled
+         (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe)
+       select $1,dst.id,dst.logical_session_id,$2,src.id,true,dst.training_load_enabled,dst.rpe_enabled
        from unnest($3::uuid[],$4::uuid[]) pair(source_id,target_id)
        join plans.plan_sessions src on src.id=pair.source_id
        join plans.plan_days sd on sd.id=src.plan_day_id and sd.plan_id=$2
@@ -96,4 +96,46 @@ export async function recordBuilderRpePlanEffect(client, before, after) {
        effective_tracking=excluded.effective_tracking, effective_rpe=excluded.effective_rpe`,
     [before.id,effect.tracking,effect.rpe,after.trackingEnabled,after.rpeEnabled],
   );
+}
+
+// Record exact inserted rows only under a known immutable plan baseline.
+export async function recordBuilderRpeSessionOpening(client, planId, sessionId, source = null) {
+  await client.query(
+    `insert into training_load.builder_rpe_session_baselines
+       (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe)
+     select $1,s.id,s.logical_session_id,$3,$4,s.training_load_enabled,s.rpe_enabled
+     from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=$1
+     join training_load.builder_rpe_plan_baselines b on b.plan_id=d.plan_id
+     where s.id=$2`,
+    [planId,sessionId,source?.plan.id ?? null,source?.id ?? null],
+  );
+}
+
+// Compare only server-recorded explicit changes. Older drafts stay on the
+// staged compatibility path until every writer supplies complete provenance.
+export async function inspectBuilderRpeSubmitEffects(client, sourcePlanId, draftId) {
+  const { rows } = await client.query(
+    `select effect.changed_tracking,effect.changed_rpe,
+            current_draft.training_load_enabled as draft_tracking,
+            current_draft.rpe_enabled as draft_rpe,
+            lineage.retained_from_opening, source_session.id as current_source_id,
+            source_session.training_load_enabled as source_tracking, source_session.rpe_enabled as source_rpe
+       from training_load.builder_rpe_session_effects effect
+       join training_load.builder_rpe_session_baselines lineage using (plan_id,session_id)
+       join training_load.builder_rpe_plan_baselines opening on opening.plan_id=effect.plan_id and opening.source_plan_id=$1
+       join (
+         select s.* from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where d.plan_id=$2
+       ) current_draft on current_draft.id=effect.session_id
+       left join lateral (
+         select s.* from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
+         where lineage.retained_from_opening and s.id=lineage.source_session_id and d.plan_id=$1 and lineage.source_plan_id=$1
+       ) source_session on true
+       where effect.plan_id=$2 order by lineage.source_session_id,effect.session_id`,
+    [sourcePlanId,draftId],
+  );
+  if (rows.some(row => row.retained_from_opening && !row.current_source_id)) return { sourceChanged: true };
+  const changed = rows.some(row => !row.retained_from_opening ||
+    (row.changed_tracking && row.draft_tracking !== row.source_tracking) ||
+    (row.changed_rpe && row.draft_rpe !== row.source_rpe));
+  return { changed };
 }

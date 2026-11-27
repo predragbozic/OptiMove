@@ -36,11 +36,12 @@ create table training_load.builder_rpe_session_baselines (
   logical_session_id uuid,
   source_plan_id uuid,
   source_session_id uuid,
+  retained_from_opening boolean not null default false,
   opening_tracking boolean not null,
   opening_rpe boolean not null,
   primary key (plan_id, session_id),
-  unique (plan_id, source_plan_id, source_session_id),
   check ((source_plan_id is null) = (source_session_id is null)),
+  check (not retained_from_opening or source_session_id is not null),
   check (opening_tracking or not opening_rpe)
 );
 

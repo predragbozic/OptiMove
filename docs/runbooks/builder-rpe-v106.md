@@ -9,8 +9,11 @@ The additive v106 schema does not require v105 at runtime.
 This checkpoint records new edit-draft openings and exact copied session IDs,
 and explicit plan/default or session flag PATCH effects against those known
 baselines. It leaves older drafts unclassified and existing feedback IDs intact.
-Bulk actions, inherited/new plans, template/assignment/paste/fan-out lineage,
-retirement and the Submit consumption policy still require the next checkpoint.
+It also tracks direct new plans and sessions, standalone session copy and the three
+explicit bulk settings actions. A nonweekly edit Submit rechecks the current
+permission and exact owner for a recorded effect. Whole-plan duplication,
+template/assignment/day and block paste, exact sibling correspondence, first
+Submit and the complete weekly Submit policy still require a follow-up.
 Keep Roles exposure closed. Releasing these changes as a complete rollout
 requires the remaining writer inventory and exact overlap evidence.
 

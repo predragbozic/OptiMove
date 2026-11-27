@@ -6,7 +6,7 @@ do $$
 begin
   if not exists (select 1 from public.schema_migrations
       where migration_name = 'migrations_v2/202612081000_training_load_v106_builder_rpe_provenance.sql'
-        and checksum = 'e30e229e234deea8bc866e070b44924674640952521067e4e3322bb1f2b64b53') then
+        and checksum = '9c32b3f5fb7c1016b1c8d5f1b125952c375bc8d2e9c7285e5f550e6a92717e4f') then
     raise exception 'v106 rollback expected its exact migration record';
   end if;
   if exists (select 1 from public.schema_migrations
