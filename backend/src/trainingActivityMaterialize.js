@@ -228,7 +228,7 @@ async function resolveAuthoritativeSource(client, scope, { planLogicalSessionId,
   }
   if (planLogicalSessionId) {
     const r = await client.query(
-      `select p.athlete_id, pd.date as local_date, a.device_timezone as timezone,
+      `select p.id as plan_id, p.athlete_id, pd.date as local_date, a.device_timezone as timezone,
               case when ps.session_time is not null and a.device_timezone is not null
                 then (pd.date + ps.session_time) at time zone a.device_timezone
                 else null end as start_instant,
@@ -250,13 +250,13 @@ async function resolveAuthoritativeSource(client, scope, { planLogicalSessionId,
     if (!row.timezone || !String(row.timezone).trim()) throw httpError(409, "The athlete's timezone is not resolvable — refusing to guess.");
     if (!row.owner_scope) throw httpError(409, "That plan has no resolved workspace ownership.");
     return {
-      athleteId: row.athlete_id, localDate: row.local_date, timezone: row.timezone, startInstant: row.start_instant,
+      sourceOwnerId: row.plan_id, athleteId: row.athlete_id, localDate: row.local_date, timezone: row.timezone, startInstant: row.start_instant,
       ownerScope: row.owner_scope, ownerIds: { userId: row.owner_user_id, clubId: row.owner_club_id, teamId: row.owner_team_id },
     };
   }
   if (externalAssignmentId) {
     const r = await client.query(
-      `select ea.athlete_id, ea.local_scheduled_date as local_date, ea.timezone,
+      `select es.id as schedule_id, ea.athlete_id, ea.local_scheduled_date as local_date, ea.timezone,
               es.owner_scope, es.owner_user_id, es.owner_club_id, es.owner_team_id
        from training_load.external_assignments ea
        join training_load.external_schedule_occurrences eo on eo.id = ea.occurrence_id
@@ -271,7 +271,7 @@ async function resolveAuthoritativeSource(client, scope, { planLogicalSessionId,
     if (!row.timezone || !String(row.timezone).trim()) throw httpError(409, "The assignment's timezone is not resolvable — refusing to guess.");
     if (!row.owner_scope) throw httpError(409, "That external schedule has no resolved workspace ownership.");
     return {
-      athleteId: row.athlete_id, localDate: row.local_date, timezone: row.timezone, startInstant: null,
+      sourceOwnerId: row.schedule_id, athleteId: row.athlete_id, localDate: row.local_date, timezone: row.timezone, startInstant: null,
       ownerScope: row.owner_scope, ownerIds: { userId: row.owner_user_id, clubId: row.owner_club_id, teamId: row.owner_team_id },
     };
   }
@@ -279,7 +279,7 @@ async function resolveAuthoritativeSource(client, scope, { planLogicalSessionId,
 }
 
 async function lockNaturalActivityKey(client, athleteId, naturalKey) {
-  await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`activity-link:${athleteId}:${naturalKey}`]);
+  await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`activity-link:${athleteId.toLowerCase()}:${naturalKey.toLowerCase()}`]);
 }
 
 async function assertNaturalResultOwner(client, scope, expectedOwner, result, athleteId, unavailable) {
@@ -345,7 +345,17 @@ export async function materializeActivityParticipant(scope, {
     // for an identity it does not control); name/activityTypeKey remain
     // pure presentation — they affect matching/display only, never which
     // athlete/date/timezone/owner this resolves to.
-    const authoritative = await resolveAuthoritativeSource(client, scope, { planLogicalSessionId, externalAssignmentId });
+    const sourceIds = { planLogicalSessionId, externalAssignmentId };
+    const authoritative = await resolveAuthoritativeSource(client, scope, sourceIds);
+    if (authoritative && scope.staffActorId) {
+      // Pin the owning record before claiming the request and waiting for the
+      // shared natural key. Never acquire a source lock after seed-0 since
+      // the automatic writers can already be holding a source row then.
+      const ownerSql = planLogicalSessionId
+        ? "select plan_id from training_load.plan_workspace_ownership where plan_id=$1 for share"
+        : "select id from training_load.external_schedules where id=$1 for share";
+      await client.query(ownerSql, [authoritative.sourceOwnerId]);
+    }
     let effectiveAthleteId = athleteId, effectiveLocalDate = localDate, effectiveTimezone = timezone;
     let effectiveStartInstant = startInstant, effectiveEndInstant = endInstant, effectiveDurationMinutes = durationMinutes;
     let ownerScope, ownerIds;
@@ -417,6 +427,10 @@ export async function materializeActivityParticipant(scope, {
     // Preserve the existing claim-before-seed-0 order so the pre-bridge
     // binary cannot hold the request row while we hold its identity lock.
     if (naturalKey && (claim.isNew || scope.staffActorId)) await lockNaturalActivityKey(client, athleteId, naturalKey);
+    if (naturalKey && scope.staffActorId) {
+      const currentSource = await resolveAuthoritativeSource(client, scope, sourceIds);
+      if (JSON.stringify(currentSource) !== JSON.stringify(authoritative)) throw httpError(404, unavailable);
+    }
     const requesterKey = requesterKeyFor({ requestedBy, requestedBySourceConnectionId });
 
     if (!claim.isNew) {
