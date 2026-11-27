@@ -923,9 +923,10 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       console.error(`[source-metric-mappings] the COMMIT of ${where} was not confirmed (${commitError?.code ?? ""}); checking the request record`);
       let found = false;
       try {
-        found = await requestIsCommitted(ctx.userId, requestKey, requests.exists, authorizeTarget);
+        const scopedReceipt = authorizeTarget ? { authorizeTarget, action, requestHash } : null;
+        found = await requestIsCommitted(ctx.userId, requestKey, scopedReceipt ? requests.find : requests.exists, scopedReceipt);
       } catch (error) {
-        if (authorizeTarget && error instanceof SourceMetricMappingError && error.status === 404) throw error;
+        if (authorizeTarget && error instanceof SourceMetricMappingError && [404, 409].includes(error.status)) throw error;
       }
       if (!found) throw refusal(503, "outcome_unknown", "The database did not confirm this request, and it could not be verified yet. Repeat it with the same requestKey.", { requestKey });
       return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget)), replayed: false, commitConfirmation: "verified_after_commit_error" };
@@ -966,7 +967,7 @@ async function answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget) {
   if (!rightConfirmed) return { readError: true };
   return { readError: true, ...idsOf(written) };
 }
-async function requestIsCommitted(userId, requestKey, existsSql, authorizeTarget) {
+async function requestIsCommitted(userId, requestKey, receiptSql, scopedReceipt) {
   const deadline = Date.now() + uncertainCheckTimeoutMs;
   const left = () => Math.max(1, deadline - Date.now());
   const connecting = pool.connect();
@@ -986,13 +987,19 @@ async function requestIsCommitted(userId, requestKey, existsSql, authorizeTarget
       await withinBound(fault, left());
     }
     const verify = (async () => {
-      if (authorizeTarget) {
+      if (scopedReceipt) {
         await client.query("begin");
         await client.query("set local lock_timeout = '" + ROW_LOCK_TIMEOUT_MS + "ms'");
-        await authorizeTarget(client);
+        await scopedReceipt.authorizeTarget(client);
       }
-      const answer = await client.query({ text: existsSql, values: [userId, requestKey], query_timeout: left() });
-      if (authorizeTarget) await client.query("commit");
+      const answer = await client.query({ text: receiptSql, values: [userId, requestKey], query_timeout: left() });
+      if (scopedReceipt) {
+        const [record] = answer.rows;
+        if (record && (record.operation !== scopedReceipt.action || record.request_hash !== scopedReceipt.requestHash)) {
+          throw refusal(409, "request_key_reused", "This requestKey was already used for a different request; use a new key.");
+        }
+        await client.query("commit");
+      }
       return answer.rowCount === 1;
     })();
     verify.catch(() => {});

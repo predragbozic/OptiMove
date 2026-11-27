@@ -799,3 +799,25 @@ test("a native icon write queued on the definition rechecks the selected team", 
   assert.equal(allowed.variable.icon, body.iconKey);
   assert.deepEqual((await changesOf(variable.id)).map(change => [change.basis,change.basis_team_id]), [["team_coach", other]]);
 });
+
+test("uncertain shared icon write cannot verify a different operation's reused receipt", async () => {
+  const original = await created(W.caA.cookie);
+  const other = await created(W.caA.cookie);
+  const body = { requestKey: key(), expectedIconKey: null, iconKey: ICON_KEYS[0] };
+  service.setMappingCommitForTests({ fault: async (client) => {
+    service.setMappingCommitForTests();
+    await client.query("rollback");
+    ok200(await post("/variables/" + other.id + "/icon", W.caA.cookie, body));
+    throw new Error("Could not confirm the original transaction");
+  } });
+  try {
+    const result = await post("/variables/" + original.id + "/icon", W.caA.cookie, body);
+    assert.deepEqual([result.status, result.body.error], [409, "request_key_reused"]);
+  } finally {
+    service.setMappingCommitForTests();
+  }
+  assert.equal((await defRow(original.id)).icon_url, null);
+  assert.deepEqual(await changesOf(original.id), []);
+  assert.equal((await defRow(other.id)).icon_url, "icon:" + body.iconKey);
+  assert.equal((await changesOf(other.id)).length, 1);
+});
