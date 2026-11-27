@@ -168,3 +168,6 @@ docs/runbooks/exercise-manage-v108-*.sql text eol=lf
 backend/scripts/exercise-manage-v108-rehearsal.sh text eol=lf
 migrations_v2/202612111000_programs_v109_edit_bridge.sql text eol=lf
 docs/runbooks/program-edit-v109-*.sql text eol=lf
+migrations_v2/202612121000_programs_v110_assign_publish_bridge.sql text eol=lf
+docs/runbooks/program-assign-publish-v110-*.sql text eol=lf
+backend/scripts/program-assign-publish-v110-rehearsal.* text eol=lf
