@@ -67,8 +67,8 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
   const rosterDecide = "load.roster.decide";
   const estimatesManage = "load.estimates.manage";
   const activitiesManage = "load.activities.manage";
-  assert.ok(!perms.HONOURED_PERMISSIONS.includes(activitiesManage));
-  assert.ok(!perms.STORABLE_PERMISSIONS.includes(activitiesManage));
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(activitiesManage));
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(activitiesManage));
   assert.ok(!perms.HONOURED_PERMISSIONS.includes(estimatesManage));
   assert.ok(!perms.STORABLE_PERMISSIONS.includes(estimatesManage));
   assert.ok(perms.HONOURED_PERMISSIONS.includes(rosterDecide), "M-3a exposure checks the projected word");
@@ -101,7 +101,10 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           const seededEstimates = word === estimatesManage && ctx.platformRoles.length === 0
             && oracle.canR1(ctx, "org.view", scope);
           const seededActivities = word === activitiesManage && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
-          if (seededEstimates || seededActivities) assert.ok(!perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id }).permissions.includes(word));
+          if (seededEstimates) assert.ok(!perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id }).permissions.includes(word));
+          if (word === activitiesManage && !ctx.platformRoles.length && (type === "club" || type === "team")) {
+            assert.equal(perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id }).permissions.includes(word), seededActivities);
+          }
           const expected = rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities ? true : r1;
           if (word === rosterDecide && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
             const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });

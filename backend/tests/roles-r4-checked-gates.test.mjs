@@ -28,6 +28,7 @@ const CAN_CALL = /\bcan\(\s*[A-Za-z_.?]+\s*,\s*"([a-z_.]+)"/g;
 // The schedule writer rechecks the actual row under locks using the Postgres twin.
 const SQL_CHECKED = Object.freeze({
   "activityRosterCommands.js": Object.freeze(["load.roster.decide"]),
+  "trainingActivityWriteAccess.js": Object.freeze(["load.activities.manage"]),
   "externalScheduleWriteAccess.js": Object.freeze(["load.schedule.manage"]),
 });
 const GLOBAL_ONLY = new Set(["accounts.manage", "platform.admin"]);
