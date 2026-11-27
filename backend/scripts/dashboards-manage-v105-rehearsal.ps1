@@ -26,7 +26,7 @@ try {
     }
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../..')
     try {
-        & node scripts/test-runner.mjs --project backend --kind disposable --file dashboards-manage-v105-rehearsal.test.mjs
+        & node scripts/test-runner.mjs --project backend --kind disposable --file dashboards-manage-v105-rehearsal.test.mjs --file dashboard-manage-v105-scope.test.mjs
         if ($LASTEXITCODE -ne 0) { throw "Rehearsal failed with exit code $LASTEXITCODE." }
         & node scripts/test-runner.mjs --project backend --kind unit --file dashboard-manage-access.test.mjs
         if ($LASTEXITCODE -ne 0) { throw "Route inventory failed with exit code $LASTEXITCODE." }

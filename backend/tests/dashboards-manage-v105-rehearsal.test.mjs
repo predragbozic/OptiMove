@@ -238,6 +238,7 @@ test("old page-copy receipts replay without v105 use; denied writes leave no mar
     const owner = await fx.user("Dashboard club admin");
     await fx.grantClub(owner, club);
     await fx.grantIndependent(owner);
+    await admin.query("alter table public.teams alter column club_id drop not null");
     const standalone = (await admin.query("insert into public.teams(name) values('Standalone dashboard team') returning id")).rows[0].id;
     const coach = await fx.user("Standalone dashboard coach");
     await fx.grantTeam(coach, standalone);
