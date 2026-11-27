@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { builderRpeReviewContext, closeBuilderRpeReview, currentBuilderRpeReview, matchesBuilderRpeReview, offerBuilderRpeReview } from "./builder-rpe-review.js";
 import { matchingAthletes } from "./athlete-list-tools.js";
 import { acknowledgeBuilderItemEdit, clearBuilderItemEdits, noteBuilderItemTextSent, pendingBuilderItemEdit, preserveBuilderItemEdits, withoutUntouchedText } from "./builder-item-edits.js";
 import { invalidateBuilderDraftsCache, loadBuilderNodePresets } from "./builder-data.js";
@@ -1487,10 +1488,23 @@ function batchEditOutcomeUnknown(error) {
 export async function handleBuilderDraftAction(action, handlers) {
   // A batch-edit choice ("All athletes", "Only {name}", "Apply to the
   // others") is the Save itself, with who gets the changes.
-  const batchExtra = BATCH_EDIT_ACTIONS[action.dataset.action] && isBatchEditDraft()
-    ? BATCH_EDIT_ACTIONS[action.dataset.action]() : null;
+  const requested = action.dataset.action;
+  const review = currentBuilderRpeReview();
+  if (requested === "builder-rpe-review-cancel") {
+    if (review && !review.confirming) {
+      closeBuilderRpeReview(review);
+      handlers.renderBuilder();
+      globalThis.document?.querySelector('[data-action="builder-submit-plan"]')?.focus();
+    }
+    return true;
+  }
+  const confirming = requested === "builder-rpe-review-confirm";
+  if (confirming && (!review || review.confirming)) return true;
+  if (!confirming && review && (requested === "builder-submit-plan" || BATCH_EDIT_ACTIONS[requested])) return true;
+  const batchExtra = confirming ? (review.payload.batchScope ? review.payload : null)
+    : BATCH_EDIT_ACTIONS[requested] && isBatchEditDraft() ? BATCH_EDIT_ACTIONS[requested]() : null;
   if (BATCH_EDIT_ACTIONS[action.dataset.action] && !batchExtra) return true;
-  const type = batchExtra ? "builder-submit-plan" : action.dataset.action;
+  const type = confirming || batchExtra ? "builder-submit-plan" : requested;
   if (state.builder.discardingDraftId) return true;
   if (type === "builder-batch-edit-again") {
     state.builder.batchEditChoice = { stage: "scope" };
@@ -1537,7 +1551,7 @@ export async function handleBuilderDraftAction(action, handlers) {
     }
     return true;
   }
-  if (type === "builder-submit-plan" && !batchExtra && isBatchEditDraft()) {
+  if (type === "builder-submit-plan" && !confirming && !batchExtra && isBatchEditDraft()) {
     // Save opens the question; it never sends by itself (and sends nothing
     // while a question is open or a result is not confirmed).
     if (!state.builder.batchEditChoice) {
@@ -1566,14 +1580,31 @@ export async function handleBuilderDraftAction(action, handlers) {
     // after a failed save - innerHTML round-trips the actual icon markup.
     const originalHTML = action.innerHTML;
     action.textContent = "Saving…";
+    let payload, context;
+    if (confirming) {
+      review.confirming = true;
+      handlers.renderBuilder();
+    }
     try {
       await handlers.flushBuilderAutosaves?.();
       await builderMutationQueue;
       const currentDraft = state.builder.draft || draft;
+      if (confirming && (!matchesBuilderRpeReview(review.context) || review.expires <= Date.now())) {
+        closeBuilderRpeReview(review);
+        handlers.renderBuilder();
+        handlers.renderBuilderError(new Error("Save again to review the current Training Load settings."));
+        return true;
+      }
+      context = builderRpeReviewContext();
+      payload = confirming ? review.payload : withBatchSyncPayload({ responseMode: "summary", ...(batchExtra || {}) });
       const result = await api(`/api/builder/plans/${encodeURIComponent(currentDraft.plan.id)}/submit`, {
         method: "POST",
-        body: JSON.stringify(withBatchSyncPayload({ responseMode: "summary", ...(batchExtra || {}) })),
+        body: JSON.stringify(confirming ? { ...payload, rpeReviewToken: review.token } : payload),
       });
+      if (confirming) {
+        closeBuilderRpeReview(review);
+        if (!matchesBuilderRpeReview(context)) return true;
+      }
       // This plan has left 'draft' status either way - the cached drafts
       // list (see loadBuilderDrafts) must never keep showing it once the
       // user next lands on that empty-state picker.
@@ -1602,6 +1633,35 @@ export async function handleBuilderDraftAction(action, handlers) {
       state.builder.batchEditChoice = null;
       await exitBuilderToPlanContext(result?.plan || draft.plan, handlers);
     } catch (error) {
+      if (confirming) {
+        closeBuilderRpeReview(review);
+        if (context && !matchesBuilderRpeReview(context)) return true;
+      }
+      if (error?.status === 409 && error.data?.code === "rpe_recovery_required") {
+        action.disabled = false;
+        action.innerHTML = originalHTML;
+        if (context && offerBuilderRpeReview(error, context, payload)) handlers.renderBuilder();
+        else if (!context || matchesBuilderRpeReview(context)) {
+          const group = payload?.batchScope === "all" || payload?.syncBatch === true;
+          if (group && isBatchEditDraft()) {
+            state.builder.batchEditChoice = { stage: "scope" };
+            handlers.renderBuilder();
+          } else if (confirming) handlers.renderBuilder();
+          const nextStep = group
+            ? isBatchEditDraft() ? "Choose this athlete only to review the Training Load settings."
+              : "Turn off Apply changes to all athletes to review this plan."
+            : "Ask someone with access to confirm its Training Load settings.";
+          handlers.renderBuilderError(new Error("The draft is still saved. " + nextStep));
+        }
+        return true;
+      }
+      if (confirming) {
+        handlers.renderBuilder();
+        if ([401, 403, 404].includes(error?.status)) {
+          handlers.renderBuilderError(new Error("The settings could not be confirmed. Reopen the draft to check it."));
+          return true;
+        }
+      }
       // Task 5: nothing was saved; say which sessions block and the way out.
       // The draft stays as it is (both Saves: this athlete and the group).
       if (error?.status === 409 && error.data?.code === "edit_sessions_locked") {
