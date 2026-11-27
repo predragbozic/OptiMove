@@ -87,8 +87,7 @@ async function clubAdminItems(pa, items) {
 // Full lists for a current database: the VIEW seed and the seeded Calendar M-1 and schedules M-2 words.
 const VIEW_SEED = ["athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team",
   "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"];
-// Full-list edits retain the stored M-3a seed even though the editor cannot change it.
-const TEAM_COACH_SCOPE_SEED = [...VIEW_SEED, "calendar.events.manage", "load.schedule.manage", "load.roster.decide"];
+const TEAM_COACH_SCOPE_SEED = [...VIEW_SEED, "calendar.events.manage", "load.roster.decide", "load.schedule.manage"];
 const CLUB_ADMIN_SEED = ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign", "calendar.settings.manage", ...TEAM_COACH_SCOPE_SEED];
 
 // ---------------------------------------------------------------------------

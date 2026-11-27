@@ -65,8 +65,8 @@ const scopesOf = () => ({
 test("31. old-vs-new: for every account of R1's matrix, every one of the 52 words and every scope, the new can(), the SQL twin and R1's can() agree - apart from the audited V and M seeds and roles.manage for a club's admin", async () => {
   const words = Object.keys(perms.PERMISSIONS);
   const rosterDecide = "load.roster.decide";
-  assert.ok(!perms.HONOURED_PERMISSIONS.includes(rosterDecide), "the M-3a bridge does not expose the checked word");
-  assert.ok(!perms.STORABLE_PERMISSIONS.includes(rosterDecide), "the M-3a bridge does not let the role editor grant the word");
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(rosterDecide), "M-3a exposure checks the projected word");
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(rosterDecide), "M-3a exposure lets the role editor grant the word");
   let cells = 0, differences = 0;
   for (const [name, userId] of Object.entries(W.users)) {
     const ctx = await ctxOf(userId);
@@ -88,16 +88,15 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           );
           const seededSchedule = word === "load.schedule.manage" && ctx.platformRoles.length === 0
             && oracle.canR1(ctx, "org.view", scope);
-          // M-3a seeds the same two native basic roles. The internal checks see the stored word, while the native
-          // permission projection excludes it until exposure. Both internal checks must reject every other cell.
+          // M-3a seeds both native basic roles. Exposure projects the checked word in native scopes.
           const seededRoster = word === rosterDecide && ctx.platformRoles.length === 0
             && oracle.canR1(ctx, "org.view", scope);
-          if (seededRoster) {
-            const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
-            assert.ok(!projection.permissions.includes(rosterDecide), `${name}: staged word hidden on ${scopeName}`);
-          }
           const rolesManage = word === "roles.manage" && clubAdminHere && ctx.platformRoles.length === 0;
           const expected = rolesManage || seededView || seededCalendar || seededSchedule || seededRoster ? true : r1;
+          if (word === rosterDecide && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
+            const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
+            assert.equal(projection.permissions.includes(rosterDecide), expected, `${name}: exposed word on ${scopeName}`);
+          }
           if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);
           assert.equal(sql, expected, `${name}: twin(${word}) on ${scopeName}`);
