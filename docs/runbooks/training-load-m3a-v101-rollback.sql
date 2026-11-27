@@ -4,8 +4,7 @@ set local lock_timeout='5s';
 select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive');
 lock table training_load.activity_roster_m3a_use, public.permission_roles, public.permission_role_items, public.permission_role_changes,
   public.permission_club_role_versions, public.permission_club_role_version_items, public.permission_club_role_version_changes,
-  public.permission_custom_roles, public.permission_custom_role_items, public.permission_custom_role_changes, public.user_role_assignments,
-  public.user_club_roles, public.user_team_roles in share row exclusive mode;
+  public.permission_custom_roles, public.permission_custom_role_items, public.permission_custom_role_changes in share row exclusive mode;
 do $$
 declare v_applied timestamptz;
 begin
@@ -63,10 +62,8 @@ begin
   ) then
     raise exception 'v101 rollback refused: Roster permission grants changed';
   end if;
-  if exists (select 1 from public.user_club_roles where role='club_admin' and greatest(created_at,updated_at)>=v_applied)
-     or exists (select 1 from public.user_team_roles where role='team_coach' and greatest(created_at,updated_at)>=v_applied) then
-    raise exception 'v101 rollback refused: a native roster role grant changed';
-  end if;
+  -- Native membership and R4 assignment rows are independent of the staged permission items.
+  -- Neither their grant nor their removal is reversed by this rollback.
 
 end $$;
 

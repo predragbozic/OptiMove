@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { test } from "node:test";
 import pg from "pg";
@@ -65,7 +66,51 @@ async function seedLayers(url, c) {
       [role, changed.revision, actor],
     );
   });
-  return { versionId, customId, owner, coach, club, team };
+  const viewer = await fx.user("Roster bridge viewer");
+  const viewerRole = await asActor(url, actor, async (tx) => {
+    const { rows: [role] } = await tx.query(
+      "insert into public.permission_roles (owner_scope,name,assignable_club,created_by_user_id) values ('system','Rehearsal Viewer',true,$1) returning id",
+      [actor],
+    );
+    await tx.query("insert into public.permission_role_items (role_id,permission_word,added_by_user_id) values ($1,'org.view',$2)", [role.id, actor]);
+    await tx.query(
+      `insert into public.permission_role_changes (role_id,revision_after,kind,performed_by_user_id,basis,items_added)
+       values ($1,1,'create',$2,'platform_admin',array['org.view'])`,
+      [role.id, actor],
+    );
+    return role.id;
+  });
+  return { versionId, customId, owner, coach, club, team, actor, viewer, viewerRole };
+}
+
+async function grantIndependentAccess(url, admin, data) {
+  const { actor, viewer, viewerRole, club, owner } = data;
+  const newAdmin = await fixtures(admin).user("Roster bridge new club admin");
+  await asActor(url, actor, async (tx) => {
+    await tx.query("select public.lock_club_ceiling($1::uuid[],'exclusive')", [[club]]);
+    const { rows: [assignment] } = await tx.query(
+      `insert into public.user_role_assignments (user_id,role_id,scope_type,scope_id,granted_by_user_id,grant_basis,grant_reason)
+       values ($1,$2,'club',$3,$4,'platform_admin','Independent grant after v101') returning id`,
+      [viewer, viewerRole, club, actor],
+    );
+    await tx.query(
+      `insert into public.permission_requests (request_key,requested_by_user_id,operation,request_hash,owner_scope,owner_club_id,basis,assignment_id)
+       values ($1,$2,'assignment_grant',$3,'club',$4,'platform_admin',$5)`,
+      [randomUUID(), actor, "a".repeat(64), club, assignment.id],
+    );
+    await tx.query("delete from public.user_club_roles where user_id=$1 and club_id=$2 and role='club_admin'", [owner, club]);
+    await fixtures(tx).grantClub(newAdmin, club);
+  });
+  return newAdmin;
+}
+
+async function accessSnapshot(client, clubId) {
+  return (await client.query(
+    `select (select jsonb_agg(to_jsonb(r) order by r.id) from public.user_club_roles r where r.club_id=$1) native_roles,
+       (select jsonb_agg(to_jsonb(a) order by a.id) from public.user_role_assignments a where a.scope_club_id=$1) assignments,
+       (select jsonb_agg(to_jsonb(p) order by p.id) from public.permission_requests p where p.owner_club_id=$1) receipts`,
+    [clubId],
+  )).rows[0];
 }
 
 async function snapshot(c) {
@@ -123,8 +168,33 @@ test("v101 seeds current layers and rolls back to the identical catalog before a
     await assert.rejects(admin.query(read("rollback")), /permission body changed/);
     await admin.query("rollback");
 
+    await admin.query("begin");
+    await admin.query("select set_config('optimove.permission_actor',$1||':'||pg_current_xact_id()::text,true)", [data.actor]);
+    await admin.query("update public.permission_roles set description='Changed during the bridge',revision=revision+1,updated_at=now() where id=$1", [ROLE_IDS.team_coach]);
+    await assert.rejects(admin.query(read("rollback")), /seeded layer changed/);
+    await admin.query("rollback");
+
+    await admin.query("begin");
+    await admin.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
+    await admin.query("set constraints all immediate");
+    await admin.query("delete from public.permission_role_items where role_id=$1 and permission_word='load.roster.decide'", [ROLE_IDS.team_coach]);
+    await admin.query("alter table public.permission_role_items enable trigger permission_role_items_guard");
+    await assert.rejects(admin.query(read("rollback")), /Roster permission grants changed/);
+    await admin.query("rollback");
+
+    const newAdmin = await grantIndependentAccess(db.url, admin, data);
+    const access = await accessSnapshot(admin, data.club);
+    assert.deepEqual(access.native_roles.map(row => row.user_id), [newAdmin]);
+    assert.deepEqual(access.assignments.map(row => row.user_id), [data.viewer]);
+    assert.equal(access.receipts.length, 1);
     await admin.query(read("rollback"));
     assert.deepEqual(await snapshot(admin), before);
+    assert.deepEqual(await accessSnapshot(admin, data.club), access);
+    assert.deepEqual((await admin.query(
+      `select public.user_has_permission($1,'org.view','club',$2) as viewer_allowed,
+         public.permission_word_honoured('load.roster.decide') as roster_storable`,
+      [data.viewer, data.club],
+    )).rows, [{ viewer_allowed: true, roster_storable: false }]);
     await runMigrations({ databaseUrl: db.url, migrationsRoot: staged.dir });
     assert.deepEqual((await admin.query(read("postcheck")))[4].rows[0],
       { v101_permission_body_matches: true, word_storable: true });

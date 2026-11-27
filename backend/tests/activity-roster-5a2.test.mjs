@@ -2335,7 +2335,7 @@ test("M-3a exposure: a native team coach can lose roster controls without losing
 });
 
 const previousServerRoot = process.env.OPTIMOVE_M3A_PREVIOUS_SERVER;
-test("M-3a: exact pre-bridge server writes a receipt the bridge can replay", { skip: !previousServerRoot }, async () => {
+test("M-3a: exact pre-bridge server writes a receipt the bridge can replay through a canonical alias", { skip: !previousServerRoot }, async () => {
   const sha = execFileSync("git", ["-C", previousServerRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.match(sha, /^[a-f0-9]{40}$/);
   assert.equal(sha, process.env.OPTIMOVE_M3A_PREVIOUS_SHA, "the checked-out prior server matches the recorded SHA");
@@ -2357,10 +2357,17 @@ test("M-3a: exact pre-bridge server writes a receipt the bridge can replay", { s
     });
     const oldBody = await result.json();
     assert.equal(result.status, 200, JSON.stringify(oldBody));
+    const survivor = await makeActivity({ teamId: s.teamId, name: "Canonical session after merge" });
+    await supersedeInto(s.activityId, survivor);
+    assert.equal((await q("select training.resolve_canonical_activity_id($1) as id", [s.activityId]))[0].id, survivor);
     const bridge = await put(s.activityId, s.athletes[0], s.coach.cookie, input);
     assert.equal(bridge.status, 200, bridge.text);
     assert.deepEqual(bridge.body, oldBody);
-    assert.equal((await q("select id from training.activity_roster_requests where activity_id=$1", [s.activityId])).length, 1);
+    const receipts = await q(
+      "select activity_id, request_key from training.activity_roster_requests where activity_id in (select activity_id from training.activity_alias_ids($1))",
+      [survivor],
+    );
+    assert.deepEqual(receipts, [{ activity_id: s.activityId, request_key: input.requestKey }]);
 
     await assertStagedRoleOperations(async (pathname, request) => {
       const answer = await fetch(`http://127.0.0.1:${oldServer.address().port}${pathname}`, {

@@ -16,7 +16,7 @@ This bridge requires the approved v99 migration. Dashboard v100 may be present o
 
 ## Rollback
 
-Drain the bridge and old writers first. Run `training-load-m3a-v101-rollback.sql` only before first checked use and exposure. It refuses after a later recorded migration, changed permission body, changed seeded state or grants, or checked use. It restores the exact v99 body. If rollback refuses, keep the bridge deployed and use a forward fix with independent review.
+Drain the bridge and old writers first. Run `training-load-m3a-v101-rollback.sql` only before first checked use and exposure. It refuses after a later recorded migration, changed permission body, a changed seeded layer revision, a change to the stored `load.roster.decide` permission items, or checked use. It restores the exact v99 body and seeded role, version and custom state. Native Club admin and Team coach memberships, R4 assignments and their receipts keep their current state, including changes made after v101. A membership change that also changes a seeded custom layer still triggers the seeded-layer refusal. If rollback refuses, keep the bridge deployed and use a forward fix with independent review.
 
 ## Rehearsal
 
