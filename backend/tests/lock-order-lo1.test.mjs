@@ -16,6 +16,7 @@
 // role-first re-locks inside the write's triggers (v34/v35/v38) wait for
 // nothing once the service holds the rows. No GPEXE request, no persistent
 // database.
+import { seedVariableRenameGrants } from "./support/variable-rename-grants.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -52,6 +53,7 @@ before(async () => {
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
+  await seedVariableRenameGrants(k);
   // The columns the real revocation routes write and read (as in the 7h suite).
   await k.query(`alter table public.user_club_roles add column if not exists granted_by_user_id uuid,
                    add column if not exists revoked_at timestamptz, add column if not exists revoked_by_user_id uuid,

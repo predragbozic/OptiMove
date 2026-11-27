@@ -863,7 +863,7 @@ const MAPPING_REQUESTS = Object.freeze({
 });
 // The ids a committed write names when its answer could not be read (readError).
 const mappingIdsOf = (written) => ({ mappingId: written.mapping_id ?? null, ...(written.mapping_version_id ? { versionId: written.mapping_version_id } : {}) });
-async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf }) {
+async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf, authorizeTarget }) {
   const client = await pool.connect();
   const release = guardClient(client);
   let released = false;
@@ -881,12 +881,13 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     await client.query(`set local lock_timeout = '${userLockWaitMs}ms'`);
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 34))`, [`source-metric-mapping:${ctx.userId}`]);
     await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
-    // The request record of this user and key, before any registry lock.
+    const targetAuthorized = await authorizeTarget?.(client);
+    // Mapping writes still read the receipt before their registry locks. Scoped variable changes authorize first.
     const earlier = (await client.query(requests.find, [ctx.userId, requestKey])).rows[0];
     if (earlier) {
       if (earlier.operation !== action || earlier.request_hash !== requestHash) throw refusal(409, "request_key_reused", "This requestKey was already used for a different request; use a new key.");
       // A replay is a read of the current state, after the right is checked again.
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (!targetAuthorized && !(await rightsStillHold(client, ctx))) throw NOT_FOUND();
       const current = await reread(client, earlier);
       await finish();
       if (!current) throw NOT_FOUND();
@@ -899,7 +900,7 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     // none.
     await client.query(ACTOR_CONTEXT_SQL, [String(ctx.userId).toLowerCase()]);
     const operationId = crypto.randomUUID();
-    const written = await operation(client, operationId);
+    const written = await operation(client, operationId, targetAuthorized);
     // The bounded COMMIT (the F2 discipline).
     let commitError = null;
     try {
@@ -923,9 +924,9 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       let found = false;
       try { found = await requestIsCommitted(ctx.userId, requestKey, requests.exists); } catch { found = false; }
       if (!found) throw refusal(503, "outcome_unknown", "The database did not confirm this request, and it could not be verified yet. Repeat it with the same requestKey.", { requestKey });
-      return { ...(await answerAfterCommit(ctx, written, reread, idsOf)), replayed: false, commitConfirmation: "verified_after_commit_error" };
+      return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget)), replayed: false, commitConfirmation: "verified_after_commit_error" };
     }
-    return { ...(await answerAfterCommit(ctx, written, reread, idsOf)), replayed: false };
+    return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget)), replayed: false };
   } catch (error) {
     await finish();
     // An allowlisted refusal becomes its stable code; anything else goes up
@@ -943,17 +944,19 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
 // failure: it keeps its status with readError, and names the ids of what was
 // written only once the right was confirmed again (a replay with the same
 // requestKey answers the rest).
-async function answerAfterCommit(ctx, written, reread, idsOf) {
+async function answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget) {
   let rightConfirmed = false;
   let outcome = null;
   try {
     outcome = await boundedRead(async (client) => {
-      if (!(await rightsStillHold(client, ctx))) return { lost: true };
+      if (!(await authorizeTarget?.(client)) && !(await rightsStillHold(client, ctx))) return { lost: true };
       rightConfirmed = true;
       if (rereadFault) await rereadFault(client);
       return { current: await reread(client, written) };
     }, { locks: true });
-  } catch { /* the answer below */ }
+  } catch (error) {
+    if (authorizeTarget && error instanceof SourceMetricMappingError && error.status === 404) throw error;
+  }
   if (outcome?.lost) throw NOT_FOUND();
   if (outcome?.current) return outcome.current;
   if (!rightConfirmed) return { readError: true };

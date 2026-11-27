@@ -14,6 +14,7 @@
 //      already there stays valid after its variable is archived);
 //   6. the rollback, its refusals, the preflight and the post-check.
 // No GPEXE request, no persistent database.
+import { seedVariableRenameGrants } from "./support/variable-rename-grants.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -47,6 +48,7 @@ before(async () => {
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
+  await seedVariableRenameGrants(k);
   v55Sql = await fs.readFile(path.resolve(here, "../../migrations_v2", V55), "utf8");
   rollbackSql = await fs.readFile(ROLLBACK, "utf8");
   await k.query(`alter table public.user_club_roles add column if not exists granted_by_user_id uuid,

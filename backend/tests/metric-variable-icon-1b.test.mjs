@@ -8,6 +8,7 @@
 // preflight / apply / post-check / rollback /
 // re-apply, one migrated through v45 for the behaviour. Contract:
 // docs/ai/gpexe-metric-variable-mapping-discovery.md, section J3b.11.
+import { seedVariableRenameGrants } from "./support/variable-rename-grants.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -114,6 +115,7 @@ before(async () => {
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
   await world();
+  await seedVariableRenameGrants(k);
 });
 
 function resetSeams() {
