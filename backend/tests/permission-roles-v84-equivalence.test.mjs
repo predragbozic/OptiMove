@@ -67,6 +67,9 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
   const rosterDecide = "load.roster.decide";
   const estimatesManage = "load.estimates.manage";
   const activitiesManage = "load.activities.manage";
+  const dashboardsManage = "dashboards.manage";
+  assert.ok(!perms.HONOURED_PERMISSIONS.includes(dashboardsManage), "the v105 bridge does not project Dashboard Manage");
+  assert.ok(!perms.STORABLE_PERMISSIONS.includes(dashboardsManage), "the v105 bridge keeps role editing closed");
   assert.ok(perms.HONOURED_PERMISSIONS.includes(activitiesManage));
   assert.ok(perms.STORABLE_PERMISSIONS.includes(activitiesManage));
   assert.ok(perms.HONOURED_PERMISSIONS.includes(estimatesManage));
@@ -101,12 +104,18 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           const seededEstimates = word === estimatesManage && ctx.platformRoles.length === 0
             && oracle.canR1(ctx, "org.view", scope);
           const seededActivities = word === activitiesManage && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
-          const expected = rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities ? true : r1;
+          // v105 seeds the same native roles for internal checks. The public projection stays closed.
+          const seededDashboards = word === dashboardsManage && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
+          const expected = rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities || seededDashboards ? true : r1;
+          if (word === dashboardsManage && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
+            const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
+            assert.ok(!projection.permissions.includes(word), `${name}: staged word hidden on ${scopeName}`);
+          }
           if ((word === rosterDecide || word === estimatesManage || word === activitiesManage) && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
             const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
             assert.equal(projection.permissions.includes(word), expected, `${name}: exposed ${word} on ${scopeName}`);
           }
-          if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster && !seededEstimates && !seededActivities) differences++;
+          if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster && !seededEstimates && !seededActivities && !seededDashboards) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);
           assert.equal(sql, expected, `${name}: twin(${word}) on ${scopeName}`);
           cells++;

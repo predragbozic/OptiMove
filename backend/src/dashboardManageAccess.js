@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isPlatformAdministrator, loadAuthorizationContext } from "./authz.js";
+import { DASHBOARD_MANAGE_WRITE_MARKER_SQL } from "./dashboardManageWriteMarker.js";
 import { lockClubCeiling } from "./clubCeilingLock.js";
 
 function nativeScope(type, id) {
@@ -81,9 +82,11 @@ export async function dashboardManageRightsStillHold(query, actor, scopes, { vie
 
 // Set this inside the domain transaction, only after a native write succeeds.
 // The lock protecting the checked scope remains held until this statement commits.
+export function shouldMarkDashboardManageWrite(actor, scopes) {
+  return Boolean(scopes?.length) && !isPlatformAdministrator(actor.authz);
+}
+
 export async function markDashboardManageWrite(query, actor, scopes) {
-  if (!scopes?.length || isPlatformAdministrator(actor.authz)) return;
-  await query(
-    "update training_load.dashboards_manage_v105_use set first_checked_write_at = clock_timestamp() where singleton and first_checked_write_at is null",
-  );
+  if (!shouldMarkDashboardManageWrite(actor, scopes)) return;
+  await query(DASHBOARD_MANAGE_WRITE_MARKER_SQL);
 }

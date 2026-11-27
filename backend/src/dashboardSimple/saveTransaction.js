@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { previewError } from './previewTransaction.js';
+import { DASHBOARD_MANAGE_WRITE_MARKER_SQL } from '../dashboardManageWriteMarker.js';
 import { checkoutObservedClient } from './clientLifecycle.js';
 
 function bounded(promise, milliseconds, error) {
@@ -24,11 +25,11 @@ export async function runSimpleSaveTransaction({ pool, requestId, write, verify,
   catch (error) { pendingClient.then(late => late.lifecycle.release(true), () => {}).catch(() => {}); throw error; }
   const deadline = performance.now() + transactionTimeoutMs;
   let stopped = false, queue = Promise.resolve();
-  const queryRunner = (sql, params = []) => {
+  const enqueue = (sql, params, sanctionedMarker = false) => {
     const running = queue.then(async () => {
       lifecycle.check();
       if (stopped || performance.now() >= deadline) throw previewError('saveTimeout');
-      if (typeof sql !== 'string' || !/^\s*select\b/i.test(sql) || /;\s*\S/.test(sql)) throw previewError('saveFailed');
+      if (!sanctionedMarker && (typeof sql !== 'string' || !/^\s*select\b/i.test(sql) || /;\s*\S/.test(sql))) throw previewError('saveFailed');
       const remaining = Math.max(1, Math.min(statementTimeoutMs, Math.floor(deadline - performance.now())));
       await client.query(`set local statement_timeout = '${remaining}ms'`);
       lifecycle.check();
@@ -38,11 +39,13 @@ export async function runSimpleSaveTransaction({ pool, requestId, write, verify,
     queue = running.catch(() => {});
     return running;
   };
+  const queryRunner = (sql, params = []) => enqueue(sql, params);
+  const writeDashboardManageMarker = () => enqueue(DASHBOARD_MANAGE_WRITE_MARKER_SQL, [], true);
   try {
     begun = true;
     await bounded(lifecycle.run(() => client.query('begin')), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
     await bounded(lifecycle.run(() => client.query("set local lock_timeout = '1000ms'")), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
-    const result = await bounded(lifecycle.run(() => write(queryRunner)), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
+    const result = await bounded(lifecycle.run(() => write(queryRunner, writeDashboardManageMarker)), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
     await bounded(lifecycle.run(() => queue), Math.max(1, deadline - performance.now()), previewError('saveTimeout'));
     if (performance.now() >= deadline) throw previewError('saveTimeout');
     lifecycle.check();
