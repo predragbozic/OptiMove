@@ -64,43 +64,32 @@ independent alignment command keep their established authorization.
 
 ### Pending indirect effects before exposure
 
-- Single new-draft Submit promotes existing settings without rewriting their
-  flag columns. To distinguish a previously staged policy edit from ordinary
-  inheritance at activation, define the baseline of a fresh draft from its
-  creation inputs and its inherited source or template. Audit the existing
-  creation paths for which baseline inputs remain recoverable. A retained
-  effect marker or persisted baseline may be necessary for drafts whose intent
-  cannot be inferred from current rows alone. Obtain a contract decision
-  before expanding storage.
-- Applying an edit draft overwrites the live plan defaults and replaces its
-  session tree. Under the draft and live-plan locks, compare the current live
-  defaults and retained logical sessions with the proposed values. Unchanged
-  defaults and unchanged retained sessions stay ordinary content edits.
-  The existing live quick-toggle cascade updates both copies, so that action
-  must not appear as a pending change on a later Save. Preserve established
-  session-removal and phase-move rules.
-- Live batch editing already computes per-sibling default and session changes
-  before applying them. Classify actual patches to the four RPE/tracking
-  columns from that plan and authorize every affected destination before
-  the first write. New inherited sessions retain their prescribed values.
-- Standalone sync and Submit's batch sync replace sibling trees and write
-  plan defaults. Compare each target's current effective settings to its
-  proposed settings. Use the batch's existing stable session correspondence
-  where it exists. For a whole-tree replacement that cannot identify retained
-  sessions unambiguously, agree on a comparison/intent representation before
-  shipping. A positional guess can turn an ordinary move or inherited copy
-  into an apparent policy change. Once classified, each changed destination
-  needs its own current ownership check before any sibling update.
-- The automatic sync requested through respondWithDraft runs after the main
-  mutation commits, with its own transaction. Guard that propagation on its
-  own client and preserve the committed primary outcome. An atomic Submit
-  that also syncs siblings authorizes every affected target inside its single
-  transaction before either change. Keep the exercise-reuse advisory and the
-  established draft, ordered live-plan, and child locks in their existing
-  order. Take the club ceiling and permission locks before row locks and
-  classify flags after obtaining the current plan/child state.
+The direct bridge checkpoint is independent of this design. Preserve the
+existing bridge behavior for indirect operations whose effective RPE changes
+cannot be resolved from stable evidence. Hold role exposure for the RPE slice
+until a separate provenance contract covers those operations, their tests,
+and the old/bridge overlap. The current direct work needs no provenance
+migration or new decision on its slot.
 
-Pin tests for omitted Manage, a changed workspace, a revoke while waiting,
-identical foreign/missing responses, no writes on a denied combined change,
-and ordinary unchanged flag inheritance. Include the exact previous build and
-both the bridge and exposure binaries in the final evidence.
+| Flow | Evidence and authorization before the first affected write |
+| --- | --- |
+| Single new-draft Submit | Activation promotes an existing draft without rewriting its flag columns. Use a recoverable creation baseline and a stable inherited source when available. Require RPE Manage for a proven pending policy change. If the draft cannot distinguish a staff edit from inherited defaults or an ordinary copy, retain the legacy bridge behavior and send that case to the provenance contract. |
+| Edit-draft merge and Submit | After locking the draft, current live source and applicable live targets, compare each target’s actual defaults and session settings with the proposed result. Use retained logical session identity and the existing explicit batch correspondence where available. A live quick toggle that has already updated both copies is unchanged. Keep creation, deletion, rearrangement and inherited flags on their existing path when they introduce no effective RPE change. Before writing any target, verify current View, RPE Manage and exact ownership for every target with a proven policy change. |
+| Explicit sync-batch and Submit’s atomic batch sync | Build the complete per-target effect set from the locked source and every current destination before the first tree/default write, deletion, activation or notification. The existing structured batch operations already provide stable correspondence for some retained sessions. Whole-tree replacements may lack sufficient evidence, especially for replacement sessions with new ids. Use stable identity and explicit source intent. Position, date, ordinal and display labels are insufficient to infer correspondence. Keep ambiguous indirect paths at the legacy bridge boundary until the provenance contract is approved. Never partially apply an already-atomic batch when an affected destination denies the change. |
+| Automatic sync in respondWithDraft | The primary mutation commits first. Open a separate sync transaction, rebuild the current target effect set and recheck rights against the actual targets before propagation. On denial roll back the sync alone. Preserve the known committed primary result and use the established partial-outcome behavior; record any needed API change for review before implementation. |
+
+Take shared club ceilings and actor locks before guarded plan/child row
+locks while preserving the existing exercise-reuse advisory and ascending
+draft/live/sibling order. The comparison runs against the now-current saved
+flags and defaults. Native role edits, workspace changes, or a mismatched
+target must take effect before the authorization result. Source read and
+destination Manage are independent. Stable, unchanged effective settings
+and automatic inherited copies need their existing content/assignment
+rights.
+
+Pin regressions for a proven changed policy versus unchanged inheritance
+and moved sessions, a revoked actor after opening the draft, one denied
+sibling with zero writes in the whole atomic operation, and a denied
+post-commit propagation with the primary result preserved. Use both old
+and bridge binaries before considering exposure. Cases without a stable
+baseline remain explicitly open.
