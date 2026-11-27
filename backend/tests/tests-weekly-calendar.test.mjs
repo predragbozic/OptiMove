@@ -17,6 +17,7 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
+import { stageScheduleManageForTest } from "./support/tests-schedule-manage-fixture.mjs";
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -220,6 +221,7 @@ before(async () => {
   // Roles V-2: the server's role read (v84, v92). A coach's Tests routes reach canAccessAthlete, which asks
   // athletes.view through can() and fails closed (503 permissions_unavailable) without it.
   await applyRoleReadMigrations(db.url);
+  await stageScheduleManageForTest(adminClient);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");

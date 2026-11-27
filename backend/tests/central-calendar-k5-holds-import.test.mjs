@@ -11,6 +11,7 @@ import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { addDays, newKey, startCalendarApp } from "./support/calendar-fixture.mjs";
+import { stageScheduleManageForTest } from "./support/tests-schedule-manage-fixture.mjs";
 import { utcDateOf, waitOutUtcMidnight } from "./support/utc-day-guard.mjs";
 
 // The server reads the real clock (all in UTC here), so this file must not run across UTC midnight: TODAY would fall
@@ -41,6 +42,7 @@ let fx;
 before(async () => {
   env = await startCalendarApp({ label: "k5holds", scheduleBridge: true });
   ({ q, api, fx } = env);
+  await stageScheduleManageForTest(env.admin);
 });
 
 after(async () => {
