@@ -263,6 +263,22 @@ before(async () => {
   // Roles V-7: the exercise library asks can(exercises.use) in a club workspace; this hand-built schema has no role
   // tables, so the basic roles' read is stubbed (support/basic-role-read-stub.mjs).
   await applyBasicRoleReadStub(adminClient);
+  // The historical mechanics fixture omits the R4 write functions. The actual
+  // checks, ceilings and grant changes are covered by the real migration suite.
+  await adminClient.query(`
+    create function public.lock_club_ceiling(uuid[],text) returns void as $$ select $$ language sql;
+    create function public.lock_permission_actor(uuid,text,uuid) returns void as $$
+      select from public.users where id=$1 for share
+    $$ language sql;
+    create function public.permission_word_honoured(word text) returns boolean as $$
+      select word in ('exercises.add','exercises.remove')
+    $$ language sql;
+    create function public.user_has_permission(actor uuid, word text, scope_kind text, scope_key uuid) returns boolean as $$
+      select word in ('exercises.use','exercises.add','exercises.remove') and exists (
+        select from public.permission_user_holdings(actor) h where h.scope_type=scope_kind and h.scope_id=scope_key
+      )
+    $$ language sql;
+  `);
   const dbModule = await import("../src/db.js");
   query = dbModule.query;
   pool = dbModule.pool;

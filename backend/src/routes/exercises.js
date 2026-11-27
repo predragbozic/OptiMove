@@ -9,6 +9,7 @@ import { deleteUnreferencedExercise } from "../exerciseDeletion.js";
 import { loadLockedExercisePreviews } from "../exerciseBlocks.js";
 import { NO_VIEWER_ID, coachModuleGate, viewEntryGate } from "../moduleView.js";
 import { can } from "../permissions.js";
+import { lockExerciseWriter, resolveExerciseWriteWorkspace } from "../exerciseWriteAccess.js";
 
 const router = Router();
 
@@ -527,6 +528,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
   const english = englishValues(body);
   if (!english) { res.status(400).json({ error: "The English name and instruction must be text." }); return; }
 
+  const workspace = await resolveExerciseWriteWorkspace(req, query);
   let selections=mediaSelections(body);
   let previousMedia=null;
   const client = await pool.connect();
@@ -543,6 +545,10 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
     await runQuery("set local lock_timeout = '2s'");
     await runQuery("set local statement_timeout = '10s'");
     await runQuery("select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
+    if (!await lockExerciseWriter(client, req, workspace, "exercises.add")) {
+      await runQuery("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
     req.exerciseAdmin = await hasExerciseAdministration(userId, req.authz, runQuery);
     if (exerciseId) {
       const existing = await runQuery(
@@ -755,11 +761,16 @@ router.post("/:exerciseId/hidden", async (req, res, next) => {
 async function setExerciseActive(req, res, next, active) {
   let client;
   try {
+    const workspace = await resolveExerciseWriteWorkspace(req, query);
     client = await pool.connect();
     await client.query("begin isolation level read committed");
     await client.query("set local lock_timeout='2s'");
     await client.query("set local statement_timeout='10s'");
     await client.query("select pg_advisory_xact_lock(hashtextextended('exercise_collections',0))");
+    if (!await lockExerciseWriter(client, req, workspace, "exercises.remove")) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
     req.exerciseAdmin = await hasExerciseAdministration(req.user.id, req.authz, client.query.bind(client));
     const existing = await client.query(`select e.id,e.owner_scope,e.owner_user_id,e.is_active from library.exercises e
       where e.id=$2 and ${exerciseLibraryScopeSql} for update of e`, [req.user.id, req.params.exerciseId]);
