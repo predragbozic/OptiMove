@@ -94,11 +94,12 @@ export async function assertExerciseReuseAllowed(client, userId, {
   }
 }
 
-export async function withExerciseReuseTransaction(pool, userId, planIds, work, { shouldCheck = () => true } = {}) {
+export async function withExerciseReuseTransaction(pool, userId, planIds, work, { shouldCheck = () => true, beforePlanLock } = {}) {
   const client = await pool.connect();
   try {
     await client.query("begin");
     await lockExerciseReuse(client);
+    await beforePlanLock?.(client);
     await client.query("select id from plans.plans where id = any($1::uuid[]) order by id for update", [planIds]);
     const runQuery = client.query.bind(client);
     if (await shouldCheck(runQuery)) await assertExerciseReuseAllowed(client, userId, { planIds });

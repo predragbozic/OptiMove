@@ -31,6 +31,30 @@ export async function lockProgramEditActor(client, req, { requireEdit = true } =
   return writer;
 }
 
+export async function assertProgramAssignmentHeld(client, writer, { assigns = false, publishes = false } = {}) {
+  const scopeId = nativeProgramRpeScope(writer.scope);
+  if (!scopeId || (!assigns && !publishes)) return;
+  const words = [];
+  if (assigns) words.push("programs.assign");
+  if (publishes) words.push("programs.publish");
+  const { rows: [rights] } = await client.query(
+    `select not exists (
+       select 1 from unnest($4::text[]) as required(word)
+       where (public.permission_word_honoured(required.word)
+         and public.user_has_permission($1,required.word,$2,$3)) is not true
+     ) as allowed`,
+    [writer.actor.user.id, writer.scope.type, scopeId, words],
+  );
+  if (rights?.allowed !== true) throw refuseProgramEdit();
+}
+
+export async function recordProgramAssignmentUse(client, writer) {
+  if (!nativeProgramRpeScope(writer.scope)) return;
+  await client.query(
+    "insert into plans.program_assign_publish_v110_use(singleton) values(true) on conflict(singleton) do nothing",
+  );
+}
+
 export function assertProgramEditHeld(writer) {
   if (!writer.canEdit) throw refuseProgramEdit();
 }
