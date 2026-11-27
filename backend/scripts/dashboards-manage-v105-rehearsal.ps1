@@ -21,7 +21,7 @@ try {
     }
     $uri = [uri]$env:DATABASE_URL
     if ($uri.Host -notin @('localhost','127.0.0.1','[::1]','::1')) { throw 'Use an isolated loopback PostgreSQL cluster.' }
-    if ($env:OPTIMOVE_DASHBOARDS_PREVIOUS_SHA -notmatch '^[a-f0-9]{40} {
+    if ($env:OPTIMOVE_DASHBOARDS_PREVIOUS_SHA -notmatch '^[a-f0-9]{40}$') {
         throw 'Set OPTIMOVE_DASHBOARDS_PREVIOUS_SHA to the exact deployed build.'
     }
     Push-Location -LiteralPath (Join-Path $PSScriptRoot '../..')
@@ -30,19 +30,6 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Rehearsal failed with exit code $LASTEXITCODE." }
         & node scripts/test-runner.mjs --project backend --kind unit --file dashboard-manage-access.test.mjs
         if ($LASTEXITCODE -ne 0) { throw "Route inventory failed with exit code $LASTEXITCODE." }
-        Write-Output "RESULT: PASS"
-    } finally { Pop-Location }
-} finally {
-    if ($secret -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($secret) }
-    $env:DATABASE_URL = $originalUrl
-}
-) {
-        throw 'Set OPTIMOVE_M3C_PREVIOUS_SERVER and the full OPTIMOVE_M3C_PREVIOUS_SHA.'
-    }
-    Push-Location -LiteralPath (Join-Path $PSScriptRoot '../..')
-    try {
-        & node scripts/test-runner.mjs --project backend --kind disposable --file training-load-m3c-v103-rehearsal.test.mjs --file training-activity.test.mjs --file training-activity-metrics-integration.test.mjs
-        if ($LASTEXITCODE -ne 0) { throw "Rehearsal failed with exit code $LASTEXITCODE." }
         Write-Output "RESULT: PASS"
     } finally { Pop-Location }
 } finally {
