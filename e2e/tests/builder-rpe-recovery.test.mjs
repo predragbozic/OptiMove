@@ -9,7 +9,7 @@ import { launch, navTo, openAs } from "../lib/browser.mjs";
 test("legacy Builder RPE review applies only after confirmation on desktop and phone", async () => {
   await withBuilderRpeGuardFixture(async ({ db, cases, cookies, snapshot, stopPrevious }) => {
     await stopPrevious();
-    await db.applyThrough("202612091000");
+    await db.applyThrough("202612121000");
     const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     const server = await previousDashboardServer(db.url, { BUILDER_RPE_REVIEW_SIGNING_KEY: randomBytes(32).toString("hex") }, head);
     let browser;
