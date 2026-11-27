@@ -35,6 +35,7 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     const weeklyTemplateId = await oldTemplate(true);
     const specificTemplateId = await oldTemplate(false);
     await stopPrevious();
+    await db.applyThrough("202612091000");
     const bridge = await previousDashboardServer(db.url, {}, process.env.OPTIMOVE_BUILDER_RPE_BRIDGE_SHA
       ?? "66220c1224abdbdc0eaa1a23fa8d53591064a98a");
     let descendant;
@@ -67,13 +68,27 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
         method: "PATCH", body: { trackTrainingLoadDefault: false, requestRpeDefault: false },
       });
       assert.equal(off.status, 200, JSON.stringify(off.body));
-      const later = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.during.id}/duplicate`, {
-        method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-06-14" },
-      });
-      assert.equal(later.status, 201, JSON.stringify(later.body));
-      descendantOfLaterPublished = later.body.plan.id;
-      const publishedAfterCopy = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.during.id}/submit`, { method: "POST" });
-      assert.equal(publishedAfterCopy.status, 200, JSON.stringify(publishedAfterCopy.body));
+      await db.client.query("begin");
+      try {
+        // v106 sets updated_at = now() in its activation UPDATE. Start
+        // the transaction before the real old-server copy, then publish after it.
+        await db.client.query("select now()");
+        const later = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.during.id}/duplicate`, {
+          method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-06-14" },
+        });
+        assert.equal(later.status, 201, JSON.stringify(later.body));
+        descendantOfLaterPublished = later.body.plan.id;
+        await db.client.query("update plans.plans set status='active',updated_at=now() where id=$1 and status='draft'", [cases.during.id]);
+        await db.client.query("commit");
+      } catch (error) {
+        await db.client.query("rollback");
+        throw error;
+      }
+      const { rows: [olderTimestamp] } = await db.client.query(
+        "select source.updated_at <= copied.created_at as misleading from plans.plans source cross join plans.plans copied where source.id=$1 and copied.id=$2",
+        [cases.during.id, descendantOfLaterPublished],
+      );
+      assert.equal(olderTimestamp.misleading, true);
     } finally {
       await bridge.stop();
     }
@@ -122,6 +137,16 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
       const legacyPublished = await snapshot([legacyActive.id]);
       assert.equal(legacyPublished.plans[0].request_rpe_default, true);
       assert.equal(legacyPublished.sessions[0].rpe_enabled, true);
+      const provedCopy = await api(`/api/builder/plans/${legacyActive.id}/duplicate`, {
+        method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-06-28" },
+      });
+      assert.equal(provedCopy.status, 201, JSON.stringify(provedCopy.body));
+      const copiedId = provedCopy.body.plan.id;
+      const verified = await snapshot([copiedId]);
+      assert.equal(verified.plan_baselines[0].opening_verified, true);
+      assert.equal(verified.session_baselines[0].opening_verified, true);
+      const attested = await submit(copiedId);
+      assert.equal(attested.status, 200, JSON.stringify(attested.body));
       const sourceSession = legacyPublished.sessions[0];
       await db.client.query("begin");
       let concurrentCopy;
