@@ -1515,25 +1515,21 @@ async function assertProgramEditAssignmentReplay(client, writer, requestId, resu
     "select edited_plan_ids,removed_plan_ids,scope_type,scope_id from plans.program_edit_v109_assignment_evidence where request_id=$1",
     [requestId],
   );
+  const created = (result.created ?? []).map(entry => ({ id: entry.planId }));
+  const replaced = (result.replaced ?? []).map(entry => ({ id: entry.planId }));
   if (proof) {
     if (proof.scope_type !== writer.scope.type || proof.scope_id !== nativeProgramRpeScope(writer.scope)) {
       throw refuseProgramEdit(404, "Assignment not found.");
     }
     if (proof.edited_plan_ids.length || proof.removed_plan_ids.length) assertProgramEditHeld(writer);
-    if (proof.edited_plan_ids.length) {
-      await assertProgramEditTargets(client, writer, proof.edited_plan_ids.map(id => ({ id })));
-    }
-    return;
+  } else if (dated && (created.length || replaced.length)) {
+    // Older receipts cannot prove whether creating a plan removed an empty
+    // draft. The caller must still hold Edit for those ambiguous results.
+    assertProgramEditHeld(writer);
   }
-  if (!dated) return;
-  // Older receipts cannot prove whether a newly created plan replaced an
-  // empty draft. Preserve their result only for a caller who can still edit.
-  const replaced = result.replaced ?? [];
-  if (replaced.length || (result.created ?? []).length) assertProgramEditHeld(writer);
-  const ids = replaced.map(entry => entry.planId);
-  if (ids.length && nativeProgramRpeScope(writer.scope)) {
-    await assertProgramEditTargets(client, writer, ids.map(id => ({ id })));
-  }
+  // In either format, reuse requires current access to every plan the
+  // receipt would disclose, even when no content edit was performed.
+  await assertProgramEditPlanAccess(client, writer, [...created, ...replaced]);
 }
 
 async function claimAssignmentRequest(client, { id, userId, sourcePlanId, payloadKey }) {
@@ -1818,6 +1814,10 @@ async function lockProgramEditTarget(client, writer, planId, { deleting = false 
 
 async function assertProgramEditTargets(client, writer, plans) {
   assertProgramEditHeld(writer);
+  return assertProgramEditPlanAccess(client, writer, plans);
+}
+
+async function assertProgramEditPlanAccess(client, writer, plans) {
   const runQuery = client.query.bind(client);
   for (const planId of [...new Set(plans.map(plan => plan.id))].sort()) {
     const current = await getEditablePlan(writer.actor, planId, runQuery);

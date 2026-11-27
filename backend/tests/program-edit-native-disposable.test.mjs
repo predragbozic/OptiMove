@@ -194,6 +194,30 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
     const replay = await write(assignPath, "POST", replace);
     assert.equal(replay.status, 201, replay.text);
     assert.deepEqual(replay.body, replaced.body);
+    // A pre-v109 result has no proof. The athlete and template are both
+    // accessible in the larger club workspace, but the created plan is
+    // owned by the team and its ID may not be replayed in that club.
+    const historicalRequestId = randomUUID();
+    await sql.query(
+      `insert into public.builder_assignment_requests(id,user_id,source_plan_id,payload_key,status,result)
+       select $2,user_id,source_plan_id,payload_key,status,result from public.builder_assignment_requests where id=$1`,
+      [newWeek.assignmentRequestId, historicalRequestId],
+    );
+    await fixture.grantClub(coach, club);
+    await sql.query(
+      `insert into public.athlete_memberships(athlete_id,membership_type,club_id,status)
+       select athlete_id,'club',$2,'active' from plans.plans where id=$1`,
+      [local, club],
+    );
+    const clubWorkspace = await write("/api/auth/workspace", "PUT", { type: "club", scopeId: club });
+    assert.equal(clubWorkspace.status, 200, clubWorkspace.text);
+    const oldRequest = { ...newWeek, assignmentRequestId: historicalRequestId };
+    const wrongLegacyScope = await write(assignPath, "POST", oldRequest);
+    assert.equal(wrongLegacyScope.status, 404, wrongLegacyScope.text);
+    assert.equal((await choose(team)).status, 200);
+    const oldReplay = await write(assignPath, "POST", oldRequest);
+    assert.equal(oldReplay.status, 201, oldReplay.text);
+    assert.deepEqual(oldReplay.body, pure.body);
   } finally {
     await server?.stop();
     await sql.end();
