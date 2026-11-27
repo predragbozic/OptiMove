@@ -1,9 +1,15 @@
 -- Read-only.
 select (select count(*) from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql'
-         and checksum='ea17315e20c3dc3ae9fc500be666b42f79c9d3000dbeebee8267d37c7d7b6f9a')=1 as v108_exact,
+         and checksum='30661e1d94f83e36fd87cb87fabfc5d25a1dbe00ba35d376abbfb346c5e8ade3')=1 as v108_exact,
        (select md5(prosrc) from pg_proc where oid=to_regprocedure('public.permission_word_honoured(text)'))='2a01ec9e027967a44892fc0f2fb6202d' as permission_body_exact,
        public.permission_word_honoured('exercises.add') and public.permission_word_honoured('exercises.remove')
          and not public.permission_word_honoured('exercises.media.upload') as exact_exercise_stage,
+       ((select t.tgenabled from pg_trigger t
+        where t.tgrelid='library.exercise_manage_v108_use'::regclass
+          and t.tgname='exercise_manage_v108_keep_use'
+          and t.tgfoid=to_regprocedure('library.keep_exercise_manage_v108_use()')) = 'O'
+       and (select md5(prosrc) from pg_proc
+         where oid=to_regprocedure('library.keep_exercise_manage_v108_use()'))='534bb84532ce05cedc4ccf4cc56abd11') as first_use_guard_exact,
        not exists(select 1 from library.exercise_manage_v108_use) as unused,
        (select bool_and(relrowsecurity) from pg_class where oid in (
          'library.exercise_manage_v108_use'::regclass,'library.exercise_manage_v108_seed'::regclass

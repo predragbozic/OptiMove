@@ -65,7 +65,7 @@ function roleData(client) {
 }
 
 
-const previousBuild = "cc1c423c729f33c6e1e4237fe413750f95636c41";
+const previousBuild = "d6d9f752ea2c534f923c8dd2ea82fee48eba3329";
 const migration = "202612101000";
 const bridgeWords = ["exercises.add", "exercises.remove"];
 const read = name => readFile(new URL(`../../docs/runbooks/exercise-manage-v108-${name}.sql`, import.meta.url), "utf8");
@@ -98,7 +98,7 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
     assert.deepEqual(await roleData(client), beforeRoles);
     await fixture.applyThrough(migration);
     assert.deepEqual(await catalogue(), installed);
-    await client.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values('migrations_v2/202612101100_exercise_rehearsal.sql',repeat('0',64),'test')");
+    await client.query("insert into public.schema_migrations(migration_name,checksum,runner_version,applied_at) values('migrations_v2/202612101100_exercise_rehearsal.sql',repeat('0',64),'test',now()-interval '1 day')");
     await assert.rejects(client.query(rollback), /later migration/);
     await client.query("rollback");
     await client.query("delete from public.schema_migrations where migration_name='migrations_v2/202612101100_exercise_rehearsal.sql'");
@@ -156,6 +156,11 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
     assert.equal(await marker(), 0);
     const archive = await check(versionCookie, "/api/exercises/" + legacy.body.id + "/archive", "POST");
     assert.equal(archive.status, 200, archive.text);
+    assert.equal(await marker(), 1);
+    for (const action of ["delete from", "truncate", "update"]) {
+      const command = action + " library.exercise_manage_v108_use" + (action === "update" ? " set first_used_at=now()" : "");
+      await assert.rejects(client.query(command), /first-use evidence is immutable/);
+    }
     assert.equal(await marker(), 1);
     const custom = await check(customCookie, "/api/exercises", "POST", { name: "Held custom Exercise writer" });
     assert.equal(custom.status, 201, custom.text);

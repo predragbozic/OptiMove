@@ -14,12 +14,20 @@ lock table library.exercise_manage_v108_use, public.permission_roles, public.per
 do $$
 declare v_applied timestamptz;
 begin
-  select applied_at into v_applied from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and checksum='ea17315e20c3dc3ae9fc500be666b42f79c9d3000dbeebee8267d37c7d7b6f9a';
-  if v_applied is null or exists (select 1 from public.schema_migrations where migration_name<>'migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and migration_name ~ '^migrations_v2/[0-9]{12}_' and applied_at>=v_applied) then
+  select applied_at into v_applied from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and checksum='30661e1d94f83e36fd87cb87fabfc5d25a1dbe00ba35d376abbfb346c5e8ade3';
+  if v_applied is null or exists (select 1 from public.schema_migrations where migration_name<>'migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and migration_name ~ '^migrations_v2/[0-9]{12}_' and (applied_at>=v_applied or migration_name>'migrations_v2/202612101000_exercises_v108_manage_bridge.sql')) then
     raise exception 'v108 rollback refused: v108 is missing, its checksum changed, or a later migration is recorded';
   end if;
   if exists (select 1 from library.exercise_manage_v108_use) then
     raise exception 'v108 rollback refuses checked Exercise writer use';
+  end if;
+  if ((select t.tgenabled from pg_trigger t
+        where t.tgrelid='library.exercise_manage_v108_use'::regclass
+          and t.tgname='exercise_manage_v108_keep_use'
+          and t.tgfoid=to_regprocedure('library.keep_exercise_manage_v108_use()')) = 'O'
+       and (select md5(prosrc) from pg_proc
+         where oid=to_regprocedure('library.keep_exercise_manage_v108_use()'))='534bb84532ce05cedc4ccf4cc56abd11') is distinct from true then
+    raise exception 'v108 rollback refused: first-use evidence guard changed';
   end if;
   if (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.permission_word_honoured(text)')) is distinct from '2a01ec9e027967a44892fc0f2fb6202d' then
     raise exception 'v108 rollback refused: the permission body changed';
@@ -70,7 +78,7 @@ begin
   end if;
   if exists (
     select 1 from library.exercise_manage_v108_seed s
-    left join (
+    full join (
       select 'role' as layer,role_id as id,revision_after,items_added from public.permission_role_changes where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql'
       union all select 'version',version_id,revision_after,items_added from public.permission_club_role_version_changes where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql'
       union all select 'custom',custom_role_id,revision_after,items_added from public.permission_custom_role_changes where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql'
@@ -161,5 +169,6 @@ do $$ begin
   end if;
 end $$;
 drop table library.exercise_manage_v108_use, library.exercise_manage_v108_seed;
-delete from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and checksum='ea17315e20c3dc3ae9fc500be666b42f79c9d3000dbeebee8267d37c7d7b6f9a';
+drop function library.keep_exercise_manage_v108_use();
+delete from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and checksum='30661e1d94f83e36fd87cb87fabfc5d25a1dbe00ba35d376abbfb346c5e8ade3';
 commit;

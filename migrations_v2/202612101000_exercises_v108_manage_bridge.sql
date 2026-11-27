@@ -37,6 +37,16 @@ create table library.exercise_manage_v108_use (
 );
 alter table library.exercise_manage_v108_use enable row level security;
 revoke all on library.exercise_manage_v108_use from public;
+create function library.keep_exercise_manage_v108_use() returns trigger
+language plpgsql set search_path=pg_catalog,library as $
+begin
+  raise exception 'Exercise bridge first-use evidence is immutable';
+end
+$;
+revoke all on function library.keep_exercise_manage_v108_use() from public;
+create trigger exercise_manage_v108_keep_use
+before update or delete or truncate on library.exercise_manage_v108_use
+for each statement execute function library.keep_exercise_manage_v108_use();
 
 create table library.exercise_manage_v108_seed (
   layer text not null check (layer in ('role','version','custom')),
@@ -109,6 +119,7 @@ begin
   foreach api_role in array array['anon','authenticated','service_role'] loop
     if exists(select 1 from pg_roles where rolname=api_role) then
       execute format('revoke all on library.exercise_manage_v108_use, library.exercise_manage_v108_seed from %I',api_role);
+      execute format('revoke all on function library.keep_exercise_manage_v108_use() from %I',api_role);
     end if;
   end loop;
 end $$;

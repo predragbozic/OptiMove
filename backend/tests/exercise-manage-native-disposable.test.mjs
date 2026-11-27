@@ -63,6 +63,106 @@ test("native Exercise content and lifecycle writes have independent staged permi
     const section = (await sql.query("insert into plans.plan_nodes(plan_session_id,node_type,name,node_order) values($1,'section','Exercises',1) returning id", [session])).rows[0].id;
     const custom = (name, extra) => write(coachCookie, "POST", "/api/builder/nodes/" + section + "/custom-exercise", { name, ...extra });
     const customEffects = async name => (await sql.query("select (select count(*)::int from library.exercises where name=$1) as exercises, (select count(*)::int from plans.plan_items where plan_node_id=$2 and title=$1) as items", [name, section])).rows[0];
+    const remoteClub = await fixture.club();
+    const remoteTeam = await fixture.team(remoteClub);
+    await fixture.grantTeam(coach, remoteTeam);
+    async function otherSection(targetClub, targetTeam, visibility = "private") {
+      const athleteUser = await fixture.user("Exercise target athlete");
+      await fixture.makeAthlete(athleteUser);
+      const athlete = (await sql.query("select id from public.athletes where user_id=$1",[athleteUser])).rows[0].id;
+      await sql.query("insert into public.athlete_memberships(athlete_id,club_id,team_id,membership_type,status) values($1,$2,$3,'team','active')",[athlete,targetClub,targetTeam]);
+      const planId = (await sql.query("insert into plans.plans(plan_type,created_by_user_id,athlete_id,name,status,source_type,visibility,is_template) values('program',$1,$2,'Other author plan','draft','builder',$3,false) returning id",[admin,athlete,visibility])).rows[0].id;
+      const dayId = (await sql.query("insert into plans.plan_days(plan_id,date,day_order,block_index) values($1,'2027-01-12',1,1) returning id",[planId])).rows[0].id;
+      const sessionId = (await sql.query("insert into plans.plan_sessions(plan_day_id,name,bta) values($1,'Target session','T') returning id",[dayId])).rows[0].id;
+      return (await sql.query("insert into plans.plan_nodes(plan_session_id,node_type,name,node_order) values($1,'section','Exercises',1) returning id",[sessionId])).rows[0].id;
+    }
+    const nativeTarget = await otherSection(club, team);
+    const remoteTarget = await otherSection(remoteClub, remoteTeam);
+    const remotePublic = await otherSection(remoteClub, remoteTeam, "public");
+    const targetWrite = (target, name, cookie = coachCookie) => write(cookie, "POST", "/api/builder/nodes/" + target + "/custom-exercise", {
+      name, imageUrl: "https://example.test/old-exercise-image.png",
+    });
+    const stateDigest = async () => (await sql.query(`select
+      (select jsonb_agg(e order by e.id) from library.exercises e) as exercises,
+      (select jsonb_agg(i order by i.id) from plans.plan_items i) as items,
+      (select jsonb_agg(a order by a.id) from media.assets a) as assets,
+      (select jsonb_agg(u order by u.id) from media.uploads u) as uploads,
+      (select count(*) from library.exercise_manage_v108_use) as marker`)).rows[0];
+    const beforeBlocked = await stateDigest();
+    const remoteOnly = await targetWrite(remoteTarget, "Other workspace exercise");
+    assert.equal(remoteOnly.status, 403, remoteOnly.text);
+    assert.deepEqual(await stateDigest(), beforeBlocked);
+
+    const changeAthleteView = async (grant) => {
+      const migration = "fixtures/athletes-view-" + randomUUID();
+      await sql.query("select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive')");
+      await sql.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values($1,repeat('0',64),'test')",[migration]);
+      const role = (await sql.query("update public.permission_roles set revision=revision+1,updated_at=now() where id=$1 returning revision",[ROLE_IDS.team_coach])).rows[0];
+      const column = grant ? "items_added" : "items_removed";
+      await sql.query(`insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,${column}) values($1,$2,'migration',$3,array['athletes.view'])`,
+        [ROLE_IDS.team_coach,role.revision,migration]);
+      const items = grant
+        ? "insert into public.permission_role_items(role_id,permission_word) values($1,'athletes.view')"
+        : "delete from public.permission_role_items where role_id=$1 and permission_word='athletes.view'";
+      await sql.query(items,[ROLE_IDS.team_coach]);
+    };
+    const waitForWriter = async () => {
+      for (let tries=0; tries<40; tries++) {
+        await sql.query("select pg_stat_clear_snapshot()");
+        const { rows: [probe] } = await sql.query("select exists(select 1 from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query like '%advisory_xact_lock_shared%exercise_collections%') as waiting");
+        if (probe.waiting) return;
+        await new Promise(resolve => setTimeout(resolve,25));
+      }
+      assert.fail("custom exercise must wait behind the held collection lock");
+    };
+    let queued;
+    await sql.query("begin");
+    try {
+      await sql.query("select pg_advisory_xact_lock(hashtextextended('exercise_collections',0))");
+      queued = targetWrite(nativeTarget, "Do not use stale Athletes View");
+      await waitForWriter();
+      await changeAthleteView(false);
+      await sql.query("commit");
+    } catch (error) {
+      await sql.query("rollback");
+      throw error;
+    }
+    const staleAthleteView = await queued;
+    assert.equal(staleAthleteView.status, 403, staleAthleteView.text);
+    assert.deepEqual(await stateDigest(), beforeBlocked);
+    await sql.query("begin");
+    try {
+      await changeAthleteView(true);
+      await sql.query("commit");
+    } catch (error) {
+      await sql.query("rollback");
+      throw error;
+    }
+
+    const privateCoach = await fixture.user("Private coach before workspace switch");
+    await fixture.grantIndependent(privateCoach);
+    await sql.query("insert into public.user_workspace_preferences(user_id,workspace_type) values($1,'private_coach')",[privateCoach]);
+    const privateCookie = await server.cookieFor(privateCoach);
+    const priorPrivate = await stateDigest();
+    await sql.query("begin");
+    let queuedPrivate;
+    try {
+      await sql.query("select pg_advisory_xact_lock(hashtextextended('exercise_collections',0))");
+      queuedPrivate = create(privateCookie, "Do not use prior private workspace");
+      await waitForWriter();
+      await fixture.grantTeam(privateCoach, team);
+      await sql.query("update public.user_workspace_preferences set workspace_type='team',scope_id=$2 where user_id=$1",[privateCoach,team]);
+      await sql.query("commit");
+    } catch (error) {
+      await sql.query("rollback");
+      throw error;
+    }
+    const switched = await queuedPrivate;
+    assert.equal(switched.status, 403, switched.text);
+    assert.deepEqual(await stateDigest(), priorPrivate);
+
+    const publicResult = await targetWrite(remotePublic, "Public writable exception");
+    assert.equal(publicResult.status, 201, publicResult.text);
     const allowed = await custom("Builder Exercise Add");
     assert.equal(allowed.status, 201, allowed.text);
     assert.deepEqual(await customEffects("Builder Exercise Add"), { exercises: 1, items: 1 });

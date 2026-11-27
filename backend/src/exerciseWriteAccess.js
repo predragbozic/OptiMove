@@ -9,13 +9,12 @@ async function activeWorkspace(userId, authz, query) {
 }
 
 export async function resolveExerciseWriteWorkspace(req, query) {
-  if (!req.authz?.clubRoles?.length && !req.authz?.teamRoles?.length) return null;
   const active = await activeWorkspace(req.user.id, req.authz, query);
   return active ?? { type: "unavailable" };
 }
 
 export async function lockExerciseWriter(client, req, expected, word, dependentWords = []) {
-  if (!expected) return true;
+  if (!expected) return false;
   const { type, scopeId } = expected;
   const native = type === "club" || type === "team";
   if (!native && type !== "platform" && type !== "private_coach") return false;
@@ -68,7 +67,8 @@ export async function lockExerciseWriter(client, req, expected, word, dependentW
     );
     if (!saved.rowCount && !matches((await resolveActiveWorkspaceReadOnly(userId, authz, runQuery)).workspace)) return false;
   }
-  if (!native) return true;
+  const actor = { user, authz, workspace: expected };
+  if (!native) return actor;
   const { rows: [rights] } = await client.query(
     `select public.permission_word_honoured($1)
         and public.user_has_permission($2,'exercises.use',$3,$4)
@@ -80,7 +80,7 @@ export async function lockExerciseWriter(client, req, expected, word, dependentW
         ) as allowed`,
     [word, userId, type, scopeId, dependentWords],
   );
-  return rights?.allowed === true;
+  return rights?.allowed === true ? actor : false;
 }
 
 export async function recordExerciseWriterUse(client, workspace) {
@@ -90,4 +90,18 @@ export async function recordExerciseWriterUse(client, workspace) {
      select true where not exists(select 1 from library.exercise_manage_v108_use)
      on conflict do nothing`,
   );
+}
+
+export function exerciseProgramActor(actor) {
+  const { workspace, authz } = actor;
+  if (workspace.type === "platform") return actor;
+  return {
+    ...actor,
+    authz: {
+      ...authz,
+      platformRoles: [],
+      clubRoles: workspace.type === "club" ? authz.clubRoles.filter(role => role.clubId === workspace.scopeId) : [],
+      teamRoles: workspace.type === "team" ? authz.teamRoles.filter(role => role.teamId === workspace.scopeId) : [],
+    },
+  };
 }

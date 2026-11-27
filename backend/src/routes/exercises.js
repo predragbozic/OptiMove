@@ -545,11 +545,12 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
     await runQuery("set local lock_timeout = '2s'");
     await runQuery("set local statement_timeout = '10s'");
     await runQuery("select pg_advisory_xact_lock_shared(hashtextextended('exercise_collections', 0))");
-    if (!await lockExerciseWriter(client, req, workspace, "exercises.add")) {
+    const actor = await lockExerciseWriter(client, req, workspace, "exercises.add");
+    if (!actor) {
       await runQuery("rollback");
       return res.status(403).json({ error: "Forbidden" });
     }
-    req.exerciseAdmin = await hasExerciseAdministration(userId, req.authz, runQuery);
+    req.exerciseAdmin = await hasExerciseAdministration(userId, actor.authz, runQuery);
     if (exerciseId) {
       const existing = await runQuery(
         `select e.id, e.owner_scope, e.owner_user_id, e.video_source,e.image_source,e.video_url as stored_video_url,e.image_url as stored_image_url, coalesce(e.video_url,fallback_media.video_url) as video_url, coalesce(e.image_url,fallback_media.image_url) as image_url from library.exercises e ${exerciseMediaJoinSql} where e.id = $2 and (${exerciseLibraryScopeSql}) and e.is_active=true for update of e`,
@@ -668,7 +669,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       await runQuery("rollback");
       return res.status(404).json({ error: "Exercise not found." });
     }
-    await recordExerciseWriterUse(client, workspace);
+    await recordExerciseWriterUse(client, actor.workspace);
     await runQuery("commit");
     if (req.exerciseAdmin) console.info(JSON.stringify({ event: "exercise.save", actor: userId, exercise: finalId, operation: copying ? "copy" : exerciseId ? "edit" : "create" }));
     res.status(exerciseId ? 200 : 201).json({
@@ -768,11 +769,12 @@ async function setExerciseActive(req, res, next, active) {
     await client.query("set local lock_timeout='2s'");
     await client.query("set local statement_timeout='10s'");
     await client.query("select pg_advisory_xact_lock(hashtextextended('exercise_collections',0))");
-    if (!await lockExerciseWriter(client, req, workspace, "exercises.remove")) {
+    const actor = await lockExerciseWriter(client, req, workspace, "exercises.remove");
+    if (!actor) {
       await client.query("rollback");
       return res.status(403).json({ error: "Forbidden" });
     }
-    req.exerciseAdmin = await hasExerciseAdministration(req.user.id, req.authz, client.query.bind(client));
+    req.exerciseAdmin = await hasExerciseAdministration(req.user.id, actor.authz, client.query.bind(client));
     const existing = await client.query(`select e.id,e.owner_scope,e.owner_user_id,e.is_active from library.exercises e
       where e.id=$2 and ${exerciseLibraryScopeSql} for update of e`, [req.user.id, req.params.exerciseId]);
     const exercise = existing.rows[0];
@@ -782,7 +784,7 @@ async function setExerciseActive(req, res, next, active) {
       return res.status(403).json({ error: "Only an owner or platform administrator can archive this exercise." });
     }
     await client.query("update library.exercises set is_active=$2,updated_at=now() where id=$1", [exercise.id, active]);
-    await recordExerciseWriterUse(client, workspace);
+    await recordExerciseWriterUse(client, actor.workspace);
     await client.query("commit");
     console.info(JSON.stringify({ event: "exercise.lifecycle", actor: req.user.id, exercise: exercise.id, active, administrator: req.exerciseAdmin }));
     res.json({ id: exercise.id, isActive: active, archived: !active });

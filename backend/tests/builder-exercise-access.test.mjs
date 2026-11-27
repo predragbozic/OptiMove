@@ -10,6 +10,8 @@ import { EXERCISE_COLLECTIONS_FIXTURE_SQL, addMediaSelectionFixture } from "./su
 const coachId = crypto.randomUUID();
 const otherCoachId = crypto.randomUUID();
 const athleteUserId = crypto.randomUUID();
+const coachSessionToken = crypto.randomUUID();
+const coachAuthz = { platformRoles: [], clubRoles: [], teamRoles: [], isIndependentCoach: true };
 let database;
 let client;
 let pool;
@@ -29,14 +31,16 @@ before(async () => {
     create schema library;
     create table public.users (id uuid primary key, is_active boolean default true, display_name text, full_name text, email text);
     create table public.user_global_roles (id uuid primary key default gen_random_uuid(), user_id uuid, role text, is_active boolean);
+    create table public.auth_sessions(user_id uuid, token_hash text, expires_at timestamptz);
+    create function public.lock_permission_actor(uuid,text,uuid) returns void language sql as $ select $;
     create table public.athletes (
       id uuid primary key, user_id uuid, athlete_id text, source_external_id text,
       display_name text, full_name text, first_name text, last_name text,
       is_active boolean default true, created_at timestamptz default now()
     );
     create table public.user_athletes (user_id uuid, athlete_id uuid, is_active boolean, relationship_type text);
-    create table public.user_team_roles (user_id uuid, team_id uuid, is_active boolean);
-    create table public.user_club_roles (user_id uuid, club_id uuid, is_active boolean);
+    create table public.user_team_roles (user_id uuid, team_id uuid, is_active boolean, role text);
+    create table public.user_club_roles (user_id uuid, club_id uuid, is_active boolean, role text);
     create table public.athlete_memberships (athlete_id uuid, team_id uuid, club_id uuid, membership_type text, status text);
     create table plans.plans (
       id uuid primary key default gen_random_uuid(), created_by_user_id uuid,
@@ -129,6 +133,9 @@ before(async () => {
   await client.query("insert into public.users (id) values ($1),($2),($3)", [coachId, otherCoachId, athleteUserId]);
   await client.query(EXERCISE_COLLECTIONS_FIXTURE_SQL);
   await addMediaSelectionFixture(client.query.bind(client));
+  await client.query("insert into public.user_global_roles(user_id,role,is_active) values ($1,'independent_coach',true)",[coachId]);
+  await client.query("insert into public.user_workspace_preferences(user_id,workspace_type) values($1,'private_coach')",[coachId]);
+  await client.query("insert into public.auth_sessions values($1,$2,now()+interval '1 hour')",[coachId,crypto.createHash("sha256").update(coachSessionToken).digest("base64url")]);
   await client.query("insert into public.user_global_roles (user_id,role,is_active) values ($1,'platform_admin',true)", [otherCoachId]);
   for (const [key, ownerScope, ownerId, active] of [
     ["own", "user", coachId, true],
@@ -158,7 +165,8 @@ before(async () => {
   app.use(express.json());
   app.use("/api/builder", (req, res, next) => {
     req.user = { id: coachId };
-    req.authz = { platformRoles: [] };
+    req.authz = coachAuthz;
+    req.sessionToken = coachSessionToken;
     next();
   }, builderRouter);
   app.use("/api/exercise-collections", (req, res, next) => {
@@ -173,7 +181,7 @@ before(async () => {
     next();
   });
   app.use("/api/templates", templatesRouter);
-  app.use("/api/exercises", (req, res, next) => { req.user = { id: coachId }; req.authz = { platformRoles: [] }; next(); }, exercisesRouter);
+  app.use("/api/exercises", (req, res, next) => { req.user = { id: coachId }; req.authz = coachAuthz; req.sessionToken = coachSessionToken; next(); }, exercisesRouter);
   app.use("/api/plans", plansRouter);
   app.use("/api/organization", organizationRouter);
   app.use((error, req, res, next) => res.status(error.status || 500).json({ error: error.message }));
