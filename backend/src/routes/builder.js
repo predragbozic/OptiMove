@@ -13,7 +13,7 @@ import { exerciseProgramActor, lockExerciseWriter, recordExerciseWriterUse, reso
 import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSessionsOf, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
-import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
+import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsOffered, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "../workspace.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
@@ -2840,6 +2840,17 @@ async function buildSubmitResponse(req, plan) {
   };
 }
 
+async function draftRpeSettingsOffered(plan, req) {
+  if (plan.plan_type !== "weekly" || !isEditableDraftPlan(plan)) return false;
+  const authz = req.authz;
+  if (![authz?.platformRoles, authz?.clubRoles, authz?.teamRoles].every(Array.isArray)) return false;
+  const scope = await resolveBuilderRpeWorkspace({ query }, req);
+  if (!programRpeSettingsOffered(req.authz, scope)) return false;
+  if (scope.type === "platform") return true;
+  const { rows: [owner] } = await query("select * from training_load.plan_workspace_ownership where plan_id=$1", [plan.id]);
+  return mayChangeDraftRpe(scope, plan.plan_type, owner);
+}
+
 async function buildDraft(plan, req) {
   const result = await query(
     `select pd.id as block_id, pd.block_index, pd.block_name, pd.block_type, pd.date, pd.day_order, pd.day_note,
@@ -2901,6 +2912,7 @@ async function buildDraft(plan, req) {
       // PATCH /plans/:planId/training-load-settings below.
       trackTrainingLoadDefault: Boolean(plan.track_training_load_default),
       requestRpeDefault: Boolean(plan.request_rpe_default),
+      canEditRpeSettings: await draftRpeSettingsOffered(plan, req),
     },
     blocks: blockList,
     batch: await loadBuilderBatch(plan, req),

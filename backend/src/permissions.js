@@ -240,7 +240,8 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   // Roles V-7 (the plan's "V-7 design"): Programs and Exercises. access.js holds the programs gates: programViewScopes
   // (the arrays of a plan's readers through its athlete) and canViewProgramsAt (coachModuleGate on the Builder, the
   // Program Library and the plan reads); routes/exercises.js holds the exercise library's coach gate.
-  "programs.view": Object.freeze(["access.js"]),
+  "programs.view": Object.freeze(["access.js", "programRpeSettingsAccess.js"]),
+  "programs.rpe_settings": Object.freeze(["programRpeSettingsAccess.js"]),
   "exercises.use": Object.freeze(["routes/exercises.js"]),
   "load.view.team": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js", "trainingLoadMetricsAccess.js"]),
   "load.view.athlete": Object.freeze(["routes/trainingLoad.js", "routes/trainingActivity.js", "routes/trainingLoadMetrics.js"]),

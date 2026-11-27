@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { loadAuthorizationContext } from "./authz.js";
 import { clubOfScope, lockClubCeiling } from "./clubCeilingLock.js";
 import { externalScheduleScopeForWorkspace } from "./trainingLoadAccess.js";
+import { can, PermissionsUnavailableError } from "./permissions.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
 
 export function nativeProgramRpeScope(scope) {
@@ -87,6 +88,21 @@ export async function lockProgramRpeActor(client, req, scope) {
   if (saved.rowCount) return actor;
   const selected = await resolveActiveWorkspaceReadOnly(user.id, authz, runQuery);
   return matchesExpected(selected.workspace) ? actor : null;
+}
+
+// A read-time offer is informational. Each mutation still reloads the actor,
+// exact owner and licensed holding under locks on the write client.
+export function programRpeSettingsOffered(authz, scope) {
+  if (!scope.type) return false;
+  const scopeId = nativeProgramRpeScope(scope);
+  if (!scopeId) return true;
+  const target = { type: scope.type, id: scopeId };
+  try {
+    return can(authz, "programs.view", target) && can(authz, "programs.rpe_settings", target);
+  } catch (error) {
+    if (error instanceof PermissionsUnavailableError) return false;
+    throw error;
+  }
 }
 
 export async function programRpeSettingsRightsStillHold(client, actor, scope, { trainingLoadView = false } = {}) {
