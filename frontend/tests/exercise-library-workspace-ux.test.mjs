@@ -152,6 +152,16 @@ test("native Add and Remove control separate Exercise actions in all library vie
       exercises: [exercise], itemIds: ["item"], markedExerciseIds: new Set(),
       search: { view, filters: {}, options: {} }, tagEditor: {},
     });
+    const empty = () => renderExerciseLibraryHtml({
+      exercises: [], itemIds: [], markedExerciseIds: new Set(), search: { view: "list", filters: {}, options: {} }, tagEditor: {},
+    });
+    state.currentUser.activeWorkspace = { type: "club", scopeId: "active-club" };
+    state.currentUser.permissions = ["exercises.use"];
+    assert.match(empty(), /No exercises are available in this library/);
+    assert.doesNotMatch(empty(), /exercise-add-open|Add your first exercise/);
+    state.currentUser.permissions.push("exercises.add");
+    assert.match(empty(), /Add your first exercise/);
+    assert.match(empty(), /exercise-add-open/);
     for (const view of ["details", "tile", "big", "list"]) {
       state.currentUser.activeWorkspace = { type: "team", scopeId: "active-team" };
       state.currentUser.permissions = ["exercises.use", "exercises.add"];

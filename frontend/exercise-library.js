@@ -143,6 +143,7 @@ export function renderExerciseSelectionBar(selection, exercises) {
 // An empty result is an empty state with one next step: a library with nothing in it offers
 // Add exercise; a search or filter that matches nothing says how to widen it.
 function renderExerciseLibraryEmptyHtml(filtered, hasTerm = false) {
+  const canAdd = canWriteExercise("exercises.add");
   return filtered
     ? `<div class="om-empty exercise-library-empty" role="status">
         <p class="om-empty__title">No exercises match</p>
@@ -150,8 +151,8 @@ function renderExerciseLibraryEmptyHtml(filtered, hasTerm = false) {
       </div>`
     : `<div class="om-empty exercise-library-empty" role="status">
         <p class="om-empty__title">Your exercise library is empty</p>
-        <p class="om-empty__text">Add your first exercise with its video or picture; it will appear here and in the Builder.</p>
-        ${!canWriteExercise("exercises.add") ? "" : `<div class="om-empty__actions"><button class="om-btn om-btn--primary" type="button" data-action="exercise-add-open">+ Add exercise</button></div>`}
+        <p class="om-empty__text">${canAdd ? "Add your first exercise. It will appear here and in the Builder." : "No exercises are available in this library."}</p>
+        ${canAdd ? `<div class="om-empty__actions"><button class="om-btn om-btn--primary" type="button" data-action="exercise-add-open">+ Add exercise</button></div>` : ""}
       </div>`;
 }
 
