@@ -77,11 +77,20 @@ export function registerDashboardChartElement(scope = globalThis, loader = loadL
         }
       }
       if(controls.children.length>1)this.append(controls);
-      if(settings.pointSelection?.mode==='details')chart.on?.('click',event=>{
+      if(settings.pointSelection?.mode==='details'||plot.bucketKeys?.length)chart.on?.('click',event=>{
         if(!this.isConnected||this.chart!==chart||event.componentType!=='series')return;
         let details=this.querySelector('.tl-chart-point');if(!details){details=scope.document.createElement('details');details.className='tl-chart-point';details.dataset.dashboardDisclosure='point';if(widgetId)details.dataset.widgetId=widgetId;const title=scope.document.createElement('summary');title.textContent='Selected point details';details.append(title,scope.document.createElement('p'));this.append(details);}
         const values=Array.isArray(event.value)?event.value:[event.value];
         details.querySelector('p').textContent=[event.seriesName,event.name,...values.filter(value=>typeof value==='number'&&Number.isFinite(value)).map(value=>Number.isInteger(value)?String(value):value.toFixed(plot.precision))].filter(Boolean).join(' · ');details.open=true;
+        const bucketIndex=event.seriesType==='heatmap'?values[0]:event.dataIndex;
+        const day=plot.bucketKeys?.[bucketIndex];
+        details.querySelector('[data-action="training-load-analysis-chart-day"]')?.remove();
+        if(day&&widgetId&&Number.isInteger(plot.interactionGeneration)){
+          const filter=scope.document.createElement('button');filter.type='button';
+          filter.className='plain-button compact-button';filter.textContent='Filter dashboard to this day';
+          Object.assign(filter.dataset,{action:'training-load-analysis-chart-day',widgetId,dateFrom:day,boundGeneration:String(plot.interactionGeneration)});
+          details.append(filter);
+        }
       });
     }
 

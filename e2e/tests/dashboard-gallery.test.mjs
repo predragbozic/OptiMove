@@ -40,6 +40,23 @@ test('1280px: seven real charts, distinct names, controls, local zoom and rememb
   await first.locator('.tl-analysis-chart-values summary').click();await host.locator('.tl-chart-controls summary').click();
   await page.locator('.tl-dashboard-pages nav button').filter({hasText:'Other page'}).click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Other page'}).waitFor();
   await page.locator('.tl-dashboard-pages nav button').filter({hasText:'Home'}).click();await host.locator('svg').waitFor();assert.equal(await first.locator('.tl-analysis-chart-values').getAttribute('open'),null);assert.equal(await host.locator('.tl-chart-controls').getAttribute('open'),null);
+  const bars=page.locator('[data-analysis-widget-id]').filter({has:page.getByRole('button',{name:'Widget actions: horizontal_bar',exact:true})}).locator('optimove-dashboard-chart');
+  await bars.locator('.tl-analysis-echarts').scrollIntoViewIfNeeded();
+  const point=await bars.evaluate(el=>{
+    const series=el.chart.getOption().series.findIndex(item=>item.data.some(value=>typeof value==='number'&&value>0));
+    const values=el.chart.getOption().series[series].data;
+    const index=values.findIndex(value=>typeof value==='number'&&value>0);
+    const coords=el.chart.convertToPixel({seriesIndex:series},[values[index]/2,index]);
+    const rect=el.querySelector('.tl-analysis-echarts').getBoundingClientRect();
+    return {x:rect.left+coords[0],y:rect.top+coords[1]};
+  });
+  await page.mouse.click(point.x,point.y);
+  const date=await bars.getByRole('button',{name:'Filter dashboard to this day'}).getAttribute('data-date-from');
+  const filtered=page.waitForRequest(request=>request.url().endsWith('/query')&&request.method()==='POST'&&request.postDataJSON().dateFrom===date&&request.postDataJSON().dateTo===date);
+  await bars.getByRole('button',{name:'Filter dashboard to this day'}).click();
+  await filtered;
+  await page.getByRole('button',{name:'Clear chart day filter'}).click();
+  await host.locator('svg').waitFor();
   await host.locator('.tl-chart-controls summary').click();await host.evaluate(el=>el.chart.dispatchAction({type:'dataZoom',start:0,end:0}));await host.getByRole('button',{name:'Apply selected period'}).click();
   await page.waitForFunction(()=>document.querySelector('[data-action="training-load-analysis-period-from"]').value==='2026-11-05');
   assert.deepEqual(pageErrors,[]);
@@ -74,6 +91,21 @@ for(const role of ['club_admin','team_coach'])test(role+': saved gallery is read
   await openDashboard(page,byRole.get(role).dashboard.id);await page.waitForFunction(()=>document.querySelectorAll('.tl-analysis-grid optimove-dashboard-chart svg').length===7);
   const charts=await page.locator('optimove-dashboard-chart').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('data-chart')).join('\n'));assert.doesNotMatch(charts,/[0-9a-f]{8}-[0-9a-f-]{27,}|Source provenance|rawCount|previewToken|fingerprint/i);
   assert.equal(await page.locator('.tl-simple-technical').count(),0);assert.doesNotMatch(await page.locator('.tl-analysis-grid').textContent(),/[0-9a-f]{8}-[0-9a-f-]{27,}|Source provenance/i);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);assert.deepEqual(pageErrors,[]);
+ }finally{await context.close()}
+});
+
+test('1280px: the regular Edit metric panel shows illustrated choices in a two-column layout',async()=>{
+ const {context,page,pageErrors}=await openAs(browser,world,'club_admin',1280);
+ try{
+  await openDashboard(page,byRole.get('club_admin').dashboard.id);
+  await page.getByRole('button',{name:'Widget actions: horizontal_bar',exact:true}).click();
+  await action(page,'analysis-edit-widget').click();
+  const editor=page.getByRole('dialog',{name:'Edit metric'});
+  await editor.waitFor();
+  assert.equal(await editor.locator('.tl-metric-panel-types button svg').count(),4);
+  assert.equal(await editor.getByRole('button',{name:'Advanced settings',exact:true}).isVisible(),true);
+  assert.equal(await editor.locator('.tl-metric-panel-body').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),2);
+  assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
 

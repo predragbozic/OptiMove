@@ -155,7 +155,7 @@ export function analysisChartInteractionGeneration(){
  const current=queryContextKey();if(current!==chartInteractionContext){chartInteractionContext=current;chartInteractionGeneration++;}
  return chartInteractionGeneration;
 }
-function queryContextKey(runtimePayload = analysisRuntimeFilterPayload()) {
+function baseQueryContextKey(runtimePayload = analysisRuntimeFilterPayload()) {
   const a = state.trainingLoad.analysis;
   const widgetRevisions = (a.widgets || []).map((w) => `${w.id}:${w.revision}`).join(",");
   return buildContextKey([
@@ -170,6 +170,19 @@ function queryContextKey(runtimePayload = analysisRuntimeFilterPayload()) {
     a.period.dateTo,
     JSON.stringify(runtimePayload),
   ]);
+}
+
+export function analysisChartDay() {
+  const selection = state.trainingLoad.analysis.chartDay;
+  return selection?.context === baseQueryContextKey() ? selection.date : null;
+}
+
+export function setAnalysisChartDay(date) {
+  state.trainingLoad.analysis.chartDay = date ? {date, context:baseQueryContextKey()} : null;
+}
+
+function queryContextKey(runtimePayload = analysisRuntimeFilterPayload()) {
+  return buildContextKey([baseQueryContextKey(runtimePayload), analysisChartDay() || ""]);
 }
 
 export function invalidateTrainingLoadAnalysis() {
@@ -325,9 +338,11 @@ export async function queryAnalysisDashboard(onPainted, { force = false } = {}) 
   const a = state.trainingLoad.analysis;
   if (!a.selectedDashboardId || !a.dashboard || a.dashboard.status === "archived" || a.dashboard.is_template) return;
   ensureAnalysisPeriod();
+  if(a.chartDay && !analysisChartDay())setAnalysisChartDay(null);
   const generation = ++queryGeneration;
   const runtimePayload = analysisRuntimeFilterPayload();
-  const requestBody = JSON.stringify({ dateFrom: a.period.dateFrom, dateTo: a.period.dateTo, ...runtimePayload });
+  const chartDay=analysisChartDay();
+  const requestBody = JSON.stringify({ dateFrom: chartDay ?? a.period.dateFrom, dateTo: chartDay ?? a.period.dateTo, ...runtimePayload });
   const contextKey = queryContextKey(runtimePayload);
   if (a.queryContextKey !== contextKey) { a.queryResult = null; a.queryError = ""; a.queryContextKey = contextKey; }
   await loadCachedView({
