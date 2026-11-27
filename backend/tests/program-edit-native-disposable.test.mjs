@@ -5,7 +5,7 @@ import pg from "pg";
 import { buildDatabase, fixtures, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 
 test("Program Edit refreshes the native grant under lock and keeps the target within the active team", async () => {
-  const database = await buildDatabase({ label: "program_edit", upTo: "202612111000_programs_v109_edit_bridge.sql" });
+  const database = await buildDatabase({ label: "program_edit", upTo: "202612121000_programs_v110_assign_publish_bridge.sql" });
   const sql = new pg.Client({ connectionString: database.url });
   let server;
   try {
