@@ -31,6 +31,15 @@ export async function stageScheduleManageForTest(client) {
       "insert into public.schema_migrations(migration_name,checksum,runner_version) values ('test-tests-schedule-manage',$1,'fixture')",
       ["0".repeat(64)],
     );
+    await client.query(`
+      create table tests.schedule_manage_bridge_use (
+        singleton boolean primary key default true check (singleton),
+        first_checked_write_at timestamptz
+      );
+      insert into tests.schedule_manage_bridge_use (singleton) values (true);
+      alter table tests.schedule_manage_bridge_use enable row level security;
+      revoke all on tests.schedule_manage_bridge_use from public;
+    `);
     await client.query("commit");
   } catch (error) {
     await client.query("rollback");

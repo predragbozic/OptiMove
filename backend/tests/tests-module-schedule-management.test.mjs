@@ -1510,3 +1510,106 @@ test("Manage: edits and deletes honor the destination holding, including delegat
   assert.equal((await remove(destination.coachCookie)).status, 200, "the delegated admin can remove the idle schedule");
   assert.equal((await unchanged()).rowCount, 0);
 });
+
+test("The Tests bridge records committed native effects once and ignores no-ops and refusals", async () => {
+  const host = await makeClubWithAthletes("first-checked-tests", 1);
+  const input = baseCreateBody([{ kind: "athlete", id: host.athletes[0].athleteId }]);
+  const rules = [{ kind: "athlete_invitation", enabled: true }];
+  const write = (path, method, body) => api(path, { method, body, cookie: host.coachCookie });
+  const readStamp = async () => (await query(
+    "select first_checked_write_at from tests.schedule_manage_bridge_use where singleton",
+  )).rows[0].first_checked_write_at;
+  const resetStamp = async () => query("update tests.schedule_manage_bridge_use set first_checked_write_at=null where singleton");
+
+  await resetStamp();
+  const created = await write("/api/tests/schedules", "POST", { ...input, notificationRules: rules });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.ok(await readStamp());
+  const path = `/api/tests/schedules/${created.body.schedule.id}`;
+
+  await resetStamp();
+  const same = await write(path, "PATCH", { ...input, status: "active", notificationRules: rules });
+  assert.equal(same.status, 200, JSON.stringify(same.body));
+  assert.equal(await readStamp(), null);
+  const refused = await write(path, "PATCH", { skipDaysOff: false, status: "invalid" });
+  assert.equal(refused.status, 400);
+  assert.equal(await readStamp(), null);
+  const changed = await write(path, "PATCH", { status: "paused" });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const first = await readStamp();
+  assert.ok(first);
+
+  const issued = await write(`${path}/link`, "POST", {});
+  assert.equal(issued.status, 201, JSON.stringify(issued.body));
+  assert.deepEqual(await readStamp(), first);
+  const revoke = `/api/tests/links/${issued.body.link.id}/revoke`;
+  await resetStamp();
+  assert.equal((await write(revoke, "POST", {})).status, 200);
+  assert.ok(await readStamp());
+  await resetStamp();
+  assert.equal((await write(revoke, "POST", {})).status, 200);
+  assert.equal(await readStamp(), null);
+  assert.equal((await write(`${path}/link`, "POST", {})).status, 201);
+  assert.ok(await readStamp());
+
+  await resetStamp();
+  assert.deepEqual((await write(path, "DELETE")).body, { action: "deleted" });
+  assert.ok(await readStamp());
+  await resetStamp();
+  const bulk = await write("/api/tests/schedules/bulk", "POST", { ...input, dates: [input.startDate] });
+  assert.equal(bulk.status, 201, JSON.stringify(bulk.body));
+  assert.ok(await readStamp());
+  const bulkPath = `/api/tests/schedules/${bulk.body.schedules[0].id}`;
+  assert.equal((await api("/api/tests/athlete/today", { cookie: host.athletes[0].cookie })).status, 200);
+  await resetStamp();
+  assert.deepEqual((await write(bulkPath, "DELETE")).body, { action: "cancelled", historyPreserved: true });
+  assert.ok(await readStamp());
+  await resetStamp();
+  assert.deepEqual((await write(bulkPath, "DELETE")).body, { action: "cancelled", historyPreserved: true });
+  assert.equal(await readStamp(), null);
+});
+
+test("The Tests bridge rolls back a native write when its expected first-use schema is absent", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("missing-tests-first-use", 1);
+  const before = await query("select count(*)::int as count from tests.test_schedules");
+  await query("alter table tests.schedule_manage_bridge_use rename to schedule_manage_bridge_use_hidden");
+  try {
+    const refused = await api("/api/tests/schedules", {
+      method: "POST", cookie: coachCookie,
+      body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]),
+    });
+    assert.equal(refused.status, 500, JSON.stringify(refused.body));
+    assert.deepEqual((await query("select count(*)::int as count from tests.test_schedules")).rows, before.rows);
+  } finally {
+    await query("alter table tests.schedule_manage_bridge_use_hidden rename to schedule_manage_bridge_use");
+  }
+});
+
+test("Platform and personal Tests writers keep their existing access without marking native use", async () => {
+  const host = await makeClubWithAthletes("untracked-tests-writers", 1);
+  const target = host.athletes[0].athleteId;
+  const input = baseCreateBody([{ kind: "athlete", id: target }]);
+  const native = await api("/api/tests/schedules", { method: "POST", cookie: host.coachCookie, body: input });
+  assert.equal(native.status, 201, JSON.stringify(native.body));
+  await query("update tests.schedule_manage_bridge_use set first_checked_write_at=null where singleton");
+
+  const platformId = await makeUser({ email: "untracked-tests-platform@test.local" });
+  await query("insert into public.user_global_roles(user_id,role) values ($1,'platform_admin')", [platformId]);
+  const platform = await loginCookie(platformId);
+  const nativePath = `/api/tests/schedules/${native.body.schedule.id}`;
+  assert.equal((await api(`${nativePath}/link`, { method: "POST", cookie: platform, body: {} })).status, 201);
+
+  const coachId = await makeUser({ email: "untracked-tests-coach@test.local" });
+  await query("insert into public.user_global_roles(user_id,role) values ($1,'independent_coach')", [coachId]);
+  await query("insert into public.user_athletes(user_id,athlete_id,relationship_type) values ($1,$2,'coach')", [coachId, target]);
+  const cookie = await loginCookie(coachId);
+  const personal = await api("/api/tests/schedules", { method: "POST", cookie, body: input });
+  assert.equal(personal.status, 201, JSON.stringify(personal.body));
+  assert.equal(personal.body.schedule.ownerScope, "user");
+  const personalPath = `/api/tests/schedules/${personal.body.schedule.id}`;
+  assert.equal((await api(personalPath, { method: "PATCH", cookie, body: { status: "paused" } })).status, 200);
+  assert.equal((await api(personalPath, { method: "DELETE", cookie })).status, 200);
+
+  const { rows: [marker] } = await query("select first_checked_write_at from tests.schedule_manage_bridge_use where singleton");
+  assert.equal(marker.first_checked_write_at, null);
+});

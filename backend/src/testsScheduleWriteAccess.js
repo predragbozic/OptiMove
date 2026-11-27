@@ -99,3 +99,18 @@ export async function lockTestsScheduleMutation(client, req, scheduleId, { link 
 export function lockTestsScheduleReminder(client, req, scheduleId) {
   return lockExistingSchedule(client, req, scheduleId, "reminder");
 }
+
+export function tracksTestsScheduleWrite(actor, ownerScope) {
+  return (ownerScope === "club" || ownerScope === "team") && !isPlatformAdministrator(actor.authz);
+}
+
+export async function markTestsScheduleWrite(client, actor, ownerScope) {
+  if (!tracksTestsScheduleWrite(actor, ownerScope)) return;
+  const recorded = await client.query(`
+    update tests.schedule_manage_bridge_use set first_checked_write_at=clock_timestamp()
+    where singleton and first_checked_write_at is null
+  `);
+  if (!recorded.rowCount && !(await client.query(
+    "select 1 from tests.schedule_manage_bridge_use where singleton and first_checked_write_at is not null",
+  )).rowCount) throw new Error("Tests Schedule Manage first-use record is missing.");
+}

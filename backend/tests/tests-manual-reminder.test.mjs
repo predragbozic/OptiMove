@@ -742,6 +742,10 @@ test("Manage: reminder denies an existing schedule whose coach cannot manage it 
   const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }]);
   const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
   const assignmentId = await getAssignmentId(occurrence.id, athletes[0].athleteId);
+  const readStamp = async () => (await query(
+    "select first_checked_write_at from tests.schedule_manage_bridge_use where singleton",
+  )).rows[0].first_checked_write_at;
+  await query("update tests.schedule_manage_bridge_use set first_checked_write_at=null where singleton");
   const { rows: [permission] } = await query(
     "select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as ddl",
   );
@@ -756,10 +760,16 @@ test("Manage: reminder denies an existing schedule whose coach cannot manage it 
     assert.equal((await api(`/api/tests/schedules/${schedule.id}`, { cookie: coachCookie })).status, 200);
     const denied = await query("select 1 from public.app_notifications where type='test_manual_reminder' and entity_id=$1", [assignmentId]);
     assert.equal(denied.rowCount, 0);
+    assert.equal(await readStamp(), null);
   } finally {
     await query(permission.ddl);
   }
   const allowed = await remind(schedule.id, coachCookie, [assignmentId]);
   assert.equal(allowed.status, 200, JSON.stringify(allowed.body));
   assert.equal(allowed.body.notifiedCount, 1);
+  assert.ok(await readStamp());
+  await query("update tests.schedule_manage_bridge_use set first_checked_write_at=null where singleton");
+  const cooldown = await remind(schedule.id, coachCookie, [assignmentId]);
+  assert.equal(cooldown.body.results[0].outcome, "skippedCooldown");
+  assert.equal(await readStamp(), null);
 });

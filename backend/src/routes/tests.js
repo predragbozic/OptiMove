@@ -10,7 +10,7 @@ import {
   viewScopeReadsSchedule,
 } from "../testsAccess.js";
 import { canView, viewEntryGate } from "../moduleView.js";
-import { lockTestsScheduleCreateAccess, lockTestsScheduleMutation, lockTestsScheduleReminder } from "../testsScheduleWriteAccess.js";
+import { lockTestsScheduleCreateAccess, lockTestsScheduleMutation, lockTestsScheduleReminder, markTestsScheduleWrite, tracksTestsScheduleWrite } from "../testsScheduleWriteAccess.js";
 import { ensureCurrentOccurrence, assignmentIsOpen, loadAthleteTodayTestAssignments } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -868,6 +868,7 @@ router.post("/schedules", async (req, res, next) => {
     // this schedule stays unconfigured (the worker sends nothing for it)
     // until a coach explicitly saves rules for it.
     if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
+    await markTestsScheduleWrite(client, writeRequest, owner.ownerScope);
     await client.query("commit");
     res.status(201).json({ schedule: formatScheduleRow({ ...schedule, test_name: "WELLNESS" }), notificationRules: resolvedRules.rules || [] });
   } catch (error) {
@@ -957,6 +958,7 @@ router.post("/schedules/bulk", async (req, res, next) => {
       if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
       created.push(schedule);
     }
+    await markTestsScheduleWrite(client, writeRequest, owner.ownerScope);
     await client.query("commit");
     res.status(201).json({
       schedules: created.map((row) => formatScheduleRow({ ...row, test_name: "WELLNESS" })),
@@ -1367,6 +1369,24 @@ router.get("/schedules/:scheduleId/group", async (req, res, next) => {
 // can still optionally include status in the same request.
 const FULL_EDIT_BODY_KEYS = ["targets", "scheduleKind", "timezone", "startDate", "endDate", "opensTime", "dueTime", "closesTime"];
 
+
+async function scheduleEditEffect(client, id) {
+  // A same-value edit may still refresh bookkeeping fields or replace rows
+  // with equivalent contents. Neither proves a new schedule effect.
+  return (await client.query(
+    `select jsonb_build_array(
+        to_jsonb(s) - array['updated_at', 'created_at'],
+        (select jsonb_agg(to_jsonb(t) - array['id','created_at','updated_at']
+                          order by t.target_kind,t.target_athlete_id,t.target_team_id,t.target_club_id)
+         from tests.test_schedule_targets t where t.schedule_id=s.id),
+        (select jsonb_agg(to_jsonb(n) - array['id','created_at','updated_at'] order by n.notification_kind)
+         from tests.test_schedule_notification_rules n where n.schedule_id=s.id)
+      )::text as effect
+      from tests.test_schedules s where s.id=$1`,
+    [id],
+  )).rows[0].effect;
+}
+
 router.patch("/schedules/:scheduleId", async (req, res, next) => {
   const client = await pool.connect();
   try {
@@ -1400,6 +1420,13 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       return res.status(409).json({ error: "This schedule is cancelled and can no longer be edited or reactivated. Create a new schedule instead." });
     }
 
+    const before = tracksTestsScheduleWrite(writeRequest, schedule.owner_scope) ? await scheduleEditEffect(client, schedule.id) : null;
+    const markEdit = async (regenerated = false) => {
+      if (before !== null && (regenerated || before !== await scheduleEditEffect(client, schedule.id))) {
+        await markTestsScheduleWrite(client, writeRequest, schedule.owner_scope);
+      }
+    };
+
     // Validated up front, before either branch below, so a bad rule rolls
     // back a status-only PATCH exactly the same way it rolls back a full
     // edit - notificationRules is accepted on both, independent of
@@ -1429,6 +1456,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
         await client.query(`update tests.test_schedules set skip_days_off = $2, updated_at = now() where id = $1`, [schedule.id, body.skipDaysOff]);
       }
       if (body.status === undefined && body.notificationRules === undefined && !FULL_EDIT_BODY_KEYS.some((key) => body[key] !== undefined)) {
+        await markEdit();
         await client.query("commit");
         return res.json({ ok: true, skipDaysOff: body.skipDaysOff });
       }
@@ -1462,6 +1490,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       // edit fields) must not have to resend a status just to trip this
       // branch - see the up-front validation/comment above.
       if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
+      await markEdit();
       await client.query("commit");
       return res.json({ ok: true, status, notificationRules: resolvedRules.rules || undefined });
     }
@@ -1642,6 +1671,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
 
     if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
 
+    let regenerated = false;
     if (regenerateOneTimeOccurrence) {
       // Cascades to test_assignments (on delete cascade, Phase 1 schema) -
       // safe because every one of those assignment rows was just locked and
@@ -1652,9 +1682,10 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       // schedule row's now-current start_date/opens_time/closes_time and
       // materializes assignments from its now-current targets, exactly the
       // same as a schedule that never had an occurrence in the first place.
-      await client.query(`delete from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id]);
+      regenerated = (await client.query(`delete from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id])).rowCount > 0;
     }
 
+    await markEdit(regenerated);
     await client.query("commit");
     const [updated, updatedActivity, updatedRules] = await Promise.all([
       query(
@@ -1685,7 +1716,7 @@ router.delete("/schedules/:scheduleId", async (req, res, next) => {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
-    const { schedule } = mutation;
+    const { schedule, writeRequest } = mutation;
     // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
     if (await scheduleManagedByCalendar(client, "test", schedule.id)) {
       await client.query("rollback");
@@ -1715,16 +1746,18 @@ router.delete("/schedules/:scheduleId", async (req, res, next) => {
     // backend/tests/tests-module-schedule-management.test.mjs.
     const hasOccurrence = await client.query(`select 1 from tests.test_schedule_occurrences where schedule_id = $1 limit 1`, [schedule.id]);
     if (!hasOccurrence.rowCount) {
-      await client.query(`delete from tests.test_schedules where id = $1`, [schedule.id]);
+      const deleted = await client.query(`delete from tests.test_schedules where id = $1`, [schedule.id]);
+      if (deleted.rowCount) await markTestsScheduleWrite(client, writeRequest, schedule.owner_scope);
       await client.query("commit");
       return res.json({ action: "deleted" });
     }
 
     await client.query(`update tests.test_schedules set status = 'cancelled', updated_at = now() where id = $1`, [schedule.id]);
-    await client.query(
+    const revoked = await client.query(
       `update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where schedule_id = $1 and status = 'active'`,
       [schedule.id, req.user.id],
     );
+    if (schedule.status !== "cancelled" || revoked.rowCount) await markTestsScheduleWrite(client, writeRequest, schedule.owner_scope);
     await client.query("commit");
     res.json({ action: "cancelled", historyPreserved: true });
   } catch (error) {
@@ -2033,6 +2066,7 @@ router.post("/schedules/:scheduleId/link", async (req, res, next) => {
        values ('schedule', $1, 'authenticated_group', $2, $3) returning id, public_token, created_at`,
       [schedule.id, publicToken, req.user.id],
     );
+    await markTestsScheduleWrite(client, mutation.writeRequest, schedule.owner_scope);
     await client.query("commit");
     res.status(201).json({ link: { id: inserted.rows[0].id, publicToken: inserted.rows[0].public_token, createdAt: inserted.rows[0].created_at } });
   } catch (error) {
@@ -2063,7 +2097,8 @@ router.post("/links/:linkId/revoke", async (req, res, next) => {
       await client.query("rollback");
       return res.status(404).json({ error: "Link not found." });
     }
-    await client.query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where id = $1 and status = 'active'`, [link.id, req.user.id]);
+    const revoked = await client.query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where id = $1 and status = 'active'`, [link.id, req.user.id]);
+    if (revoked.rowCount) await markTestsScheduleWrite(client, mutation.writeRequest, mutation.schedule.owner_scope);
     await client.query("commit");
     res.json({ ok: true });
   } catch (error) {
@@ -2112,7 +2147,7 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
   try {
     await client.query("begin");
 
-    const { schedule, status } = await lockTestsScheduleReminder(client, req, req.params.scheduleId);
+    const { schedule, status, writeRequest } = await lockTestsScheduleReminder(client, req, req.params.scheduleId);
     if (!schedule) {
       await client.query("rollback");
       // Existing reminder behavior distinguishes an unavailable schedule
@@ -2265,6 +2300,7 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
       results.push({ ...base, outcome: "notified" });
     }
 
+    if (toEmit.length) await markTestsScheduleWrite(client, writeRequest, schedule.owner_scope);
     await client.query("commit");
   } catch (error) {
     await client.query("rollback").catch(() => {});
