@@ -2890,7 +2890,7 @@ test("M-3c: moving a group source does not expose its previously linked foreign 
   }
 });
 
-test("M-3c: a foreign candidate or participant is refused without waiting for its held identity lock", {timeout:7000}, async () => {
+test("M-3c: a foreign suggestion, candidate or participant is refused without waiting for its held identity lock", {timeout:7000}, async () => {
   const own = await makeClubCoach("m3c-held-owner");
   const foreign = await makeClubCoach("m3c-held-foreign");
   const fixture = await makeSharedActivityWithTwoSuggestionGroups(own.clubId);
@@ -2910,7 +2910,11 @@ test("M-3c: a foreign candidate or participant is refused without waiting for it
   try {
     await blocker.query("begin");
     await blocker.query("select pg_advisory_xact_lock(hashtextextended($1, 4))",[`activity-participant:${candidate.participantId}`]);
+    await blocker.query("select pg_advisory_xact_lock(hashtextextended($1, 5))",
+      [`activity-suggestion-source:${foreignFixture.sharedActivityId}:${foreignFixture.participantAId}`]);
     for (const [foreignRoute, missingRoute, foreignBody, missingBody] of [
+      [`/match-suggestions/${foreignFixture.s1a}/accept`,`/match-suggestions/${missingId}/accept`,{},{}],
+      [`/match-suggestions/${foreignFixture.s1a}/dismiss`,`/match-suggestions/${missingId}/dismiss`,{},{}],
       [`/match-suggestions/${suggestion.id}/accept`,`/match-suggestions/${missingId}/accept`,{},{}],
       [`/participants/${fixture.participantAId}/merge`,`/participants/${fixture.participantAId}/merge`,
         {targetParticipantId:candidate.participantId},{targetParticipantId:missingId}],
@@ -2937,4 +2941,34 @@ test("M-3c: a foreign candidate or participant is refused without waiting for it
     await blocker.end();
     await Promise.allSettled(started);
   }
+});
+
+test("M-3c: a moved natural-key source cannot disclose the earlier owner's receipt or linked participant", async () => {
+  const original = await makeClubCoach("m3c-natural-original");
+  const nextOwner = await makeClubCoach("m3c-natural-next");
+  await grantClubAdmin(original.coachId,nextOwner.clubId);
+  const {athleteId} = await makeAthleteInClub(original.clubId);
+  await query("insert into public.athlete_memberships (athlete_id,club_id,membership_type,status) values ($1,$2,'club','active')",
+    [athleteId,nextOwner.clubId]);
+  const {assignmentId,occurrenceId} = await makeExternalAssignmentForAthlete(athleteId,original.coachId,{
+    owner:{ownerScope:"club",ownerClubId:original.clubId},
+  });
+  const request = (id,requestKey) => api("/api/training-activity/materialize",{
+    method:"POST",cookie:original.coachCookie,body:{externalAssignmentId:id,requestKey},
+  });
+  const oldKey = uid();
+  const old = await request(assignmentId,oldKey);
+  assert.equal(old.status,201,JSON.stringify(old.body));
+  await query("update training_load.external_schedules set owner_club_id=$1 where id=(select schedule_id from training_load.external_schedule_occurrences where id=$2)",
+    [nextOwner.clubId,occurrenceId]);
+  await setActiveWorkspace(original.coachId,"club",nextOwner.clubId);
+  const receipts = () => query("select request_key,result_activity_id,result_participant_id from training.activity_write_requests where requested_by_user_id=$1",
+    [original.coachId]);
+  const {rows:before} = await receipts();
+  const missing = await request(crypto.randomUUID(),uid());
+  assert.equal(missing.status,404);
+  assert.deepEqual(await request(assignmentId,uid()),missing,"a fresh key cannot adopt the old participant");
+  assert.deepEqual(await request(assignmentId,oldKey),missing,"replay cannot disclose an earlier workspace");
+  assert.doesNotMatch(JSON.stringify(missing.body),new RegExp(old.body.activityId));
+  assert.deepEqual((await receipts()).rows,before);
 });

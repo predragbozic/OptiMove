@@ -67,7 +67,10 @@ async function claimActivityWriteRequest(client, { requestKey, requestedBy, requ
 
   const requesterKey = requesterKeyFor({ requestedBy, requestedBySourceConnectionId });
   const existing = await client.query(`select * from training.activity_write_requests where requester_key=$1 and request_key=$2`, [requesterKey, requestKey]);
-  const row = existing.rows[0];
+  return { isNew: false, row: existing.rows[0] };
+}
+
+function assertExistingActivityRequest(row, { operationKind, ownerScope, ownerIds, contentHash }) {
   if (row.operation_kind !== operationKind) throw httpError(409, "request key already used for a different operation kind");
   // The current caller's own claimed workspace/owner scope is re-checked
   // on every replay, BEFORE the generic content-hash check, so a
@@ -81,7 +84,6 @@ async function claimActivityWriteRequest(client, { requestKey, requestedBy, requ
     throw httpError(403, "request key replay under a DIFFERENT current workspace/owner scope — refusing to return another workspace's result");
   }
   if (row.request_content_hash !== contentHash) throw httpError(409, "request key already used with different content");
-  return { isNew: false, row };
 }
 
 // Versioned multi-signal scoring: a candidate is "strong" (auto-confirm
@@ -142,7 +144,7 @@ function scoreCandidate({ startInstant, durationMinutes, name, activityTypeKey }
 
 // Candidate search: owner scope + athlete + local date are the mandatory
 // filter (never date alone); scoreCandidate() above refines confidence.
-async function findActivityCandidates(client, { ownerScope, ownerIds, athleteId, localDate, startInstant, endInstant, durationMinutes, name, activityTypeKey, planLogicalSessionId, externalAssignmentId }) {
+async function findConfirmedNaturalKeyMatch(client, { athleteId, planLogicalSessionId, externalAssignmentId }) {
   if (planLogicalSessionId || externalAssignmentId) {
     // The physical row a CONFIRMED link points at may itself be a
     // merge-superseded ALIAS by now (a merge never touches the session
@@ -167,9 +169,16 @@ async function findActivityCandidates(client, { ownerScope, ownerIds, athleteId,
       const canonicalParticipantId = canonicalParticipant.rows[0].id;
       const canonicalParticipantRow = await client.query(`select activity_id from training.activity_participants where id=$1`, [canonicalParticipantId]);
       const canonicalActivity = await client.query(`select training.resolve_canonical_activity_id($1) as id`, [canonicalParticipantRow.rows[0].activity_id]);
-      return { exactKeyMatch: { participant_id: canonicalParticipantId, activity_id: canonicalActivity.rows[0].id }, candidates: [] };
+      return { participant_id: canonicalParticipantId, activity_id: canonicalActivity.rows[0].id };
     }
   }
+
+  return null;
+}
+
+async function findActivityCandidates(client, { ownerScope, ownerIds, athleteId, localDate, startInstant, endInstant, durationMinutes, name, activityTypeKey, planLogicalSessionId, externalAssignmentId }) {
+  const exactKeyMatch = await findConfirmedNaturalKeyMatch(client, { athleteId, planLogicalSessionId, externalAssignmentId });
+  if (exactKeyMatch) return { exactKeyMatch, candidates: [] };
 
   const ownerCond = ownerScope === "system"
     ? "a.owner_scope = 'system'"
@@ -269,6 +278,31 @@ async function resolveAuthoritativeSource(client, scope, { planLogicalSessionId,
   return null;
 }
 
+async function lockNaturalActivityKey(client, athleteId, naturalKey) {
+  await client.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`activity-link:${athleteId}:${naturalKey}`]);
+}
+
+async function assertNaturalResultOwner(client, scope, expectedOwner, result, athleteId, unavailable) {
+  const { rows: [owner] } = await client.query(
+    `select a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id,
+            case when $2::uuid is null then true
+              else ap.athlete_id=$3 and ap.owner_scope=a.owner_scope
+                and ap.owner_user_id is not distinct from a.owner_user_id
+                and ap.owner_club_id is not distinct from a.owner_club_id
+                and ap.owner_team_id is not distinct from a.owner_team_id end as participant_matches
+     from training.activities a
+     left join lateral (
+       select p.athlete_id, pa.owner_scope,pa.owner_user_id,pa.owner_club_id,pa.owner_team_id
+       from training.activity_participants p join training.activities pa on pa.id=training.resolve_canonical_activity_id(p.activity_id)
+       where p.id=training.resolve_canonical_participant_id($2)
+     ) ap on true
+     where a.id=training.resolve_canonical_activity_id($1)`,
+    [result.activity_id, result.participant_id ?? null, athleteId],
+  );
+  if (!owner?.participant_matches || !canManageOwnerRow(scope, owner) || !sameActivityOwner(expectedOwner, owner)) {
+    throw httpError(404, unavailable);
+  }
+}
 // The core idempotent join for a SINGLE participant. Group identities
 // (shared external occurrence / shared metric event) go through the
 // dedicated SQL functions in migrations_v2's training_activity_v4 instead
@@ -372,10 +406,28 @@ export async function materializeActivityParticipant(scope, {
     await assertActivityTypeKeyValid(client.query.bind(client), activityTypeKey);
 
     const contentHash = buildContentHash({ operationKind, ownerScope, ownerIds, athleteId, localDate, timezone, startInstant, endInstant, durationMinutes, planLogicalSessionId, externalAssignmentId, name, activityTypeKey });
-    const claim = await claimActivityWriteRequest(client, { requestKey, requestedBy, requestedBySourceConnectionId, operationKind, ownerScope, ownerIds, contentHash });
+    const request = { requestKey, requestedBy, requestedBySourceConnectionId, operationKind, ownerScope, ownerIds, contentHash };
+    const claim = await claimActivityWriteRequest(client, request);
+    const naturalKey = planLogicalSessionId || externalAssignmentId;
+    const unavailable = planLogicalSessionId
+      ? "No real, live, published Weekly plan session was found for that logical session."
+      : "External assignment not found.";
+    const expectedOwner = { owner_scope: ownerScope, owner_user_id: ownerIds?.userId ?? null,
+      owner_club_id: ownerIds?.clubId ?? null, owner_team_id: ownerIds?.teamId ?? null };
+    // Preserve the existing claim-before-seed-0 order so the pre-bridge
+    // binary cannot hold the request row while we hold its identity lock.
+    if (naturalKey && (claim.isNew || scope.staffActorId)) await lockNaturalActivityKey(client, athleteId, naturalKey);
     const requesterKey = requesterKeyFor({ requestedBy, requestedBySourceConnectionId });
 
     if (!claim.isNew) {
+      if (naturalKey && scope.staffActorId) {
+        const current = await findConfirmedNaturalKeyMatch(client, { athleteId, planLogicalSessionId, externalAssignmentId });
+        if (current) await assertNaturalResultOwner(client, scope, expectedOwner, current, athleteId, unavailable);
+        await assertNaturalResultOwner(client, scope, expectedOwner, {
+          activity_id: claim.row.result_activity_id, participant_id: claim.row.result_participant_id,
+        }, athleteId, unavailable);
+      }
+      assertExistingActivityRequest(claim.row, request);
       let participantId = claim.row.result_participant_id;
       if (!participantId) {
         const participantRow = await client.query(`select id from training.activity_participants where activity_id=$1 and athlete_id=$2`, [claim.row.result_activity_id, athleteId]);
@@ -385,10 +437,7 @@ export async function materializeActivityParticipant(scope, {
       return { activityId: claim.row.result_activity_id, participantId, reused: true, matchStatus: "replay" };
     }
 
-    const naturalKey = planLogicalSessionId || externalAssignmentId;
-    if (naturalKey) {
-      await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`activity-link:${athleteId}:${naturalKey}`]);
-    } else {
+    if (!naturalKey) {
       // The fuzzy path's advisory lock, taken BEFORE candidates are ever
       // read, keyed on the minimum natural grouping required: owner
       // scope+id, athlete, local date.
@@ -399,6 +448,7 @@ export async function materializeActivityParticipant(scope, {
     const { exactKeyMatch, candidates } = await findActivityCandidates(client, { ownerScope, ownerIds, athleteId, localDate, startInstant, endInstant, durationMinutes, name, activityTypeKey, planLogicalSessionId, externalAssignmentId });
 
     if (exactKeyMatch) {
+      if (scope.staffActorId) await assertNaturalResultOwner(client, scope, expectedOwner, exactKeyMatch, athleteId, unavailable);
       await client.query(`update training.activity_write_requests set result_activity_id=$1, result_participant_id=$2 where requester_key=$3 and request_key=$4`, [exactKeyMatch.activity_id, exactKeyMatch.participant_id, requesterKey, requestKey]);
       await recordCheckedActivityWrite(client, scope);
       await client.query("commit");
@@ -633,10 +683,14 @@ function canManageOwnerRow(scope, row) {
 // sibling suggestions sharing the SAME source identity still correctly
 // serialize through lockMatchSuggestionSourceIdentity's own advisory lock
 // above (untouched by this fix).
-async function lockMatchSuggestionSourceIdentity(client, suggestionId) {
-  const idLookup = await client.query(`select activity_id, source_participant_id from training.activity_match_suggestions where id=$1`, [suggestionId]);
-  if (!idLookup.rowCount) throw httpError(404, "Suggestion not found.");
-  const { activity_id: sourceActivityId, source_participant_id: sourceParticipantId } = idLookup.rows[0];
+async function lockMatchSuggestionSourceIdentity(client, scope, suggestionId) {
+  const { rows: [source] } = await client.query(
+    `select ms.activity_id, ms.source_participant_id, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
+     from training.activity_match_suggestions ms join training.activities a on a.id=ms.activity_id where ms.id=$1`,
+    [suggestionId],
+  );
+  if (!source || !canManageOwnerRow(scope, source)) throw httpError(404, "Suggestion not found.");
+  const { activity_id: sourceActivityId, source_participant_id: sourceParticipantId } = source;
   await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 5))`, [`activity-suggestion-source:${sourceActivityId}:${sourceParticipantId}`]);
 }
 
@@ -646,7 +700,7 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
   try {
     await client.query("begin");
     await lockActivityWriter(client, scope);
-    await lockMatchSuggestionSourceIdentity(client, suggestionId);
+    await lockMatchSuggestionSourceIdentity(client, scope, suggestionId);
     const sugRes = await client.query(
       `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
        from training.activity_match_suggestions ms join training.activities a on a.id = ms.activity_id
@@ -712,7 +766,7 @@ export async function dismissMatchSuggestion(scope, { suggestionId, performedBy 
   try {
     await client.query("begin");
     await lockActivityWriter(client, scope);
-    await lockMatchSuggestionSourceIdentity(client, suggestionId);
+    await lockMatchSuggestionSourceIdentity(client, scope, suggestionId);
     const sugRes = await client.query(
       `select ms.*, a.owner_scope, a.owner_user_id, a.owner_club_id, a.owner_team_id
        from training.activity_match_suggestions ms join training.activities a on a.id = ms.activity_id
