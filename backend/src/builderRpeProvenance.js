@@ -260,3 +260,96 @@ export async function hasBuilderRpeSiblingLineage(client, source, target) {
   const matches = await listBuilderRpeSiblingLineage(client, source.planId, target.planId, [source.sessionId], []);
   return matches.length === 1 && matches[0].target_id === target.sessionId;
 }
+
+function hasRpe(row) {
+  return row.tracking === true || row.rpe === true;
+}
+
+function sameRpe(left, right) {
+  return left.tracking === right.tracking && left.rpe === right.rpe;
+}
+
+function matchesRecordedRpe(row) {
+  return row.known && row.tracking === row.expected_tracking && row.rpe === row.expected_rpe;
+}
+
+function provesRpeChange(before, after) {
+  return matchesRecordedRpe(after) &&
+    (before.tracking === after.tracking || after.changed_tracking === true) &&
+    (before.rpe === after.rpe || after.changed_rpe === true);
+}
+
+function recoveryRequired() {
+  return Object.assign(new Error("The draft is still saved. Confirm its Training Load settings before publishing."), {
+    status: 409, code: "rpe_recovery_required",
+  });
+}
+
+async function readBuilderRpeState(client, planId) {
+  const planResult = await client.query(
+      `select p.track_training_load_default as tracking, p.request_rpe_default as rpe,
+              b.plan_id is not null as known,
+              e.changed_tracking, e.changed_rpe,
+              coalesce(e.effective_tracking,b.opening_tracking) as expected_tracking,
+              coalesce(e.effective_rpe,b.opening_rpe) as expected_rpe
+       from plans.plans p
+       left join training_load.builder_rpe_plan_baselines b on b.plan_id=p.id
+       left join training_load.builder_rpe_plan_effects e on e.plan_id=b.plan_id
+       where p.id=$1`, [planId],
+    );
+  const sessionResult = await client.query(
+      `select s.id,s.logical_session_id,s.training_load_enabled as tracking,s.rpe_enabled as rpe,
+              b.session_id is not null as known,
+              e.changed_tracking, e.changed_rpe,
+              coalesce(e.effective_tracking,b.opening_tracking) as expected_tracking,
+              coalesce(e.effective_rpe,b.opening_rpe) as expected_rpe
+       from plans.plan_sessions s
+       join plans.plan_days d on d.id=s.plan_day_id
+       left join training_load.builder_rpe_session_baselines b
+         on b.plan_id=d.plan_id and b.session_id=s.id and b.logical_session_id=s.logical_session_id
+       left join training_load.builder_rpe_session_effects e on e.plan_id=b.plan_id and e.session_id=b.session_id
+       where d.plan_id=$1`, [planId],
+    );
+  return { plan: planResult.rows[0], sessions: sessionResult.rows };
+}
+
+export async function assertBuilderRpeActivationProvenance(client, planId) {
+  const state = await readBuilderRpeState(client, planId);
+  if ([state.plan, ...state.sessions].some(row => hasRpe(row) &&
+      !matchesRecordedRpe(row))) {
+    throw recoveryRequired();
+  }
+}
+
+export async function assertBuilderRpeReplacementProvenance(client, targetId, replacementId, { edit = false } = {}) {
+  const target = await readBuilderRpeState(client, targetId);
+  const replacement = await readBuilderRpeState(client, replacementId);
+  if (!sameRpe(target.plan, replacement.plan) && (!edit || !provesRpeChange(target.plan, replacement.plan))) {
+    throw recoveryRequired();
+  }
+  const enabled = state => state.sessions.filter(hasRpe);
+  if (!enabled(replacement).length && !enabled(target).length) return;
+  const pairs = await listBuilderRpeSiblingLineage(client, replacementId, targetId,
+    enabled(replacement).map(row => row.id), enabled(target).map(row => row.id));
+  if (edit) {
+    // The live row and its edit draft retain these server-owned logical ids.
+    for (const after of replacement.sessions) {
+      if (!after.logical_session_id) continue;
+      for (const before of target.sessions) {
+        if (before.logical_session_id !== after.logical_session_id) continue;
+        if (pairs.some(pair => pair.target_id === before.id && pair.source_id === after.id)) continue;
+        pairs.push({ target_id: before.id, source_id: after.id });
+      }
+    }
+  }
+  const targetById = new Map(target.sessions.map(row => [row.id, row]));
+  const replacementById = new Map(replacement.sessions.map(row => [row.id, row]));
+  for (const row of [...enabled(target), ...enabled(replacement)]) {
+    const matches = pairs.filter(pair => pair.target_id === row.id || pair.source_id === row.id);
+    if (matches.length !== 1) throw recoveryRequired();
+    const { target_id, source_id } = matches[0];
+    const before = targetById.get(target_id);
+    const after = replacementById.get(source_id);
+    if (!sameRpe(before, after) && (!edit || !provesRpeChange(before, after))) throw recoveryRequired();
+  }
+}
