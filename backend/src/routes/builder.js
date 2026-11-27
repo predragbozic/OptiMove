@@ -869,7 +869,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     const { athletes: targetAthletes, missing, archived } = await timing.measure("targets", () => findRequestedAthletes(targetAthleteExternalIds));
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
     if (archived.length) return res.status(400).json({ error: `Athlete is archived, restore them first: ${archived.join(", ")}` });
-    if (intent === "assign" && !source.is_template) {
+    if (intent === "assign" && (!source.is_template || source.plan_type !== "program")) {
       return res.status(400).json({ error: "Only a template can be assigned to an athlete." });
     }
     // A weekly program template reaches athletes only through the dated
@@ -954,7 +954,6 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
     const writer = await lockProgramEditActor(client, req, { requireEdit: intent !== "assign" });
-    let cleanedDraft = false;
     if (recordRpeOpening) {
       const expected = weeklyPlanOwnerScope ?? await resolveBuilderRpeWorkspace(client, req);
       const actor = await lockProgramRpeActor(client, req, expected);
@@ -970,11 +969,18 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     await lockCopyTargetPlan(client,source.id);
     const currentSource = await getCopySource(writer.sourceActor, source.id, client.query.bind(client));
     if (!currentSource) throw refuseProgramEdit(404, "Program not found.");
-    if (!canCopyFromPlan(writer.sourceActor, currentSource) ||
-        (intent === "assign" && currentSource.can_assign_to_athlete === false &&
-         !canAccessAllAthletes(writer.sourceActor) && currentSource.created_by_user_id !== writer.actor.user.id)) {
-      throw refuseProgramEdit();
+    if (!canCopyFromPlan(writer.sourceActor, currentSource)) throw refuseProgramEdit(403, "This template cannot be copied.");
+    if (intent === "assign" && (!currentSource.is_template || currentSource.plan_type !== "program")) {
+      throw refuseProgramEdit(400, "Only a template can be assigned to an athlete.");
     }
+    if (targetAthletes.length && currentSource.plan_type === "program" &&
+        await weeklyTemplateFacts(client.query.bind(client), currentSource.id)) {
+      throw refuseProgramEdit(400, "A weekly program is assigned from a date into the athletes' weekly plans.");
+    }
+    if (await findAthleteOutsideScope(writer.scope, targets, client.query.bind(client))) {
+      throw refuseProgramEdit(404, "Athlete not found.");
+    }
+    Object.assign(source, currentSource);
     const sourceDefaults = (await client.query(
       "select track_training_load_default,request_rpe_default from plans.plans where id=$1", [source.id],
     )).rows[0];
@@ -1014,11 +1020,21 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         replay = existing.result;
       }
       if (replay) {
+        // Only an ordinary program template can be assigned here. Weekly
+        // plan copies are always drafts and are the only branch that can
+        // remove an empty weekly plan when taking its slot.
+        await assertProgramEditAssignmentReplay(client, writer, assignmentRequestId, replay, { dated: false });
+        const replayedPlan = await getEditablePlan(writer.actor, replay.planId, client.query.bind(client));
+        if (!replayedPlan) throw refuseProgramEdit(404, "Assignment not found.");
+        await assertProgramEditOwnership(client, writer.scope, replayedPlan);
         await client.query("commit");
         client.release();
         client = null;
         res.status(201);
-        return timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, replay.planId), req))), assignments: replay.assignments });
+        return timing.json({
+          ...(await timing.measure("response", () => buildDraft(replayedPlan, { ...req, authz: writer.actor.authz }))),
+          assignments: replay.assignments,
+        });
       }
       if (!claimed) {
         await client.query("rollback");
@@ -1032,10 +1048,8 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
       const conflicts = [];
       try {
         for (const target of targets) {
-          const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart, async plan => {
-            await assertProgramEditTargets(client, writer, [plan]);
-            cleanedDraft = true;
-          }));
+          const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart,
+            plan => assertProgramEditTargets(client, writer, [plan])));
           if (conflict) conflicts.push(conflict);
         }
       } catch (error) {
@@ -1119,8 +1133,9 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         `update public.builder_assignment_requests set status = 'completed', result = $2::jsonb, updated_at = now() where id = $1`,
         [assignmentRequestId, JSON.stringify({ planId: createdIds[0], assignments })],
       );
+      await recordProgramEditAssignmentEvidence(client, writer, assignmentRequestId, [], []);
     }
-    await recordProgramEditUse(client, (intent !== "assign" || cleanedDraft) && writer.checked);
+    await recordProgramEditUse(client, intent !== "assign" && writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -1231,7 +1246,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         : { error: "Could not process this assignment request, please retry." });
     }
     if (claim.replay) {
-      await assertWeeklyProgramEditReplay(client, writer, assignmentRequestId, claim.replay);
+      await assertProgramEditAssignmentReplay(client, writer, assignmentRequestId, claim.replay, { dated: true });
       await client.query("commit");
       client.release();
       client = null;
@@ -1446,11 +1461,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       "update public.builder_assignment_requests set status = 'completed', result = $2::jsonb, updated_at = now() where id = $1",
       [assignmentRequestId, JSON.stringify(result)],
     );
-    await client.query(
-      `insert into plans.program_edit_v109_assignment_evidence(request_id,edited_plan_ids,removed_plan_ids,scope_type,scope_id)
-       values($1,$2,$3,$4,$5)`,
-      [assignmentRequestId, editedPlanIds, removedPlanIds, writer.scope.type, nativeProgramRpeScope(writer.scope)],
-    );
+    await recordProgramEditAssignmentEvidence(client, writer, assignmentRequestId, editedPlanIds, removedPlanIds);
     await recordProgramEditUse(client, editIds.length > 0 && writer.checked);
     await client.query("commit");
     client.release();
@@ -1491,7 +1502,15 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
 // POST /plans/:id/duplicate's assign, migration 202608290900): the request that
 // inserts the row owns the work; another with the same id waits on the row and
 // replays its stored result (same user and payload) or is refused.
-async function assertWeeklyProgramEditReplay(client, writer, requestId, result) {
+async function recordProgramEditAssignmentEvidence(client, writer, requestId, editedPlanIds, removedPlanIds) {
+  await client.query(
+    `insert into plans.program_edit_v109_assignment_evidence(request_id,edited_plan_ids,removed_plan_ids,scope_type,scope_id)
+     values($1,$2,$3,$4,$5)`,
+    [requestId, editedPlanIds, removedPlanIds, writer.scope.type, nativeProgramRpeScope(writer.scope)],
+  );
+}
+
+async function assertProgramEditAssignmentReplay(client, writer, requestId, result, { dated }) {
   const { rows: [proof] } = await client.query(
     "select edited_plan_ids,removed_plan_ids,scope_type,scope_id from plans.program_edit_v109_assignment_evidence where request_id=$1",
     [requestId],
@@ -1502,23 +1521,18 @@ async function assertWeeklyProgramEditReplay(client, writer, requestId, result) 
     }
     if (proof.edited_plan_ids.length || proof.removed_plan_ids.length) assertProgramEditHeld(writer);
     if (proof.edited_plan_ids.length) {
-      const locks = await client.query(
-        "select id from plans.plans where id=any($1::uuid[]) order by id for share", [proof.edited_plan_ids],
-      );
-      if (locks.rowCount !== proof.edited_plan_ids.length) throw refuseProgramEdit(404, "Assignment not found.");
-      await assertProgramEditTargets(client, writer, locks.rows);
+      await assertProgramEditTargets(client, writer, proof.edited_plan_ids.map(id => ({ id })));
     }
     return;
   }
+  if (!dated) return;
   // Older receipts cannot prove whether a newly created plan replaced an
   // empty draft. Preserve their result only for a caller who can still edit.
   const replaced = result.replaced ?? [];
   if (replaced.length || (result.created ?? []).length) assertProgramEditHeld(writer);
   const ids = replaced.map(entry => entry.planId);
   if (ids.length && nativeProgramRpeScope(writer.scope)) {
-    const locks = await client.query("select id from plans.plans where id=any($1::uuid[]) order by id for share", [ids]);
-    if (locks.rowCount !== ids.length) throw refuseProgramEdit(404, "Assignment not found.");
-    await assertProgramEditTargets(client, writer, locks.rows);
+    await assertProgramEditTargets(client, writer, ids.map(id => ({ id })));
   }
 }
 

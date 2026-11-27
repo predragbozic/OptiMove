@@ -395,7 +395,8 @@ router.patch("/:planId/metadata", async (req, res, next) => {
       ? normalizeChoice(req.body?.subscriptionPeriod, ["month", "year"], "month")
       : null;
     const result = await withEditableTemplate(req, planId, true, async (client, current, writer) => {
-      const metadataPolicy = await resolveProgramMetadataPolicy(writer.actor, {
+      // Publishing uses the existing policy, with the current account holdings.
+      const metadataPolicy = await resolveProgramMetadataPolicy(writer.sourceActor, {
         scope: requestedScope,
         status: requestedStatus,
         athleteCanViewDirectly: booleanValue(req.body?.athleteCanViewDirectly, false),

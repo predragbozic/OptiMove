@@ -110,6 +110,14 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
     assert.equal(revoked.status, 403, revoked.text);
     assert.deepEqual(await digest(), initial);
     await grant(true);
+    await sql.query("alter table plans.plans add constraint program_edit_test_reject_check check (name <> 'Rejected within the transaction')");
+    try {
+      const failed = await rename(local, "Rejected within the transaction");
+      assert.equal(failed.status, 500, failed.text);
+      assert.deepEqual(await digest(), initial);
+    } finally {
+      await sql.query("alter table plans.plans drop constraint program_edit_test_reject_check");
+    }
     const result = await rename(local, "Allowed");
     assert.equal(result.status, 200, result.text);
     assert.equal((await digest()).marker, 1);
@@ -117,6 +125,75 @@ test("Program Edit refreshes the native grant under lock and keeps the target wi
     assert.equal(switched.status, 200, switched.text);
     const validForeignOwner = await rename(foreignOwned, "Allowed now");
     assert.equal(validForeignOwner.status, 200, validForeignOwner.text);
+    const write = (path, method, body) => server.api(cookie, path, { method, body });
+    const choose = teamId => write("/api/auth/workspace", "PUT", { type: "team", scopeId: teamId });
+    assert.equal((await choose(team)).status, 200);
+    const builder = "/api/builder";
+    const created = await write(builder + "/plans", "POST", { planType: "program", name: "Program with child edits" });
+    assert.equal(created.status, 201, created.text);
+    const programId = created.body.plan.id;
+    const createdBlock = await write(builder + "/plans/" + programId + "/blocks", "POST", { name: "Block" });
+    assert.equal(createdBlock.status, 201, createdBlock.text);
+    const blockId = createdBlock.body.blocks[0].id;
+    const createdSession = await write(builder + "/blocks/" + blockId + "/sessions", "POST", { name: "Original session" });
+    assert.equal(createdSession.status, 201, createdSession.text);
+    const sessionId = createdSession.body.blocks[0].sessions[0].id;
+    const createdNode = await write(builder + "/sessions/" + sessionId + "/nodes", "POST", { nodeType: "section", name: "Original section" });
+    assert.equal(createdNode.status, 201, createdNode.text);
+    const nodeId = createdNode.body.blocks[0].sessions[0].nodes[0].id;
+    const weeklyTemplate = await write(builder + "/plans", "POST", { planType: "program", templateKind: "weekly", weeks: 1, name: "Weekly source" });
+    assert.equal(weeklyTemplate.status, 201, weeklyTemplate.text);
+    const templateId = weeklyTemplate.body.plan.id;
+    const addSession = await write(builder + "/blocks/" + weeklyTemplate.body.blocks[0].id + "/sessions", "POST", { name: "Template session" });
+    assert.equal(addSession.status, 201, addSession.text);
+    const assignedAthlete = (await sql.query(
+      "select a.athlete_id from public.athletes a join plans.plans p on p.athlete_id=a.id where p.id=$1",
+      [local],
+    )).rows[0].athlete_id;
+    const assignPath = builder + "/plans/" + templateId + "/assign-weekly";
+    const newWeek = { athleteIds: [assignedAthlete], startDate: "2027-03-01", assignmentRequestId: randomUUID() };
+    await grant(false);
+    for (const [path, method, body] of [
+      [builder + "/plans", "POST", { name: "Denied create" }],
+      [builder + "/blocks/" + blockId, "PATCH", { name: "Denied block rename" }],
+      [builder + "/sessions/" + sessionId, "PATCH", { name: "Denied session rename" }],
+      [builder + "/nodes/" + nodeId, "DELETE", undefined],
+      ["/api/templates/" + programId + "/tags", "POST", { name: "Denied tag" }],
+    ]) {
+      const denied = await write(path, method, body);
+      assert.equal(denied.status, 403, denied.text);
+    }
+    assert.equal((await sql.query("select name from plans.plan_sessions where id=$1", [sessionId])).rows[0].name, "Original session");
+    assert.equal((await sql.query("select name from plans.plan_nodes where id=$1", [nodeId])).rows[0].name, "Original section");
+    assert.equal((await sql.query("select id from library.program_tag_definitions where name='Denied tag'")).rowCount, 0);
+    const pure = await write(assignPath, "POST", newWeek);
+    assert.equal(pure.status, 201, pure.text);
+    assert.deepEqual((await sql.query(
+      "select edited_plan_ids,removed_plan_ids,scope_type,scope_id from plans.program_edit_v109_assignment_evidence where request_id=$1",
+      [newWeek.assignmentRequestId],
+    )).rows[0], { edited_plan_ids: [], removed_plan_ids: [], scope_type: "team", scope_id: team });
+    const pureReplay = await write(assignPath, "POST", newWeek);
+    assert.equal(pureReplay.status, 201, pureReplay.text);
+    assert.deepEqual(pureReplay.body, pure.body);
+    const occupied = { athleteIds: [assignedAthlete], startDate: newWeek.startDate, assignmentRequestId: randomUUID() };
+    const conflict = await write(assignPath, "POST", occupied);
+    assert.equal(conflict.status, 409, conflict.text);
+    assert.equal(conflict.body.code, "weekly_assign_conflicts");
+    const replace = { ...occupied, choice: "replace", choiceToken: conflict.body.choiceToken };
+    const deniedReplacement = await write(assignPath, "POST", replace);
+    assert.equal(deniedReplacement.status, 403, deniedReplacement.text);
+    assert.equal((await sql.query("select 1 from public.builder_assignment_requests where id=$1", [replace.assignmentRequestId])).rowCount, 0);
+    await grant(true);
+    const replaced = await write(assignPath, "POST", replace);
+    assert.equal(replaced.status, 201, replaced.text);
+    assert.equal(replaced.body.replaced.length, 1);
+    await grant(false);
+    const deniedReplay = await write(assignPath, "POST", replace);
+    assert.equal(deniedReplay.status, 403, deniedReplay.text);
+    await grant(true);
+    const replay = await write(assignPath, "POST", replace);
+    assert.equal(replay.status, 201, replay.text);
+    assert.deepEqual(replay.body, replaced.body);
   } finally {
     await server?.stop();
     await sql.end();
