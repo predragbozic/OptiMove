@@ -1,3 +1,4 @@
+import { canWriteExercise } from "./permission-nav.js";
 import { viewModuleOpen } from "./view-modules.js";
 import { normalizeExerciseView, renderExerciseThumb, renderExerciseViewSwitcher } from "./exercise-view-modes.js";
 import { exerciseMediaOf, hasAnyMedia, mediaAccessAttributes } from "./media.js";
@@ -142,6 +143,7 @@ export function renderExerciseSelectionBar(selection, exercises) {
 // An empty result is an empty state with one next step: a library with nothing in it offers
 // Add exercise; a search or filter that matches nothing says how to widen it.
 function renderExerciseLibraryEmptyHtml(filtered, hasTerm = false) {
+  const canAdd = canWriteExercise("exercises.add");
   return filtered
     ? `<div class="om-empty exercise-library-empty" role="status">
         <p class="om-empty__title">No exercises match</p>
@@ -149,8 +151,8 @@ function renderExerciseLibraryEmptyHtml(filtered, hasTerm = false) {
       </div>`
     : `<div class="om-empty exercise-library-empty" role="status">
         <p class="om-empty__title">Your exercise library is empty</p>
-        <p class="om-empty__text">Add your first exercise with its video or picture; it will appear here and in the Builder.</p>
-        ${exerciseLibraryReadOnly() ? "" : `<div class="om-empty__actions"><button class="om-btn om-btn--primary" type="button" data-action="exercise-add-open">+ Add exercise</button></div>`}
+        <p class="om-empty__text">${canAdd ? "Add your first exercise. It will appear here and in the Builder." : "No exercises are available in this library."}</p>
+        ${canAdd ? `<div class="om-empty__actions"><button class="om-btn om-btn--primary" type="button" data-action="exercise-add-open">+ Add exercise</button></div>` : ""}
       </div>`;
 }
 
@@ -171,7 +173,7 @@ export function renderExerciseLibraryHtml(data) {
       ${filterBadges ? `<div class="exercise-results-filters">${filterBadges}</div>` : ""}
       <div class="exercise-results-actions">
         ${search.canManageCollections ? `<button class="plain-button compact-button exercise-select-button" type="button" data-action="exercise-select-mode" title="${selection ? "Stop selecting" : "Select exercises to move them into a block"}">${selection ? "Done" : "Select"}</button>` : ""}
-        ${exerciseLibraryReadOnly() ? "" : `<button class="plain-button compact-button exercise-add-button" type="button" data-action="exercise-add-open">+ Add exercise</button>`}
+        ${!canWriteExercise("exercises.add") ? "" : `<button class="plain-button compact-button exercise-add-button" type="button" data-action="exercise-add-open">+ Add exercise</button>`}
         ${renderExerciseBrowseControls(search, view)}
       </div>
     </div>
@@ -273,10 +275,9 @@ function renderExerciseLibraryCard(exercise, itemId, markedExerciseIds, platform
         <button class="text-action" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(name || "Exercise")}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
         <button class="text-action" type="button" data-action="exercise-classification" data-exercise-id="${escapeAttr(exercise.id)}">My classification</button>
         <button class="text-action" type="button" data-action="exercise-hide" data-exercise-id="${escapeAttr(exercise.id)}" data-hidden="${exercise.is_hidden ? "true" : "false"}">${exercise.is_hidden ? "Unhide" : "Hide"}</button>
-        ${exercise.is_active !== false ? `<button class="text-action" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
-        ${canManageExercise(exercise, platformAdmin) ? `
-          ${exercise.is_active !== false ? `<button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
-          <button class="text-action" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
+        ${exercise.is_active !== false && exercise.can_copy !== false && canWriteExercise("exercises.add") ? `<button class="text-action" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
+        ${exercise.is_active !== false && canManageExercise(exercise, platformAdmin) && canWriteExercise("exercises.add") ? `<button class="text-action" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
+        ${canManageExercise(exercise, platformAdmin) && canWriteExercise("exercises.remove") ? `<button class="text-action" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
         ${exercise.owner_scope === "user" && exercise.can_edit === true ? `<button class="text-action" type="button" data-action="exercise-delete" data-exercise-id="${escapeAttr(exercise.id)}">Delete permanently</button>` : ""}
       </div>`}
       ${tags.length ? `<div class="exercise-tag-list">${tags.slice(0, 4).map((tag) => `<span>${escapeHtml(tag.name)}</span>`).join("")}${tags.length > 4 ? `<span>+${tags.length - 4}</span>` : ""}</div>` : ""}
@@ -317,10 +318,9 @@ function renderExerciseViewCard(exercise, itemId, markedExerciseIds, platformAdm
             <button class="exercise-view-menu-item" type="button" data-action="exercise-tags" data-exercise-id="${escapeAttr(exercise.id)}" data-exercise-name="${escapeAttr(name)}">Tags${tags.length ? ` (${tags.length})` : ""}</button>
             <button class="exercise-view-menu-item" type="button" data-action="exercise-classification" data-exercise-id="${escapeAttr(exercise.id)}">My classification</button>
             <button class="exercise-view-menu-item" type="button" data-action="exercise-hide" data-exercise-id="${escapeAttr(exercise.id)}" data-hidden="${exercise.is_hidden ? "true" : "false"}">${exercise.is_hidden ? "Unhide" : "Hide"}</button>
-            ${exercise.is_active !== false ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
-            ${canManageExercise(exercise, platformAdmin) ? `
-              ${exercise.is_active !== false ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
-              <button class="exercise-view-menu-item" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
+            ${exercise.is_active !== false && exercise.can_copy !== false && canWriteExercise("exercises.add") ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-copy-open" data-exercise-id="${escapeAttr(exercise.id)}">Copy</button>` : ""}
+            ${exercise.is_active !== false && canManageExercise(exercise, platformAdmin) && canWriteExercise("exercises.add") ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-edit-open" data-exercise-id="${escapeAttr(exercise.id)}">Edit</button>` : ""}
+            ${canManageExercise(exercise, platformAdmin) && canWriteExercise("exercises.remove") ? `<button class="exercise-view-menu-item" type="button" data-action="${exercise.is_active === false ? "exercise-restore" : "exercise-archive"}" data-exercise-id="${escapeAttr(exercise.id)}">${exercise.is_active === false ? "Restore" : "Archive"}</button>` : ""}
             ${exercise.owner_scope === "user" && exercise.can_edit === true ? `<button class="exercise-view-menu-item" type="button" data-action="exercise-delete" data-exercise-id="${escapeAttr(exercise.id)}">Delete permanently</button>` : ""}
           </div>
         </details>

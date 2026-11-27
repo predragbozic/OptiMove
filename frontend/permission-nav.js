@@ -39,6 +39,17 @@ export function canManageExternalSchedules(user = state.currentUser) {
   return Boolean(held?.has("load.view.team") && held.has("load.schedule.manage"));
 }
 
+// Library writes use the checked permissions from the selected native workspace.
+export function canWriteExercise(word, user = state.currentUser) {
+  const type = user?.activeWorkspace?.type;
+  if (type === "platform" || type === "private_coach") return true;
+  if (type === "club" || type === "team") {
+    const held = heldPermissions(user);
+    return Boolean(held?.has("exercises.use") && held.has(word));
+  }
+  return user?.activeWorkspace === undefined;
+}
+
 // Settings tabs (and the sidebar's Settings entries) that a honoured word decides. Any other tab is not listed here.
 const SETTINGS_TAB_WORDS = Object.freeze({
   overview: ["org.view"],

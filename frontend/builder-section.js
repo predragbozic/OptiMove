@@ -1,3 +1,4 @@
+import { canWriteExercise } from "./permission-nav.js";
 import { exerciseNodeLabel } from "./builder-helpers.js";
 import { libraryDragAvailable } from "./builder-library-drag.js";
 import {
@@ -67,6 +68,7 @@ export function renderBuilderAddedPanelContent(state, selectedNode) {
 
 function renderBuilderSectionPanel(state, selectedNode) {
   const query = state.builder.exerciseQuery;
+  const canAddExercise = canWriteExercise("exercises.add", state.currentUser);
   const selectFilterCount = activeExerciseSelectFilterCount(state.builder.exerciseFilters);
   return `
     <div class="builder-section-panel" data-mobile-mode="${escapeAttr(state.builder.mobileMode)}" data-filters-open="${state.builder.exerciseFiltersOpen ? "true" : "false"}" aria-label="Section exercise editor">
@@ -77,7 +79,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
       </div>
       <div class="builder-section-grid">
         <section class="builder-section-library">
-          <div class="builder-library-head"><div class="builder-panel-label">Exercise library</div><button class="text-action builder-custom-exercise-link" type="button" data-action="builder-open-custom-exercise">+ Add custom exercise</button></div>
+          <div class="builder-library-head"><div class="builder-panel-label">Exercise library</div>${canAddExercise ? `<button class="text-action builder-custom-exercise-link" type="button" data-action="builder-open-custom-exercise">+ Add custom exercise</button>` : ""}</div>
           <div class="builder-library-controls">
             <div class="builder-library-toolbar">
               <label class="search-field builder-exercise-search"><span>Search exercises</span><input data-builder-exercise-search type="search" enterkeyhint="search" value="${escapeAttr(query)}" placeholder="Name or code"></label>
@@ -94,7 +96,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
                   ${renderExerciseFilterControls(state.builder.exerciseFilters, state.exerciseSearch.options, "builder-selects")}
                 </div>
               </details>
-              <button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>
+              ${canAddExercise ? `<button class="text-action builder-custom-exercise-button" type="button" data-action="builder-open-custom-exercise">Add custom exercise</button>` : ""}
             `)}
             </div>
             <div class="builder-dose-inputs builder-quick-dose">
@@ -113,7 +115,7 @@ function renderBuilderSectionPanel(state, selectedNode) {
         </section>
       </div>
       ${renderBuilderStickyBar(selectedNode, state.builder.mobileMode)}
-      ${state.builder.customExerciseOpen ? renderCustomExerciseModal(selectedNode, state.builder.customExerciseDose) : ""}
+      ${canAddExercise && state.builder.customExerciseOpen ? renderCustomExerciseModal(selectedNode, state.builder.customExerciseDose) : ""}
       ${state.tagEditor.open ? renderExerciseTagModal(state.tagEditor) : ""}
     </div>
   `;

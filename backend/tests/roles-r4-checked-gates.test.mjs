@@ -44,6 +44,12 @@ test("A1. every listed gate file checks its word through can() or its named tran
       const words = [...src.text.matchAll(CAN_CALL)].map((m) => m[1]);
       const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1, '([a-z_.]+)', \$2, \$3\)/g)].map((m) => m[1]);
       words.push(...sqlWords.filter((checked) => SQL_CHECKED[gate]?.includes(checked)));
+      if (word === "exercises.add" || word === "exercises.remove") {
+        const guard = SOURCES.find(source => source.rel === "exerciseWriteAccess.js").text;
+        assert.match(guard, /permission_word_honoured\(\$1\)/);
+        assert.match(guard, /user_has_permission\(\$2,\$1,\$3,\$4\)/);
+        words.push(...[...src.text.matchAll(/lockExerciseWriter\(client, req, workspace, "(exercises\.(?:add|remove))"/g)].map(match => match[1]));
+      }
       assert.ok(words.includes(word), `${word}: ${gate} checks the word`);
     }
   }
@@ -145,6 +151,7 @@ const REVIEWED = Object.freeze({
   // coach path asks athletes.view at (its own resolved club / team workspace).
   "positionService.js": 11,
   "routes/auth.js": 1,
+  "exerciseWriteAccess.js": 8, // Exercise bridge rechecks existing workspace and narrows Builder's target scope.
   "programRpeSettingsAccess.js": 4, // revalidates an existing native workspace for an RPE write
   "routes/builder.js": 10, // existing visibility plus scoped direct and indirect RPE effects
   "routes/calendar.js": 1,
