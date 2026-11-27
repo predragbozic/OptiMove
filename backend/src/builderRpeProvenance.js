@@ -9,6 +9,7 @@ export async function beginBuilderRpeProvenance(client) {
 }
 
 export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = null, origin = sourcePlanId ? "edit" : "created", copies = new Map() }) {
+  if (origin === "copy") await assertBuilderRpeCopyProvenance(client, sourcePlanId);
   const { rowCount } = await client.query(
     `insert into training_load.builder_rpe_plan_baselines
        (plan_id,origin,source_plan_id,source_updated_at,owner_scope,owner_user_id,owner_club_id,owner_team_id,opening_tracking,opening_rpe)
@@ -35,8 +36,9 @@ export async function recordBuilderRpeUse(client) {
   await client.query("insert into training_load.builder_rpe_provenance_use default values on conflict do nothing");
 }
 
-async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, sourcePlanIds = [sourcePlanId], copies, retained = false }) {
+async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, sourcePlanIds = [sourcePlanId], copies, retained = false, verified = false }) {
   if (!copies.size) return;
+  if (!retained && !verified) await assertBuilderRpeCopyProvenance(client, null, [...copies.keys()]);
   const { rowCount: sessions } = await client.query(
     `insert into training_load.builder_rpe_session_baselines
        (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe)
@@ -55,8 +57,9 @@ async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, so
 
 export async function recordBuilderRpeCopyIfTracked(client, copy) {
   if (!copy.copies.size) return;
+  if (!copy.verified) await assertBuilderRpeCopyProvenance(client, null, [...copy.copies.keys()]);
   const opening = await client.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [copy.planId]);
-  if (opening.rowCount) await recordBuilderRpeCopiedSessions(client, copy);
+  if (opening.rowCount) await recordBuilderRpeCopiedSessions(client, { ...copy, verified: true });
 }
 
 export async function recordBuilderRpeNewLogicalCopies(client, { planId, sourcePlanId, copies }) {
@@ -72,7 +75,7 @@ export async function recordBuilderRpeNewLogicalCopies(client, { planId, sourceP
   );
   const missing = new Set(rows.map(row => row.id));
   await recordBuilderRpeCopiedSessions(client, {
-    planId, sourcePlanId, copies: new Map([...copies].filter(([,targetId]) => missing.has(targetId))),
+    planId, sourcePlanId, verified: true, copies: new Map([...copies].filter(([,targetId]) => missing.has(targetId))),
   });
 }
 
@@ -108,7 +111,7 @@ export async function recordBuilderRpeSyncedCopy(client, { planId, sourcePlanId,
       [planId,sourcePlanId,source_id,target_id,inserted],
     );
   }
-  await recordBuilderRpeCopyIfTracked(client, { planId, sourcePlanId, copies: inherited });
+  await recordBuilderRpeCopyIfTracked(client, { planId, sourcePlanId, copies: inherited, verified: true });
 }
 
 // Existing drafts without exact baselines stay unclassified while exposure is closed.
@@ -172,6 +175,7 @@ export async function recordBuilderRpePlanEffect(client, before, after) {
 
 // Record exact inserted rows only under a known immutable plan baseline.
 export async function recordBuilderRpeSessionOpening(client, planId, sessionId, source = null) {
+  if (source) await assertBuilderRpeCopyProvenance(client, null, [source.id]);
   await client.query(
     `insert into training_load.builder_rpe_session_baselines
        (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe)
@@ -288,6 +292,7 @@ function recoveryRequired() {
 async function readBuilderRpeState(client, planId) {
   const planResult = await client.query(
       `select p.track_training_load_default as tracking, p.request_rpe_default as rpe,
+              b.source_plan_id,
               b.plan_id is not null as known,
               e.changed_tracking, e.changed_rpe,
               coalesce(e.effective_tracking,b.opening_tracking) as expected_tracking,
@@ -299,6 +304,7 @@ async function readBuilderRpeState(client, planId) {
     );
   const sessionResult = await client.query(
       `select s.id,s.logical_session_id,s.training_load_enabled as tracking,s.rpe_enabled as rpe,
+              b.source_plan_id,b.source_session_id,
               b.session_id is not null as known,
               e.changed_tracking, e.changed_rpe,
               coalesce(e.effective_tracking,b.opening_tracking) as expected_tracking,
@@ -313,17 +319,89 @@ async function readBuilderRpeState(client, planId) {
   return { plan: planResult.rows[0], sessions: sessionResult.rows };
 }
 
+async function assertBuilderRpeInheritedRoots(client, roots) {
+  if (!roots.length) return;
+  // An old bridge could copy enabled flags without proving the pending source.
+  // A later edit to that source is not evidence of what the old copy inherited.
+  const { rows } = await client.query(
+    `with recursive lineage(root, plan_id, session_id, tracking, rpe, visited) as (
+       select ord, plan_id, session_id, tracking, rpe, array[]::text[]
+       from unnest($1::uuid[],$2::uuid[],$3::boolean[],$4::boolean[]) with ordinality
+         as seed(plan_id,session_id,tracking,rpe,ord)
+       union all
+       select l.root, origin.source_plan_id, origin.source_session_id, l.tracking, l.rpe,
+              l.visited || concat(l.plan_id,'/',l.session_id)
+       from lineage l
+       join plans.plans p on p.id=l.plan_id and p.status<>'active'
+       join lateral (
+         select b.source_plan_id, null::uuid as source_session_id
+         from training_load.builder_rpe_plan_baselines b
+         where l.session_id is null and b.plan_id=l.plan_id
+           and (not l.tracking or b.opening_tracking) and (not l.rpe or b.opening_rpe)
+         union all
+         select b.source_plan_id, b.source_session_id
+         from training_load.builder_rpe_session_baselines b
+         join plans.plan_sessions s on s.id=b.session_id and s.logical_session_id=b.logical_session_id
+         join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=b.plan_id
+         where b.plan_id=l.plan_id and b.session_id=l.session_id
+           and (not l.tracking or b.opening_tracking) and (not l.rpe or b.opening_rpe)
+       ) origin on true
+       where not (concat(l.plan_id,'/',l.session_id)=any(l.visited))
+     )
+     select distinct l.root from lineage l
+     left join plans.plans p on p.id=l.plan_id
+     where l.plan_id is null or (p.status='active' and (
+       (l.session_id is null and (not l.tracking or p.track_training_load_default) and (not l.rpe or p.request_rpe_default)) or exists (
+         select 1 from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
+         where s.id=l.session_id and d.plan_id=p.id
+           and (not l.tracking or s.training_load_enabled) and (not l.rpe or s.rpe_enabled)
+       )
+     ))`, [
+      roots.map(root => root.planId), roots.map(root => root.sessionId ?? null),
+      roots.map(root => !!root.tracking), roots.map(root => !!root.rpe),
+    ],
+  );
+  if (rows.length !== roots.length) throw recoveryRequired();
+}
+
+function inheritedRoot(row) {
+  return {
+    planId: row.source_plan_id,
+    sessionId: row.source_session_id,
+    tracking: row.tracking && !row.changed_tracking,
+    rpe: row.rpe && !row.changed_rpe,
+  };
+}
+
+export async function assertBuilderRpeCopyProvenance(client, planId = null, sessionIds = []) {
+  const { rows } = await client.query(
+    `select p.id as "planId",null::uuid as "sessionId",p.track_training_load_default as tracking,p.request_rpe_default as rpe
+     from plans.plans p where p.id=$1
+     union all
+     select d.plan_id,s.id,s.training_load_enabled,s.rpe_enabled
+     from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
+     where s.id=any($2::uuid[])`, [planId, sessionIds],
+  );
+  await assertBuilderRpeInheritedRoots(client, rows.filter(hasRpe));
+}
+
 export async function assertBuilderRpeActivationProvenance(client, planId) {
   const state = await readBuilderRpeState(client, planId);
   if ([state.plan, ...state.sessions].some(row => hasRpe(row) &&
       !matchesRecordedRpe(row))) {
     throw recoveryRequired();
   }
+  const inherited = [state.plan, ...state.sessions].filter(row => row.source_plan_id).map(inheritedRoot).filter(hasRpe);
+  await assertBuilderRpeInheritedRoots(client, inherited);
 }
 
 export async function assertBuilderRpeReplacementProvenance(client, targetId, replacementId, { edit = false } = {}) {
   const target = await readBuilderRpeState(client, targetId);
   const replacement = await readBuilderRpeState(client, replacementId);
+  if (!edit) {
+    const inherited = [replacement.plan, ...replacement.sessions].filter(row => row.source_plan_id).map(inheritedRoot).filter(hasRpe);
+    await assertBuilderRpeInheritedRoots(client, inherited);
+  }
   if (!sameRpe(target.plan, replacement.plan) && (!provesRpeChange(target.plan, replacement.plan) || (!edit && !matchesRecordedRpe(target.plan)))) {
     throw recoveryRequired();
   }

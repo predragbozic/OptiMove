@@ -541,6 +541,7 @@ test("v106 uses exact inserted IDs for whole-plan duplicates and dated assignmen
      values ($1,'Training', 'T', true, true),($2,'Training','T', false, false) returning id`,
     days.map(day => day.id),
   )).rows.map(row => row.id);
+  await db.query("update plans.plans set status='active' where id=$1", [source]);
   const copy = await http.api(coach.cookie, "/api/builder/plans/" + source + "/duplicate", { method: "POST", body: {} });
   assert.equal(copy.status, 201, copy.text);
   const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);

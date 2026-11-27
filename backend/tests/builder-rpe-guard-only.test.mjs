@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { randomUUID } from "node:crypto";
 import {
-  createBuilderRpeFixtureDraft, withBuilderRpeGuardFixture,
+  builderRpeFixtureApi, createBuilderRpeFixtureDraft, enableBuilderRpeFixtureDraft, withBuilderRpeGuardFixture,
 } from "./support/builder-rpe-guard-fixture.mjs";
 import { execFileSync } from "node:child_process";
 import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
-import { builderRpeFixtureApi } from "./support/builder-rpe-guard-fixture.mjs";
 
 test("guard preserves ambiguous predecessor drafts and publishes all-off and proven drafts", async () => {
   await withBuilderRpeGuardFixture(async ({ db, oldApi, cookies, cases, athleteCode, snapshot, stopPrevious }) => {
@@ -14,20 +14,69 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     assert.equal(legacySubmission.status, 200, JSON.stringify(legacySubmission.body));
     const legacyEdit = await oldApi(`/api/builder/plans/${legacyActive.id}/edit`, { method: "POST" });
     assert.equal(legacyEdit.status, 200, JSON.stringify(legacyEdit.body));
+    const unprovenTemplate = await oldApi("/api/builder/plans", {
+      method: "POST", body: { planType: "program", templateKind: "weekly", weeks: 1, name: "Old enabled template" },
+    });
+    assert.equal(unprovenTemplate.status, 201, JSON.stringify(unprovenTemplate.body));
+    const templateId = unprovenTemplate.body.plan.id;
+    const added = await oldApi(`/api/builder/blocks/${unprovenTemplate.body.blocks[0].id}/sessions`, {
+      method: "POST", body: { name: "Old enabled session", bta: "T" },
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.body));
+    const templateSession = added.body.blocks[0].sessions[0].id;
+    await enableBuilderRpeFixtureDraft(oldApi, templateId, templateSession);
     await stopPrevious();
+    const bridge = await previousDashboardServer(db.url, {}, process.env.OPTIMOVE_BUILDER_RPE_BRIDGE_SHA
+      ?? "66220c1224abdbdc0eaa1a23fa8d53591064a98a");
+    let descendant;
+    try {
+      const copied = await builderRpeFixtureApi(bridge, cookies.owner, `/api/builder/plans/${cases.before.id}/duplicate`, {
+        method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-05-17" },
+      });
+      assert.equal(copied.status, 201, JSON.stringify(copied.body));
+      descendant = copied.body.plan.id;
+    } finally {
+      await bridge.stop();
+    }
     const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     const server = await previousDashboardServer(db.url, {}, head);
     try {
       const api = (path, options) => builderRpeFixtureApi(server, cookies.owner, path, options);
       const submit = id => api(`/api/builder/plans/${id}/submit`, { method: "POST" });
-      const ids = Object.values(cases).map(item => item.id);
+      const ids = [...Object.values(cases).map(item => item.id), descendant, templateId];
       const before = await snapshot(ids);
-      for (const item of [cases.before, cases.during, cases.editDraft]) {
+      for (const item of [cases.before, cases.during, cases.editDraft, { id: descendant }]) {
         const result = await submit(item.id);
         assert.equal(result.status, 409, JSON.stringify(result.body));
         assert.equal(result.body.code, "rpe_recovery_required");
         assert.deepEqual(await snapshot(ids), before);
       }
+      const sourceDay = before.sessions.find(row => row.id === cases.before.sessionId).plan_day_id;
+      const targetDay = before.days.find(row => row.plan_id === cases.off.id).id;
+      const requestKeys = [randomUUID(), randomUUID()];
+      const copies = [
+        [`/api/builder/plans/${cases.before.id}/duplicate`, { athleteIds: [athleteCode], weekStart: "2027-05-24" }],
+        [`/api/builder/sessions/${cases.before.sessionId}/copy-into/${targetDay}`, {}],
+        [`/api/builder/days/${sourceDay}/copy-into/${targetDay}`, {}],
+        [`/api/builder/blocks/${sourceDay}/copy-into/${targetDay}`, {}],
+        ["/api/builder/weekly-templates", { name: "Unconfirmed copy", planIds: [cases.before.id] }],
+        [`/api/builder/plans/${templateId}/duplicate`, { intent: "assign", athleteIds: [athleteCode], assignmentRequestId: requestKeys[0] }],
+        [`/api/builder/plans/${templateId}/assign-weekly`, { athleteIds: [athleteCode], startDate: "2027-05-31", assignmentRequestId: requestKeys[1] }],
+      ];
+      const planCount = () => db.client.query("select count(*)::integer as n from plans.plans").then(({ rows }) => rows[0].n);
+      const priorCount = await planCount();
+      for (const [path, body] of copies) {
+        const refused = await api(path, { method: "POST", body });
+        assert.equal(refused.status, 409, path + " " + JSON.stringify(refused.body));
+        assert.match(refused.body.error, /Training Load settings/);
+        assert.equal(await planCount(), priorCount);
+        assert.deepEqual(await snapshot(ids), before);
+      }
+      assert.equal((await db.client.query("select id from public.builder_assignment_requests where id=any($1::uuid[])", [requestKeys])).rowCount, 0);
+      const safeCopy = await api(`/api/builder/plans/${cases.off.id}/duplicate`, {
+        method: "POST", body: { athleteIds: [athleteCode], weekStart: "2027-06-07" },
+      });
+      assert.equal(safeCopy.status, 201, JSON.stringify(safeCopy.body));
       const unchanged = await submit(legacyEdit.body.plan.id);
       assert.equal(unchanged.status, 200, JSON.stringify(unchanged.body));
       const legacyPublished = await snapshot([legacyActive.id]);

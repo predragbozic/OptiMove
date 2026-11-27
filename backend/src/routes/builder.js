@@ -3,7 +3,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
-import { assertBuilderRpeActivationProvenance, assertBuilderRpeReplacementProvenance, beginBuilderRpeProvenance, hasBuilderRpeSiblingLineage, inspectBuilderRpeSubmitEffects, listBuilderRpeExplicitSessions, listBuilderRpeSiblingLineage, recordBuilderRpeCopyIfTracked, recordBuilderRpeNewLogicalCopies, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening, recordBuilderRpeSyncedCopy, recordBuilderRpeUse } from "../builderRpeProvenance.js";
+import { assertBuilderRpeActivationProvenance, assertBuilderRpeCopyProvenance, assertBuilderRpeReplacementProvenance, beginBuilderRpeProvenance, hasBuilderRpeSiblingLineage, inspectBuilderRpeSubmitEffects, listBuilderRpeExplicitSessions, listBuilderRpeSiblingLineage, recordBuilderRpeCopyIfTracked, recordBuilderRpeNewLogicalCopies, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening, recordBuilderRpeSyncedCopy, recordBuilderRpeUse } from "../builderRpeProvenance.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -1070,6 +1070,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         const copies = source.plan_type === "weekly"
           ? await copyWeeklyPlanTree(client, source.id, planId, targetWeekStart, { targetIsNew: true })
           : await copyProgramTree(client, source.id, planId);
+        if (recordRpeOpening) await assertBuilderRpeCopyProvenance(client, source.id, [...copies.keys()]);
         if (planOwner) {
           await insertPlanOwnershipSnapshot(client, planId, planOwner);
           if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId, sourcePlanId: source.id, origin: "copy", copies });
@@ -1335,6 +1336,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     }
 
     // Write.
+    if (recordRpeOpening && entries.some(entry => entry.kind === "new")) await assertBuilderRpeCopyProvenance(client, source.id);
     const created = [];
     const replaced = [];
     const skipped = [];
@@ -1364,6 +1366,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         const targetDays = (await client.query("select id, date::text as date from plans.plan_days where plan_id = $1", [row.id])).rows;
         entry.targetDays = new Map(targetDays.map((d) => [d.date.slice(0, 10), d.id]));
         const copies = await writeTemplateDays(client, entry, new Map());
+        if (recordRpeOpening) await assertBuilderRpeCopyProvenance(client, null, [...copies.keys()]);
         if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: row.id, sourcePlanId: source.id, origin: "copy", copies });
         newPlanIds.push(row.id);
         created.push({ athleteId: entry.athleteId, weekStart: entry.weekStart, planId: row.id });
@@ -2932,11 +2935,15 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
       : { rows: [{ id: plan.id }] };
     const deletedIds = [];
     for (const target of targets.rows) {
+      await checkFirstRpeSubmit(client, req, target.id);
+      const eligible = await client.query(
+        "select 1 from plans.plans where id=$1 and status='draft' and source_type='builder' and not coalesce(is_edit_draft,false) for update", [target.id],
+      );
+      if (!eligible.rowCount) continue;
       const hasContent = plan.plan_type === "weekly"
         ? await planHasWeeklyTrainingContentWithClient(client, target.id)
         : await planHasBuilderContentWithClient(client, target.id);
       if (hasContent) continue;
-      await checkFirstRpeSubmit(client, req, target.id);
       await deletePlanTreeWithClient(client, target.id);
       deletedIds.push(target.id);
     }
@@ -3068,7 +3075,7 @@ async function syncBatchContentWithClient(client, sourceRow, siblingRows, guard 
     }
     if (provenance) {
       const lineage = provenance.sessionLineage?.get(sibling.id);
-      const copy = { planId: sibling.id, sourcePlanId: sourceRow.id, copies };
+      const copy = { planId: sibling.id, sourcePlanId: sourceRow.id, copies, verified: true };
       if (lineage?.length) await recordBuilderRpeSyncedCopy(client, { ...copy, lineage });
       else await recordBuilderRpeCopyIfTracked(client, copy);
     }
@@ -3630,7 +3637,7 @@ async function applyEditDraft(req, draftPlan, timing) {
             copyLegacySession,
             assertReuse: (c, planId, retainedItems) => assertExerciseReuseAllowed(c, req.user.id, { planIds: [planId], retainedItems }),
           });
-          if (hasProvenance) await recordBuilderRpeCopyIfTracked(client, { planId: member.planId, sourcePlanId: freshDraft.id, copies });
+          if (hasProvenance) await recordBuilderRpeCopyIfTracked(client, { planId: member.planId, sourcePlanId: freshDraft.id, copies, verified: true });
         }
       });
     }
