@@ -417,7 +417,9 @@ test("v106 records a real opening, exact session lineage and effective settings 
   assert.equal((await db.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [draftId])).rowCount, 0);
   const rollback = await fsp.readFile(new URL("../../docs/runbooks/builder-rpe-v106-rollback.sql", import.meta.url), "utf8");
   try {
-    await assert.rejects(db.query(rollback), /v106 rollback refuses recorded Builder provenance/);
+    const v107 = await db.query("select 1 from public.schema_migrations where migration_name ~ '^migrations_v2/202612091000_'");
+    assert.equal(v107.rowCount, 1);
+    await assert.rejects(db.query(rollback), /v106 rollback refused: v106 is missing, its checksum changed, or a later migration is recorded/);
   } finally {
     await db.query("rollback");
   }
