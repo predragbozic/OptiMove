@@ -2,9 +2,8 @@
 // GET  /api/training-activity/:activityId/estimates/proposal?athleteId=…[&minutes=…][&sourceAthleteId=…]
 // POST /api/training-activity/:activityId/estimates { requestKey, athleteId, method, minutes?, sourceAthleteId?, note? }
 //
-// The action is offered only on a "Participated · no device data" row, to a viewer who may decide on the roster, while
-// the server authorizes the estimate editor (roster.data.viewer.estimates). Every estimated value is shown with its label; a coach
-// never sees an estimate unlabelled.
+// The action is offered on a "Participated · no device data" row when the server authorizes estimate editing in the
+// active workspace (roster.data.viewer.estimates). Every estimated value is shown with its label.
 import { api } from "./api.js";
 import { currentRosterResetGeneration, newRosterRequestKey, refreshActivityRoster, sendRosterCommand } from "./activity-roster-data.js";
 import { state } from "./state.js";
@@ -113,7 +112,7 @@ export function isEstimateValue(v) {
   return v?.entryMethod === "estimate";
 }
 
-// The row offers the action: a Participated · no device data athlete, the save on, a viewer who decides.
+// A Participated · no device data athlete is eligible when the viewer has estimate editing access.
 export function estimateOffered(data, athlete) {
   return data?.viewer?.estimates === true && athlete?.state === "participated_no_values";
 }
