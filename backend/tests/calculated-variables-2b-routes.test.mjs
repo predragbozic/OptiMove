@@ -2,6 +2,7 @@
 // inputs; the in-app undo removes the calculated values with the rest of the session in its own transaction (C148), and the
 // fresh candidate it leaves imports them again; the estimates neither propose nor write a calculated variable.
 // HMLD = power zone distance 25-60 + 60-75 + 75+. Disposable optimove_tests_gpexe_* databases only; a fake GPEXE source.
+import { stageDashboardManageForFixture } from "./support/dashboard-manage-grants.mjs";
 import { after, before, test } from "node:test";
 import { applyEstimateBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 import assert from "node:assert/strict";
@@ -374,6 +375,7 @@ const mapi = (path, opts) => call("/api/training-load/metrics", path, opts);
 const dapi = (path, opts) => call("/api/training-load/dashboards", path, opts);
 
 test("5. an athlete's own reads carry no calculated value, name or unit - the activity detail, an occasion, the results and her own dashboards - while the coach's reads of the same data do", async () => {
+  await stageDashboardManageForFixture(admin);
   const team = await setupTeam();
   const s = await importSession(team, 9841);
   const athleteId = team.athleteIds[0];
@@ -669,6 +671,7 @@ test("10. v79: an athlete never sees a ratio or a difference - her catalog, one 
 });
 
 test("11. v79: a coach's dashboard refuses invalid ratio aggregations and takes a difference; the database refuses totalling or averaging a ratio and 'ratio' on anything else; the query never adds or averages a ratio", async () => {
+  await stageDashboardManageForFixture(admin);
   const { perMin, rest } = await v79Variables();
   const team = await setupTeam();
   await importSession(team, 9852);

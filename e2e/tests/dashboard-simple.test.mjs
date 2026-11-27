@@ -114,7 +114,7 @@ for (const width of [WIDTHS.phone, WIDTHS.desktop]) {
       } });
       assert.equal(legacy.status(), 201, await legacy.text());
       await page.goto(world.baseUrl);
-      await page.getByText("Sign out").first().waitFor();
+      await page.getByRole("button", { name: "Sign out" }).waitFor();
       await openTrainingLoad(page);
       await page.getByRole("tab", { name: "Data & Analysis" }).click();
       if (await dashboards.isVisible()) await dashboards.click();

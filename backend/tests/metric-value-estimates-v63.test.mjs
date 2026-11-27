@@ -1,6 +1,7 @@
 // v63 (phase 5b, 6b-A): estimated values. The capture kind, the provenance table and its guards (M1, M2), the supersede of
 // an estimate by a later whole-session value (M3), the session undo that removes and logs estimates, the dashboards' policy word,
 // and the migration's preflight / rollback rehearsal. Disposable databases; the import is the real approval through the routes.
+import { stageDashboardManageForFixture } from "./support/dashboard-manage-grants.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -867,6 +868,7 @@ async function booleansOf(client, sql) {
 }
 
 test("dashboard query excludes estimates from current and comparison without changing session built-ins", async () => {
+  await stageDashboardManageForFixture(admin);
   const team = await setupTeam();
   const session = await importSession(team, 9181);
   const { sum } = await eventFacts(session);

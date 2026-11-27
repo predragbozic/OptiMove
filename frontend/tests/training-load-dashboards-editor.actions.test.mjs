@@ -79,7 +79,7 @@ function installServer(initial, { onCall = () => null, loseResponse = () => fals
   const handle = (call) => {
     if (call.url.startsWith("/api/training-load/dashboards?")) return ok({ dashboards: [dashboard()] });
     if (call.url === "/api/training-load/dashboards/active") return ok({ activeDashboard: { dashboard_id: dashboardId } });
-    if (call.url === BASE && call.method === "GET") return ok({ dashboard: dashboard(), widgets: [structuredClone(w)] });
+    if (call.url === BASE && call.method === "GET") return ok({ canManage: true, dashboard: dashboard(), widgets: [structuredClone(w)] });
     if (call.url === `${BASE}/query`) return ok({ dashboardRevision: 3, widgets: [] });
     if (call.url.startsWith("/api/training-load/metrics/definitions")) return ok({ rows: [{ id: metricId, key: "jump_height", label: "Jump height", unit: "cm", value_type: "number", scope_capabilities: ["session"] }], nextCursor: null });
     if (call.url.startsWith("/api/training-load/metrics/")) return ok({ rows: [] });
@@ -183,6 +183,8 @@ async function openEditor(initial, options) {
   a.dashboards = [dashboard()];
   a.selectedDashboardId = dashboardId;
   a.dashboard = dashboard();
+  a.dashboardCanManage = true;
+  a.canCreateDashboard = true;
   a.widgets = [structuredClone(initial)];
   a.period = { dateFrom: "2026-09-01", dateTo: "2026-09-17" };
   await act("open-advanced", { widgetId });
@@ -436,7 +438,7 @@ test("H3 (H1 fix): the guided panel posts Session count at its catalog-fixed DAY
     calls.push(call);
     if (call.method === "POST" && call.url === `${BASE}/widgets`) return { ok: true, status: 201, json: async () => ({ widgetId: "w-new" }) };
     if (call.method === "POST") return { ok: true, status: 201, json: async () => ({ seriesId: "s-new", widgetRevision: 2 }) };
-    return { ok: true, status: 200, json: async () => ({ dashboards: [], dashboard: dashboard(), widgets: [], rows: [] }) };
+    return { ok: true, status: 200, json: async () => ({ canCreateDashboard: true, canManage: true, dashboards: [], dashboard: dashboard(), widgets: [], rows: [] }) };
   };
   await act("panel-save");
   const seriesPost = calls.find((c) => c.method === "POST" && c.url.endsWith("/series"));
@@ -578,7 +580,7 @@ test("H3 (review LOW): saving a widget that was deleted elsewhere reloads and sa
   const { editor, draft } = await openEditor(widget(), {
     onCall: (call) => {
       if (call.method === "PATCH") { gone = true; return { status: 404, body: { error: "notFound" } }; }
-      if (gone && call.method === "GET" && call.url === BASE) return { status: 200, body: { dashboard: dashboard(), widgets: [] } };
+      if (gone && call.method === "GET" && call.url === BASE) return { status: 200, body: { canManage: true, dashboard: dashboard(), widgets: [] } };
       return null;
     },
   });

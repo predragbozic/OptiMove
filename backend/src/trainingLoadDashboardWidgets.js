@@ -39,8 +39,8 @@ function toStaleOrRaise(error) {
   throw error;
 }
 
-async function assertOwnsWidget(dashboardId, widgetId) {
-  const r = await query(`select 1 from training_load.dashboard_widgets where id = $1 and dashboard_id = $2`, [widgetId, dashboardId]);
+async function assertOwnsWidget(dashboardId, widgetId, runQuery) {
+  const r = await runQuery(`select 1 from training_load.dashboard_widgets where id = $1 and dashboard_id = $2`, [widgetId, dashboardId]);
   if (!r.rowCount) throw httpError(404, "Widget not found on this dashboard.");
 }
 
@@ -52,15 +52,15 @@ async function assertOwnsWidget(dashboardId, widgetId) {
 // same "may only be NEWLY bound to an active metric" rule the trigger
 // itself enforces.
 // v79: the service checks aggregation compatibility before sanctioned writes.
-async function assertMetricReferenceOk(dashboardRow, metricDefinitionId) {
+async function assertMetricReferenceOk(dashboardRow, metricDefinitionId, runQuery) {
   if (!metricDefinitionId) return;
-  const { visible, def } = await isMetricVisibleToDashboard(dashboardRow, metricDefinitionId);
+  const { visible, def } = await isMetricVisibleToDashboard(dashboardRow, metricDefinitionId, runQuery);
   if (!visible || !def || def.state !== "active") throw httpError(404, "Metric not found.");
   return def;
 }
-async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionId) {
+async function assertSourceConnectionReferenceOk(dashboardRow, sourceConnectionId, runQuery) {
   if (!sourceConnectionId) return;
-  const { visible, conn } = await isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId);
+  const { visible, conn } = await isSourceConnectionVisibleToDashboard(dashboardRow, sourceConnectionId, runQuery);
   // Nonexistent, foreign, AND inactive/archived all collapse to the SAME
   // info-hiding 404 — an inactive connection's mere existence (and its
   // active/inactive state) is not something a caller who can't otherwise
@@ -190,19 +190,19 @@ export async function resolveTemplateSeriesBatchForWorkspace(runQuery, seriesSpe
 // Layout.
 // ------------------------------------------------------------
 
-export async function replaceLayout(dashboardId, { expectedRevision, layout }) {
+export async function replaceLayout(dashboardId, { expectedRevision, layout }, runQuery = query) {
   try {
-    const r = await query(`select * from training_load.replace_dashboard_layout($1, $2, $3)`, [dashboardId, expectedRevision, JSON.stringify(layout)]);
+    const r = await runQuery(`select * from training_load.replace_dashboard_layout($1, $2, $3)`, [dashboardId, expectedRevision, JSON.stringify(layout)]);
     return { widgets: r.rows };
   } catch (error) {
     return toStaleOrRaise(error);
   }
 }
 
-export async function updateWidgetLayout(dashboardId, widgetId, { expectedWidgetRevision, x, y, width, height, mobileOrder }) {
-  await assertOwnsWidget(dashboardId, widgetId);
+export async function updateWidgetLayout(dashboardId, widgetId, { expectedWidgetRevision, x, y, width, height, mobileOrder }, runQuery = query) {
+  await assertOwnsWidget(dashboardId, widgetId, runQuery);
   try {
-    const r = await query(`select * from training_load.update_widget_layout($1,$2,$3,$4,$5,$6,$7)`, [widgetId, expectedWidgetRevision, x, y, width, height, mobileOrder]);
+    const r = await runQuery(`select * from training_load.update_widget_layout($1,$2,$3,$4,$5,$6,$7)`, [widgetId, expectedWidgetRevision, x, y, width, height, mobileOrder]);
     return { widget: r.rows[0] };
   } catch (error) {
     return toStaleOrRaise(error);
@@ -213,11 +213,11 @@ export async function updateWidgetLayout(dashboardId, widgetId, { expectedWidget
 // Widgets.
 // ------------------------------------------------------------
 
-export async function createWidget(dashboardId, { expectedDashboardRevision, widgetType, title, widgetOrder, x, y, width, height, mobileOrder, groupBy, displayConfig, localFilterOverride, presentation }) {
+export async function createWidget(dashboardId, { expectedDashboardRevision, widgetType, title, widgetOrder, x, y, width, height, mobileOrder, groupBy, displayConfig, localFilterOverride, presentation }, runQuery = query) {
   try {
     const createParameters = [dashboardId, expectedDashboardRevision, widgetType, title, widgetOrder, x, y, width, height, mobileOrder, groupBy ?? "day", displayConfig ? JSON.stringify(displayConfig) : null, localFilterOverride ? JSON.stringify(localFilterOverride) : null];
     if (presentation !== undefined) createParameters.push(JSON.stringify(presentation.value));
-    const r = await query(
+    const r = await runQuery(
       presentation === undefined
         ? `select * from training_load.create_widget($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`
         : `select * from training_load.create_widget_with_presentation($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
@@ -229,8 +229,8 @@ export async function createWidget(dashboardId, { expectedDashboardRevision, wid
   }
 }
 
-export async function updateWidgetContent(dashboardId, widgetId, body) {
-  await assertOwnsWidget(dashboardId, widgetId);
+export async function updateWidgetContent(dashboardId, widgetId, body, runQuery = query) {
+  await assertOwnsWidget(dashboardId, widgetId, runQuery);
   // PATCH semantics (merge-readiness corrective round, finding #7) —
   // exactly one rule, no client-facing clear flag: an ABSENT key means no
   // change; an explicit `null` means clear; any other value means
@@ -248,7 +248,7 @@ export async function updateWidgetContent(dashboardId, widgetId, body) {
       body.localFilterOverride ? JSON.stringify(body.localFilterOverride) : null, clearLocalFilterOverride,
     ];
     if (hasPresentation) updateParameters.push(body.presentation.mode, body.presentation.mode === "replace" ? JSON.stringify(body.presentation.value) : null);
-    const r = await query(
+    const r = await runQuery(
       hasPresentation
         ? `select * from training_load.update_widget_content_with_presentation($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
         : `select * from training_load.update_widget_content($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -260,10 +260,10 @@ export async function updateWidgetContent(dashboardId, widgetId, body) {
   }
 }
 
-export async function deleteWidget(dashboardId, widgetId, { expectedWidgetRevision }) {
-  await assertOwnsWidget(dashboardId, widgetId);
+export async function deleteWidget(dashboardId, widgetId, { expectedWidgetRevision }, runQuery = query) {
+  await assertOwnsWidget(dashboardId, widgetId, runQuery);
   try {
-    const r = await query(`select * from training_load.delete_widget($1, $2)`, [widgetId, expectedWidgetRevision]);
+    const r = await runQuery(`select * from training_load.delete_widget($1, $2)`, [widgetId, expectedWidgetRevision]);
     return { dashboard: r.rows[0] };
   } catch (error) {
     return toStaleOrRaise(error);
@@ -283,13 +283,13 @@ export async function deleteWidget(dashboardId, widgetId, { expectedWidgetRevisi
 // hint is ALWAYS the server's own snapshot of the locked definition, so
 // this function never even attempts to forward a client-supplied hint
 // alongside a real binding.
-export async function addSeries(dashboardId, widgetId, body, createdByUserId, dashboardRow) {
-  await assertOwnsWidget(dashboardId, widgetId);
-  const metric = await assertMetricReferenceOk(dashboardRow, body.metricDefinitionId);
+export async function addSeries(dashboardId, widgetId, body, createdByUserId, dashboardRow, runQuery = query) {
+  await assertOwnsWidget(dashboardId, widgetId, runQuery);
+  const metric = await assertMetricReferenceOk(dashboardRow, body.metricDefinitionId, runQuery);
   const aggregation = body.analyticalAggregation ?? (metric?.calculation_kind === 'ratio' ? 'ratio' : 'sum');
   const rolePolicy = body.aggregationRolePolicy ?? (metric?.calculation_kind === 'ratio' ? 'all_including_derived' : 'standalone_and_source_rollup');
   assertDashboardAggregation(metric?.calculation_kind ? { kind: metric.calculation_kind } : null, aggregation, rolePolicy);
-  await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId);
+  await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId, runQuery);
   // A built-in series has no Metrics-Core provenance concept at all — the
   // table's own CHECK requires source_policy='not_applicable' (and no
   // source_connection_id) whenever built_in_series_key is set, so the
@@ -297,7 +297,7 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId, da
   // case and must never be applied to it.
   const defaultSourcePolicy = body.builtInSeriesKey ? "not_applicable" : "all_with_conflicts";
   try {
-    const r = await query(
+    const r = await runQuery(
       `select * from training_load.add_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
       [
         widgetId, body.expectedWidgetRevision, body.seriesOrder,
@@ -316,12 +316,12 @@ export async function addSeries(dashboardId, widgetId, body, createdByUserId, da
   }
 }
 
-export async function updateSeries(dashboardId, widgetId, seriesId, body, dashboardRow) {
-  await assertOwnsWidget(dashboardId, widgetId);
-  if (body.sourceConnectionId) await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId);
-  const existing = (await query('select metric_definition_id, analytical_aggregation, aggregation_role_policy from training_load.dashboard_widget_series where id=$1 and widget_id=$2', [seriesId, widgetId])).rows[0];
+export async function updateSeries(dashboardId, widgetId, seriesId, body, dashboardRow, runQuery = query) {
+  await assertOwnsWidget(dashboardId, widgetId, runQuery);
+  if (body.sourceConnectionId) await assertSourceConnectionReferenceOk(dashboardRow, body.sourceConnectionId, runQuery);
+  const existing = (await runQuery('select metric_definition_id, analytical_aggregation, aggregation_role_policy from training_load.dashboard_widget_series where id=$1 and widget_id=$2', [seriesId, widgetId])).rows[0];
   if (!existing) throw httpError(404, 'Series not found.');
-  const visible = existing.metric_definition_id ? await isMetricVisibleToDashboard(dashboardRow, existing.metric_definition_id) : null;
+  const visible = existing.metric_definition_id ? await isMetricVisibleToDashboard(dashboardRow, existing.metric_definition_id, runQuery) : null;
   assertDashboardAggregation(visible?.def?.calculation_kind ? { kind: visible.def.calculation_kind } : null,
     body.analyticalAggregation ?? existing.analytical_aggregation, body.aggregationRolePolicy ?? existing.aggregation_role_policy);
   // PATCH semantics (finding #3): absent = no change, explicit null =
@@ -333,7 +333,7 @@ export async function updateSeries(dashboardId, widgetId, seriesId, body, dashbo
   const hasComparisonPeriod = Object.prototype.hasOwnProperty.call(body, "comparisonPeriod");
   const clearComparisonPeriod = hasComparisonPeriod && body.comparisonPeriod === null;
   try {
-    const r = await query(
+    const r = await runQuery(
       `select * from training_load.update_series($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         seriesId, widgetId, body.expectedWidgetRevision,
@@ -351,34 +351,34 @@ export async function updateSeries(dashboardId, widgetId, seriesId, body, dashbo
   }
 }
 
-export async function deleteSeries(dashboardId, widgetId, seriesId, { expectedWidgetRevision }) {
-  await assertOwnsWidget(dashboardId, widgetId);
+export async function deleteSeries(dashboardId, widgetId, seriesId, { expectedWidgetRevision }, runQuery = query) {
+  await assertOwnsWidget(dashboardId, widgetId, runQuery);
   try {
-    const r = await query(`select * from training_load.delete_series($1, $2, $3)`, [seriesId, widgetId, expectedWidgetRevision]);
+    const r = await runQuery(`select * from training_load.delete_series($1, $2, $3)`, [seriesId, widgetId, expectedWidgetRevision]);
     return { widgetRevision: r.rows[0].widget_revision };
   } catch (error) {
     return toStaleOrRaise(error);
   }
 }
 
-export async function reorderSeries(dashboardId, widgetId, { expectedWidgetRevision, order }) {
-  await assertOwnsWidget(dashboardId, widgetId);
+export async function reorderSeries(dashboardId, widgetId, { expectedWidgetRevision, order }, runQuery = query) {
+  await assertOwnsWidget(dashboardId, widgetId, runQuery);
   try {
-    const r = await query(`select * from training_load.reorder_series($1, $2, $3)`, [widgetId, expectedWidgetRevision, JSON.stringify(order)]);
+    const r = await runQuery(`select * from training_load.reorder_series($1, $2, $3)`, [widgetId, expectedWidgetRevision, JSON.stringify(order)]);
     return { widgetRevision: r.rows[0].widget_revision };
   } catch (error) {
     return toStaleOrRaise(error);
   }
 }
 
-export async function resolveSeriesBinding(dashboardId, widgetId, seriesId, { expectedWidgetRevision, metricDefinitionId }, dashboardRow) {
-  await assertOwnsWidget(dashboardId, widgetId);
-  const metric = await assertMetricReferenceOk(dashboardRow, metricDefinitionId);
-  const existing = (await query("select analytical_aggregation, aggregation_role_policy from training_load.dashboard_widget_series where id=$1 and widget_id=$2", [seriesId, widgetId])).rows[0];
+export async function resolveSeriesBinding(dashboardId, widgetId, seriesId, { expectedWidgetRevision, metricDefinitionId }, dashboardRow, runQuery = query) {
+  await assertOwnsWidget(dashboardId, widgetId, runQuery);
+  const metric = await assertMetricReferenceOk(dashboardRow, metricDefinitionId, runQuery);
+  const existing = (await runQuery("select analytical_aggregation, aggregation_role_policy from training_load.dashboard_widget_series where id=$1 and widget_id=$2", [seriesId, widgetId])).rows[0];
   if (!existing) throw httpError(404, "Series not found.");
   assertDashboardAggregation(metric?.calculation_kind ? { kind: metric.calculation_kind } : null, existing.analytical_aggregation, existing.aggregation_role_policy);
   try {
-    const r = await query(`select * from training_load.resolve_series_binding($1, $2, $3, $4)`, [seriesId, widgetId, expectedWidgetRevision, metricDefinitionId]);
+    const r = await runQuery(`select * from training_load.resolve_series_binding($1, $2, $3, $4)`, [seriesId, widgetId, expectedWidgetRevision, metricDefinitionId]);
     return { seriesId: r.rows[0].series_id, widgetRevision: r.rows[0].widget_revision };
   } catch (error) {
     return toStaleOrRaise(error);

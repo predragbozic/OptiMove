@@ -20,6 +20,7 @@
 // real routes.
 //
 // Through the real server on a disposable database (T1 kind: disposable).
+import { stageDashboardManageForFixture } from "./support/dashboard-manage-grants.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -309,6 +310,7 @@ test("8. the roster names only the team's own club's variables, for every basis:
 });
 
 test("9. a team dashboard holds its own club's variable (v55, O7) and never another club's: club A's variable binds on A1's dashboard, club B's is the identical 404, even for a platform admin who coaches A1", async () => {
+  await stageDashboardManageForFixture(k);
   const D = "/api/training-load/dashboards";
   for (const who of [W.coachA1, W.paCoachA1]) {
     const dashboard = await call(D, { method: "POST", cookie: who.cookie, body: { name: `7h-V ${uid()}` } });

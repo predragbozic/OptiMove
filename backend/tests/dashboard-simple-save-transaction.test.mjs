@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { DASHBOARD_MANAGE_WRITE_MARKER_SQL } from '../src/dashboardManageWriteMarker.js';
 import { runSimpleSaveTransaction } from '../src/dashboardSimple/saveTransaction.js';
 
 function fixture(handler = async () => ({ rows: [] })) {
@@ -13,12 +14,14 @@ const options = { requestId: 'request', checkoutTimeoutMs: 20, transactionTimeou
 test('acknowledged save commits once, releases a clean client and skips recovery', async () => {
   const state = fixture();
   let recoveries = 0;
-  const result = await runSimpleSaveTransaction({ ...options, pool: state.pool, write: async query => {
+  const result = await runSimpleSaveTransaction({ ...options, pool: state.pool, write: async (query, markDashboardManageWrite) => {
     await query('select sanctioned_writer()');
+    await markDashboardManageWrite();
     return { receipt };
   }, verify: async () => { recoveries++; } });
   assert.deepEqual(result, { ...receipt, verification: 'commitAcknowledged' });
-  assert.equal(state.queries.filter(sql => sql === 'commit').length, 1);
+  assert.deepEqual(state.queries.filter(sql => ['select sanctioned_writer()', DASHBOARD_MANAGE_WRITE_MARKER_SQL, 'commit'].includes(sql)),
+    ['select sanctioned_writer()', DASHBOARD_MANAGE_WRITE_MARKER_SQL, 'commit']);
   assert.deepEqual(state.releases, [false]);
   assert.equal(recoveries, 0);
 });
@@ -31,14 +34,15 @@ test('completed ledger replay commits its read and preserves receipt', async () 
 
 test('precommit failure confirms rollback; rejected queued operations never execute', async () => {
   const state = fixture();
-  await assert.rejects(runSimpleSaveTransaction({ ...options, pool: state.pool, write: async query => {
-    await query('update forbidden set value=1');
-    return { receipt };
-  }, verify: async () => null }), error => error.code === 'saveFailed');
+  for (const sql of ['update forbidden set value=1', DASHBOARD_MANAGE_WRITE_MARKER_SQL, 'select 1; select 2']) {
+    await assert.rejects(runSimpleSaveTransaction({ ...options, pool: state.pool, write: query => query(sql), verify: async () => null }),
+      error => error.code === 'saveFailed');
+    assert.ok(!state.queries.includes(sql));
+  }
   assert.equal(state.queries.includes('commit'), false);
   assert.equal(state.queries.some(sql => sql.startsWith('update')), false);
   assert.equal(state.queries.at(-1), 'rollback');
-  assert.deepEqual(state.releases, [false]);
+  assert.deepEqual(state.releases, [false, false, false]);
 });
 
 test('lost commit acknowledgement destroys original client and verifies without rollback or second write', async () => {

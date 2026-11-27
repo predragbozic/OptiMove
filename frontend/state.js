@@ -681,6 +681,8 @@ export const emptyTrainingLoadFilterPicker = (overrides = {}) => ({
 
 export const emptyTrainingLoadAnalysisState = (overrides = {}) => ({
   dashboards: [],
+  canCreateDashboard: null,
+  dashboardCanManage: null,
   activeDashboardId: "",
   selectedDashboardId: "",
   dashboard: null,

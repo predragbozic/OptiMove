@@ -65,9 +65,33 @@ for(const width of [360,390,1280])test(`(${width}px) Pages create, rename, reord
   await page.getByRole('button',{name:'Widget actions: Page sessions'}).click();await action(page,'pages-open-copy').click();await action(page,'pages-destination').selectOption({label:'Home'});await action(page,'pages-save').click();
   await page.getByText('Widget copied to Home.',{exact:true}).waitFor();await choosePage(page, 'Home');await page.getByRole('button',{name:'Widget actions: Page sessions'}).waitFor();
   await choosePage(page, 'Peak');await page.getByRole('button',{name:'Widget actions: Page sessions'}).waitFor();
+  const pagesUrl=world.baseUrl+'/api/training-load/dashboards/'+dashboard.id+'/pages';
+  const pageList=await (await context.request.get(pagesUrl)).json();
+  const sourcePage=pageList.pages.find(item=>item.name==='Peak');
+  const original=await (await context.request.get(pagesUrl+'/'+sourcePage.id)).json();
+  await page.getByLabel('Page actions',{exact:true}).click();
+  await page.getByRole('button',{name:'Copy page',exact:true}).click();
+  await action(page,'pages-name').fill('Peak duplicate');
+  const sent=page.waitForRequest(request=>request.method()==='POST'&&request.url()===pagesUrl+'/'+sourcePage.id+'/copy');
+  await page.getByRole('button',{name:'Copy and open',exact:true}).click();
+  await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Peak duplicate'}).waitFor({state:'attached'});
+  await page.getByRole('button',{name:'Widget actions: Page sessions'}).waitFor();
+  const replay=await context.request.post(pagesUrl+'/'+sourcePage.id+'/copy',{data:(await sent).postDataJSON()});
+  assert.equal(replay.status(),200,await replay.text());
+  const {receipt}=await replay.json();
+  const duplicate=await (await context.request.get(pagesUrl+'/'+receipt.pageId)).json();
+  assert.equal(duplicate.page.is_home,false);
+  assert.deepEqual(duplicate.page.period_config,original.page.period_config);
+  assert.deepEqual(duplicate.page.default_filter,original.page.default_filter);
+  const layout=({x,y,width,height,widget_order,mobile_order})=>({x,y,width,height,widget_order,mobile_order});
+  assert.deepEqual(duplicate.widgets.map(layout),original.widgets.map(layout));
+  assert.notEqual(duplicate.widgets[0].id,original.widgets[0].id);
+  assert.notEqual(duplicate.widgets[0].series[0].id,original.widgets[0].series[0].id);
+  await choosePage(page, 'Peak');
+  await page.getByRole('button',{name:'Widget actions: Page sessions'}).waitFor();
   await page.reload();await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();const reopenedTab=page.getByRole('tab',{name:'Dashboards'});if(await reopenedTab.isVisible())await reopenedTab.click();await action(page,'analysis-open-picker').click();await page.locator('[data-dashboard-id="'+dashboard.id+'"]').first().click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Peak'}).waitFor({state:'attached'});
   await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-delete').click();await page.locator('.tl-page-form [data-action="training-load-pages-save"]').click();await page.getByText('This page still has widgets. Remove them before deleting the page.',{exact:true}).waitFor();await action(page,'pages-cancel').click();
-  await action(page,'pages-create').click();await action(page,'pages-name').fill('Empty');await action(page,'pages-save').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Empty'}).waitFor({state:'attached'});await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-up').focus();await action(page,'pages-up').press('Enter');await page.locator('.tl-dashboard-pages nav button').nth(1).filter({hasText:'Empty'}).waitFor({state:'attached'});await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-down').click();await page.locator('.tl-dashboard-pages nav button').nth(2).filter({hasText:'Empty'}).waitFor({state:'attached'});await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-delete').click();await page.locator('.tl-page-form [data-action="training-load-pages-save"]').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Home'}).waitFor({state:'attached'});
+  await action(page,'pages-create').click();await action(page,'pages-name').fill('Empty');await action(page,'pages-save').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Empty'}).waitFor({state:'attached'});await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-up').focus();await action(page,'pages-up').press('Enter');await page.locator('.tl-dashboard-pages nav button').nth(2).filter({hasText:'Empty'}).waitFor({state:'attached'});await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-down').click();await page.locator('.tl-dashboard-pages nav button').nth(3).filter({hasText:'Empty'}).waitFor({state:'attached'});await page.getByLabel('Page actions',{exact:true}).click();await action(page,'pages-delete').click();await page.locator('.tl-page-form [data-action="training-load-pages-save"]').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Home'}).waitFor({state:'attached'});
   assert.deepEqual(pageErrors,[]);assert.equal(await page.locator('.tl-layout-bar').count(),0);
   if(process.env.DASHBOARD_PAGES_SCREENSHOTS){await mkdir(process.env.DASHBOARD_PAGES_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.DASHBOARD_PAGES_SCREENSHOTS,`pages-${width}.png`)})}
  }finally{await context.close()}

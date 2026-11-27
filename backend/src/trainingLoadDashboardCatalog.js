@@ -17,17 +17,80 @@ import { pageSchemaInstalled } from './dashboardPages/config.js';
 import { query, pool } from "./db.js";
 import {
   canManageDashboardRow, canViewDashboardRow, dashboardManageBasis, dashboardVisibilitySql, dataWorkspaceMatches,
-  resolveDashboardCreateContext,
+  resolveDashboardCreateContext, resolveActiveDataWorkspace, dataWorkspaceForActiveWorkspace,
 } from "./trainingLoadDashboardAccess.js";
 import { resolveTemplateSeriesBatchForWorkspace } from "./trainingLoadDashboardWidgets.js";
 import { isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
 import { calculatedDefinitionSql } from "./calculatedValues.js";
+import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
+import { dashboardManageOffered, dashboardWorkspaceWriteScope, dashboardOwnerWriteScope, lockDashboardManageCeilings, dashboardManageRightsStillHold, lockDashboardActor, loadDashboardWriteActor, markDashboardManageWrite } from "./dashboardManageAccess.js";
 
 function httpError(status, message, code) {
   const e = new Error(message);
   e.httpStatus = status;
   if (code) e.code = code;
   return e;
+}
+
+function ownerScopeForCreate(ctx) {
+  return dashboardOwnerWriteScope({ owner_scope: ctx.ownerScope, owner_club_id: ctx.ownerClubId, owner_team_id: ctx.ownerTeamId });
+}
+
+function dashboardDestinationDenied(ctx) {
+  return httpError(403, ctx.ownerScope === "club" ? "That club is outside your access."
+    : ctx.ownerScope === "team" ? "That team is outside your access." : "No active workspace.");
+}
+
+async function authorizeLegacyDashboardActor(runQuery, req, dataWorkspace, manageScopes, deny, { viewOnly = [], denyDestination } = {}) {
+  const scopes = await lockDashboardManageCeilings(runQuery, [...manageScopes, ...viewOnly]);
+  await lockDashboardActor(runQuery, req);
+  const actor = await loadDashboardWriteActor(runQuery, req);
+  if (!actor) throw deny();
+  let freshWorkspace = dataWorkspace;
+  if (dataWorkspace) {
+    const resolved = await resolveActiveWorkspaceReadOnly(actor.user.id, actor.authz, runQuery);
+    freshWorkspace = dataWorkspaceForActiveWorkspace(resolved.workspace ?? pickFallbackWorkspace(resolved.availableWorkspaces), actor);
+    if (freshWorkspace.dataWorkspaceType !== dataWorkspace.dataWorkspaceType ||
+        String(freshWorkspace.dataWorkspaceScopeId) !== String(dataWorkspace.dataWorkspaceScopeId)) throw deny();
+  }
+  if (!await dashboardManageRightsStillHold(runQuery, actor, scopes, {
+    viewOnly,
+    refuse: ({ manage }) => { if (manage && denyDestination) throw denyDestination(); return false; },
+  })) throw deny();
+  return { actor, freshWorkspace };
+}
+
+async function legacyDashboardTransaction(run) {
+  const client = await pool.connect();
+  let destroy = false;
+  try {
+    await client.query("begin");
+    await client.query("set local statement_timeout = '5000ms'; set local lock_timeout = '2000ms'");
+    const result = await run(client.query.bind(client));
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback").catch(() => { destroy = true; });
+    throw error;
+  } finally {
+    client.release(destroy);
+  }
+}
+
+export async function withLegacyDashboardWrite(req, dataWorkspace, dashboard, run) {
+  const owner = dashboardOwnerWriteScope(dashboard);
+  const scopes = [dashboardWorkspaceWriteScope(dataWorkspace), owner].filter(Boolean);
+  if (!scopes.length) return run(query, dashboard, req);
+  const deny = () => httpError(404, "Dashboard not found.");
+  return legacyDashboardTransaction(async runQuery => {
+    const { actor } = await authorizeLegacyDashboardActor(runQuery, req, dataWorkspace, scopes, deny);
+    const { rows: [current] } = await runQuery("select * from training_load.dashboards where id=$1 for update", [dashboard.id]);
+    if (!current || !canManageDashboardRow(actor, current) ||
+        JSON.stringify(dashboardOwnerWriteScope(current)) !== JSON.stringify(owner)) throw deny();
+    const result = await run(runQuery, current, actor);
+    if (result !== null) await markDashboardManageWrite(runQuery, actor, scopes);
+    return result;
+  });
 }
 
 // Deliberately the SAME 404 whether a dashboard doesn't exist or merely
@@ -57,7 +120,7 @@ export async function listDashboards(req, dataWorkspace, { includeTemplates = tr
      order by d.updated_at desc`,
     params,
   );
-  return { dashboards: r.rows };
+  return { dashboards: r.rows, canCreateDashboard: dashboardManageOffered(req, dataWorkspace) };
 }
 
 export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
@@ -86,6 +149,7 @@ export async function getDashboardDetail(req, dataWorkspace, dashboardId) {
   }
   return {
     dashboard,
+    canManage: canManageDashboardRow(req, dashboard) && dashboardManageOffered(req, dataWorkspace, dashboard),
     widgets: widgets.rows.map((w) => ({ ...w, series: seriesByWidget.get(w.id) || [] })),
   };
 }
@@ -128,15 +192,28 @@ export async function createDashboard(req, body) {
   if (body.defaultFilter !== undefined && !validFilterShape(body.defaultFilter)) {
     throw httpError(400, "defaultFilter is invalid.");
   }
-  const r = await query(
-    `select * from training_load.create_dashboard($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+  const insert = async runQuery => {
+    const r = await runQuery(
+      `select * from training_load.create_dashboard($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
       body.name.trim(), body.description ?? null, ctx.ownerScope, ctx.ownerUserId, ctx.ownerClubId, ctx.ownerTeamId,
       ctx.dataWorkspaceType, ctx.dataWorkspaceScopeId, ctx.isTemplate, req.user.id,
       body.defaultFilter ? JSON.stringify(body.defaultFilter) : null,
-    ],
-  );
-  return { dashboard: r.rows[0] };
+      ],
+    );
+    return { dashboard: r.rows[0] };
+  };
+  const workspace = ctx.ownerScope === "user" ? await resolveActiveDataWorkspace(req) : null;
+  const scope = ownerScopeForCreate(ctx) ?? dashboardWorkspaceWriteScope(workspace);
+  if (!scope) return insert(query);
+  const deny = () => dashboardDestinationDenied(ctx);
+  return legacyDashboardTransaction(async runQuery => {
+    const { actor, freshWorkspace } = await authorizeLegacyDashboardActor(runQuery, req, workspace, [scope], deny);
+    if ((await resolveDashboardCreateContext(actor, body, freshWorkspace)).error) throw deny();
+    const result = await insert(runQuery);
+    await markDashboardManageWrite(runQuery, actor, [scope]);
+    return result;
+  });
 }
 
 // PATCH semantics (merge-readiness corrective round, finding #7): one
@@ -172,7 +249,7 @@ export async function updateDashboardMetadata(req, dataWorkspace, dashboardId, b
     throw httpError(400, "A system dashboard is always a template.");
   }
   try {
-    const r = await query(
+    const r = await withLegacyDashboardWrite(req, dataWorkspace, row, runQuery => runQuery(
       `select * from training_load.update_dashboard_metadata($1,$2,$3,$4,$5,$6,$7,$8)`,
       [
         dashboardId, body.expectedRevision, body.name !== undefined ? body.name.trim() : null,
@@ -180,7 +257,7 @@ export async function updateDashboardMetadata(req, dataWorkspace, dashboardId, b
         body.defaultFilter ? JSON.stringify(body.defaultFilter) : null, clearDefaultFilter,
         body.isTemplate ?? null,
       ],
-    );
+    ));
     return { dashboard: r.rows[0] };
   } catch (error) {
     if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
@@ -196,7 +273,7 @@ export async function archiveDashboard(req, dataWorkspace, dashboardId, { expect
     throw httpError(400, "expectedRevision must be a positive integer.");
   }
   try {
-    const r = await query(`select * from training_load.archive_dashboard($1, $2)`, [dashboardId, expectedRevision]);
+    const r = await withLegacyDashboardWrite(req, dataWorkspace, row, runQuery => runQuery(`select * from training_load.archive_dashboard($1, $2)`, [dashboardId, expectedRevision]));
     return { dashboard: r.rows[0] };
   } catch (error) {
     if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
@@ -235,7 +312,11 @@ export async function deleteDashboard(req, dataWorkspace, dashboardId, { expecte
     throw httpError(400, "expectedRevision must be a positive integer.");
   }
   try {
-    await query(`select * from training_load.delete_dashboard($1, $2, $3, $4)`, [dashboardId, expectedRevision, req.user.id, authorizedVia]);
+    await withLegacyDashboardWrite(req, dataWorkspace, row, (runQuery, current, actor) => {
+      const basis = dashboardManageBasis(actor, current);
+      if (!basis) throw httpError(403, "Forbidden.");
+      return runQuery(`select * from training_load.delete_dashboard($1, $2, $3, $4)`, [dashboardId, expectedRevision, actor.user.id, basis]);
+    });
     return { deleted: true, dashboardId };
   } catch (error) {
     if (error?.code === "40001") throw httpError(409, "Stale revision — reload and retry.", "staleRevision");
@@ -273,30 +354,49 @@ export async function deleteDashboard(req, dataWorkspace, dashboardId, { expecte
 // operation is one transaction: either every widget/series lands, or
 // none do.
 //
-// Merge-readiness corrective round — the transaction now opens FIRST and
-// takes an explicit `FOR SHARE` lock on the template row as its OWN first
-// statement, before reading anything else: the template's existence,
-// visibility, is_template, and status are all checked against THAT
-// locked, transaction-consistent snapshot, never a separate pre-BEGIN
-// pooled read that a concurrent template-flip/archive could invalidate
-// out from under it (finding #5). An archived template cannot be cloned
-// (finding #1). default_filter is copied along with name/description/
+// The transaction locks the source template before reading its hierarchy.
+// Scoped callers acquire their ceiling and actor locks first, then repeat
+// visibility, template and archive checks on the protected source row.
+// default_filter is copied along with name/description/
 // widgets/series (previously silently dropped). A pinned source
 // connection (source_policy='source_connection') that is not active and
 // visible in the TARGET workspace aborts the WHOLE clone atomically with
 // 409 sourceConnectionResolutionRequired — never a silent policy change
 // or a substituted connection (finding #6).
 // ------------------------------------------------------------
+function checkCloneTemplate(req, workspace, template) {
+  if (!template || !canViewDashboardRow(req, template, workspace)) throw httpError(404, "Template not found.");
+  if (!template.is_template) throw httpError(400, "That dashboard is not a template.");
+  if (template.status === "archived") throw httpError(409, "That template is archived and cannot be cloned.", "dashboardArchived");
+}
+
 export async function cloneDashboard(req, dataWorkspace, templateId, body) {
   const c = await pool.connect();
   try {
     await c.query("begin");
-    const templateResult = await c.query(`select * from training_load.dashboards where id = $1 for share`, [templateId]);
-    const templateRow = templateResult.rows[0];
-    if (!templateRow) throw httpError(404, "Template not found.");
-    if (!templateRow.is_template) throw httpError(400, "That dashboard is not a template.");
-    if (!canViewDashboardRow(req, templateRow, dataWorkspace)) throw httpError(404, "Template not found.");
-    if (templateRow.status === "archived") throw httpError(409, "That template is archived and cannot be cloned.", "dashboardArchived");
+    const runQuery = c.query.bind(c);
+    const targetBody = { ...body, ownerScope: body?.ownerScope ?? "user" };
+    const sourceScope = dashboardWorkspaceWriteScope(dataWorkspace);
+    let actor = req;
+    let workspace = dataWorkspace;
+    let checkedDestination;
+    if (sourceScope || ["club", "team"].includes(targetBody.ownerScope)) {
+      const initial = (await runQuery("select * from training_load.dashboards where id = $1", [templateId])).rows[0];
+      checkCloneTemplate(req, dataWorkspace, initial);
+      const target = await resolveDashboardCreateContext(req, targetBody, dataWorkspace);
+      if (target.error) throw httpError(target.status, target.error);
+      const destination = ownerScopeForCreate(target) ?? sourceScope;
+      const viewOnly = sourceScope && (sourceScope.type !== destination?.type || sourceScope.id !== destination?.id) ? [sourceScope] : [];
+      const deny = () => httpError(404, "Template not found.");
+      const locked = await authorizeLegacyDashboardActor(runQuery, req, dataWorkspace, [destination].filter(Boolean), deny, {
+        viewOnly, denyDestination: () => dashboardDestinationDenied(target),
+      });
+      actor = locked.actor;
+      workspace = locked.freshWorkspace;
+      checkedDestination = destination;
+    }
+    const templateRow = (await runQuery(`select * from training_load.dashboards where id = $1 for share`, [templateId])).rows[0];
+    checkCloneTemplate(actor, workspace, templateRow);
 
     // P1: freeze the full source hierarchy before the first target write.
     const pagesInstalled = await pageSchemaInstalled(c.query.bind(c));
@@ -310,7 +410,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     // called exactly once per request (finding #3). A workspace-preference
     // change racing mid-request can therefore never hand this one request
     // two disagreeing snapshots.
-    const ctx = await resolveDashboardCreateContext(req, { ...body, ownerScope: body?.ownerScope ?? "user" }, dataWorkspace);
+    const ctx = await resolveDashboardCreateContext(actor, targetBody, workspace);
     if (ctx.error) throw httpError(ctx.status, ctx.error);
     const name = body?.name || `${templateRow.name} (copy)`;
     if (typeof name !== "string" || name.trim().length < 1 || name.length > 200) {
@@ -466,6 +566,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       const presentation=remapGalleryPresentation(sourceWidget.presentation_config,idMap);
       await c.query('update training_load.dashboard_widgets set presentation_config=$2 where id=$1',[widgetIdMap.get(sourceWidget.id),JSON.stringify(presentation)]);
     }
+    if (checkedDestination) await markDashboardManageWrite(runQuery, actor, [checkedDestination]);
     await c.query("commit");
     return { dashboard: newDashboard, cloneReport };
   } catch (error) {

@@ -190,7 +190,7 @@ export function resetAnalysisDashboardQuery() {
   analysis.queryError = "";
 }
 
-function applyDashboardDetail(detail) {
+function applyDashboardDetail(detail, { fromCache }) {
   const analysis = state.trainingLoad.analysis;
   // H2: layout editing belongs to one dashboard - a detail for a DIFFERENT
   // dashboard (create, clone, fallback after a delete) never opens in
@@ -201,6 +201,7 @@ function applyDashboardDetail(detail) {
     analysis.editMode = false;
   }
   analysis.dashboard = detail.dashboard;
+  analysis.dashboardCanManage = !fromCache && detail.canManage === true;
   analysis.simplePreview = detail.simplePreview === true;
   analysis.chartShapes = detail.chartShapes === true;
   analysis.pagesAvailable = detail.pagesAvailable === true;
@@ -214,6 +215,9 @@ function applyDashboardDetail(detail) {
 }
 
 export async function loadTrainingLoadAnalysis(onPainted) {
+  const analysis = state.trainingLoad.analysis;
+  analysis.dashboardCanManage = false;
+  analysis.pageCanManage = false;
   ensureAnalysisPeriod();
   await Promise.all([
     loadDashboards(onPainted),
@@ -240,18 +244,21 @@ async function selectFallbackDashboard(onPainted, { force = false } = {}) {
 export async function loadDashboards(onPainted) {
   const analysis = state.trainingLoad.analysis;
   const generation = ++dashboardsGeneration;
+  analysis.canCreateDashboard = false;
   const contextKey = listContextKey();
   await loadCachedView({
     namespace: DASHBOARD_LIST_NAMESPACE,
+    forceRefresh: true,
     contextKey,
     // Dashboards UX H1: the picker groups archived dashboards under their
     // own heading (read-only once opened, exactly as before), so the list
     // now asks for them too - an existing query flag, not an API change.
     fetcher: () => api("/api/training-load/dashboards?includeTemplates=true&includeArchived=true"),
     showLoading: () => { analysis.listLoading = true; analysis.listError = ""; onPainted?.(); },
-    applyData: (data) => {
+    applyData: (data, cache) => {
       if (generation !== dashboardsGeneration) return;
       analysis.dashboards = data.dashboards || [];
+      analysis.canCreateDashboard = !cache.fromCache && data.canCreateDashboard === true;
       analysis.listLoading = false;
       onPainted?.();
     },
@@ -276,19 +283,21 @@ export async function loadActiveDashboard(onPainted) {
   onPainted?.();
 }
 
-export async function loadDashboardDetail(dashboardId, onPainted, { force = false } = {}) {
+export async function loadDashboardDetail(dashboardId, onPainted) {
   const analysis = state.trainingLoad.analysis;
   const generation = ++detailGeneration;
+  analysis.dashboardCanManage = false;
+  analysis.pageCanManage = false;
   const contextKey = detailContextKey(dashboardId);
   await loadCachedView({
     namespace: DASHBOARD_DETAIL_NAMESPACE,
     contextKey,
-    forceRefresh: force,
+    forceRefresh: true,
     fetcher: () => api(`/api/training-load/dashboards/${encodeURIComponent(dashboardId)}`),
     showLoading: () => { analysis.detailLoading = true; analysis.detailError = ""; onPainted?.(); },
-    applyData: (data) => {
+    applyData: (data, cache) => {
       if (generation !== detailGeneration || state.trainingLoad.analysis.selectedDashboardId !== dashboardId) return;
-      applyDashboardDetail(data);
+      applyDashboardDetail(data, cache);
       onPainted?.();
       // Series bound to a catalog metric are labelled with that metric's
       // name, which lives in the catalog. It is fetched once per workspace

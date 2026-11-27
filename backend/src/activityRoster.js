@@ -569,12 +569,20 @@ export async function getActivityRoster(ctx, activityId) {
         canComplete: false,
       };
     }
-    const canDecideRoster = basis === "platform_admin" || Boolean((await client.query(
-      `select public.permission_word_honoured('load.roster.decide')
-        and public.user_has_permission($1, 'load.view.team', $2, $3)
-        and public.user_has_permission($1, 'load.roster.decide', $2, $3) as allowed`,
-      [ctx.userId, ctx.workspace.type, ctx.workspace.scopeId],
-    )).rows[0]?.allowed);
+    const platform = basis === "platform_admin";
+    const estimatesEnabled = process.env.ESTIMATES_ENABLED === "true";
+    const rights = platform ? null : (await client.query(
+      `select permissions.can_view
+          and public.permission_word_honoured('load.roster.decide')
+          and public.user_has_permission($1, 'load.roster.decide', $2, $3) as can_decide_roster,
+        $4::boolean and permissions.can_view
+          and public.permission_word_honoured('load.estimates.manage')
+          and public.user_has_permission($1, 'load.estimates.manage', $2, $3) as can_estimate
+        from (select public.user_has_permission($1, 'load.view.team', $2, $3) as can_view) permissions`,
+      [ctx.userId, ctx.workspace.type, ctx.workspace.scopeId, estimatesEnabled],
+    )).rows[0];
+    const canDecideRoster = platform || rights?.can_decide_roster === true;
+    const canEstimate = estimatesEnabled && (platform || rights?.can_estimate === true);
     return {
       activity: {
         id: String(activityId),
@@ -586,13 +594,13 @@ export async function getActivityRoster(ctx, activityId) {
         ownerTeamId: String(activity.owner_team_id),
       },
       canonicalActivityId: canonicalId,
-      // 6b-C1: the estimate action is offered only while the save is on (ESTIMATES_ENABLED, metricEstimateService's own
-      // check, read here without importing it: that module imports this one). Off, the answer is as before.
+      // Both the roster editor and the Imports shortcut consume the estimate capability.
+      // The estimate proposal and writer recheck permission independently.
       // ST-4: manual values are offered while their routes are on (MANUAL_VALUES_ENABLED, on unless "false").
       viewer: {
         basis,
         canDecideRoster,
-        ...(process.env.ESTIMATES_ENABLED === "true" ? { estimates: true } : {}),
+        ...(canEstimate ? { estimates: true } : {}),
         ...(process.env.MANUAL_VALUES_ENABLED !== "false" ? { manualValues: true } : {}),
       },
       completion: snap.completion,
