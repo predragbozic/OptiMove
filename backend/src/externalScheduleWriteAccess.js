@@ -10,8 +10,8 @@ export async function resolveExternalScheduleWriteScope(req) {
   return { ...scope, ceilingClubId: workspace?.type === "club" ? scope.clubId : workspace?.clubId ?? null };
 }
 
-// The M-2 bridge stages the word in SQL. The checked/editable JavaScript
-// inventory and native /me projection are enabled only after old writers drain.
+// Recheck both native rights under the transaction locks. The /me projection
+// controls what the UI shows but does not authorize writes.
 export async function lockExternalScheduleWriter(client, userId, scope) {
   const native = scope.type === "club" || scope.type === "team";
   const scopeId = scope.type === "club" ? scope.clubId : scope.type === "team" ? scope.teamId : null;
