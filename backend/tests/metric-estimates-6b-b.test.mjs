@@ -1624,7 +1624,7 @@ test("M-3b: the exact previous server's bridge and exposure honor the same Setti
     await new Promise(resolve => oldServer.listen(0, "127.0.0.1", resolve));
     const priorUrl = `http://127.0.0.1:${oldServer.address().port}`;
     await assertStagedEstimateRoleOperations(priorUrl);
-    const beforeMarker = await estimateWriteMarker();
+    let writeMarker = await estimateWriteMarker();
     const team = await setupTeam();
     const s = await importSession(team, bundleOf({ sessionId: 9894, ids: [101, 102, 104] }));
     const route = `/api/training-activity/${s.activityId}/estimates`;
@@ -1637,11 +1637,15 @@ test("M-3b: the exact previous server's bridge and exposure honor the same Setti
       if (actor === team.coach) coachInput = input;
       const priorWrite = await call("", route, { server: priorUrl, method: "POST", cookie: actor.cookie, body: input });
       assert.equal(priorWrite.status, 201, priorWrite.text);
+      const markerAfterWrite = await estimateWriteMarker();
+      assert.ok(markerAfterWrite instanceof Date);
+      if (writeMarker) assert.deepEqual(markerAfterWrite, writeMarker);
+      writeMarker = markerAfterWrite;
       const rows = await estimateRows(team.teamId);
       const replay = await save(team, s, input, { cookie: actor.cookie });
       assert.equal(replay.status, 200, replay.text);
       assert.deepEqual(replay.body, priorWrite.body);
-      assert.deepEqual(await estimateWriteMarker(), beforeMarker);
+      assert.deepEqual(await estimateWriteMarker(), writeMarker);
       assert.deepEqual(await estimateRows(team.teamId), rows);
     }
     const word = "load.estimates.manage";
@@ -1671,7 +1675,7 @@ test("M-3b: the exact previous server's bridge and exposure honor the same Setti
       assert.equal(replay.status, 200, replay.text);
     }
     assert.deepEqual(await writes(team.teamId), beforeDenied);
-    assert.deepEqual(await estimateWriteMarker(), beforeMarker);
+    assert.deepEqual(await estimateWriteMarker(), writeMarker);
   } finally {
     oldServer.closeAllConnections();
     if (oldServer.listening) await new Promise(resolve => oldServer.close(resolve));
