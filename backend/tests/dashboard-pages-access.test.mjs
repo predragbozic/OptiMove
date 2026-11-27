@@ -2,9 +2,8 @@ import {before,after,test} from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import {fileURLToPath} from 'node:url';
 import pg from 'pg';
-import {runMigrations} from '../src/migrate.js';
+import {createPagesDatabase} from './support/dashboard-pages-db.mjs';
 import {startDashboardShellFixture} from './support/dashboard-shell-fixture.mjs';
 let world,q,template,foreign;
 async function api(actor,path,body,method='GET'){
@@ -71,8 +70,8 @@ test('archived dashboards offer Page reading without editing controls and refuse
 });
 
 const copyPath=(dashboard,page)=>`/api/training-load/dashboards/${dashboard.id}/pages/${page.id}/copy`;
-async function pageSnapshot(dashboardId){
- return (await q.query(`select
+async function pageSnapshot(dashboardId,client=q){
+ return (await client.query(`select
   (select to_jsonb(d) from training_load.dashboards d where id=$1) dashboard,
   (select jsonb_agg(to_jsonb(p) order by p.id) from training_load.dashboard_pages p where dashboard_id=$1) pages,
   (select jsonb_agg(to_jsonb(w) order by w.id) from training_load.dashboard_widgets w where dashboard_id=$1) widgets,
@@ -157,40 +156,63 @@ test('whole-page copy rolls back destination, widgets, series and receipt after 
  assert.notEqual(series.id,sourceSeriesId);
  assert.deepEqual(widget.presentation_config.chartShape.seriesIds,[series.id]);
  assert.equal(final.receipts.filter(row=>row.request_id===body.requestId).length,1);
- copyFixture.copied=final;
 });
 
 test('v104 rehearsal verifies the writer, rolls back without data loss, and reapplies it',async()=>{
- const {dashboard,copied}=copyFixture;
- const sql=kind=>readFile(new URL(`../../docs/runbooks/dashboard-page-copy-v104-${kind}.sql`,import.meta.url),'utf8');
- const assertChecks=async kind=>{
-  const result=await q.query(await sql(kind));
-  for(const [name,passed] of Object.entries(result.rows[0]))assert.equal(passed,true,name);
- };
- await assertChecks('postcheck');
- const competingRunner=new pg.Client({connectionString:world.databaseUrl});
- await competingRunner.connect();
+ const db=await createPagesDatabase({through:'202612061000',label:'page_copy_v104_rehearsal'});
+ const client=db.client;
  try{
-  await competingRunner.query('select pg_advisory_lock(822026)');
-  await assert.rejects(q.query(await sql('rollback')),/migration runner is active/);
+  const {id:actor}=(await client.query("insert into public.users(email,first_name,last_name,full_name,display_name) values('copy-v104@example.invalid','Copy','Rehearsal','Copy Rehearsal','Copy Rehearsal') returning id")).rows[0];
+  await client.query("insert into public.user_global_roles(user_id,role,is_active) values($1,'platform_admin',true)",[actor]);
+  await client.query('update training_load.dashboard_pages_activation set enabled=true');
+  const dashboard=(await client.query("select * from training_load.create_dashboard('Copy rehearsal',null,'system',null,null,null,null,null,true,$1,null)",[actor])).rows[0];
+  const home=(await client.query('select id from training_load.dashboard_pages where dashboard_id=$1 and is_home',[dashboard.id])).rows[0];
+  const widget=(await client.query("select * from training_load.create_widget($1,$2,'table','Copy rehearsal',0,0::smallint,0::smallint,6::smallint,4::smallint,0,'athlete',null,null)",[dashboard.id,dashboard.revision])).rows[0];
+  await client.query("select * from training_load.add_series($1,$2,0,null,'session_count',null,'primary',null,null,'not_applicable',null,'day','sum')",[widget.widget_id,1]);
+  const requestId=crypto.randomUUID();
+  await client.query('begin');
+  try{
+   const {receipt}=(await client.query("select training_load.mutate_dashboard_page($1,$2,'{}',$3,$4,$5,'create',null,$6,$7) receipt",
+    [dashboard.id,actor,requestId,'a'.repeat(64),dashboard.pages_revision,{name:'Copied page'},new Date().toISOString()])).rows[0];
+   await client.query('select training_load.copy_dashboard_page_contents($1,$2,$3,$4,$5)',[dashboard.id,home.id,receipt.pageId,actor,requestId]);
+   await client.query('commit');
+  }catch(error){await client.query('rollback');throw error}
+
+  const copied=await pageSnapshot(dashboard.id,client);
+  assert.equal(copied.widgets.length,2);
+  assert.equal(copied.series.length,2);
+  const sql=kind=>readFile(new URL(`../../docs/runbooks/dashboard-page-copy-v104-${kind}.sql`,import.meta.url),'utf8');
+  const assertChecks=async kind=>{
+   const result=await client.query(await sql(kind));
+   for(const [name,passed] of Object.entries(result.rows[0]))assert.equal(passed,true,name);
+  };
+  await assertChecks('postcheck');
+  const competingRunner=new pg.Client({connectionString:db.url});
+  await competingRunner.connect();
+  try{
+   await competingRunner.query('select pg_advisory_lock(822026)');
+   await assert.rejects(client.query(await sql('rollback')),/migration runner is active/);
+  }finally{
+   await client.query('rollback');
+   await competingRunner.end();
+  }
+  await assertChecks('postcheck');
+  await client.query(await sql('rollback'));
+  assert.deepEqual(await pageSnapshot(dashboard.id,client),copied);
+  await assertChecks('preflight');
+  await client.query('begin');
+  try{
+   await client.query(`insert into public.schema_migrations (migration_name,checksum,execution_time_ms,runner_version)
+     values ('migrations_v2/202612051100_reserved_predecessor.sql',repeat('0',64),0,'rehearsal')`);
+   const checks=(await client.query(await sql('preflight'))).rows[0];
+   assert.equal(checks.v103_is_latest,false);
+  }finally{
+   await client.query('rollback');
+  }
+  await db.applyThrough('202612061000');
+  await assertChecks('postcheck');
+  assert.deepEqual(await pageSnapshot(dashboard.id,client),copied);
  }finally{
-  await q.query('rollback');
-  await competingRunner.end();
+  await db.drop();
  }
- await assertChecks('postcheck');
- await q.query(await sql('rollback'));
- assert.deepEqual(await pageSnapshot(dashboard.id),copied);
- await assertChecks('preflight');
- await q.query('begin');
- try{
-  await q.query(`insert into public.schema_migrations (migration_name,checksum,execution_time_ms,runner_version)
-    values ('migrations_v2/202612051100_reserved_predecessor.sql',repeat('0',64),0,'rehearsal')`);
-  const checks=(await q.query(await sql('preflight'))).rows[0];
-  assert.equal(checks.v103_is_latest,false);
- }finally{
-  await q.query('rollback');
- }
- await runMigrations({databaseUrl:world.databaseUrl,migrationsRoot:fileURLToPath(new URL('../../migrations_v2/',import.meta.url))});
- await assertChecks('postcheck');
- assert.deepEqual(await pageSnapshot(dashboard.id),copied);
 });

@@ -155,11 +155,14 @@ async function prepareCopy(api, cookie, dashboardId, homeId) {
   assert.equal(pages.status, 200, pages.text);
   const home = pages.body.pages.find((page) => page.id === homeId);
   assert.ok(home);
+  const source = await api(cookie, `${apiPath}/${dashboardId}/pages/${homeId}`);
+  assert.equal(source.status, 200, source.text);
+  const widgetRevisions = Object.fromEntries(source.body.widgets.map(({ id, revision }) => [id, revision]));
   return {
     requestId: randomUUID(),
     requestIssuedAt: pages.body.requestIssuedAt,
     expectedPagesRevision: pages.body.pagesRevision,
-    input: { name: "Duplicate page", sourceRevision: home.revision, widgetRevisions: {} },
+    input: { name: "Duplicate page", sourceRevision: home.revision, widgetRevisions },
   };
 }
 
@@ -263,6 +266,20 @@ test("old page-copy receipts replay without v105 use; denied writes leave no mar
     const creation = await oldApi(cookie, apiPath, { method: "POST", body: { name: "Worked before the bridge", ownerScope: "club", ownerClubId: club } });
     assert.equal(creation.status, 201, creation.text);
     const dashboard = creation.body.dashboard;
+    const widget = await oldApi(cookie, `${apiPath}/${dashboard.id}/widgets`, {
+      method: "POST", body: {
+        expectedDashboardRevision: dashboard.revision, widgetType: "table", title: "Copy proof",
+        widgetOrder: 0, x: 0, y: 0, width: 6, height: 4, mobileOrder: 0, groupBy: "athlete",
+      },
+    });
+    assert.equal(widget.status, 201, widget.text);
+    const series = await oldApi(cookie, `${apiPath}/${dashboard.id}/widgets/${widget.body.widgetId}/series`, {
+      method: "POST", body: {
+        expectedWidgetRevision: 1, seriesOrder: 0, builtInSeriesKey: "session_count",
+        dataScopeLevel: "day", analyticalAggregation: "sum",
+      },
+    });
+    assert.equal(series.status, 201, series.text);
     const personal = await oldApi(cookie, apiPath, { method: "POST", body: { name: "Club-bound personal dashboard" } });
     assert.equal(personal.status, 201, personal.text);
     assert.equal(personal.body.dashboard.owner_scope, "user");
@@ -325,10 +342,62 @@ test("old page-copy receipts replay without v105 use; denied writes leave no mar
     assert.deepEqual(foreign, missing);
     assert.equal(await firstUse(admin), null);
 
+    const counts = async () => (await admin.query(
+      `select (select count(*)::int from training_load.dashboard_pages where dashboard_id=$1) pages,
+        (select count(*)::int from training_load.dashboard_widgets where dashboard_id=$1) widgets,
+        (select count(*)::int from training_load.dashboard_widget_series s join training_load.dashboard_widgets w on w.id=s.widget_id where w.dashboard_id=$1) series,
+        (select count(*)::int from training_load.dashboard_page_requests where dashboard_id=$1) receipts`,
+      [dashboard.id],
+    )).rows[0];
     const fresh = await prepareCopy(bridge.api, cookie, dashboard.id, home);
     fresh.input.name = "Native checked page copy";
+    const beforeDenied = await counts();
+    const { definition } = (await admin.query(
+      "select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as definition",
+    )).rows[0];
+    const withheld = definition.replace(", 'dashboards.manage'", "");
+    assert.notEqual(definition, withheld);
+    await admin.query(withheld);
+    try {
+      const denied = await bridge.api(cookie, copyPath, { method: "POST", body: fresh });
+      assert.deepEqual([denied.status, denied.text], [404, '{"error":"notFound"}']);
+      assert.deepEqual(await counts(), beforeDenied);
+      assert.equal(await firstUse(admin), null);
+    } finally {
+      await admin.query(definition);
+    }
+
+    await admin.query(`create function training_load.test_refuse_checked_copy() returns trigger language plpgsql as $$
+      begin
+        if exists (select 1 from training_load.dashboard_widgets w join training_load.dashboard_pages p on p.id=w.page_id
+          where w.id=new.widget_id and p.name='Native checked page copy') then
+          if not exists (select 1 from training_load.dashboards_manage_v105_use where first_checked_write_at is not null) then
+            raise exception 'first-use marker missing before commit' using errcode='23514';
+          end if;
+          raise exception 'Forced deferred copy refusal' using errcode='S2C02';
+        end if;
+        return null;
+      end;
+      $$;
+      create constraint trigger test_refuse_checked_copy after insert on training_load.dashboard_widget_series
+      deferrable initially deferred for each row execute function training_load.test_refuse_checked_copy();`);
+    try {
+      const failed = await bridge.api(cookie, copyPath, { method: "POST", body: fresh });
+      assert.deepEqual([failed.status, failed.body.error], [409, "pageCopyConfigurationUnavailable"]);
+      assert.deepEqual(await counts(), beforeDenied, "destination, contents and receipt share a transaction");
+      assert.equal(await firstUse(admin), null);
+    } finally {
+      await admin.query("drop trigger test_refuse_checked_copy on training_load.dashboard_widget_series; drop function training_load.test_refuse_checked_copy()");
+    }
     const native = await bridge.api(cookie, copyPath, { method: "POST", body: fresh });
     assert.equal(native.status, 200, native.text);
+    const destinationId = native.body.receipt.pageId;
+    const copied = (await admin.query(
+      `select w.title,s.built_in_series_key from training_load.dashboard_widgets w
+        join training_load.dashboard_widget_series s on s.widget_id=w.id where w.page_id=$1`,
+      [destinationId],
+    )).rows;
+    assert.deepEqual(copied, [{ title: "Copy proof", built_in_series_key: "session_count" }]);
     const marked = await firstUse(admin);
     assert.ok(marked instanceof Date, "a sanctioned native Page copy must set the marker");
     assert.deepEqual(await bridge.api(cookie, copyPath, { method: "POST", body: fresh }), native);
