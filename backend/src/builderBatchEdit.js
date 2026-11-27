@@ -252,7 +252,10 @@ export function planSiblingChange(before, after, sibling, facts = { results: new
     if (fieldDiff.length) {
       const merge = threeWay(b, a, s, SESSION_FIELDS);
       if (merge.diverged) { reasons.add("changed_separately"); continue; }
-      if (Object.keys(merge.set).length) ops.update.push({ sessionId: s.id, set: merge.set });
+      if (Object.keys(merge.set).length) {
+        const carriesRpe = Object.hasOwn(merge.set, "training_load_enabled") || Object.hasOwn(merge.set, "rpe_enabled");
+        ops.update.push({ sessionId: s.id, set: merge.set, ...(carriesRpe ? { liveSourceId: b.id, draftSessionId: a.id } : {}) });
+      }
     }
     if (moved) {
       // A move carries the athlete's session only while it is still as before
@@ -526,6 +529,7 @@ export async function writeSiblingChange(client, siblingPlanId, ops, { assertReu
   await deleteSessionContent(client, ops.content.map((c) => c.sessionId));
   for (const content of ops.content) contentMap.set(content.fromSessionId, content.sessionId);
   // Added sessions: a new row with a fresh logical id (the column default).
+  const added = new Map();
   for (const add of ops.add) {
     const from = (await client.query(
       "select name, session_time, rpe_enabled, training_load_enabled from plans.plan_sessions where id = $1",
@@ -537,7 +541,9 @@ export async function writeSiblingChange(client, siblingPlanId, ops, { assertReu
       [add.slot.dayId, add.slot.am_pm, add.slot.bta, from.session_time, add.slot.session_order, from.name, from.rpe_enabled, from.training_load_enabled],
     );
     contentMap.set(add.fromSessionId, created.rows[0].id);
+    added.set(add.fromSessionId, created.rows[0].id);
   }
   await copyBuilderSessionContents(client, contentMap, copyLegacySession);
   await assertReuse(client, siblingPlanId, retained);
+  return added;
 }

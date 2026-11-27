@@ -9,10 +9,9 @@ import {fileURLToPath} from 'node:url';
 import {generateKeyEntry} from '../../src/sourceCredentialCrypto.js';
 const root=fileURLToPath(new URL('../../../',import.meta.url));
 export const PREVIOUS_BUILD='aa6e765c86525f23d4ff970c9fa550b4183bae01';
-export async function previousDashboardServer(databaseUrl,overrides={}){
+export async function previousDashboardServer(databaseUrl,overrides={},commit=process.env.P1_PREVIOUS_BUILD_SHA??PREVIOUS_BUILD){
  const url=new URL(databaseUrl);
  if(!['127.0.0.1','localhost','[::1]'].includes(url.hostname)||!/^optimove_tests_[a-z0-9_]+$/.test(url.pathname.slice(1)))throw Error('Previous-build rehearsal requires its own disposable database');
- const commit=process.env.P1_PREVIOUS_BUILD_SHA??PREVIOUS_BUILD;
  if(!/^[0-9a-f]{40}$/.test(commit))throw Error('Exact previous build SHA required');
  execFileSync('git',['cat-file','-e',commit+'^{commit}'],{cwd:root,windowsHide:true});
  const scratch=fs.mkdtempSync(path.join(os.tmpdir(),'optimove-p1-old-build-'));

@@ -95,3 +95,11 @@ test("6. nothing hidden: a weekly member gets the step 2 panel as before; a prog
   assert.equal(content().querySelector("[data-builder-batch-edit-note]"), null);
   assert.equal(content().querySelector("[data-builder-batch-hidden]"), null);
 });
+
+test("a saved draft shows the batch RPE refusal as plain status text", () => {
+  const message = "The draft was saved. The other plans did not take its RPE settings.";
+  state.builder = emptyBuilderState({ draft: { ...draft(two, 0), batchSyncMessage: message } });
+  renderBuilder();
+  const status = [...content().querySelectorAll('[role="status"]')].find((node) => node.textContent === message);
+  assert.ok(status);
+});

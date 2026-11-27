@@ -7,7 +7,7 @@
 // week, not a weekday: "Day 1" lands on the date the coach assigns from).
 // No schema change: block_type has no check constraint, and every copy path
 // (copyProgramTree, the edit draft, block copy) already carries it.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { copyBuilderSessionContents } from "./builderTreeBatch.js";
 
 export const WEEKLY_BLOCK_TYPE = "template_week_day";
@@ -116,13 +116,13 @@ export function assignChoiceToken(classified) {
 // target day, and their node / item trees. `pairs`: [{ sourceDayId,
 // targetDayId, orderOffset }].
 export async function copyTemplateDaySessions(client, pairs, copyLegacySession) {
-  if (!pairs.length) return [];
+  if (!pairs.length) return new Map();
   const bySource = new Map(pairs.map((p) => [String(p.sourceDayId), p]));
   const sessions = (await client.query(
     `select * from plans.plan_sessions where plan_day_id = any($1::uuid[]) order by plan_day_id, session_order nulls first, id`,
     [pairs.map((p) => p.sourceDayId)],
   )).rows;
-  if (!sessions.length) return [];
+  if (!sessions.length) return new Map();
   const values = [];
   const params = [];
   let column = 0;
@@ -132,21 +132,24 @@ export async function copyTemplateDaySessions(client, pairs, copyLegacySession) 
   // one order even from a legacy source ordered NULL and 1. Without an offset
   // the source's own order is copied as it is (it is already unique per slot).
   const rank = new Map();
+  const copies = new Map();
   for (const session of sessions) {
     const pair = bySource.get(String(session.plan_day_id));
     const slot = `${session.plan_day_id}|${session.am_pm ?? ""}|${session.bta ?? ""}`;
     rank.set(slot, (rank.get(slot) || 0) + 1);
-    const row = [pair.targetDayId, session.am_pm, session.bta, session.session_time,
+    const targetId = randomUUID();
+    copies.set(session.id, targetId);
+    const row = [targetId, pair.targetDayId, session.am_pm, session.bta, session.session_time,
       pair.afterKept ? rank.get(slot) + Number(pair.orderOffset || 0) : session.session_order,
       session.name, session.rpe_enabled, session.training_load_enabled];
     values.push(`(${row.map(() => `$${++column}`).join(", ")})`);
     params.push(...row);
   }
-  const created = (await client.query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
-     values ${values.join(", ")} returning id`,
+  await client.query(
+    `insert into plans.plan_sessions (id, plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
+     values ${values.join(", ")}`,
     params,
-  )).rows;
-  await copyBuilderSessionContents(client, new Map(sessions.map((s, i) => [s.id, created[i].id])), copyLegacySession);
-  return created.map((row) => row.id);
+  );
+  await copyBuilderSessionContents(client, copies, copyLegacySession);
+  return copies;
 }

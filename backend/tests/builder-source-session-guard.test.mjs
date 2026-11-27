@@ -382,7 +382,7 @@ test("8. a Save racing the athlete's RPE submit on the session the edit removes,
       await waitForLockWait((r) => /training_load\.plan_workspace_ownership/.test(r.query));
       const before = await digestOf(plans);
       const saving = save(s.coach.cookie, draft.plan.id);
-      await waitForLockWait((r) => /plan_sessions where id = any/.test(r.query));
+      await waitForLockWait((r) => /plan_sessions where id = any|where pd\.plan_id=any[\s\S]*for update of ps/.test(r.query));
       await holder.query("commit");
       const rated = await rating;
       assert.ok(rated.status < 300, rated.text);

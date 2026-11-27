@@ -153,3 +153,8 @@ backend/scripts/training-load-m3c-v103-rehearsal.ps1 text eol=lf
 
 migrations_v2/202612071000_training_load_v105_dashboards_manage_bridge.sql text eol=lf
 docs/runbooks/dashboards-manage-v105-*.sql text eol=lf
+
+# Builder RPE provenance migration rehearsals use byte-exact SQL.
+docs/runbooks/builder-rpe-v106-*.sql text eol=lf
+migrations_v2/202612081000_training_load_v106_builder_rpe_provenance.sql text eol=lf
+backend/scripts/builder-rpe-v106-rehearsal.* text eol=lf

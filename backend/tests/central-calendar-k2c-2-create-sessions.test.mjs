@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import pg from "pg";
 import { addDays, calendarRoleMatrix, newKey, startCalendarApp, uid } from "./support/calendar-fixture.mjs";
+import { seedProgramRpeGrants } from "./support/program-rpe-grants.mjs";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 const DAY = addDays(TODAY, 3);
@@ -25,6 +26,7 @@ let membershipOnDaySql;
 before(async () => {
   env = await startCalendarApp({ label: "k2c2b" });
   ({ q, api, fx } = env);
+  await seedProgramRpeGrants(env.admin);
   // The fixture's legacy scaffold has no in-app notifications table (the
   // questions write to it): the real one's shape, as the K2b-2a-1 suite.
   await q(`create table if not exists public.app_notifications (
