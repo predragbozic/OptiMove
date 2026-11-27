@@ -166,3 +166,4 @@ backend/scripts/builder-rpe-v107-rehearsal.* text eol=lf
 migrations_v2/202612101000_exercises_v108_manage_bridge.sql text eol=lf
 docs/runbooks/exercise-manage-v108-*.sql text eol=lf
 backend/scripts/exercise-manage-v108-rehearsal.sh text eol=lf
+migrations_v2/202612111000_programs_v109_edit_bridge.sql text eol=lf

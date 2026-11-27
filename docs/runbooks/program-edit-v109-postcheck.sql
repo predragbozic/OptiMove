@@ -1,0 +1,41 @@
+-- Read-only.
+select (select count(*) from public.schema_migrations where migration_name='migrations_v2/202612111000_programs_v109_edit_bridge.sql'
+         and checksum='232de3919373123f6e79dd89550f0d4ec65a164d10158ec02b0cbab7243ebce3')=1 as v109_exact,
+       (select md5(prosrc) from pg_proc where oid=to_regprocedure('public.permission_word_honoured(text)'))='087f01e9188b2a8a16e3f748addba19f' as permission_body_exact,
+       public.permission_word_honoured('programs.edit')
+         and not public.permission_word_honoured('programs.assign')
+         and not public.permission_word_honoured('programs.publish') as edit_only_stage,
+       ((select t.tgenabled from pg_trigger t
+        where t.tgrelid='plans.program_manage_v109_use'::regclass
+          and t.tgname='program_manage_v109_keep_use'
+          and t.tgfoid=to_regprocedure('plans.keep_program_manage_v109_use()')) = 'O'
+       and (select md5(prosrc) from pg_proc
+         where oid=to_regprocedure('plans.keep_program_manage_v109_use()'))='f2c169e3ad3329bc06a24d4270c8e924') as first_use_guard_exact,
+       not exists(select 1 from plans.program_manage_v109_use) as unused,
+       (select bool_and(relrowsecurity) from pg_class where oid in (
+         'plans.program_manage_v109_use'::regclass,'plans.program_manage_v109_seed'::regclass
+       )) as bridge_rls_enabled,
+       not exists (
+         with expected as (select layer,id,unnest(words) as word from plans.program_manage_v109_seed),
+         actual as (
+           select 'role' as layer,role_id as id,permission_word as word from public.permission_role_items
+           union all select 'version',version_id,permission_word from public.permission_club_role_version_items
+           union all select 'custom',custom_role_id,permission_word from public.permission_custom_role_items
+         )
+         (select * from expected except select * from actual)
+         union all
+         (select * from actual where word in ('programs.edit') except select * from expected)
+       ) as seeded_items_exact,
+       not exists (
+         with audit as (
+           select 'role' as layer,role_id as id,revision_after,items_added from public.permission_role_changes
+           where migration_name='migrations_v2/202612111000_programs_v109_edit_bridge.sql'
+           union all select 'version',version_id,revision_after,items_added from public.permission_club_role_version_changes
+           where migration_name='migrations_v2/202612111000_programs_v109_edit_bridge.sql'
+           union all select 'custom',custom_role_id,revision_after,items_added from public.permission_custom_role_changes
+           where migration_name='migrations_v2/202612111000_programs_v109_edit_bridge.sql'
+         )
+         select 1 from plans.program_manage_v109_seed s full join audit a using(layer,id)
+         where a.revision_after is distinct from s.revision_before+1 or a.items_added is distinct from s.words
+       ) as seeded_audit_exact;
+select layer,count(*) from plans.program_manage_v109_seed group by layer order by layer;
