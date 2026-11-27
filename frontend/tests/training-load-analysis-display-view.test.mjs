@@ -415,7 +415,7 @@ test("fresh Page capability alone can remove widget and layout controls while pr
   for (const capability of [true, false, undefined]) {
     analysis.pageCanManage = capability;
     const document = rendered();
-    assert.equal(actions(document).every(Boolean), capability === true);
+    for (const control of actions(document)) assert.equal(Boolean(control), capability === true);
     assert.equal(Boolean(document.querySelector(".tl-widget-menu-trigger")), capability === true);
     assert.ok(document.querySelector('[data-action="training-load-analysis-rename-dashboard"]'));
     assert.ok(document.querySelector('[data-action="training-load-analysis-print"]'));
