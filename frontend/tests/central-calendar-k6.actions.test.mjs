@@ -384,6 +384,8 @@ test("K6-F1. a computer's box hides and shows again; who is chosen stays; the ch
   globalThis.localStorage = storage;
   try {
     await open();
+    assert.equal(dom().querySelector(".athlete-switcher-hide").textContent, "Show athletes");
+    await act({ action: "central-calendar-switcher-hide" });
     await act({ action: "central-calendar-pick-athlete", athleteKey: uuid(2) });
     render();
     assert.equal(dom().querySelector(".athlete-switcher-hide").textContent, "Hide athletes");
@@ -405,14 +407,14 @@ test("K6-F1. a computer's box hides and shows again; who is chosen stays; the ch
     data.resetCentralCalendarForWorkspaceChange();
     state.currentUser = { ...state.currentUser, id: "coach-2" };
     await open();
-    assert.equal(dom().querySelector(".athlete-switcher.is-collapsed"), null);
+    assert.ok(dom().querySelector(".athlete-switcher.is-collapsed"), "another user starts compact");
     state.currentUser = { ...state.currentUser, id: "coach-1" };
     data.resetCentralCalendarForWorkspaceChange();
     await open();
     await act({ action: "central-calendar-switcher-hide" });
     render();
     assert.equal(dom().querySelector(".athlete-switcher.is-collapsed"), null, "shown again");
-    assert.equal(storage.store.has("optimove.athleteStrip.hidden.calendar.coach-1"), false);
+    assert.equal(storage.store.get("optimove.athleteStrip.hidden.calendar.coach-1"), "0");
   } finally {
     delete globalThis.localStorage;
   }
@@ -422,6 +424,7 @@ test("K6-F2. blocked storage: hiding still works for the screen and nothing thro
   Object.defineProperty(globalThis, "localStorage", { configurable: true, get() { throw new Error("blocked"); } });
   try {
     await open();
+    await act({ action: "central-calendar-switcher-hide" });
     await act({ action: "central-calendar-switcher-hide" });
     render();
     assert.ok(dom().querySelector(".athlete-switcher.is-collapsed"));

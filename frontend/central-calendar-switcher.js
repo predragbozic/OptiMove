@@ -174,13 +174,13 @@ export function buildCentralCalendarSwitcherModel(cal, athletes = state.athletes
 
 // K6 follow-up: the computer's hide / show choice, read once per workspace slice from the per-user preference.
 export function centralCalendarStripHidden(cal) {
-  if (typeof cal.switcher.hidden !== "boolean") cal.switcher.hidden = readAthleteStripHidden("calendar", state.currentUser?.id);
+  if (typeof cal.switcher.hidden !== "boolean") cal.switcher.hidden = readAthleteStripHidden("calendar", state.currentUser?.id, true);
   return cal.switcher.hidden;
 }
 
 export function toggleCentralCalendarStripHidden(cal) {
   cal.switcher.hidden = !centralCalendarStripHidden(cal);
-  writeAthleteStripHidden("calendar", state.currentUser?.id, cal.switcher.hidden);
+  writeAthleteStripHidden("calendar", state.currentUser?.id, cal.switcher.hidden, true);
   return cal.switcher.hidden;
 }
 

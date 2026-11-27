@@ -22101,6 +22101,88 @@ body.exercise-header-pinned #viewToolbar {
   overflow-y: auto;
 }
 
+@media (min-width: 761px) {
+  .central-calendar { container: calendar / inline-size; }
+
+  .central-calendar {
+    --accent: #374151;
+    --accent-soft: #eef0f3;
+  }
+
+  .central-calendar :is(.cc-card-stripe, .cc-team-dot, .cc-mini-dot, .cc-chip-dot) {
+    background: #8793a2;
+  }
+
+  .central-calendar :is(.cc-team-pill, .cc-timegrid-cell.is-today) {
+    background: var(--surface-soft);
+  }
+
+  .central-calendar .cc-primary:not(.cc-danger) {
+    background: var(--surface, #fff);
+    border-color: var(--line-strong, #a8b3c0);
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .central-calendar .cc-panel-when {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 4px;
+  }
+
+  .central-calendar .cc-panel-time {
+    color: var(--text);
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .central-calendar .cc-timegrid-row { min-width: 0; }
+  .central-calendar .cc-week { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+
+  .central-calendar .cc-timegrid-untimed :is(.cc-card-meta, .cc-card-place, .cc-card-note) { display: none; }
+  .central-calendar .cc-timegrid-untimed .cc-card-body {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+  }
+  .central-calendar .cc-timegrid-untimed .cc-card-top { flex: none; }
+  .central-calendar .cc-timegrid-untimed .cc-card-title {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .central-calendar .cc-timegrid-untimed :is(.cc-card, .cc-daychip, .cc-daymark) { min-height: 44px; }
+
+  @container calendar (max-width: 1210px) {
+    .cc-layout-wide.cc-panel-open .cc-body { grid-template-columns: minmax(0, 1fr); }
+    .cc-layout-wide.cc-panel-open .cc-body > :is(.cc-main, .cc-panel) { grid-area: 1 / 1; }
+    .cc-layout-wide.cc-panel-open .cc-panel {
+      justify-self: end;
+      width: min(340px, 48%);
+      z-index: 2;
+      box-shadow: -10px 6px 30px #1421321f;
+    }
+  }
+
+  @container calendar (max-width: 850px) {
+    .central-calendar .cc-timegrid:not(.cc-timegrid-day) .cc-timegrid-row {
+      grid-template-columns: 38px repeat(7, minmax(0, 1fr));
+      gap: 2px;
+    }
+    .central-calendar .cc-timegrid:not(.cc-timegrid-day) .cc-day-head {
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+    .central-calendar .cc-timegrid:not(.cc-timegrid-day) .cc-day-count { display: none; }
+  }
+}
+
 .cc-panel-head {
   display: flex;
   align-items: flex-start;

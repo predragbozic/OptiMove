@@ -3,17 +3,19 @@
 // write is inside try/catch, so the screen works without storage (a private window, blocked site data).
 const key = (surface, userId) => `optimove.athleteStrip.hidden.${surface}.${String(userId || "anonymous")}`;
 
-export function readAthleteStripHidden(surface, userId) {
+export function readAthleteStripHidden(surface, userId, defaultHidden = false) {
   try {
-    return globalThis.localStorage?.getItem(key(surface, userId)) === "1";
+    const value = globalThis.localStorage?.getItem(key(surface, userId));
+    return value == null ? defaultHidden : value === "1";
   } catch {
-    return false;
+    return defaultHidden;
   }
 }
 
-export function writeAthleteStripHidden(surface, userId, hidden) {
+export function writeAthleteStripHidden(surface, userId, hidden, defaultHidden = false) {
   try {
     if (hidden) globalThis.localStorage?.setItem(key(surface, userId), "1");
+    else if (defaultHidden) globalThis.localStorage?.setItem(key(surface, userId), "0");
     else globalThis.localStorage?.removeItem(key(surface, userId));
   } catch { /* the choice lives in memory only */ }
 }

@@ -39,10 +39,8 @@ async function openCalendar(page, width) {
   await openFold(page, width);
 }
 async function openFold(page, width) {
-  if (width < 761) {
-    const fold = page.locator(".athlete-switcher-fold");
-    if ((await fold.getAttribute("aria-expanded")) !== "true") await fold.click();
-  }
+  const fold = page.locator(width < 761 ? ".athlete-switcher-fold" : ".athlete-switcher-hide");
+  if ((await fold.getAttribute("aria-expanded")) !== "true") await fold.click();
 }
 const overflow = (page, width) => page.evaluate((w) => Math.max(window.innerWidth - w, document.documentElement.scrollWidth - w), width);
 const activeInView = (page, scope) => page.evaluate((s) => {
@@ -157,6 +155,7 @@ test("(1280 px) the screen works when storage is blocked", async () => {
     await page.getByText("Sign out").first().waitFor({ timeout: 20_000 });
     await page.locator("#calendarToggle").click();
     await page.waitForSelector(".central-calendar .athlete-switcher");
+    await page.getByRole("button", { name: "Show athletes", exact: true }).click();
     await page.locator(".athlete-switcher-hide").click();
     await page.waitForSelector(".athlete-switcher.is-collapsed");
     await page.locator(".athlete-switcher-hide").click();

@@ -46,6 +46,8 @@ async function openCalendar(page, width) {
   if (width < 761) {
     const fold = page.locator(".athlete-switcher-fold");
     if ((await fold.getAttribute("aria-expanded")) !== "true") await fold.click();
+  } else {
+    await page.getByRole("button", { name: "Show athletes", exact: true }).click();
   }
 }
 const overflow = (page, width) => page.evaluate((w) => Math.max(window.innerWidth - w, document.documentElement.scrollWidth - w), width);

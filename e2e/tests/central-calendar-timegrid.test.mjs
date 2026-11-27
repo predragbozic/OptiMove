@@ -2,7 +2,7 @@
 // real browser on the real server, as the team coach. Today holds the owner's two trainings (00:00-01:00 and
 // 00:30-01:29) and a cluster of five at 10:00-11:00. At 1280 and 1024 px: the pair side by side at its minutes, the
 // cluster as two columns and "+3 more", whose click shows the Day list with all of them; the team colour; no horizontal
-// page scroll; at 1024 px with the panel open the grid scrolls in its own box; reading order day by day. At 390 px
+// page scroll; at 1024 px the detail overlays the grid without shrinking it; reading order day by day. At 390 px
 // the phone switches between its selected-day list and the weekly time grid. Invented data on a disposable database.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
@@ -120,15 +120,16 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["1024 px", 1024]]) {
       assert.match(narrow.text, /^10:00/, JSON.stringify(narrow));
       assert.ok(narrow.textRight <= narrow.bodyRight + 0.5, `"10:00" not cut in a ${narrow.boxWidth}px box (${JSON.stringify(narrow)})`);
       if (width === 1024) {
-        // With the panel open the grid scrolls inside its own box, the page does not.
+        const gridWidth = await page.locator(".cc-timegrid").evaluate((el) => el.clientWidth);
         await page.locator(".cc-tg-col .cc-card").first().click();
         await page.waitForSelector('[data-action="central-calendar-close-panel"]', { timeout: 20_000 });
         const scroll = await page.evaluate(() => {
           const grid = document.querySelector(".cc-timegrid");
-          return { inner: grid.scrollWidth - grid.clientWidth, page: document.documentElement.scrollWidth - window.innerWidth };
+          return { width: grid.clientWidth, inner: grid.scrollWidth - grid.clientWidth, page: document.documentElement.scrollWidth - window.innerWidth };
         });
         assert.equal(scroll.page, 0, "no page scroll with the panel open");
-        assert.ok(scroll.inner > 0, `the grid scrolls in its box (${scroll.inner})`);
+        assert.equal(scroll.width, gridWidth, "opening a detail does not narrow the week");
+        assert.ok(scroll.inner <= 1, `the grid fits in its box (${scroll.inner})`);
         // The narrowest case (mobile review): a third of a column still shows its start uncut, and "+3 more" fits.
         const when = await page.evaluate(() => {
           const card = [...document.querySelectorAll(".cc-tg-box.is-narrow .cc-card")].find((el) => el.querySelector(".cc-card-title")?.textContent === "Cluster 1");
@@ -191,6 +192,30 @@ test("(1280 px, touch) a tablet in landscape keeps 44 px targets: the short box 
     assert.deepEqual(pageErrors, []);
   } finally { await context.close(); }
 });
+
+for (const width of [768, 820]) {
+  test(`(${width}px, touch) tablet can inspect a full weekly timeline and return from details`, async () => {
+    const { context, page, pageErrors } = await openAs(browser, world, "team_coach", width, { hasTouch: true });
+    try {
+      await openCalendar(page);
+      await page.getByRole("button", { name: "Time grid", exact: true }).click();
+      const grid = page.locator(".cc-timegrid");
+      await grid.waitFor();
+      assert.equal(await grid.locator(".cc-timegrid-head").count(), 7);
+      assert.equal(await grid.evaluate(el => el.scrollWidth - el.clientWidth), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), 0);
+      const period = await page.locator(".cc-period").innerText();
+      await grid.locator(".cc-tg-col .cc-card").first().click();
+      const sheet = page.getByRole("dialog", { name: "Morning group" });
+      await sheet.waitFor();
+      await sheet.getByRole("button", { name: "Close", exact: true }).click();
+      await sheet.waitFor({ state: "hidden" });
+      assert.equal(await page.locator(".cc-period").innerText(), period);
+      assert.ok(await grid.isVisible());
+      assert.deepEqual(pageErrors, []);
+    } finally { await context.close(); }
+  });
+}
 
 test("(390 px) a team coach can switch List → Time grid → List without horizontal overflow", async () => {
   const { context, page, pageErrors } = await openAs(browser, world, "team_coach", WIDTHS.phone);
