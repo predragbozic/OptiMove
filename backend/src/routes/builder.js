@@ -14,6 +14,7 @@ import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSe
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsOffered, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
+import { assertProgramEditHeld, assertProgramEditOwnership, combinedProgramEditIsChecked, lockProgramEditActor, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "../workspace.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
@@ -155,10 +156,10 @@ async function resolveWeeklyPlanOwnerScope(req, res) {
 // Club A athlete at all. The WHOLE request is rejected on the FIRST
 // athlete outside scope - never a partial batch (matches this file's own
 // existing conflict-collection style just below each call site).
-async function findAthleteOutsideScope(scope, athletes) {
+async function findAthleteOutsideScope(scope, athletes, runQuery = query) {
   for (const athlete of athletes) {
     if (!athlete?.id) continue; // a null target (program/template-only slot) has no athlete to check
-    const allowed = await isAthleteInWorkspaceScope(scope, athlete.id);
+    const allowed = await isAthleteInWorkspaceScope(scope, athlete.id, runQuery);
     if (!allowed) return athlete;
   }
   return null;
@@ -410,9 +411,11 @@ router.patch("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
-    const name = text(req.body?.name) || (plan.plan_type === "weekly" ? `Weekly plan ${plan.week_start}` : plan.name);
-    const coverImageUrl = req.body?.coverImageUrl === undefined ? plan.cover_image_url : nullableText(req.body.coverImageUrl);
-    await query("update plans.plans set name = $2, cover_image_url = $3, updated_at = now() where id = $1", [plan.id, name, coverImageUrl]);
+    await withProgramPlanEdit(req, plan.id, async (client, current) => {
+      const name = text(req.body?.name) || (current.plan_type === "weekly" ? `Weekly plan ${current.week_start}` : current.name);
+      const coverImageUrl = req.body?.coverImageUrl === undefined ? current.cover_image_url : nullableText(req.body.coverImageUrl);
+      await client.query("update plans.plans set name = $2, cover_image_url = $3, updated_at = now() where id = $1", [plan.id, name, coverImageUrl]);
+    });
     return await respondWithDraft(req, res, req.user, plan);
   } catch (error) { next(error); }
 }));
@@ -661,34 +664,20 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
     client = await pool.connect();
     await client.query("begin");
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
-    let recordedOwner = ownerScope?.ownerContext;
-    if (recordRpeOpening) {
-      const expected = ownerScope ?? await resolveBuilderRpeWorkspace(client, req);
-      const actor = await lockProgramRpeActor(client, req, expected);
-      let targetsAllowed = false;
-      if (actor) {
-        const targetChecks = [];
-        for (const target of targets) {
-          if (target?.id) targetChecks.push(await isAthleteInWorkspaceScope(expected, target.id, client.query.bind(client)));
-        }
-        targetsAllowed = targetChecks.every(Boolean);
-        if (targetsAllowed) recordedOwner = expected.ownerContext;
-      }
-      if (!actor || !targetsAllowed) {
-        if (ownerScope) {
-          await client.query("rollback");
-          client.release();
-          client = null;
-          return res.status(409).json({ error: "Your workspace changed. Open the plan again." });
-        }
-        recordedOwner = null;
-      }
+    const writer = await lockProgramEditActor(client, req);
+    if (ownerScope && (ownerScope.type !== writer.scope.type ||
+        nativeProgramRpeScope(ownerScope) !== nativeProgramRpeScope(writer.scope))) {
+      throw refuseProgramEdit(409, "Your workspace changed. Open the plan again.");
     }
+    const currentTargets = await findAthleteOutsideScope(writer.scope, targets, client.query.bind(client));
+    if (currentTargets) throw refuseProgramEdit(404, "Athlete not found.");
+    const recordedOwner = writer.scope.ownerContext;
 
     if (planType === "weekly") {
       const conflicts = [];
       for (const target of targets) {
-        const conflict = await ensureWeeklySlot(client, req.user.id, target, weekStart);
+        const conflict = await ensureWeeklySlot(client, req.user.id, target, weekStart,
+          plan => assertProgramEditTargets(client, writer, [plan]));
         if (conflict) conflicts.push(conflict);
       }
       if (conflicts.length) {
@@ -713,6 +702,7 @@ router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
       }
       if (weeklyTemplateWeeks) await insertTemplateWeeks(client, created.rows[0].id, 1, weeklyTemplateWeeks);
     }
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -879,7 +869,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     const { athletes: targetAthletes, missing, archived } = await timing.measure("targets", () => findRequestedAthletes(targetAthleteExternalIds));
     if (missing.length) return res.status(404).json({ error: `Athlete not found: ${missing.join(", ")}` });
     if (archived.length) return res.status(400).json({ error: `Athlete is archived, restore them first: ${archived.join(", ")}` });
-    if (intent === "assign" && !source.is_template) {
+    if (intent === "assign" && (!source.is_template || source.plan_type !== "program")) {
       return res.status(400).json({ error: "Only a template can be assigned to an athlete." });
     }
     // A weekly program template reaches athletes only through the dated
@@ -963,6 +953,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    const writer = await lockProgramEditActor(client, req, { requireEdit: intent !== "assign" });
     if (recordRpeOpening) {
       const expected = weeklyPlanOwnerScope ?? await resolveBuilderRpeWorkspace(client, req);
       const actor = await lockProgramRpeActor(client, req, expected);
@@ -976,6 +967,20 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
 
     // Source must remain stable until the copied grant upsert finishes.
     await lockCopyTargetPlan(client,source.id);
+    const currentSource = await getCopySource(writer.sourceActor, source.id, client.query.bind(client));
+    if (!currentSource) throw refuseProgramEdit(404, "Program not found.");
+    if (!canCopyFromPlan(writer.sourceActor, currentSource)) throw refuseProgramEdit(403, "This template cannot be copied.");
+    if (intent === "assign" && (!currentSource.is_template || currentSource.plan_type !== "program")) {
+      throw refuseProgramEdit(400, "Only a template can be assigned to an athlete.");
+    }
+    if (targetAthletes.length && currentSource.plan_type === "program" &&
+        await weeklyTemplateFacts(client.query.bind(client), currentSource.id)) {
+      throw refuseProgramEdit(400, "A weekly program is assigned from a date into the athletes' weekly plans.");
+    }
+    if (await findAthleteOutsideScope(writer.scope, targets, client.query.bind(client))) {
+      throw refuseProgramEdit(404, "Athlete not found.");
+    }
+    Object.assign(source, currentSource);
     const sourceDefaults = (await client.query(
       "select track_training_load_default,request_rpe_default from plans.plans where id=$1", [source.id],
     )).rows[0];
@@ -1015,11 +1020,21 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         replay = existing.result;
       }
       if (replay) {
+        // Only an ordinary program template can be assigned here. Weekly
+        // plan copies are always drafts and are the only branch that can
+        // remove an empty weekly plan when taking its slot.
+        await assertProgramEditAssignmentReplay(client, writer, assignmentRequestId, replay, { dated: false });
+        const replayedPlan = await getEditablePlan(writer.actor, replay.planId, client.query.bind(client));
+        if (!replayedPlan) throw refuseProgramEdit(404, "Assignment not found.");
+        await assertProgramEditOwnership(client, writer.scope, replayedPlan);
         await client.query("commit");
         client.release();
         client = null;
         res.status(201);
-        return timing.json({ ...(await timing.measure("response", async () => buildDraft(await getEditablePlan(req, replay.planId), req))), assignments: replay.assignments });
+        return timing.json({
+          ...(await timing.measure("response", () => buildDraft(replayedPlan, { ...req, authz: writer.actor.authz }))),
+          assignments: replay.assignments,
+        });
       }
       if (!claimed) {
         await client.query("rollback");
@@ -1033,7 +1048,8 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
       const conflicts = [];
       try {
         for (const target of targets) {
-          const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart));
+          const conflict = await timing.measure("slot", () => ensureWeeklySlot(client, req.user.id, target, targetWeekStart,
+            plan => assertProgramEditTargets(client, writer, [plan])));
           if (conflict) conflicts.push(conflict);
         }
       } catch (error) {
@@ -1117,7 +1133,9 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         `update public.builder_assignment_requests set status = 'completed', result = $2::jsonb, updated_at = now() where id = $1`,
         [assignmentRequestId, JSON.stringify({ planId: createdIds[0], assignments })],
       );
+      await recordProgramEditAssignmentEvidence(client, writer, assignmentRequestId, [], []);
     }
+    await recordProgramEditUse(client, intent !== "assign" && writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -1183,6 +1201,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    const writer = await lockProgramEditActor(client, req, { requireEdit: false });
     if (recordRpeOpening) {
       const actor = await lockProgramRpeActor(client, req, scope);
       const targetsAllowed = [];
@@ -1197,6 +1216,23 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       }
     }
     await lockCopyTargetPlan(client, source.id);
+    if (scope.type !== writer.scope.type || nativeProgramRpeScope(scope) !== nativeProgramRpeScope(writer.scope)) {
+      throw refuseProgramEdit(409, "Your workspace changed. Open the plan again.");
+    }
+    const runQuery = client.query.bind(client);
+    const liveSource = await getCopySource(writer.sourceActor, source.id, runQuery);
+    if (!liveSource?.is_template || liveSource.plan_type !== "program" ||
+        (liveSource.is_edit_draft && liveSource.created_by_user_id !== writer.actor.user.id) ||
+        !(await weeklyTemplateFacts(runQuery, source.id))) {
+      throw refuseProgramEdit(404, "Template not found.");
+    }
+    if (!canCopyFromPlan(writer.sourceActor, liveSource) ||
+        (liveSource.can_assign_to_athlete === false &&
+          !canAccessAllAthletes(writer.sourceActor) && liveSource.created_by_user_id !== writer.actor.user.id)) {
+      throw refuseProgramEdit();
+    }
+    if (await findAthleteOutsideScope(writer.scope, athletes, runQuery)) throw refuseProgramEdit(404, "Athlete not found.");
+    Object.assign(source, liveSource);
     const sourceDefaults = (await client.query(
       "select track_training_load_default,request_rpe_default from plans.plans where id=$1", [source.id],
     )).rows[0];
@@ -1210,6 +1246,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         : { error: "Could not process this assignment request, please retry." });
     }
     if (claim.replay) {
+      await assertProgramEditAssignmentReplay(client, writer, assignmentRequestId, claim.replay, { dated: true });
       await client.query("commit");
       client.release();
       client = null;
@@ -1340,6 +1377,10 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       });
     }
 
+    const editedPlanIds = entries.filter(entry => entry.kind === "existing" && !entry.cannot && choice === "replace").map(entry => entry.planId);
+    const removedPlanIds = entries.filter(entry => entry.kind === "new").flatMap(entry => entry.emptyPlanIds || []);
+    const editIds = [...editedPlanIds, ...removedPlanIds];
+    if (editIds.length) await assertProgramEditTargets(client, writer, editIds.map(id => ({ id })));
     const lockedSources = recordRpeOpening ? new Set((await client.query(
       `select s.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
        where d.plan_id=$1 order by s.id for share of s`, [source.id],
@@ -1420,6 +1461,8 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       "update public.builder_assignment_requests set status = 'completed', result = $2::jsonb, updated_at = now() where id = $1",
       [assignmentRequestId, JSON.stringify(result)],
     );
+    await recordProgramEditAssignmentEvidence(client, writer, assignmentRequestId, editedPlanIds, removedPlanIds);
+    await recordProgramEditUse(client, editIds.length > 0 && writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -1459,6 +1502,36 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
 // POST /plans/:id/duplicate's assign, migration 202608290900): the request that
 // inserts the row owns the work; another with the same id waits on the row and
 // replays its stored result (same user and payload) or is refused.
+async function recordProgramEditAssignmentEvidence(client, writer, requestId, editedPlanIds, removedPlanIds) {
+  await client.query(
+    `insert into plans.program_edit_v109_assignment_evidence(request_id,edited_plan_ids,removed_plan_ids,scope_type,scope_id)
+     values($1,$2,$3,$4,$5)`,
+    [requestId, editedPlanIds, removedPlanIds, writer.scope.type, nativeProgramRpeScope(writer.scope)],
+  );
+}
+
+async function assertProgramEditAssignmentReplay(client, writer, requestId, result, { dated }) {
+  const { rows: [proof] } = await client.query(
+    "select edited_plan_ids,removed_plan_ids,scope_type,scope_id from plans.program_edit_v109_assignment_evidence where request_id=$1",
+    [requestId],
+  );
+  const created = (result.created ?? []).map(entry => ({ id: entry.planId }));
+  const replaced = (result.replaced ?? []).map(entry => ({ id: entry.planId }));
+  if (proof) {
+    if (proof.scope_type !== writer.scope.type || proof.scope_id !== nativeProgramRpeScope(writer.scope)) {
+      throw refuseProgramEdit(404, "Assignment not found.");
+    }
+    if (proof.edited_plan_ids.length || proof.removed_plan_ids.length) assertProgramEditHeld(writer);
+  } else if (dated && (created.length || replaced.length)) {
+    // Older receipts cannot prove whether creating a plan removed an empty
+    // draft. The caller must still hold Edit for those ambiguous results.
+    assertProgramEditHeld(writer);
+  }
+  // In either format, reuse requires current access to every plan the
+  // receipt would disclose, even when no content edit was performed.
+  await assertProgramEditPlanAccess(client, writer, [...created, ...replaced]);
+}
+
 async function claimAssignmentRequest(client, { id, userId, sourcePlanId, payloadKey }) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const inserted = await client.query(
@@ -1504,13 +1577,8 @@ router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
-    let owner;
-    if (recordRpeOpening) {
-      const expected = await resolveBuilderRpeWorkspace(client, req);
-      const actor = await lockProgramRpeActor(client, req, expected);
-      if (actor) owner = expected.ownerContext;
-      else if (expected.type) throw Object.assign(new Error("Your workspace changed. Open the plan again."), { status: 409 });
-    }
+    const writer = await lockProgramEditActor(client, req);
+    const owner = recordRpeOpening ? writer.scope.ownerContext : null;
     // The chosen plans stay as they are while they are copied: FOR SHARE,
     // ascending id (a Save takes them FOR UPDATE in the same order).
     const stillThere = await client.query(
@@ -1525,6 +1593,11 @@ router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
       client.release();
       client = null;
       return res.status(404).json({ error: "Weekly plan not found." });
+    }
+    for (const source of sources) {
+      if (!await getEditablePlan(writer.sourceActor, source.id, client.query.bind(client))) {
+        throw refuseProgramEdit(404, "Weekly plan not found.");
+      }
     }
     const created = (await client.query(
       `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, visibility, is_template, status, source_type)
@@ -1550,6 +1623,7 @@ router.post("/weekly-templates", withBatchReuseGuard(async (req, res, next) => {
       await recordBuilderRpeCopyIfTracked(client, { planId: created.id, sourcePlanIds: sources.map(plan => plan.id), copies });
     }
     await assertExerciseReuseAllowed(client, req.user.id, { planIds: [created.id], guard: req.exerciseReuseGuard });
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -1594,6 +1668,7 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
     client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    const writer = await lockProgramEditActor(client, req);
     // docs/ai/builder-batch-edit-plan.md 10.2.3: the live plan's row FOR SHARE
     // before it is copied, so a Save of its batch that holds it FOR UPDATE
     // finishes first and the copy sees what that Save wrote. One row, the only
@@ -1610,6 +1685,9 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
       client = null;
       return res.status(404).json({ error: "Program not found or not editable." });
     }
+    const currentSource = await getEditablePlan(writer.actor, plan.id, client.query.bind(client));
+    if (!currentSource) throw refuseProgramEdit(404, "Program not found or not editable.");
+    await assertProgramEditOwnership(client, writer.scope, currentSource);
     // The values the copy writes are the ones read under the lock.
     Object.assign(plan, lockedSource.rows[0]);
     const created = await client.query(
@@ -1648,6 +1726,7 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
       if (plan.plan_type === "weekly" || recordRpeOpening) await copyPlanOwnershipSnapshot(client, plan.id, draftId);
       if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: draftId, sourcePlanId: plan.id, copies });
     });
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -1668,7 +1747,9 @@ router.delete("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
     if (!plan) return;
     client = await pool.connect();
     await client.query("begin");
-    const lockedRow = (await client.query("select id, status, plan_type from plans.plans where id = $1 for update", [plan.id])).rows[0];
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const writer = await lockProgramEditActor(client, req);
+    const lockedRow = await lockProgramEditTarget(client, writer, plan.id, { deleting: true });
     // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a published plan (of
     // any kind) whose session has results or a live event link made for it is
     // not deleted (rights first: requirePlan's 404 comes before this 409). A
@@ -1682,6 +1763,7 @@ router.delete("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
     }
     await deleteBuilderPlanContent(client, plan.id);
     await client.query("delete from plans.plans where id = $1", [plan.id]);
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     res.json({ deleted: true, planId: plan.id });
   } catch (error) {
@@ -1694,17 +1776,81 @@ router.post("/plans/:planId/blocks", withBatchReuseGuard(async (req, res, next) 
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
-    if (plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
-    if (await weeklyTemplateFacts(query, plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
-    const next = await nextOrder("plans.plan_days", "plan_id", plan.id, "block_order");
-    await query(
-      `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
-       values ($1, $2, $3, $4, $5, $6)`,
-      [plan.id, next, next, text(req.body?.name) || `Block ${next}`, text(req.body?.type) || "session", nullableText(req.body?.note)],
-    );
+    let rejection;
+    await withProgramPlanEdit(req, plan.id, async (client, current) => {
+      const runQuery = client.query.bind(client);
+      if (current.plan_type === "weekly") {
+        rejection = { error: "Weekly plans already contain seven calendar days." };
+        return false;
+      }
+      if (await weeklyTemplateFacts(runQuery, current.id)) {
+        rejection = { error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" };
+        return false;
+      }
+      const order = await nextOrder("plans.plan_days", "plan_id", current.id, "block_order", runQuery);
+      await client.query(
+        `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
+         values ($1, $2, $3, $4, $5, $6)`,
+        [current.id, order, order, text(req.body?.name) || `Block ${order}`, text(req.body?.type) || "session", nullableText(req.body?.note)],
+      );
+    });
+    if (rejection) return res.status(400).json(rejection);
     return await respondWithDraft(req, res, req.user, plan, { status: 201 });
   } catch (error) { next(error); }
 }));
+
+async function lockProgramEditTarget(client, writer, planId, { deleting = false } = {}) {
+  if (deleting) {
+    const locked = await client.query("select id from plans.plans where id=$1 for update", [planId]);
+    if (!locked.rowCount) throw refuseProgramEdit(404, "Draft program not found");
+  } else {
+    await lockCopyTargetPlan(client, planId);
+  }
+  const current = await getEditablePlan(writer.actor, planId, client.query.bind(client));
+  if (!current) throw refuseProgramEdit(404, "Draft program not found");
+  await assertProgramEditOwnership(client, writer.scope, current);
+  return current;
+}
+
+async function assertProgramEditTargets(client, writer, plans) {
+  assertProgramEditHeld(writer);
+  return assertProgramEditPlanAccess(client, writer, plans);
+}
+
+async function assertProgramEditPlanAccess(client, writer, plans) {
+  const runQuery = client.query.bind(client);
+  for (const planId of [...new Set(plans.map(plan => plan.id))].sort()) {
+    const current = await getEditablePlan(writer.actor, planId, runQuery);
+    if (!current) throw refuseProgramEdit(404, "Draft program not found");
+    await assertProgramEditOwnership(client, writer.scope, current);
+  }
+}
+
+async function withProgramPlanEdit(req, planId, write) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const writer = await lockProgramEditActor(client, req);
+    const current = await lockProgramEditTarget(client, writer, planId);
+    const result = await write(client, current, writer.actor);
+    await recordProgramEditUse(client, result !== false && writer.checked);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function withProgramChildEdit(req, child, readChild, write) {
+  return withProgramPlanEdit(req, child.plan.id, async (client, current, actor) => {
+    const refreshed = await readChild(actor, child.id, client.query.bind(client));
+    if (!refreshed || refreshed.plan.id !== current.id) throw refuseProgramEdit(404, "Program content not found");
+    return write(client, refreshed);
+  });
+}
 
 // Weekly program templates (docs/ai/weekly-program-template-plan.md): the
 // template changes by whole weeks. One transaction each: the exercise-reuse
@@ -1719,7 +1865,8 @@ async function changeWeeklyTemplate(req, res, next, change) {
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeCopy = await beginBuilderRpeProvenance(client);
-    await lockCopyTargetPlan(client, plan.id);
+    const writer = await lockProgramEditActor(client, req);
+    await lockProgramEditTarget(client, writer, plan.id);
     const facts = await weeklyTemplateFacts(client.query.bind(client), plan.id);
     const outcome = facts
       ? await change(client, plan, facts, recordRpeCopy)
@@ -1730,6 +1877,7 @@ async function changeWeeklyTemplate(req, res, next, change) {
       client = null;
       return res.status(outcome.status).json(outcome.body);
     }
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -1813,36 +1961,32 @@ router.delete("/plans/:planId/weeks/:week", withBatchReuseGuard((req, res, next)
 })));
 
 router.delete("/blocks/:blockId", withBatchReuseGuard(async (req, res, next) => {
-  let client;
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
-    if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plan days cannot be deleted." });
-    if (await weeklyTemplateFacts(query, block.plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
-    if (isDraftPlanRow(block.plan)) {
-      await deleteBlockTree(block.id);
-      return await respondWithDraft(req, res, req.user, block.plan);
-    }
-    // Task 5 (12.6a): a published plan's block takes its sessions with it -
-    // never one with results or a live event link.
-    client = await pool.connect();
-    await client.query("begin");
-    const locked = await directSessionsLocked(client, block.plan.id, (s) => String(s.plan_day_id) === String(block.id), "removed");
-    if (locked) {
-      await client.query("rollback");
-      client.release();
-      client = null;
-      return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
-    }
-    await deleteBlockTreeWithClient(client, block.id);
-    await client.query("commit");
-    client.release();
-    client = null;
+    let rejection;
+    await withProgramChildEdit(req, block, getEditableBlock, async (client, current) => {
+      const runQuery = client.query.bind(client);
+      if (current.plan.plan_type === "weekly") {
+        rejection = { status: 400, body: { error: "Weekly plan days cannot be deleted." } };
+        return false;
+      }
+      if (await weeklyTemplateFacts(runQuery, current.plan.id)) {
+        rejection = { status: 400, body: { error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" } };
+        return false;
+      }
+      if (!isDraftPlanRow(current.plan)) {
+        const locked = await directSessionsLocked(client, current.plan.id, session => String(session.plan_day_id) === String(current.id), "removed");
+        if (locked) {
+          rejection = { status: 409, body: { error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked } };
+          return false;
+        }
+      }
+      await deleteBlockTreeWithClient(client, current.id);
+    });
+    if (rejection) return res.status(rejection.status).json(rejection.body);
     return await respondWithDraft(req, res, req.user, block.plan);
-  } catch (error) {
-    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
-    next(error);
-  }
+  } catch (error) { next(error); }
 }));
 
 router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) => {
@@ -1852,15 +1996,16 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
     if (!block) return res.status(404).json({ error: "Program block not found" });
     if (block.plan.plan_type === "weekly") return res.status(400).json({ error: "Weekly plans already contain seven calendar days." });
     if (await weeklyTemplateFacts(query, block.plan.id)) return res.status(400).json({ error: "A weekly program template changes by whole weeks.", code: "weekly_template_weeks_only" });
-    const source = await query("select * from plans.plan_days where id = $1", [block.id]);
-    const sourceDay = source.rows[0];
-    if (!sourceDay) return res.status(404).json({ error: "Program block not found" });
-    const nextBlockOrder = await nextOrder("plans.plan_days", "plan_id", block.plan.id, "block_order");
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeCopy = await beginBuilderRpeProvenance(client);
-    await lockCopyTargetPlan(client,block.plan.id,{dayId:block.id});
+    const writer = await lockProgramEditActor(client, req);
+    await lockProgramEditTarget(client, writer, block.plan.id);
+    const runQuery = client.query.bind(client);
+    const { rows: [sourceDay] } = await runQuery("select * from plans.plan_days where id=$1 and plan_id=$2", [block.id, block.plan.id]);
+    if (!sourceDay) throw refuseProgramEdit(404, "Program block not found");
+    const nextBlockOrder = await nextOrder("plans.plan_days", "plan_id", block.plan.id, "block_order", runQuery);
     const created = await client.query(
       `insert into plans.plan_days (plan_id, block_index, block_order, block_name, block_type, day_note)
        values ($1, $2, $3, $4, $5, $6) returning id`,
@@ -1885,6 +2030,7 @@ router.post("/blocks/:blockId/copy", withBatchReuseGuard(async (req, res, next) 
     }
     if (recordRpeCopy) await recordBuilderRpeCopyIfTracked(client, { planId: block.plan.id, sourcePlanId: block.plan.id, copies });
     await assertExerciseReuseAllowed(client, req.user.id, { dayIds: [newBlockId], guard: req.exerciseReuseGuard });
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -1954,11 +2100,22 @@ async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPl
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeCopy = await beginBuilderRpeProvenance(client);
+    const writer = await lockProgramEditActor(client, req);
     if (source.plan.id !== target.plan.id) {
       await client.query("select id from plans.plans where id=any($1::uuid[]) order by id for no key update", [[source.plan.id,target.plan.id]]);
     }
     await lockCopyTargetPlan(client, source.plan.id, { dayId: source.id });
     await lockCopyTargetPlan(client, target.plan.id, { dayId: target.id });
+    await assertProgramEditTargets(client, writer, [target.plan]);
+    const readSource = allowCrossPlan ? getCopySourceBlock : getEditableBlock;
+    const refreshedSource = await readSource(writer.sourceActor, source.id, client.query.bind(client));
+    if (!refreshedSource || refreshedSource.plan.id !== source.plan.id) throw refuseProgramEdit(404, "Source not found.");
+    if (req.body?.confirmOverwrite !== true && await dayHasContentWithClient(client, target.id)) {
+      await client.query("rollback");
+      client.release();
+      client = null;
+      return res.status(409).json({ error: "This day already has content. Paste again to confirm the overwrite." });
+    }
     // Task 5 (12.6a): pasting over a published plan's day removes its
     // sessions - never one with results or a live event link.
     const locked = await directSessionsLocked(client, target.plan.id, (s) => String(s.plan_day_id) === String(target.id), "removed");
@@ -1972,6 +2129,7 @@ async function respondCopyIntoDay(req, res, next, source, target, { allowCrossPl
     const copies = await copyDaySessions(client, source.id, target.id);
     if (recordRpeCopy) await recordBuilderRpeCopyIfTracked(client, { planId: target.plan.id, sourcePlanId: source.plan.id, copies });
     await assertExerciseReuseAllowed(client, req.user.id, { dayIds: [target.id], guard: req.exerciseReuseGuard });
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -2160,7 +2318,7 @@ router.get("/sessions/:sessionId/nodes", async (req, res, next) => {
 router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
-    const source = await getCopySourceSession(req, req.params.sessionId);
+    let source = await getCopySourceSession(req, req.params.sessionId);
     if (!source) return res.status(404).json({ error: "Source session not found." });
     const target = await getEditableBlock(req, req.params.targetDayId);
     if (!target) return res.status(404).json({ error: "Target day not found." });
@@ -2171,6 +2329,7 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    const writer = await lockProgramEditActor(client, req);
     if (source.plan.id !== target.plan.id) {
       const plans = await client.query(
         "select id from plans.plans where id=any($1::uuid[]) order by id for no key update", [[source.plan.id, target.plan.id]],
@@ -2178,6 +2337,10 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
       if (plans.rowCount !== 2) throw Object.assign(new Error("Program not found."), { status: 404 });
     }
     await lockCopyTargetPlan(client,target.plan.id,{dayId:target.id});
+    await assertProgramEditTargets(client, writer, [target.plan]);
+    const refreshedSource = await getCopySourceSession(writer.sourceActor, source.id, client.query.bind(client));
+    if (!refreshedSource || refreshedSource.plan.id !== source.plan.id) throw refuseProgramEdit(404, "Source session not found.");
+    source = refreshedSource;
     const { rows: [currentSource] } = await client.query(
       `select ps.training_load_enabled, ps.rpe_enabled
        from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id
@@ -2206,6 +2369,7 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
     await copySessionContent(client, source.id, created.rows[0].id);
     await assertExerciseReuseAllowed(client, req.user.id, { sessionIds: [created.rows[0].id], guard: req.exerciseReuseGuard });
     if (recordRpeOpening) await recordBuilderRpeSessionOpening(client, target.plan.id, created.rows[0].id, source);
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -2223,10 +2387,10 @@ router.patch("/blocks/:blockId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
-    await query(
+    await withProgramChildEdit(req, block, getEditableBlock, (client, current) => client.query(
       "update plans.plan_days set block_name = $2, day_note = $3, updated_at = now() where id = $1",
-      [block.id, nullableText(req.body?.name), nullableText(req.body?.note)],
-    );
+      [current.id, nullableText(req.body?.name), nullableText(req.body?.note)],
+    ));
     return await respondWithDraft(req, res, req.user, block.plan);
   } catch (error) { next(error); }
 }));
@@ -2254,6 +2418,7 @@ router.post("/blocks/:blockId/sessions", withBatchReuseGuard(async (req, res, ne
     client = await pool.connect();
     await client.query("begin");
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    const writer = await lockProgramEditActor(client, req);
     const planResult = await client.query(
       `select id, track_training_load_default, request_rpe_default from plans.plans where id = $1 for update`,
       [block.plan.id],
@@ -2264,6 +2429,7 @@ router.post("/blocks/:blockId/sessions", withBatchReuseGuard(async (req, res, ne
       client.release();
       return res.status(404).json({ error: "Program block not found" });
     }
+    await assertProgramEditTargets(client, writer, [plan]);
     // Re-confirm the target day still exists and still belongs to this
     // SAME locked plan, inside the transaction - a concurrent delete (or
     // an edit-draft being consumed by Submit/applyEditDraft between the
@@ -2302,6 +2468,7 @@ router.post("/blocks/:blockId/sessions", withBatchReuseGuard(async (req, res, ne
       [block.id, phaseValue(req.body?.amPm, ["AM", "PM"]), bta, sessionTimeValue(req.body?.time), order, nullableText(req.body?.name), trackingEnabled, rpeEnabled],
     );
     if (recordRpeOpening) await recordBuilderRpeSessionOpening(client, plan.id, created.id);
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -2342,57 +2509,23 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
 
     if (!touchesTrainingLoadFields) {
       if (batchEditTestHooks.afterSessionRead) await batchEditTestHooks.afterSessionRead({ sessionId: session.id });
-      if (!isDraftPlanRow(session.plan)) {
-        // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a published
-        // plan's session. Under the plan lock and the session's own row lock,
-        // the fields this request does not name come from the row as it is
-        // NOW (never the unlocked read above, which a concurrent move could
-        // have outdated - code and db re-reviews); a new half-day or phase
-        // moves the session, and one with results or a live event link is
-        // never moved. A rename or a time change stays free.
-        client = await pool.connect();
-        await client.query("begin");
-        await client.query("select id from plans.plans where id = $1 for no key update", [session.plan.id]);
-        const fresh = (await client.query(
-          "select id, session_time, name, am_pm, bta from plans.plan_sessions where id = $1 for update",
-          [session.id],
-        )).rows[0];
-        if (!fresh) {
-          await client.query("rollback");
-          client.release();
-          client = null;
-          return res.status(404).json({ error: "Program session not found" });
-        }
-        const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : fresh.session_time;
-        const name = req.body?.name !== undefined ? nullableText(req.body.name) : fresh.name;
-        const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : fresh.am_pm;
-        const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : fresh.bta;
-        const moves = (amPm ?? null) !== (fresh.am_pm ?? null) || (bta ?? null) !== (fresh.bta ?? null);
-        const locked = moves ? await directSessionsLocked(client, session.plan.id, (s) => String(s.id) === String(session.id), "moved") : null;
-        if (locked) {
-          await client.query("rollback");
-          client.release();
-          client = null;
-          return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
+      let locked;
+      await withProgramChildEdit(req, session, getEditableSession, async (client, current) => {
+        const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : current.session_time;
+        const name = req.body?.name !== undefined ? nullableText(req.body.name) : current.name;
+        const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : current.am_pm;
+        const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : current.bta;
+        const moves = (amPm ?? null) !== (current.am_pm ?? null) || (bta ?? null) !== (current.bta ?? null);
+        if (moves && !isDraftPlanRow(current.plan)) {
+          locked = await directSessionsLocked(client, current.plan.id, row => String(row.id) === String(current.id), "moved");
+          if (locked) return false;
         }
         await client.query(
           "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
-          [session.id, sessionTime, name, amPm, bta],
+          [current.id, sessionTime, name, amPm, bta],
         );
-        await client.query("commit");
-        client.release();
-        client = null;
-        return await respondWithDraft(req, res, req.user, session.plan);
-      }
-      // A draft: the fast, unlocked path, exactly as before.
-      const sessionTime = req.body?.time !== undefined ? sessionTimeValue(req.body.time) : session.session_time;
-      const name = req.body?.name !== undefined ? nullableText(req.body.name) : session.name;
-      const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : session.am_pm;
-      const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : session.bta;
-      await query(
-        "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, updated_at = now() where id = $1",
-        [session.id, sessionTime, name, amPm, bta],
-      );
+      });
+      if (locked) return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
       return await respondWithDraft(req, res, req.user, session.plan);
     }
 
@@ -2400,6 +2533,7 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
     client = await pool.connect();
     await client.query("begin");
     const trackRpeEffect = await beginBuilderRpeProvenance(client);
+    const writer = await lockProgramEditActor(client, req, { requireEdit: false });
     const plan = await lockBuilderRpeDraft(client, req, res, scope, session.plan, "Program session not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
@@ -2432,6 +2566,10 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
     // above.
     const amPm = req.body?.amPm !== undefined ? phaseValue(req.body.amPm, ["AM", "PM"]) : freshSession.am_pm;
     const bta = req.body?.bta !== undefined ? phaseValue(req.body.bta, ["B", "T", "A"]) : freshSession.bta;
+    const changesContent = (sessionTime ?? null) !== (freshSession.session_time ?? null) ||
+      (name ?? null) !== (freshSession.name ?? null) || (amPm ?? null) !== (freshSession.am_pm ?? null) ||
+      (bta ?? null) !== (freshSession.bta ?? null);
+    if (changesContent) await assertProgramEditTargets(client, writer, [plan]);
     const trackingEnabled = req.body?.trackingEnabled !== undefined ? strictBoolean(req.body.trackingEnabled) : freshSession.training_load_enabled;
     const requestedRpeEnabled = req.body?.rpeEnabled !== undefined ? strictBoolean(req.body.rpeEnabled) : freshSession.rpe_enabled;
     // The DB's own plan_sessions_rpe_requires_training_load CHECK forbids
@@ -2446,6 +2584,7 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
       [freshSession.id, sessionTime, name, amPm, bta, rpeEnabled, trackingEnabled],
     );
     if (trackRpeEffect) await recordBuilderRpeSessionEffect(client, plan.id, freshSession, { trackingEnabled, rpeEnabled });
+    await recordProgramEditUse(client, changesContent && writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -2457,37 +2596,20 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
 }));
 
 router.delete("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) => {
-  let client;
   try {
     const session = await getEditableSession(req, req.params.sessionId);
     if (!session) return res.status(404).json({ error: "Program session not found" });
-    if (isDraftPlanRow(session.plan)) {
-      await deleteSessionTree(session.id);
-      return await respondWithDraft(req, res, req.user, session.plan);
-    }
-    // Task 5 (12.6a): a published plan's session with results or a live
-    // event link is never removed; any other is removed as before, in one
-    // transaction under the plan lock.
-    client = await pool.connect();
-    await client.query("begin");
-    const locked = await directSessionsLocked(client, session.plan.id, (s) => String(s.id) === String(session.id), "removed");
-    if (locked) {
-      await client.query("rollback");
-      client.release();
-      client = null;
-      return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
-    }
-    await client.query("delete from plans.plan_items where plan_session_id = $1", [session.id]);
-    await client.query("delete from plans.plan_nodes where plan_session_id = $1", [session.id]);
-    await client.query("delete from plans.plan_sessions where id = $1", [session.id]);
-    await client.query("commit");
-    client.release();
-    client = null;
+    let locked;
+    await withProgramChildEdit(req, session, getEditableSession, async (client, current) => {
+      if (!isDraftPlanRow(current.plan)) {
+        locked = await directSessionsLocked(client, current.plan.id, row => String(row.id) === String(current.id), "removed");
+        if (locked) return false;
+      }
+      await deleteSessionTree(current.id, client.query.bind(client));
+    });
+    if (locked) return res.status(409).json({ error: SESSIONS_LOCKED_ERROR, code: "edit_sessions_locked", sessions: locked });
     return await respondWithDraft(req, res, req.user, session.plan);
-  } catch (error) {
-    if (client) { try { await client.query("rollback"); } catch {} client.release(); }
-    next(error);
-  }
+  } catch (error) { next(error); }
 }));
 
 router.post("/sessions/:sessionId/nodes", withBatchReuseGuard(async (req, res, next) => {
@@ -2498,16 +2620,25 @@ router.post("/sessions/:sessionId/nodes", withBatchReuseGuard(async (req, res, n
     const name = text(req.body?.name);
     const parentId = nullableText(req.body?.parentId);
     if (!NODE_TYPES.has(nodeType) || !name) return res.status(400).json({ error: "Node type and name are required." });
-    if (parentId && !(await isNodeInSession(parentId, session.id))) return res.status(400).json({ error: "Parent node is outside this session." });
-    if (!(await isAllowedNodePlacement(session.id, parentId, nodeType))) {
-      return res.status(400).json({ error: "Use Domain → Category → Section. A Section may also sit directly under a Domain or session." });
-    }
-    const order = await nextNodeOrder(session.id, parentId);
-    await query(
-      `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [session.id, parentId, nodeType, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), nullableText(req.body?.shortNote), nullableText(req.body?.note), order],
-    );
+    let rejection;
+    await withProgramChildEdit(req, session, getEditableSession, async (client, current) => {
+      const runQuery = client.query.bind(client);
+      if (parentId && !(await isNodeInSession(parentId, current.id, runQuery))) {
+        rejection = "Parent node is outside this session.";
+        return false;
+      }
+      if (!(await isAllowedNodePlacement(current.id, parentId, nodeType, runQuery))) {
+        rejection = "Use Domain → Category → Section. A Section may also sit directly under a Domain or session.";
+        return false;
+      }
+      const order = await nextNodeOrder(current.id, parentId, runQuery);
+      await client.query(
+        `insert into plans.plan_nodes (plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [current.id, parentId, nodeType, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), nullableText(req.body?.shortNote), nullableText(req.body?.note), order],
+      );
+    });
+    if (rejection) return res.status(400).json({ error: rejection });
     return await respondWithDraft(req, res, req.user, session.plan, { status: 201 });
   } catch (error) { next(error); }
 }));
@@ -2516,7 +2647,7 @@ router.delete("/nodes/:nodeId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
-    await deleteNodeTree(node.id);
+    await withProgramChildEdit(req, node, getEditableNode, (client, current) => deleteNodeTree(current.id, client.query.bind(client)));
     return await respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
 }));
@@ -2525,14 +2656,16 @@ router.patch("/nodes/:nodeId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
-    const name = text(req.body?.name) || node.name;
-    const shortNote = req.body?.shortNote === undefined ? node.short_note : nullableText(req.body.shortNote);
-    const note = req.body?.note === undefined ? node.note : nullableText(req.body.note);
-    await query(
-      "update plans.plan_nodes set name = $2, color = $3, icon_url = $4, short_note = $5, note = $6, updated_at = now() where id = $1",
-      [node.id, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), shortNote, note],
-    );
-    await syncSessionItemSnapshots(node.plan_session_id);
+    await withProgramChildEdit(req, node, getEditableNode, async (client, current) => {
+      const name = text(req.body?.name) || current.name;
+      const shortNote = req.body?.shortNote === undefined ? current.short_note : nullableText(req.body.shortNote);
+      const note = req.body?.note === undefined ? current.note : nullableText(req.body.note);
+      await client.query(
+        "update plans.plan_nodes set name = $2, color = $3, icon_url = $4, short_note = $5, note = $6, updated_at = now() where id = $1",
+        [current.id, name, nullableText(req.body?.color), nullableText(req.body?.iconUrl), shortNote, note],
+      );
+      await syncSessionItemSnapshots(current.plan_session_id, client.query.bind(client));
+    });
     return await respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
 }));
@@ -2540,8 +2673,8 @@ router.patch("/nodes/:nodeId", withBatchReuseGuard(async (req, res, next) => {
 // Refreshes the denormalized domain_/category_/section_ name+color+icon snapshot
 // columns on every plan_item in a session from the current plan_nodes tree, so a
 // rename doesn't leave already-linked exercises displaying the old name/color/icon.
-async function syncSessionItemSnapshots(sessionId) {
-  await query(
+async function syncSessionItemSnapshots(sessionId, runQuery = query) {
+  await runQuery(
     `with recursive node_chain as (
        select id, parent_id, node_type, name, color, icon_url, short_note, note, id as leaf_id
        from plans.plan_nodes
@@ -2593,25 +2726,27 @@ router.post("/nodes/:nodeId/move", withBatchReuseGuard(async (req, res, next) =>
     if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: "Move direction is required." });
     const comparator = direction === 'up' ? '<' : '>';
     const sort = direction === 'up' ? 'desc' : 'asc';
-    const neighborResult = await query(
-      `select id, node_order
-       from plans.plan_nodes
-       where plan_session_id = $1
-         and parent_id is not distinct from $2
-         and node_order ${comparator} $3::numeric
-       order by node_order ${sort}
-       limit 1`,
-      [node.plan_session_id, node.parent_id, node.node_order],
-    );
-    const neighbor = neighborResult.rows[0];
-    if (!neighbor) return await respondWithDraft(req, res, req.user, node.plan);
-    await query(
-      `update plans.plan_nodes
-   set node_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end,
-           updated_at = now()
-       where id in ($1, $3)`,
-      [node.id, neighbor.node_order, neighbor.id, node.node_order],
-    );
+    await withProgramChildEdit(req, node, getEditableNode, async (client, current) => {
+      const neighborResult = await client.query(
+        `select id, node_order
+         from plans.plan_nodes
+         where plan_session_id = $1
+           and parent_id is not distinct from $2
+           and node_order ${comparator} $3::numeric
+         order by node_order ${sort}
+         limit 1`,
+        [current.plan_session_id, current.parent_id, current.node_order],
+      );
+      const neighbor = neighborResult.rows[0];
+      if (!neighbor) return false;
+      await client.query(
+        `update plans.plan_nodes
+     set node_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end,
+             updated_at = now()
+         where id in ($1, $3)`,
+        [current.id, neighbor.node_order, neighbor.id, current.node_order],
+      );
+    });
     return await respondWithDraft(req, res, req.user, node.plan);
   } catch (error) { next(error); }
 }));
@@ -2619,7 +2754,7 @@ router.post("/nodes/:nodeId/move", withBatchReuseGuard(async (req, res, next) =>
 router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, next) => {
   let client;
   try {
-    const node = await getEditableNode(req, req.params.nodeId);
+    let node = await getEditableNode(req, req.params.nodeId);
     if (!node) return res.status(404).json({ error: "Program node not found" });
     if (node.node_type !== "section") return res.status(400).json({ error: "Exercises can only be added to a section." });
     const dose = doseFields(req.body);
@@ -2629,6 +2764,13 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
     await runQuery("set local lock_timeout = '2s'");
     await runQuery("set local statement_timeout = '10s'");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const writer = await lockProgramEditActor(client, req);
+    await lockProgramEditTarget(client, writer, node.plan.id);
+    const refreshed = await getEditableNode(writer.actor, node.id, runQuery);
+    if (!refreshed || refreshed.plan.id !== node.plan.id || refreshed.node_type !== "section") {
+      throw refuseProgramEdit(404, "Program node not found");
+    }
+    node = refreshed;
     const exerciseResult = await runQuery(
       effectiveExerciseMediaSql + ' for share of e', [req.user.id, text(req.body?.exerciseId)],
     );
@@ -2658,6 +2800,7 @@ router.post("/nodes/:nodeId/exercises", withBatchReuseGuard(async (req, res, nex
         ancestry.section?.name || null, ancestry.section?.color || null, ancestry.section?.icon_url || null, ancestry.section?.short_note || null, ancestry.section?.note || null, ancestry.section?.node_order ?? null],
     );
     await snapshotExerciseMedia(runQuery,exercise.id,insertedItem.rows[0].id);
+    await recordProgramEditUse(client, writer.checked);
     await runQuery("commit");
     client.release();
     client = null;
@@ -2691,11 +2834,15 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
       throw Object.assign(new Error("Forbidden"), { status: 403 });
     }
     // Match DELETE/apply: plan before child node, exercise and media locks.
-    const lockedPlan=await runQuery('select id from plans.plans where id=$1 for no key update',[node.plan.id]);
-    if(!lockedPlan.rowCount)throw Object.assign(new Error('Program not found'),{status:404});
+    const { rows: [lockedPlan] } = await runQuery(
+      "select id,plan_type,visibility,is_template,athlete_id as athlete_uuid from plans.plans where id=$1 for no key update",
+      [node.plan.id],
+    );
+    if (!lockedPlan) throw refuseProgramEdit(404, "Program not found");
     const target=await runQuery('select id from plans.plan_nodes where id=$1 for update',[node.id]);
     if(!target.rowCount)throw Object.assign(new Error('Program node not found'),{status:404});
     if(!await canAccessPlan(runQuery,exerciseProgramActor(actor),node.plan.id,{editable:true}))throw Object.assign(new Error('Forbidden'),{status:403});
+    const checkedProgramEdit = await combinedProgramEditIsChecked(client, actor, lockedPlan);
     const created = await runQuery(
       `insert into library.exercises (owner_scope, owner_user_id, created_by_user_id, exercise_code, slug, name, instruction, image_url, video_url, is_active)
        values ('user', $1, $1, concat('CUSTOM-', substring(gen_random_uuid()::text from 1 for 8)), concat('custom-', gen_random_uuid()), $2, $3, $4, $5, true)
@@ -2725,6 +2872,7 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
     );
     await snapshotExerciseMedia(runQuery,exercise.id,insertedItem.rows[0].id);
     await recordExerciseWriterUse(client, actor.workspace);
+    await recordProgramEditUse(client, checkedProgramEdit);
     await runQuery('commit');client.release();client=null;
     return await respondWithDraft(req, res, req.user, node.plan, { status: 201 });
   } catch (error) { if(client)await client.query('rollback').catch(()=>{});next(error); } finally {client?.release();}
@@ -2753,9 +2901,24 @@ router.post("/nodes/:nodeId/copy", withBatchReuseGuard(async (req, res, next) =>
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
-    await lockCopyTargetPlan(client,targetSession.plan.id,{sessionId:targetSession.id});
+    const writer = await lockProgramEditActor(client, req);
+    const sourceAndDestination = [...new Set([source.plan.id, targetSession.plan.id])].sort();
+    const locked = await client.query("select id from plans.plans where id=any($1::uuid[]) order by id for no key update", [sourceAndDestination]);
+    if (locked.rowCount !== sourceAndDestination.length) throw refuseProgramEdit(404, "Source node or target session not found");
+    await lockCopyTargetPlan(client, targetSession.plan.id, { sessionId: targetSession.id });
+    await assertProgramEditTargets(client, writer, [targetSession.plan]);
+    const runQuery = client.query.bind(client);
+    const refreshed = await getCopySourceNode(writer.sourceActor, source.id, runQuery);
+    if (!refreshed || refreshed.plan.id !== source.plan.id) throw refuseProgramEdit(404, "Source node or target session not found");
+    if (targetParentId && !(await isNodeInSession(targetParentId, targetSession.id, runQuery))) {
+      throw refuseProgramEdit(400, "Target parent is outside target session.");
+    }
+    if (!(await isAllowedNodePlacement(targetSession.id, targetParentId, refreshed.node_type, runQuery))) {
+      throw refuseProgramEdit(400, "Choose a compatible target for this copied structure.");
+    }
     const newNodeId = await copyNodeTree(source.id, targetSession.id, targetParentId, client.query.bind(client));
     await assertExerciseReuseAllowed(client, req.user.id, { nodeIds: [newNodeId], guard: req.exerciseReuseGuard });
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -2775,12 +2938,12 @@ router.patch("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
     // in English is never written back over the stored text.
     const descriptionSent = Object.hasOwn(req.body || {}, "description");
     const dose = doseFields(req.body);
-    const updated = await query(
+    const updated = await withProgramChildEdit(req, item, getEditableItem, (client, current) => client.query(
       `update plans.plan_items set sets = $2, reps = $3, load = $4,
          description = case when $6::boolean then $5 else description end, updated_at = now() where id = $1
        returning id, exercise_id, title, sets, reps, load, description`,
-      [item.id, dose.sets, dose.reps, dose.load, nullableText(req.body?.description), descriptionSent],
-    );
+      [current.id, dose.sets, dose.reps, dose.load, nullableText(req.body?.description), descriptionSent],
+    ));
     if (req.body?.responseMode === "item" && !wantsBatchSync(req, item.plan)) {
       const row = updated.rows[0];
       if (!row) return res.status(404).json({ error: "Program item not found" });
@@ -2799,16 +2962,18 @@ router.post("/items/:itemId/move", withBatchReuseGuard(async (req, res, next) =>
     if (!['up', 'down'].includes(direction)) return res.status(400).json({ error: "Move direction is required." });
     const comparator = direction === 'up' ? '<' : '>';
     const sort = direction === 'up' ? 'desc' : 'asc';
-    const neighborResult = await query(
-      `select id, item_order from plans.plan_items where plan_node_id = $1 and item_order ${comparator} $2 order by item_order ${sort} limit 1`,
-      [item.plan_node_id, item.item_order],
-    );
-    const neighbor = neighborResult.rows[0];
-    if (!neighbor) return await respondWithDraft(req, res, req.user, item.plan);
-    await query(
-      `update plans.plan_items set item_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end, updated_at = now() where id in ($1, $3)`,
-      [item.id, neighbor.item_order, neighbor.id, item.item_order],
-    );
+    await withProgramChildEdit(req, item, getEditableItem, async (client, current) => {
+      const neighborResult = await client.query(
+        `select id, item_order from plans.plan_items where plan_node_id = $1 and item_order ${comparator} $2 order by item_order ${sort} limit 1`,
+        [current.plan_node_id, current.item_order],
+      );
+      const neighbor = neighborResult.rows[0];
+      if (!neighbor) return false;
+      await client.query(
+        `update plans.plan_items set item_order = case when id = $1 then $2::numeric when id = $3 then $4::numeric end, updated_at = now() where id in ($1, $3)`,
+        [current.id, neighbor.item_order, neighbor.id, current.item_order],
+      );
+    });
     return await respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
 }));
@@ -2817,7 +2982,8 @@ router.delete("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
-    await query("delete from plans.plan_items where id = $1", [item.id]);
+    await withProgramChildEdit(req, item, getEditableItem, (client, current) =>
+      client.query("delete from plans.plan_items where id = $1", [current.id]));
     return await respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
 }));
@@ -2936,16 +3102,19 @@ async function respondWithDraft(req, res, user, plan, options = {}) {
   // redundant round-trip on every single Builder edit.
   let freshPlan = targetPlan;
   let batchRpeRefused = false;
+  let batchEditRefused = false;
   if (wantsBatchSync(req, targetPlan)) {
     try {
       await syncBatchFromPlan(targetPlan, req, req.exerciseReuseGuard);
       freshPlan = await getEditablePlan(req, targetPlan.id);
     } catch (error) {
-      if (!["program_rpe_scope", "rpe_sibling_unmatched", "rpe_recovery_required"].includes(error?.code)) throw error;
-      batchRpeRefused = true;
+      if (error?.code === "program_edit_scope") batchEditRefused = true;
+      else if (["program_rpe_scope", "rpe_sibling_unmatched", "rpe_recovery_required"].includes(error?.code)) batchRpeRefused = true;
+      else throw error;
     }
   }
   const draft = await buildDraft(freshPlan || targetPlan, req);
+  if (batchEditRefused) draft.batchSyncMessage = "The draft was saved. The other plans could not be updated.";
   if (batchRpeRefused) draft.batchSyncMessage = "The draft was saved. The other plans did not take its RPE settings.";
   if (options.status) return res.status(options.status).json(draft);
   return res.json(draft);
@@ -2956,6 +3125,9 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
   const client = await pool.connect();
   try {
     await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    await beginBuilderRpeProvenance(client);
+    const writer = await lockProgramEditActor(client, req, { requireEdit: false });
     const targets = wantsBatchSync(req, plan) && plan.builder_batch_id
       ? await client.query(
         `select id
@@ -2970,7 +3142,7 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
       )
       : { rows: [{ id: plan.id }] };
     const deletedIds = [];
-    for (const target of targets.rows) {
+    for (const target of targets.rows.sort((a, b) => a.id.localeCompare(b.id))) {
       await checkFirstRpeSubmit(client, req, target.id, { emptyCheck: () => plan.plan_type === "weekly"
         ? planHasWeeklyTrainingContentWithClient(client, target.id)
         : planHasBuilderContentWithClient(client, target.id) });
@@ -2982,6 +3154,7 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
         ? await planHasWeeklyTrainingContentWithClient(client, target.id)
         : await planHasBuilderContentWithClient(client, target.id);
       if (hasContent) continue;
+      await assertProgramEditTargets(client, writer, [target]);
       await deletePlanTreeWithClient(client, target.id);
       deletedIds.push(target.id);
     }
@@ -2989,6 +3162,7 @@ async function removeEmptyDraftOnSubmit(user, plan, req) {
       await client.query("rollback");
       return null;
     }
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     if (!deletedIds.includes(plan.id)) return null;
     return {
@@ -3178,6 +3352,7 @@ async function syncBatchFromPlan(sourcePlan, req, guard = null) {
   try {
     await client.query("begin");
     const { checkProvenance, rpe } = await prepareRpeBatchSync(client, sourcePlan, req, guard);
+    const writer = await lockProgramEditActor(client, req, { requireEdit: false });
     const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, req.user);
     if (!sourceRow?.builder_batch_id) {
       await client.query("rollback");
@@ -3186,7 +3361,15 @@ async function syncBatchFromPlan(sourcePlan, req, guard = null) {
     const evidence = checkProvenance ? await checkBatchRpeEffects(client, rpe, sourceRow, siblingRows, false) : null;
     await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
     if (checkProvenance) await assertBuilderRpeBatchProvenance(client, sourceRow, siblingRows, false);
+    if (siblingRows.length) {
+      // Only the siblings change. The source has the existing read boundary.
+      if (!await getEditablePlan(writer.sourceActor, sourceRow.id, client.query.bind(client))) {
+        throw refuseProgramEdit(404, "Draft program not found");
+      }
+      await assertProgramEditTargets(client, writer, siblingRows);
+    }
     await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, evidence);
+    await recordProgramEditUse(client, siblingRows.length > 0 && writer.checked);
     await client.query("commit");
   } catch (error) {
     try { await client.query("rollback"); } catch {}
@@ -3273,6 +3456,7 @@ async function prepareRpeBatchSync(client, sourcePlan, req, guard) {
 
 async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = null) {
   const { checkProvenance, rpe } = await prepareRpeBatchSync(client, sourcePlan, req, guard);
+  const writer = await lockProgramEditActor(client, req, { requireEdit: false });
   const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, req.user);
   if (!sourceRow) return { activatedPlans: [] };
   if (checkProvenance) await checkBatchRpeEffects(client, rpe, sourceRow, siblingRows, true);
@@ -3284,6 +3468,7 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
     // this SAME locked source row, never a second independent lock.
     return { sourceRow, activatedPlans: null };
   }
+  if (siblingRows.length) await assertProgramEditTargets(client, writer, siblingRows);
   await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, checkProvenance ? {} : null);
 
   const emptinessTargets = sourceRow.status === "draft" ? [sourceRow, ...siblingRows] : siblingRows;
@@ -3293,9 +3478,11 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
       ? await planHasWeeklyTrainingContentWithClient(client, target.id)
       : await planHasBuilderContentWithClient(client, target.id);
     if (hasContent) continue;
+    await assertProgramEditTargets(client, writer, [target]);
     await deletePlanTreeWithClient(client, target.id);
     deletedIds.push(target.id);
   }
+  await recordProgramEditUse(client, (siblingRows.length > 0 || deletedIds.length > 0) && writer.checked);
   if (deletedIds.some((id) => String(id) === String(sourceRow.id))) {
     return {
       emptyDraftResponse: {
@@ -3538,6 +3725,7 @@ async function applyEditDraft(req, draftPlan, timing) {
     // request gets there first wins and the other serializes behind it;
     // nothing below trusts a field on the passed-in draftPlan for
     // anything it writes.
+    const writer = await lockProgramEditActor(client, req);
     const freshDraftResult = await client.query(
       `select id, plan_type, week_start, name, note, icon_url, color, visibility, is_template,
               is_edit_draft, edit_source_plan_id, track_training_load_default, request_rpe_default, created_at
@@ -3557,7 +3745,7 @@ async function applyEditDraft(req, draftPlan, timing) {
       client = null;
       return { alreadyApplied: true };
     }
-    const source = await getEditablePlan(req, freshDraft.edit_source_plan_id, client.query.bind(client));
+    const source = await getEditablePlan(writer.actor, freshDraft.edit_source_plan_id, client.query.bind(client));
     if (!source) throw new Error("Original program not found or not editable.");
     // "All athletes" for a published weekly batch (docs/ai/builder-batch-
     // edit-plan.md): every live member, the source included, FOR UPDATE in
@@ -3609,6 +3797,7 @@ async function applyEditDraft(req, draftPlan, timing) {
         return { sessionsLocked: locks };
       }
     }
+    await assertProgramEditTargets(client, writer, [freshDraft, source, ...(batch?.apply ?? []).map(member => ({ id: member.planId }))]);
     if (freshDraft.plan_type === "weekly") {
       if (hasProvenance) {
         const effects = await inspectBuilderRpeSubmitEffects(client, source.id, freshDraft.id);
@@ -3707,6 +3896,7 @@ async function applyEditDraft(req, draftPlan, timing) {
     }
     await timing.measure("apply_delete", () => deleteBuilderPlanContent(client, freshDraft.id));
     await client.query("delete from plans.plans where id = $1", [freshDraft.id]);
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     committed = true;
     client.release();
@@ -4194,12 +4384,6 @@ async function copyNodeTree(sourceId, targetSessionId, targetParentId, runQuery 
   return newNodeId;
 }
 
-async function deleteBlockTree(blockId) {
-  const sessions = await query("select id from plans.plan_sessions where plan_day_id = $1", [blockId]);
-  for (const session of sessions.rows) await deleteSessionTree(session.id);
-  await query("delete from plans.plan_days where id = $1", [blockId]);
-}
-
 async function deleteBlockTreeWithClient(client, blockId) {
   await deleteDayContentWithClient(client, blockId);
   await client.query("delete from plans.plan_days where id = $1", [blockId]);
@@ -4287,21 +4471,21 @@ export async function planHasWeeklyTrainingContentWithClient(client, planId) {
   return result.rows[0]?.has_content === true;
 }
 
-async function deleteSessionTree(sessionId) {
-  await query("delete from plans.plan_items where plan_session_id = $1", [sessionId]);
-  await query("delete from plans.plan_nodes where plan_session_id = $1", [sessionId]);
-  await query("delete from plans.plan_sessions where id = $1", [sessionId]);
+async function deleteSessionTree(sessionId, runQuery) {
+  await runQuery("delete from plans.plan_items where plan_session_id = $1", [sessionId]);
+  await runQuery("delete from plans.plan_nodes where plan_session_id = $1", [sessionId]);
+  await runQuery("delete from plans.plan_sessions where id = $1", [sessionId]);
 }
 
-async function deleteNodeTree(nodeId) {
-  await query(
+async function deleteNodeTree(nodeId, runQuery = query) {
+  await runQuery(
     `with recursive node_tree as (
        select id from plans.plan_nodes where id = $1
        union all
        select child.id from plans.plan_nodes child join node_tree parent on child.parent_id = parent.id
      ) delete from plans.plan_items where plan_node_id in (select id from node_tree)`, [nodeId],
   );
-  await query("delete from plans.plan_nodes where id = $1", [nodeId]);
+  return runQuery("delete from plans.plan_nodes where id = $1", [nodeId]);
 }
 
 async function getEditablePlan(req, planId, runQuery = query) {
@@ -4389,10 +4573,10 @@ function canCopyFromPlan(req, plan) {
   return true;
 }
 
-async function getCopySourceBlock(req, blockId) {
-  const result = await query("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
+async function getCopySourceBlock(req, blockId, runQuery = query) {
+  const result = await runQuery("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getCopySource(req, row.plan_id);
+  const plan = await getCopySource(req, row.plan_id, runQuery);
   if (!plan || !canCopyFromPlan(req, plan)) return null;
   return { id: row.id, plan };
 }
@@ -4406,24 +4590,24 @@ async function getCopySourceBlock(req, blockId) {
 // edit it) and, for getCopySourceNode, widen POST /nodes/:nodeId/copy so
 // the existing same-plan node clipboard/paste mechanism works cross-plan
 // too, with zero new clipboard type.
-async function getCopySourceSession(req, sessionId) {
-  const result = await query(
+async function getCopySourceSession(req, sessionId, runQuery = query) {
+  const result = await runQuery(
     "select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, ps.training_load_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1",
     [sessionId],
   );
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getCopySource(req, row.plan_id);
+  const plan = await getCopySource(req, row.plan_id, runQuery);
   if (!plan || !canCopyFromPlan(req, plan)) return null;
   return { ...row, plan };
 }
 
-async function getCopySourceNode(req, nodeId) {
-  const result = await query(
+async function getCopySourceNode(req, nodeId, runQuery = query) {
+  const result = await runQuery(
     "select pn.id, pn.plan_session_id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1",
     [nodeId],
   );
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getCopySource(req, row.plan_id);
+  const plan = await getCopySource(req, row.plan_id, runQuery);
   if (!plan || !canCopyFromPlan(req, plan)) return null;
   return { ...row, plan };
 }
@@ -4563,23 +4747,23 @@ function strictBoolean(value) {
   return value === true || value === false ? value : undefined;
 }
 
-async function getEditableBlock(req, blockId) {
-  const result = await query("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
+async function getEditableBlock(req, blockId, runQuery = query) {
+  const result = await runQuery("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(req, row.plan_id); return plan ? { id: row.id, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id, runQuery); return plan ? { id: row.id, plan } : null;
 }
 
-async function getEditableSession(req, sessionId) {
-  const result = await query("select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, ps.training_load_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
+async function getEditableSession(req, sessionId, runQuery = query) {
+  const result = await runQuery("select ps.id, ps.am_pm, ps.bta, ps.session_time, ps.name, ps.rpe_enabled, ps.training_load_enabled, pd.plan_id from plans.plan_sessions ps join plans.plan_days pd on pd.id = ps.plan_day_id where ps.id = $1", [sessionId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(req, row.plan_id);
+  const plan = await getEditablePlan(req, row.plan_id, runQuery);
   return plan ? { id: row.id, am_pm: row.am_pm, bta: row.bta, session_time: row.session_time, name: row.name, rpe_enabled: row.rpe_enabled, training_load_enabled: row.training_load_enabled, plan } : null;
 }
 
-async function getEditableNode(req, nodeId) {
-  const result = await query("select pn.id, pn.plan_session_id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1", [nodeId]);
+async function getEditableNode(req, nodeId, runQuery = query) {
+  const result = await runQuery("select pn.id, pn.plan_session_id, pn.parent_id, pn.node_type, pn.name, pn.color, pn.icon_url, pn.short_note, pn.note, pn.node_order, pd.plan_id from plans.plan_nodes pn join plans.plan_sessions ps on ps.id = pn.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pn.id = $1", [nodeId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(req, row.plan_id); return plan ? { ...row, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id, runQuery); return plan ? { ...row, plan } : null;
 }
 
 async function getNodeAncestryMeta(node, runQuery = query) {
@@ -4599,10 +4783,10 @@ async function getNodeAncestryMeta(node, runQuery = query) {
   return chain;
 }
 
-async function getEditableItem(req, itemId) {
-  const result = await query("select pi.id, pi.plan_node_id, pi.item_order, pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pi.id = $1", [itemId]);
+async function getEditableItem(req, itemId, runQuery = query) {
+  const result = await runQuery("select pi.id, pi.plan_node_id, pi.item_order, pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pi.id = $1", [itemId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(req, row.plan_id); return plan ? { id: row.id, plan_node_id: row.plan_node_id, item_order: row.item_order, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id, runQuery); return plan ? { id: row.id, plan_node_id: row.plan_node_id, item_order: row.item_order, plan } : null;
 }
 
 async function findAthlete(externalId) {
@@ -4632,7 +4816,7 @@ async function findRequestedAthletes(externalIds) {
   return { athletes, missing, archived };
 }
 
-async function ensureWeeklySlot(client, userId, athlete, weekStart) {
+async function ensureWeeklySlot(client, userId, athlete, weekStart, beforeCleanup) {
   if (!athlete?.id) return "Choose an athlete for a weekly plan.";
   const existing = await client.query(
     `select p.id, p.created_by_user_id, p.source_type, p.status
@@ -4650,6 +4834,7 @@ async function ensureWeeklySlot(client, userId, athlete, weekStart) {
       && String(existingPlan.created_by_user_id) === String(userId)
     ) {
       if (await weeklySlotPlanIsFree(client, existingPlan, userId)) {
+        await beforeCleanup(existingPlan);
         await deletePlanTreeWithClient(client, existingPlan.id);
         continue;
       }
@@ -4767,14 +4952,14 @@ async function loadBuilderBatch(plan, req) {
   };
 }
 
-async function isNodeInSession(nodeId, sessionId) {
-  const result = await query("select 1 from plans.plan_nodes where id = $1 and plan_session_id = $2", [nodeId, sessionId]);
+async function isNodeInSession(nodeId, sessionId, runQuery = query) {
+  const result = await runQuery("select 1 from plans.plan_nodes where id = $1 and plan_session_id = $2", [nodeId, sessionId]);
   return result.rowCount > 0;
 }
 
-async function isAllowedNodePlacement(sessionId, parentId, nodeType) {
+async function isAllowedNodePlacement(sessionId, parentId, nodeType, runQuery = query) {
   if (!parentId) return true;
-  const result = await query("select node_type from plans.plan_nodes where id = $1 and plan_session_id = $2", [parentId, sessionId]);
+  const result = await runQuery("select node_type from plans.plan_nodes where id = $1 and plan_session_id = $2", [parentId, sessionId]);
   const parentType = result.rows[0]?.node_type;
   if (parentType === "domain") return nodeType === "category" || nodeType === "section";
   if (parentType === "category") return nodeType === "section";
@@ -4830,5 +5015,37 @@ function doseFields(body) {
 }
 function phaseValue(value, allowed) { const clean = text(value).toUpperCase(); return allowed.includes(clean) ? clean : null; }
 function sessionTimeValue(value) { return /^\d{2}:\d{2}$/.test(text(value)) ? text(value) : null; }
+
+// A resource rejected by the scoped Edit guard has the same response as
+// a missing resource at each existing Builder entry point.
+const PROGRAM_EDIT_MISSING = Object.freeze({
+  "/plans/:planId/edit": "Program not found or not editable.",
+  "/plans/:planId/duplicate": "Program or template not found.",
+  "/plans/:planId/assign-weekly": "Template not found.",
+  "/weekly-templates": "Weekly plan not found.",
+  "/blocks/:blockId": "Program block not found",
+  "/blocks/:blockId/copy": "Program block not found",
+  "/blocks/:blockId/sessions": "Program block not found",
+  "/sessions/:sessionId": "Program session not found",
+  "/sessions/:sessionId/nodes": "Program session not found",
+  "/sessions/:sessionId/copy-into/:targetDayId": "Target day not found.",
+  "/blocks/:blockId/copy-into/:targetDayId": "Target day not found.",
+  "/days/:dayId/copy-into/:targetDayId": "Target day not found.",
+  "/nodes/:nodeId": "Program node not found",
+  "/nodes/:nodeId/move": "Program node not found",
+  "/nodes/:nodeId/exercises": "Program node not found",
+  "/nodes/:nodeId/custom-exercise": "Program node not found",
+  "/nodes/:nodeId/copy": "Source node or target session not found",
+  "/items/:itemId": "Program item not found",
+  "/items/:itemId/move": "Program item not found",
+});
+
+router.use((error, req, res, next) => {
+  if (error?.code !== "program_edit_scope") return next(error);
+  const message = error.status === 404 && ["Draft program not found", "Program content not found"].includes(error.message)
+    ? PROGRAM_EDIT_MISSING[req.route?.path] ?? error.message
+    : error.message;
+  return res.status(error.status).json({ error: message });
+});
 
 export default router;

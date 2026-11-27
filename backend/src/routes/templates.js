@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { pool, query } from "../db.js";
-import { assertExerciseReuseAllowed, withExerciseReuseTransaction } from "../exerciseAccess.js";
+import { assertExerciseReuseAllowed, lockExerciseReuse, withExerciseReuseTransaction } from "../exerciseAccess.js";
 import { canAccessAllAthletes, canAccessAthlete, canViewProgramsAt } from "../access.js";
 import { isPlatformAdministrator } from "../authz.js";
+import { assertProgramEditOwnership, lockProgramEditActor, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
 import { createNotification } from "../notifications.js";
 import { NO_VIEWER_ID, coachModuleGate, handOnReadsRefuseWrites, viewEntryGate } from "../moduleView.js";
 import {
@@ -346,6 +347,31 @@ router.get("/options", async (req, res, next) => {
   }
 });
 
+async function withEditableTemplate(req, planId, exerciseReuse, write) {
+  const client = await pool.connect();
+  const runQuery = client.query.bind(client);
+  try {
+    await client.query("begin");
+    if (exerciseReuse) await lockExerciseReuse(client);
+    const writer = await lockProgramEditActor(client, req);
+    const { rows: [plan] } = await runQuery(
+      "select id,plan_type,status,library_scope,visibility,athlete_can_view_directly from plans.plans where id=$1 for update",
+      [planId],
+    );
+    if (!plan || !await canEditTemplate(runQuery, writer.actor, planId)) throw refuseProgramEdit(404, "Template not found.");
+    await assertProgramEditOwnership(client, writer.scope, plan);
+    const outcome = await write(client, plan, writer);
+    await recordProgramEditUse(client, outcome?.rowCount !== 0 && writer.checked);
+    await client.query("commit");
+    return outcome;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 router.patch("/:planId/metadata", async (req, res, next) => {
   try {
     const planId = req.params.planId;
@@ -355,12 +381,6 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const isFree = req.body?.isFree !== false && req.body?.isFree !== "false";
     const priceCents = isFree ? null : Math.max(0, Math.round(Number(req.body?.priceCents || 0)));
     const requestedStatus = normalizeProgramStatus(req.body?.programStatus);
-    const metadataPolicy = await resolveProgramMetadataPolicy(req, {
-      scope: requestedScope,
-      status: requestedStatus,
-      athleteCanViewDirectly: booleanValue(req.body?.athleteCanViewDirectly, false),
-    });
-    if (!metadataPolicy.ok) return res.status(403).json({ error: metadataPolicy.error });
     const libraryCategory = textOrNull(req.body?.libraryCategory);
     const coverImageUrl = textOrNull(req.body?.coverImageUrl);
     const description = textOrNull(req.body?.description);
@@ -374,59 +394,69 @@ router.patch("/:planId/metadata", async (req, res, next) => {
     const subscriptionPeriod = accessModel === "subscription"
       ? normalizeChoice(req.body?.subscriptionPeriod, ["month", "year"], "month")
       : null;
-    const result = await withExerciseReuseTransaction(pool, req.user.id, [planId], (runQuery) => runQuery(
-      `
-      update plans.plans
-      set library_scope = $2,
-          library_category = $3,
-          cover_image_url = $4,
-          is_free = $5,
-          price_cents = $6,
-          available_until = $7::date,
-          owner_type = $8,
-          visibility = $9,
-          access_model = $10,
-          access_duration_days = $11,
-          subscription_period = $12,
-          can_copy = $13,
-          can_edit_copy = $14,
-          can_assign_to_athlete = $15,
-          athlete_can_view_directly = $16,
-          requires_approval = $17,
-          status = $18,
-          note = $19,
-          updated_at = now()
-      where id = $1
-      returning id
-      `,
-      [
-        planId,
-        metadataPolicy.scope,
-        libraryCategory,
-        coverImageUrl,
-        isFree,
-        priceCents,
-        availableUntil,
-        metadataPolicy.ownerType,
-        metadataPolicy.visibility,
-        accessModel,
-        accessDurationDays,
-        subscriptionPeriod,
-        booleanValue(req.body?.canCopy, true),
-        booleanValue(req.body?.canEditCopy, true),
-        booleanValue(req.body?.canAssignToAthlete, true),
-        metadataPolicy.athleteCanViewDirectly,
-        booleanValue(req.body?.requiresApproval, false),
-        metadataPolicy.status,
-        description,
-      ],
-    ), { shouldCheck: async (runQuery) => {
-      const current = (await runQuery("select status,library_scope,visibility,athlete_can_view_directly from plans.plans where id=$1", [planId])).rows[0];
-      return metadataPolicy.status === "active" && (!current || (current.library_scope || "my") !== metadataPolicy.scope
-        || (current.visibility || "private") !== metadataPolicy.visibility
-        || (!current.athlete_can_view_directly && metadataPolicy.athleteCanViewDirectly)
-        || (current.status || "active") !== "active");
-    } });
+    const result = await withEditableTemplate(req, planId, true, async (client, current, writer) => {
+      // Publishing uses the existing policy, with the current account holdings.
+      const metadataPolicy = await resolveProgramMetadataPolicy(writer.sourceActor, {
+        scope: requestedScope,
+        status: requestedStatus,
+        athleteCanViewDirectly: booleanValue(req.body?.athleteCanViewDirectly, false),
+      });
+      if (!metadataPolicy.ok) throw refuseProgramEdit(403, metadataPolicy.error);
+      if (metadataPolicy.status === "active" &&
+          ((current.library_scope || "my") !== metadataPolicy.scope ||
+           (current.visibility || "private") !== metadataPolicy.visibility ||
+           (!current.athlete_can_view_directly && metadataPolicy.athleteCanViewDirectly) ||
+           (current.status || "active") !== "active")) {
+        await assertExerciseReuseAllowed(client, req.user.id, { planIds: [planId] });
+      }
+      return client.query(
+        `
+        update plans.plans
+        set library_scope = $2,
+            library_category = $3,
+            cover_image_url = $4,
+            is_free = $5,
+            price_cents = $6,
+            available_until = $7::date,
+            owner_type = $8,
+            visibility = $9,
+            access_model = $10,
+            access_duration_days = $11,
+            subscription_period = $12,
+            can_copy = $13,
+            can_edit_copy = $14,
+            can_assign_to_athlete = $15,
+            athlete_can_view_directly = $16,
+            requires_approval = $17,
+            status = $18,
+            note = $19,
+            updated_at = now()
+        where id = $1
+        returning id
+        `,
+        [
+          planId,
+          metadataPolicy.scope,
+          libraryCategory,
+          coverImageUrl,
+          isFree,
+          priceCents,
+          availableUntil,
+          metadataPolicy.ownerType,
+          metadataPolicy.visibility,
+          accessModel,
+          accessDurationDays,
+          subscriptionPeriod,
+          booleanValue(req.body?.canCopy, true),
+          booleanValue(req.body?.canEditCopy, true),
+          booleanValue(req.body?.canAssignToAthlete, true),
+          metadataPolicy.athleteCanViewDirectly,
+          booleanValue(req.body?.requiresApproval, false),
+          metadataPolicy.status,
+          description,
+        ],
+      );
+    });
     if (!result.rows[0]) return res.status(404).json({ error: "Template not found." });
     res.json({ ok: true, planId: result.rows[0].id });
   } catch (error) {
@@ -634,34 +664,25 @@ router.post("/:planId/assignments", async (req, res, next) => {
 
 router.post("/:planId/tags", async (req, res, next) => {
   try {
-    if (!(await canEditTemplate(query, req, req.params.planId))) {
-      return res.status(404).json({ error: "Template not found." });
-    }
+    if (!(await canEditTemplate(query, req, req.params.planId))) return res.status(404).json({ error: "Template not found." });
     const name = text(req.body?.name);
     const tagId = text(req.body?.tagId);
-    let finalTagId = tagId;
-
-    if (!finalTagId) {
-      if (!name) return res.status(400).json({ error: "Tag name is required." });
-      finalTagId = await findOrCreateProgramTag(req.user, name);
-    }
-
-    const tag = await query(
-      `select id, name
-       from library.program_tag_definitions
-       where id = $1
-         and is_active = true`,
-      [finalTagId],
-    );
-    if (!tag.rows[0]) return res.status(404).json({ error: "Tag not found." });
-
-    await query(
-      `insert into library.program_tags (plan_id, tag_id)
-       values ($1, $2)
-       on conflict (plan_id, tag_id) do nothing`,
-      [req.params.planId, finalTagId],
-    );
-    res.status(201).json({ tag: tag.rows[0] });
+    if (!tagId && !name) return res.status(400).json({ error: "Tag name is required." });
+    const result = await withEditableTemplate(req, req.params.planId, false, async (client) => {
+      const runQuery = client.query.bind(client);
+      const definition = tagId ? { id: tagId, changed: false } : await findOrCreateProgramTag(req.user, name, runQuery);
+      const { rows: [tag] } = await runQuery(
+        "select id,name from library.program_tag_definitions where id=$1 and is_active=true",
+        [definition.id],
+      );
+      if (!tag) throw refuseProgramEdit(404, "Tag not found.");
+      const link = await runQuery(
+        "insert into library.program_tags(plan_id,tag_id) values($1,$2) on conflict(plan_id,tag_id) do nothing",
+        [req.params.planId, definition.id],
+      );
+      return { tag, rowCount: link.rowCount || Number(definition.changed) };
+    });
+    res.status(201).json({ tag: result.tag });
   } catch (error) {
     next(error);
   }
@@ -669,14 +690,11 @@ router.post("/:planId/tags", async (req, res, next) => {
 
 router.delete("/:planId/tags/:tagId", async (req, res, next) => {
   try {
-    if (!(await canEditTemplate(query, req, req.params.planId))) {
-      return res.status(404).json({ error: "Template not found." });
-    }
-    await query(
-      `delete from library.program_tags
-       where plan_id = $1 and tag_id = $2`,
+    if (!(await canEditTemplate(query, req, req.params.planId))) return res.status(404).json({ error: "Template not found." });
+    await withEditableTemplate(req, req.params.planId, false, client => client.query(
+      "delete from library.program_tags where plan_id=$1 and tag_id=$2",
       [req.params.planId, req.params.tagId],
-    );
+    ));
     res.json({ ok: true });
   } catch (error) {
     next(error);
@@ -1033,44 +1051,27 @@ async function markProgramUsed(req, planId, note) {
   return result;
 }
 
-async function findOrCreateProgramTag(user, name) {
-  const existing = await query(
-    `select id, is_active
-     from library.program_tag_definitions
-     where lower(name) = lower($1)
-     limit 1`,
+async function findOrCreateProgramTag(user, name, runQuery) {
+  const find = async () => (await runQuery(
+    "select id,is_active from library.program_tag_definitions where lower(name)=lower($1) limit 1",
     [name],
-  );
-  if (existing.rows[0]?.id) {
-    if (!existing.rows[0].is_active) {
-      await query(`update library.program_tag_definitions set is_active = true, updated_at = now() where id = $1`, [existing.rows[0].id]);
-    }
-    return existing.rows[0].id;
-  }
-
-  try {
-    const created = await query(
+  )).rows[0];
+  let existing = await find();
+  if (!existing) {
+    const { rows: [created] } = await runQuery(
       `insert into library.program_tag_definitions (name, slug, owner_scope, owner_user_id, created_by_user_id, is_active)
        values ($1, concat($2::text, '-', substring(gen_random_uuid()::text from 1 for 8)), 'user', $3, $3, true)
-       returning id`,
+       on conflict do nothing returning id`,
       [name, slugify(name), user.id],
     );
-    return created.rows[0].id;
-  } catch (error) {
-    if (error?.code !== "23505") throw error;
-    const fallback = await query(
-      `select id
-       from library.program_tag_definitions
-       where lower(name) = lower($1)
-       limit 1`,
-      [name],
-    );
-    if (fallback.rows[0]?.id) {
-      await query(`update library.program_tag_definitions set is_active = true, updated_at = now() where id = $1`, [fallback.rows[0].id]);
-      return fallback.rows[0].id;
-    }
-    throw error;
+    if (created) return { id: created.id, changed: true };
+    existing = await find();
+    if (!existing) throw refuseProgramEdit(409, "The tag could not be saved. Try again.");
   }
+  if (!existing.is_active) {
+    await runQuery("update library.program_tag_definitions set is_active=true,updated_at=now() where id=$1", [existing.id]);
+  }
+  return { id: existing.id, changed: !existing.is_active };
 }
 
 function ownerTypeForScope(scope) {
@@ -1086,5 +1087,11 @@ function booleanValue(value, fallback = false) {
   if (value === false || value === "false") return false;
   return fallback;
 }
+
+router.use((error, req, res, next) => {
+  if (error?.code !== "program_edit_scope") return next(error);
+  const message = error.status === 404 && error.message === "Draft program not found" ? "Template not found." : error.message;
+  return res.status(error.status).json({ error: message });
+});
 
 export default router;

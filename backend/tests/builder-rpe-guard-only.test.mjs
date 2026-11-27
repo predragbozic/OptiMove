@@ -35,7 +35,8 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     const weeklyTemplateId = await oldTemplate(true);
     const specificTemplateId = await oldTemplate(false);
     await stopPrevious();
-    await db.applyThrough("202612091000");
+    // The current server also uses the Programs Edit bridge.
+    await db.applyThrough("202612111000");
     const bridge = await previousDashboardServer(db.url, {}, process.env.OPTIMOVE_BUILDER_RPE_BRIDGE_SHA
       ?? "66220c1224abdbdc0eaa1a23fa8d53591064a98a");
     let descendant;

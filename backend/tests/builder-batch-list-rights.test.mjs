@@ -87,7 +87,7 @@ async function world(label) {
   const created = ok(await api("/api/builder/plans", { method: "POST", cookie: admin, body: { planType: "weekly", weekStart: WEEK, athleteIds: ids, athleteExternalIds: ids, name: `${label} week` } }), 201);
   const plans = await q(`select p.id, p.athlete_id from plans.plans p where p.builder_batch_id = (select builder_batch_id from plans.plans where id = $1)`, [created.body.plan.id]);
   const planOf = (athlete) => plans.find((p) => String(p.athlete_id) === String(athlete.athleteId)).id;
-  return { admin, coachA: await cookieOf(coachA), a1, a2, b1, planA1: planOf(a1), planA2: planOf(a2), planB1: planOf(b1), batchPlanIds: plans.map((p) => p.id) };
+  return { admin, teamA, coachA: await cookieOf(coachA), a1, a2, b1, planA1: planOf(a1), planA2: planOf(a2), planB1: planOf(b1), batchPlanIds: plans.map((p) => p.id) };
 }
 
 // What loadBuilderBatch returned before this change, for every member: the reference for "exactly as today".
@@ -148,8 +148,12 @@ test("1. a coach who may open only their own team's members: the switcher lists 
   // A write that answers with the draft (sync-batch), and a new session.
   const sync = ok(await api(`/api/builder/plans/${w.planA1}/sync-batch`, { method: "POST", cookie: w.coachA, body: {} }));
   assertNothingOf(sync.text, hidden, "POST /sync-batch");
-  const session = ok(await api(`/api/builder/blocks/${draft.body.blocks[0].id}/sessions`, { method: "POST", cookie: w.coachA, body: { bta: "T", name: "Main" } }), 201);
-  assertNothingOf(session.text, hidden, "POST /blocks/:id/sessions");
+  const sessionPath = `/api/builder/blocks/${draft.body.blocks[0].id}/sessions`;
+  const sessionBody = { bta: "T", name: "Main" };
+  const forbidden = await api(sessionPath, { method: "POST", cookie: w.coachA, body: sessionBody });
+  assert.equal(forbidden.status, 404, forbidden.text);
+  assertNothingOf(forbidden.text, hidden, "POST /blocks/:id/sessions outside the owner workspace");
+  const session = ok(await api(sessionPath, { method: "POST", cookie: w.admin, body: sessionBody }), 201);
   // The drafts list holds only the viewer's own plans.
   const drafts = ok(await api("/api/builder/drafts", { cookie: w.coachA }));
   assertNothingOf(drafts.text, hidden, "GET /drafts");
@@ -158,6 +162,9 @@ test("1. a coach who may open only their own team's members: the switcher lists 
   const sessionId = session.body.blocks[0].sessions[0].id;
   ok(await api(`/api/builder/sessions/${sessionId}/nodes`, { method: "POST", cookie: w.admin, body: { nodeType: "domain", name: "Strength", syncBatch: true } }), 201);
   ok(await api(`/api/builder/plans/${w.planA1}/submit`, { method: "POST", cookie: w.admin, body: { syncBatch: true, responseMode: "summary" } }));
+  // Model a batch containing established team-owned plans. Its two Team
+  // A rows are writable by Team A; the other team's row remains hidden.
+  await q("update training_load.plan_workspace_ownership set owner_scope='team',owner_club_id=null,owner_team_id=$2 where plan_id=any($1::uuid[])", [[w.planA1,w.planA2],w.teamA]);
   const edit = ok(await api(`/api/builder/plans/${w.planA1}/edit`, { method: "POST", cookie: w.coachA }));
   assert.equal(edit.body.batch.hiddenCount, 1);
   assert.deepEqual(edit.body.batch.plans.map((p) => String(p.id)).sort(), [String(w.planA1), String(w.planA2)].sort());

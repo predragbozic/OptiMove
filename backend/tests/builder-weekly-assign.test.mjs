@@ -275,6 +275,8 @@ test("3. weeks the coach cannot write: another coach's plan and an open edit dra
      values ('weekly', $1, $2, 'Elsewhere', 'private', false, 'active', 'builder', '2026-12-14') returning id`, [outsider.coach.id, one.athleteId]))[0].id;
   await q(`insert into plans.plan_days (plan_id, date, day_order, block_index, block_order, block_type) select $1, '2026-12-14'::date + i, i + 1, i + 1, i + 1, 'session' from generate_series(0, 6) i`, [otherPlan]);
   await q(`insert into plans.plan_sessions (plan_day_id, bta, session_order, name) select id, 'T', 1, 'Theirs' from plans.plan_days where plan_id = $1 and day_order = 2`, [otherPlan]);
+  // The previous author no longer holds this team, but its recorded owner is still the team.
+  await q("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_team_id) values($1,'team',$2)", [otherPlan,s.teamId]);
   // Athlete two: a published week with an open edit draft.
   const twoPlan = await publishedWeek(s, two, "2026-12-14", [[2, "Mine"]]);
   ok(await api(`/api/builder/plans/${twoPlan}/edit`, { method: "POST", cookie, body: {} }));

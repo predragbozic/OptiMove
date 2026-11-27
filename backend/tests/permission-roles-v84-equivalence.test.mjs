@@ -69,6 +69,9 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
   const activitiesManage = "load.activities.manage";
   const dashboardsManage = "dashboards.manage";
   const builderRpe = "programs.rpe_settings";
+  const programEditBridge = "programs.edit";
+  assert.equal(perms.HONOURED_PERMISSIONS.includes(programEditBridge), false);
+  assert.equal(perms.STORABLE_PERMISSIONS.includes(programEditBridge), false);
   const exerciseWrites = ["exercises.add", "exercises.remove"];
   for (const word of exerciseWrites) assert.ok(perms.HONOURED_PERMISSIONS.includes(word) && perms.STORABLE_PERMISSIONS.includes(word));
   assert.ok(perms.HONOURED_PERMISSIONS.includes(builderRpe));
@@ -112,12 +115,16 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           const seededDashboards = word === dashboardsManage && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
           const seededBuilderRpe = word === builderRpe && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
           const seededExerciseWrite = exerciseWrites.includes(word) && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
-          const expected = rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities || seededDashboards || seededBuilderRpe || seededExerciseWrite ? true : r1;
+          const seededProgramEdit = word === programEditBridge && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
+          if (seededProgramEdit) {
+            assert.equal(perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id }).permissions.includes(word), false);
+          }
+          const expected = rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities || seededDashboards || seededBuilderRpe || seededExerciseWrite || seededProgramEdit ? true : r1;
           if ((word === rosterDecide || word === estimatesManage || word === activitiesManage || word === dashboardsManage || word === builderRpe || exerciseWrites.includes(word)) && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
             const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
             assert.equal(projection.permissions.includes(word), expected, `${name}: exposed ${word} on ${scopeName}`);
           }
-          if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster && !seededEstimates && !seededActivities && !seededDashboards && !seededBuilderRpe && !seededExerciseWrite) differences++;
+          if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster && !seededEstimates && !seededActivities && !seededDashboards && !seededBuilderRpe && !seededExerciseWrite && !seededProgramEdit) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);
           assert.equal(sql, expected, `${name}: twin(${word}) on ${scopeName}`);
           cells++;

@@ -65,6 +65,11 @@ before(async () => {
       subscription_period text, owner_type text, library_category text, available_until date,
       created_at timestamptz default now(), updated_at timestamptz default now()
     );
+    create schema training_load;
+    create table training_load.plan_workspace_ownership(plan_id uuid primary key, owner_scope text, owner_user_id uuid, owner_club_id uuid, owner_team_id uuid);
+    create table plans.program_edit_v109_assignment_evidence (
+      request_id uuid primary key, edited_plan_ids uuid[], removed_plan_ids uuid[], scope_type text, scope_id uuid
+    );
     create table plans.plan_days (
       id uuid primary key default gen_random_uuid(), plan_id uuid references plans.plans(id),
       block_index integer default 1, block_name text, block_type text, date date, day_order numeric,
@@ -286,7 +291,8 @@ before(async () => {
   app.use(["/api/templates", "/api/plans", "/api/organization"], (req, res, next) => {
     const athlete = req.headers["x-test-athlete"] === "true";
     req.user = { id: athlete ? athleteUserId : coachId };
-    req.authz = { platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [], isAthlete: athlete, capabilities: { coachWorkspace: !athlete } };
+    req.authz = athlete ? { platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [], isAthlete: true, capabilities: { coachWorkspace: false } } : coachAuthz;
+    if (!athlete) req.sessionToken = coachSessionToken;
     next();
   });
   app.use("/api/templates", templatesRouter);
@@ -547,7 +553,7 @@ if(process.env.MEDIA_L1_TEST==='true') {
  if(mode==='block'){const r=await request('/api/builder/blocks/'+src.day+'/copy',{});assert.equal(r.status,201,JSON.stringify(r.body));assert.equal(await evidence(source.plan),'2');
   const carrying=(await client.query('select count(*) filter(where i.video_asset_id=$2)::int as video,count(*) filter(where i.image_asset_id=$3)::int as image from plans.plan_items i join plans.plan_sessions s on s.id=i.plan_session_id join plans.plan_days d on d.id=s.plan_day_id where d.plan_id=$1',[source.plan,media.video.id,media.image.id])).rows[0];
   assert.deepEqual(carrying,{video:2,image:2},'the copied block keeps its R2 video and picture');}
- else{const target=await assignedSection();await client.query("update plans.plans set plan_type='weekly' where id=$1",[target.plan]);const targetDay=(await client.query('select d.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where s.id=(select plan_session_id from plans.plan_nodes where id=$1)',[target.node])).rows[0].id;
+ else{const target=await assignedSection();await client.query("update plans.plans set plan_type='weekly' where id=$1",[target.plan]);await client.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_user_id) values($1,'user',$2)",[target.plan,coachId]);const targetDay=(await client.query('select d.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id where s.id=(select plan_session_id from plans.plan_nodes where id=$1)',[target.node])).rows[0].id;
  const path=mode==='day'?'/api/builder/blocks/'+src.day+'/copy-into/'+targetDay:'/api/builder/sessions/'+src.session+'/copy-into/'+targetDay,r=await request(path,{confirmOverwrite:true});assert.equal(r.status,200,JSON.stringify(r.body));assert.ok(await assetItem(target.plan,media.video.id));assert.equal(await evidence(target.plan),'2');}}
  });
  test('Drive L1 HTTP: Builder copy/assignment, Access revoke, source deletion and mapping rollback preserve independent rights',async()=>{

@@ -14,7 +14,8 @@ test("an explicit recovery review preserves and then publishes a legacy draft in
     });
     assert.equal(defaults.status, 200, JSON.stringify(defaults.body));
     await stopPrevious();
-    await db.applyThrough("202612091000");
+    // The current server also uses the Programs Edit bridge.
+    await db.applyThrough("202612111000");
     const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     let server;
     const submit = (id, body, cookie = cookies.owner) =>

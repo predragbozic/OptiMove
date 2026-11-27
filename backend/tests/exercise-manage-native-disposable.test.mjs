@@ -37,16 +37,17 @@ test("native Exercise content and lifecycle writes have independent staged permi
     // Deliberately limited to this disposable database and kept out of runtime/registry.
     assert.match(database.name, /^optimove_tests_/);
     const { rows: [functionRow] } = await sql.query("select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as definition");
-    const staged = functionRow.definition.replace("'exercises.use'", "'exercises.use','exercises.add','exercises.remove'");
+    const staged = functionRow.definition.replace("'exercises.use'", "'exercises.use','exercises.add','exercises.remove'")
+      .replace("'programs.view'", "'programs.view','programs.edit'");
     assert.notEqual(staged, functionRow.definition);
     const fixtureMigration = "fixtures/exercise-write-" + randomUUID();
-    await sql.query("create table library.exercise_manage_v108_use(singleton boolean primary key)");
+    await sql.query("create table library.exercise_manage_v108_use(singleton boolean primary key); create table plans.program_manage_v109_use(singleton boolean primary key)");
     await sql.query("begin");
     try {
       await sql.query("select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive')");
       await sql.query(staged);
       await sql.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values($1,repeat('0',64),'test')", [fixtureMigration]);
-      for (const [roleId, words] of [[ROLE_IDS.club_admin, ["exercises.add", "exercises.remove"]], [ROLE_IDS.team_coach, ["exercises.add"]]]) {
+      for (const [roleId, words] of [[ROLE_IDS.club_admin, ["exercises.add", "exercises.remove", "programs.edit"]], [ROLE_IDS.team_coach, ["exercises.add", "programs.edit"]]]) {
         const { rows: [role] } = await sql.query("update public.permission_roles set revision=revision+1,updated_at=now() where id=$1 returning revision", [roleId]);
         await sql.query("insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_added) values($1,$2,'migration',$3,$4)",
           [roleId, role.revision, fixtureMigration, words]);
@@ -66,12 +67,15 @@ test("native Exercise content and lifecycle writes have independent staged permi
     const remoteClub = await fixture.club();
     const remoteTeam = await fixture.team(remoteClub);
     await fixture.grantTeam(coach, remoteTeam);
-    async function otherSection(targetClub, targetTeam, visibility = "private") {
+    async function otherSection(targetClub, targetTeam, visibility = "private", knownOwner = false) {
       const athleteUser = await fixture.user("Exercise target athlete");
       await fixture.makeAthlete(athleteUser);
       const athlete = (await sql.query("select id from public.athletes where user_id=$1",[athleteUser])).rows[0].id;
       await sql.query("insert into public.athlete_memberships(athlete_id,club_id,team_id,membership_type,status) values($1,$2,$3,'team','active')",[athlete,targetClub,targetTeam]);
       const planId = (await sql.query("insert into plans.plans(plan_type,created_by_user_id,athlete_id,name,status,source_type,visibility,is_template) values('program',$1,$2,'Other author plan','draft','builder',$3,false) returning id",[admin,athlete,visibility])).rows[0].id;
+      if (knownOwner) {
+        await sql.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_team_id) values($1,'team',$2)", [planId, targetTeam]);
+      }
       const dayId = (await sql.query("insert into plans.plan_days(plan_id,date,day_order,block_index) values($1,'2027-01-12',1,1) returning id",[planId])).rows[0].id;
       const sessionId = (await sql.query("insert into plans.plan_sessions(plan_day_id,name,bta) values($1,'Target session','T') returning id",[dayId])).rows[0].id;
       return (await sql.query("insert into plans.plan_nodes(plan_session_id,node_type,name,node_order) values($1,'section','Exercises',1) returning id",[sessionId])).rows[0].id;
@@ -79,6 +83,7 @@ test("native Exercise content and lifecycle writes have independent staged permi
     const nativeTarget = await otherSection(club, team);
     const remoteTarget = await otherSection(remoteClub, remoteTeam);
     const remotePublic = await otherSection(remoteClub, remoteTeam, "public");
+    const ownedRemotePublic = await otherSection(remoteClub, remoteTeam, "public", true);
     const targetWrite = (target, name, cookie = coachCookie) => write(cookie, "POST", "/api/builder/nodes/" + target + "/custom-exercise", {
       name, imageUrl: "https://example.test/old-exercise-image.png",
     });
@@ -91,6 +96,11 @@ test("native Exercise content and lifecycle writes have independent staged permi
     const beforeBlocked = await stateDigest();
     const remoteOnly = await targetWrite(remoteTarget, "Other workspace exercise");
     assert.equal(remoteOnly.status, 403, remoteOnly.text);
+    assert.deepEqual(await stateDigest(), beforeBlocked);
+    const publicWithForeignOwner = await targetWrite(ownedRemotePublic, "Public plan with another owner");
+    assert.equal(publicWithForeignOwner.status, 404, publicWithForeignOwner.text);
+    const missingPublicTarget = await targetWrite(randomUUID(), "Public plan with another owner");
+    assert.deepEqual([publicWithForeignOwner.status, publicWithForeignOwner.body], [missingPublicTarget.status, missingPublicTarget.body]);
     assert.deepEqual(await stateDigest(), beforeBlocked);
 
     const changeAthleteView = async (grant) => {
@@ -167,6 +177,7 @@ test("native Exercise content and lifecycle writes have independent staged permi
     const allowed = await custom("Builder Exercise Add");
     assert.equal(allowed.status, 201, allowed.text);
     assert.deepEqual(await customEffects("Builder Exercise Add"), { exercises: 1, items: 1 });
+    assert.equal((await sql.query("select * from plans.program_manage_v109_use")).rowCount, 1);
     await sql.query(staged.replace("'exercises.add',", ""));
     const noAdd = await custom("Builder Add denied");
     assert.equal(noAdd.status, 403, noAdd.text);
@@ -175,7 +186,7 @@ test("native Exercise content and lifecycle writes have independent staged permi
     const noMedia = await custom("Builder media denied", { videoUrl: "https://example.test/exercise.mp4" });
     assert.equal(noMedia.status, 403, noMedia.text);
     assert.deepEqual(await customEffects("Builder media denied"), { exercises: 0, items: 0 });
-    await sql.query(staged.replace("'exercises.remove'", "'exercises.remove','programs.edit'"));
+    await sql.query(staged.replace("'programs.view','programs.edit'", "'programs.view'"));
     const noEdit = await custom("Builder edit denied");
     assert.equal(noEdit.status, 403, noEdit.text);
     assert.deepEqual(await customEffects("Builder edit denied"), { exercises: 0, items: 0 });
