@@ -25,6 +25,7 @@ const ASSIGNMENT = "cccccccc-0000-4000-8000-000000000001";
 const CATALOG = {
   modules: [{ word: "athletes", label: "Athletes" }, { word: "organization", label: "Organization" }],
   permissions: [
+    { word: "load.estimates.manage", module: "training_load", scopeTypes: ["club", "team"], platformOnly: false, systemRoleOnly: false, honoured: true },
     { word: "load.roster.decide", module: "training_load", scopeTypes: ["club", "team"], platformOnly: false, systemRoleOnly: false, honoured: true },
     { word: "athletes.view", module: "athletes", scopeTypes: ["club", "team"], platformOnly: false, systemRoleOnly: false, honoured: true },
     { word: "athletes.manage", module: "athletes", scopeTypes: ["club", "team"], platformOnly: false, systemRoleOnly: false, honoured: true },
@@ -34,15 +35,15 @@ const CATALOG = {
     { word: "exercises.use", module: "organization", scopeTypes: ["club", "team"], platformOnly: false, systemRoleOnly: false, honoured: true },
   ],
   groups: [
-    { key: "training_load", label: "Training Load", permissions: ["load.roster.decide"], levels: [
+    { key: "training_load", label: "Training Load", permissions: ["load.roster.decide", "load.estimates.manage"], levels: [
       { key: "off", label: "Off", permissions: [] },
-      { key: "manage", label: "Manage", permissions: ["load.roster.decide"] }] },
+      { key: "manage", label: "Manage", permissions: ["load.roster.decide", "load.estimates.manage"] }] },
     { key: "athletes", label: "Athletes", permissions: ["athletes.view", "athletes.manage"], levels: [
       { key: "off", label: "Off", permissions: [] }, { key: "view", label: "View", permissions: ["athletes.view"] },
       { key: "edit", label: "Add and edit", permissions: ["athletes.view", "athletes.manage"] }] },
   ],
-  held: ["load.roster.decide", "athletes.view", "athletes.manage", "roles.manage", "calendar.view"],
-  delegable: ["load.roster.decide", "athletes.view", "athletes.manage", "calendar.view"],
+  held: ["load.estimates.manage", "load.roster.decide", "athletes.view", "athletes.manage", "roles.manage", "calendar.view"],
+  delegable: ["load.estimates.manage", "load.roster.decide", "athletes.view", "athletes.manage", "calendar.view"],
 };
 const role = (over = {}) => ({
   id: ROLE, owner: { scope: "club", clubId: CLUB }, name: "Assistant", description: "Helps", scopeTypes: ["club"], isBasic: false, basicKey: null,
@@ -145,6 +146,7 @@ test("4. a word the editor can't tick is disabled with the reason as text", asyn
   assert.match(html, /What this role sees/);
   assert.match(html, /Nothing yet/);
   assert.match(html, /data-roles-word="load\.roster\.decide"> Decide attendance and complete rosters<\/label>/);
+  assert.match(html, /data-roles-word="load\.estimates\.manage"> Manage estimated values<\/label>/);
 });
 
 test("5. create sends the exact body once; a refused name stays on the form as a sentence", async () => {

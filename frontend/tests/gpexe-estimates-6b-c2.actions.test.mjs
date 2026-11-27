@@ -186,7 +186,7 @@ test("3. a club variable of another club stays as the preview names it; the appr
 // ---------------------------------------------------------------------------
 
 const ACT = "act-1";
-function rosterBody({ estimates = true, states = { "ath-1": "participated_no_values" } } = {}) {
+function rosterBody({ estimates = true, canDecideRoster = true, states = { "ath-1": "participated_no_values" } } = {}) {
   const athletes = Object.entries(states).map(([athleteId, s]) => ({
     athleteId, name: athleteId === "ath-1" ? "Ana Example" : "Bo Example", state: s,
     stateLabel: s === "participated_no_values" ? "Participated · no device data" : "Measured", group: "done", flags: [], values: [],
@@ -194,7 +194,7 @@ function rosterBody({ estimates = true, states = { "ath-1": "participated_no_val
   }));
   return {
     activity: { id: ACT, name: "Full training", occurredLocalDate: "2026-10-05", startedAt: "2026-10-05T16:08:12Z", timezone: "Europe/Belgrade" },
-    canonicalActivityId: ACT, viewer: { basis: "team_coach", ...(estimates ? { estimates: true } : {}) },
+    canonicalActivityId: ACT, viewer: { basis: "team_coach", canDecideRoster, ...(estimates ? { estimates: true } : {}) },
     completion: { status: "not_complete", revision: 0 }, reasons: [],
     counts: { total: athletes.length, needsState: 0, needsReview: 0, recordedOutsideRoster: 0 }, athletes, recordedOutsideRoster: [],
   };
@@ -242,8 +242,8 @@ test("4. an imported session's review lists who took part without device data, e
   assert.equal(targetsSection(), "", "a failed read shows no link");
 });
 
-test("5. the link closes the review and opens the session's Roster tab in Activities with that athlete's estimate panel", async () => {
-  await openImportedReview();
+test("5. the link closes the review and opens the estimate panel independently of attendance permission", async () => {
+  await openImportedReview({ roster: rosterBody({ canDecideRoster: false }) });
   await act("training-load-estimate-in-activities", { athleteId: "ath-1" });
   assert.equal(gx().detail, null, "the review is closed");
   const cal = state.trainingLoad.calendar;

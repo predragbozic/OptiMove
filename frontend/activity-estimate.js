@@ -2,9 +2,8 @@
 // GET  /api/training-activity/:activityId/estimates/proposal?athleteId=…[&minutes=…][&sourceAthleteId=…]
 // POST /api/training-activity/:activityId/estimates { requestKey, athleteId, method, minutes?, sourceAthleteId?, note? }
 //
-// The action is offered only on a "Participated · no device data" row, to a viewer who may decide on the roster, while
-// the server says the save is on (roster.data.viewer.estimates). Every estimated value is shown with its label; a coach
-// never sees an estimate unlabelled.
+// The action is offered on a "Participated · no device data" row when the server authorizes estimate editing in the
+// active workspace (roster.data.viewer.estimates). Every estimated value is shown with its label.
 import { api } from "./api.js";
 import { currentRosterResetGeneration, newRosterRequestKey, refreshActivityRoster, sendRosterCommand } from "./activity-roster-data.js";
 import { state } from "./state.js";
@@ -113,7 +112,7 @@ export function isEstimateValue(v) {
   return v?.entryMethod === "estimate";
 }
 
-// The row offers the action: a Participated · no device data athlete, the save on, a viewer who decides.
+// A Participated · no device data athlete is eligible when the viewer has estimate editing access.
 export function estimateOffered(data, athlete) {
   return data?.viewer?.estimates === true && athlete?.state === "participated_no_values";
 }
@@ -238,6 +237,7 @@ export async function handleEstimateAction(action, { render }) {
     if (type === "training-load-roster-estimate-check") return checkResult(r, e, render);
     return true;
   }
+  if (r.data?.viewer?.estimates !== true) return true;
   if (type === "training-load-roster-estimate-method") {
     const method = action.dataset.method || action.value;
     if (!ESTIMATE_METHODS.includes(method) || !choosable(e.proposal?.methods?.[method], method)) return true;
@@ -437,7 +437,7 @@ function methodHtml(e, method) {
 
 export function renderEstimatePanelHtml(r, athlete) {
   const e = r.estimate;
-  if (!e || e.athleteId !== athlete.athleteId) return "";
+  if (!e || e.athleteId !== athlete.athleteId || (r.data?.viewer?.estimates !== true && !e.sending && !e.unconfirmed)) return "";
   const name = athlete.name || "this athlete";
   if (e.unconfirmed) {
     return `
