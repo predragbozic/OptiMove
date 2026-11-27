@@ -298,8 +298,8 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
     }
     const linkCount = async () => (await client.query("select 1 from tests.test_access_links where schedule_id=$1", [old.body.schedule.id])).rowCount;
     for (const layer of [
-      { id: versionId, cookie: versionCookie, path: clubRolePath, table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", context: {} },
-      { id: customId, cookie: coachCookie, path: customRolePath, table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id", context: { roleId, scopeType: "team", scopeId: team } },
+      { id: versionId, cookie: versionCookie, path: clubRolePath, table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", receipt: "role", context: {} },
+      { id: customId, cookie: coachCookie, path: customRolePath, table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id", receipt: "custom", context: { roleId, scopeType: "team", scopeId: team } },
     ]) {
 
       const revise = async direction => {
@@ -320,7 +320,9 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
         const replay = await call(staged, layer.path, input);
         assert.equal(replay.status, 200, JSON.stringify(replay.body));
         assert.equal(replay.body.replayed, true);
-        assert.deepEqual(replay.body, { ...result.body, replayed: true });
+        // Fresh responses can also describe other holdings. Compare the durable role receipt.
+        assert.ok(result.body[layer.receipt]);
+        assert.deepEqual(replay.body, { [layer.receipt]: result.body[layer.receipt], replayed: true });
         assert.equal(await auditCount(), before + 1);
         assert.deepEqual(await roleData(client), stored);
       };
