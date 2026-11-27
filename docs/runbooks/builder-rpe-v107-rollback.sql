@@ -10,7 +10,7 @@ lock table training_load.builder_rpe_plan_baselines, training_load.builder_rpe_s
 do $$
 declare v_applied timestamptz;
 begin
-  select applied_at into v_applied from public.schema_migrations where migration_name='migrations_v2/202612091000_training_load_v107_builder_rpe_copy_attestation.sql' and checksum='569dda46b08f1b44dd0afba14bb486842943643d0f55dabfeebf866e18caa711';
+  select applied_at into v_applied from public.schema_migrations where migration_name='migrations_v2/202612091000_training_load_v107_builder_rpe_copy_attestation.sql' and checksum='7f1f42e052681532a7ce6860f184013ca21490006ff58d3baecf154c24f93f9f';
   if v_applied is null or exists (
     select 1 from public.schema_migrations where migration_name<>'migrations_v2/202612091000_training_load_v107_builder_rpe_copy_attestation.sql'
        and migration_name ~ '^migrations_v2/[0-9]{12}_' and (applied_at>=v_applied or migration_name>'migrations_v2/202612091000_training_load_v107_builder_rpe_copy_attestation.sql')
@@ -35,5 +35,5 @@ drop function training_load.guard_builder_rpe_copy_attestation();
 drop function training_load.guard_builder_rpe_copy_attestation_use();
 alter table training_load.builder_rpe_plan_baselines drop column opening_verified;
 alter table training_load.builder_rpe_session_baselines drop column opening_verified;
-delete from public.schema_migrations where migration_name='migrations_v2/202612091000_training_load_v107_builder_rpe_copy_attestation.sql' and checksum='569dda46b08f1b44dd0afba14bb486842943643d0f55dabfeebf866e18caa711';
+delete from public.schema_migrations where migration_name='migrations_v2/202612091000_training_load_v107_builder_rpe_copy_attestation.sql' and checksum='7f1f42e052681532a7ce6860f184013ca21490006ff58d3baecf154c24f93f9f';
 commit;

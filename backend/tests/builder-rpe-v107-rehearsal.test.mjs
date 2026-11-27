@@ -37,8 +37,8 @@ test("v107 is additive for legacy writers and restores the catalogue on an unuse
     await db.query("rollback");
   };
   const insertPlan = async (actor) => (await db.query(
-    `insert into plans.plans(plan_type,created_by_user_id,name,status,source_type,visibility)
-     values ('program',$1,'Disposable v107 plan','draft','builder','private') returning id`, [actor],
+    `insert into plans.plans(plan_type,created_by_user_id,name,status,source_type,visibility,is_template)
+     values ('program',$1,'Disposable v107 plan','draft','builder','private',true) returning id`, [actor],
   )).rows[0].id;
   try {
     const actor = await fixtures(db).user("Builder v107 fixture");

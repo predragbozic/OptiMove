@@ -29,7 +29,8 @@ create table training_load.builder_rpe_copy_attestation_use (
   singleton boolean primary key default true check (singleton)
 );
 
-revoke all on training_load.builder_rpe_copy_attestation_use from public, anon, authenticated;
+alter table training_load.builder_rpe_copy_attestation_use enable row level security;
+revoke all on training_load.builder_rpe_copy_attestation_use from public;
 
 create function training_load.guard_builder_rpe_copy_attestation()
 returns trigger
@@ -51,7 +52,7 @@ begin
 end
 $$;
 
-revoke all on function training_load.guard_builder_rpe_copy_attestation() from public, anon, authenticated;
+revoke all on function training_load.guard_builder_rpe_copy_attestation() from public;
 
 create trigger builder_rpe_plan_copy_attestation_guard
 before insert or update on training_load.builder_rpe_plan_baselines
@@ -71,8 +72,21 @@ begin
 end
 $$;
 
-revoke all on function training_load.guard_builder_rpe_copy_attestation_use() from public, anon, authenticated;
+revoke all on function training_load.guard_builder_rpe_copy_attestation_use() from public;
 
 create trigger builder_rpe_copy_attestation_use_append_only
 before update or delete or truncate on training_load.builder_rpe_copy_attestation_use
 for each statement execute function training_load.guard_builder_rpe_copy_attestation_use();
+
+do $$
+declare api_role text;
+begin
+  foreach api_role in array array['anon','authenticated','service_role'] loop
+    if exists (select 1 from pg_roles where rolname=api_role) then
+      execute format('revoke all on training_load.builder_rpe_copy_attestation_use from %I',api_role);
+      execute format('revoke all on function training_load.guard_builder_rpe_copy_attestation() from %I',api_role);
+      execute format('revoke all on function training_load.guard_builder_rpe_copy_attestation_use() from %I',api_role);
+    end if;
+  end loop;
+end
+$$;

@@ -9,7 +9,7 @@ export async function beginBuilderRpeProvenance(client) {
 }
 
 export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = null, origin = sourcePlanId ? "edit" : "created", copies = new Map() }) {
-  if (origin === "copy") await assertBuilderRpeCopyProvenance(client, sourcePlanId);
+  if (origin === "copy") await assertBuilderRpeCopyProvenance(client, sourcePlanId, copies);
   const { rowCount } = await client.query(
     `insert into training_load.builder_rpe_plan_baselines
        (plan_id,origin,source_plan_id,source_updated_at,owner_scope,owner_user_id,owner_club_id,owner_team_id,opening_tracking,opening_rpe,opening_verified)
@@ -22,8 +22,8 @@ export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = n
      left join training_load.plan_workspace_ownership o on o.plan_id=p.id
      where p.id=$1 and (
        ($3 = 'created' and $2::uuid is null and p.edit_source_plan_id is null)
-       or ($3 = 'edit' and p.edit_source_plan_id=src.id)
-       or ($3 = 'copy' and src.id is not null and p.edit_source_plan_id is null)
+       or ($3 = 'edit' and p.edit_source_plan_id=src.id and (p.track_training_load_default,p.request_rpe_default)=(src.track_training_load_default,src.request_rpe_default))
+       or ($3 = 'copy' and src.id is not null and p.edit_source_plan_id is null and (p.track_training_load_default,p.request_rpe_default)=(src.track_training_load_default,src.request_rpe_default))
      )`,
     [planId, sourcePlanId, origin],
   );
@@ -39,14 +39,16 @@ export async function recordBuilderRpeUse(client) {
 
 async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, sourcePlanIds = [sourcePlanId], copies, retained = false, verified = false }) {
   if (!copies.size) return;
-  if (!retained && !verified) await assertBuilderRpeCopyProvenance(client, null, [...copies.keys()]);
+  if (!retained && !verified) await assertBuilderRpeCopyProvenance(client, null, copies);
   const { rowCount: sessions } = await client.query(
     `insert into training_load.builder_rpe_session_baselines
        (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe,opening_verified)
-     select $1,dst.id,dst.logical_session_id,sd.plan_id,src.id,$5,dst.training_load_enabled,dst.rpe_enabled,dst.training_load_enabled
+     select $1,dst.id,dst.logical_session_id,sd.plan_id,src.id,$5,dst.training_load_enabled,dst.rpe_enabled,
+            dst.training_load_enabled and (not $5::boolean or (source_plan.status='active' and not coalesce(source_plan.is_edit_draft,false)))
      from unnest($3::uuid[],$4::uuid[]) pair(source_id,target_id)
      join plans.plan_sessions src on src.id=pair.source_id
      join plans.plan_days sd on sd.id=src.plan_day_id and sd.plan_id=any($2::uuid[])
+     join plans.plans source_plan on source_plan.id=sd.plan_id
      join plans.plan_sessions dst on dst.id=pair.target_id
      join plans.plan_days dd on dd.id=dst.plan_day_id and dd.plan_id=$1
      join training_load.builder_rpe_plan_baselines opening on opening.plan_id=dd.plan_id
@@ -58,7 +60,7 @@ async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, so
 
 export async function recordBuilderRpeCopyIfTracked(client, copy) {
   if (!copy.copies.size) return;
-  if (!copy.verified) await assertBuilderRpeCopyProvenance(client, null, [...copy.copies.keys()]);
+  if (!copy.verified) await assertBuilderRpeCopyProvenance(client, null, copy.copies);
   const opening = await client.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [copy.planId]);
   if (opening.rowCount) await recordBuilderRpeCopiedSessions(client, { ...copy, verified: true });
 }
@@ -185,7 +187,7 @@ export async function recordBuilderRpeSessionOpening(client, planId, sessionId, 
          (destination.training_load_enabled,destination.rpe_enabled)`, [source.id, source.plan.id, sessionId],
     );
     if (!copied.rowCount) throw recoveryRequired();
-    await assertBuilderRpeCopyProvenance(client, null, [source.id]);
+    await assertBuilderRpeCopyProvenance(client, null, new Map([[source.id, sessionId]]));
   }
   await client.query(
     `insert into training_load.builder_rpe_session_baselines
@@ -343,8 +345,24 @@ function assertBuilderRpeStateProven(state) {
   if ([state.plan, ...state.sessions].some(row => !provesEnabledRpe(row))) throw recoveryRequired();
 }
 
-export async function assertBuilderRpeCopyProvenance(client, planId = null, sessionIds = []) {
+export async function assertBuilderRpeCopyProvenance(client, planId = null, copies = new Map()) {
+  const sessionIds = [...copies.keys()];
   if (!planId && !sessionIds.length) return;
+  if (sessionIds.length) {
+    const locked = await client.query(
+      "select id from plans.plan_sessions where id=any($1::uuid[]) order by id for share", [sessionIds],
+    );
+    if (locked.rowCount !== sessionIds.length) throw recoveryRequired();
+    const copied = await client.query(
+      `select src.id
+       from unnest($1::uuid[],$2::uuid[]) pair(source_id,destination_id)
+       join plans.plan_sessions src on src.id=pair.source_id
+       join plans.plan_sessions dst on dst.id=pair.destination_id
+       where (src.training_load_enabled,src.rpe_enabled)=(dst.training_load_enabled,dst.rpe_enabled)`,
+      [sessionIds,[...copies.values()]],
+    );
+    if (copied.rowCount !== sessionIds.length) throw recoveryRequired();
+  }
   const { rows } = await client.query(
     `select p.track_training_load_default as tracking,p.request_rpe_default as rpe,
             p.status,p.is_edit_draft,b.opening_verified,b.opening_tracking,b.opening_rpe
