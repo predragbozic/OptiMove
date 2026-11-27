@@ -1,10 +1,10 @@
 # Builder RPE v106 provenance bridge
 
-Local checkpoint. The slot `202612081000` is provisional and must be rechecked
-against the exact deployed predecessor. Preflight provisionally pins the v105
-candidate from `9a7c89450175f236ea271a657f9113989f10940c`. No v105 body is
-changed. Apply order on production is v105, then v106 on the owner's order.
-The additive v106 schema does not require v105 at runtime.
+Local release candidate. The slot `202612081000` must be rechecked before
+review. The approved v105 predecessor is live at
+`4d7d0ced4f9f2eb5f2eb8d9b726295282d7e0555`. The v106 SQL requires the
+exact v105 migration record and its current permission evaluator body.
+Apply v106 only after a production order and the reviewed preflight.
 
 This checkpoint records new edit-draft openings and exact copied session IDs,
 and explicit plan/default or session flag PATCH effects against those known
@@ -25,19 +25,16 @@ post-commit sync still returns the saved primary draft and one status message.
 A legacy draft without evidence stays unclassified, as does a future replacement
 where its exact source history cannot be recovered. Those cases require the
 owner's recorded resolution or a new draft after the bridge, never a slot guess.
-Keep Roles exposure closed. The schema-only migration neither honours
-`programs.rpe_settings` nor assigns it to a native role. The HTTP fixture
-does both only inside a disposable database. Native runtime checks require
-both conditions, so the full checkpoint as written would deny existing
-native RPE actions against the unstaged production registry. A standalone
-schema rollout must bring only schema-compatible runtime; integrate the
-audited permission staging into the focused application bridge once the
-remaining writers and exact predecessor overlap are covered. Role visibility
-still belongs to its subsequent exposure change.
+The migration stages the existing `programs.rpe_settings` word for
+eligible native layers and records the sanctioned role change. The Roles UI
+and app-wide exposed permission list stay closed during old/new overlap.
+Older binary-created drafts can still be read and submitted with their
+existing behavior. Opening metadata remains unclassified until exact evidence
+is written in the course of later work.
 
 Run the read-only preflight and postcheck on the exact branches. The migration
-takes a deployment advisory lock and creates only new relations. Writers acquire
-its shared variant before plan locks. The first successful real opening sets the
+takes a deployment advisory lock before creating its evidence and staging roles. Writers acquire
+its shared variant before plan locks. The first successful real opening or checked RPE effect sets the
 durable marker in the same transaction. The rollback script takes the exclusive
 lock first, refuses a later migration and refuses when either the marker or a
 saved baseline exists. Discarding a draft does not make SQL rollback safe.
@@ -73,4 +70,4 @@ native write transactionally. Rollback must hold the deployment lock before
 checking native first use, existing provenance, later migrations, schema and
 body fingerprints, and the captured role/audit snapshot. Refuse if an
 independent role editor changed any staged row. Rehearse catalogue and role
-data equality before reapplying. This checkpoint does not implement seed SQL.
+data equality before reapplying. The v106 migration and rollback implement this staging. Role UI exposure remains a separate release.

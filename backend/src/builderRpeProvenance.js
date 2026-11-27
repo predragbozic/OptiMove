@@ -28,6 +28,10 @@ export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = n
   if (rowCount !== 1) throw new Error("Builder RPE opening plan was not recorded.");
 
   await recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, copies, retained: origin === "edit" });
+  await recordBuilderRpeUse(client);
+}
+
+export async function recordBuilderRpeUse(client) {
   await client.query("insert into training_load.builder_rpe_provenance_use default values on conflict do nothing");
 }
 
@@ -53,6 +57,23 @@ export async function recordBuilderRpeCopyIfTracked(client, copy) {
   if (!copy.copies.size) return;
   const opening = await client.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [copy.planId]);
   if (opening.rowCount) await recordBuilderRpeCopiedSessions(client, copy);
+}
+
+export async function recordBuilderRpeNewLogicalCopies(client, { planId, sourcePlanId, copies }) {
+  if (!copies.size) return;
+  const { rows } = await client.query(
+    `select s.id
+     from plans.plan_sessions s
+     join training_load.builder_rpe_plan_baselines p on p.plan_id=$1
+     where s.id=any($2::uuid[]) and not exists(
+       select 1 from training_load.builder_rpe_session_baselines b
+       where b.plan_id=p.plan_id and b.logical_session_id=s.logical_session_id
+     )`, [planId,[...copies.values()]],
+  );
+  const missing = new Set(rows.map(row => row.id));
+  await recordBuilderRpeCopiedSessions(client, {
+    planId, sourcePlanId, copies: new Map([...copies].filter(([,targetId]) => missing.has(targetId))),
+  });
 }
 
 export async function recordBuilderRpeSyncedCopy(client, { planId, sourcePlanId, copies, lineage }) {
@@ -95,6 +116,7 @@ export async function recordBuilderRpeSessionEffect(client, planId, before, afte
   const trackingChanged = before.training_load_enabled !== after.trackingEnabled;
   const rpeChanged = before.rpe_enabled !== after.rpeEnabled;
   if (!trackingChanged && !rpeChanged) return;
+  await recordBuilderRpeUse(client);
   const { rows: [effect] } = await client.query(
     `select ($3 <> b.opening_tracking and ($5 or coalesce(e.changed_tracking,false))) as tracking,
             ($4 <> b.opening_rpe and ($6 or coalesce(e.changed_rpe,false))) as rpe
@@ -123,6 +145,7 @@ export async function recordBuilderRpePlanEffect(client, before, after) {
   const trackingChanged = before.track_training_load_default !== after.trackingEnabled;
   const rpeChanged = before.request_rpe_default !== after.rpeEnabled;
   if (!trackingChanged && !rpeChanged) return;
+  await recordBuilderRpeUse(client);
   const { rows: [effect] } = await client.query(
     `select ($2 <> b.opening_tracking and ($4 or coalesce(e.changed_tracking,false))) as tracking,
             ($3 <> b.opening_rpe and ($5 or coalesce(e.changed_rpe,false))) as rpe
@@ -202,22 +225,33 @@ export async function listBuilderRpeExplicitSessions(client, planId) {
 
 export async function listBuilderRpeSiblingLineage(client, sourcePlanId, targetPlanId, sourceIds, targetIds) {
   const { rows } = await client.query(
-    `with current_sessions as (
-       select d.plan_id,s.id,b.source_plan_id,b.source_session_id
-       from plans.plan_sessions s
-       join plans.plan_days d on d.id=s.plan_day_id
-       left join training_load.builder_rpe_session_baselines b
-         on b.plan_id=d.plan_id and b.logical_session_id=s.logical_session_id
+    `with recursive current_sessions as (
+       select d.plan_id,s.id,s.logical_session_id
+       from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
        where d.plan_id in ($1,$2)
+     ), anchors as (
+       select s.plan_id,s.id,s.plan_id as ancestor_plan_id,s.id as ancestor_id
+       from current_sessions s
+       where not exists(
+         select 1 from training_load.builder_rpe_session_baselines recorded
+         where recorded.plan_id=s.plan_id and recorded.session_id=s.id
+           and recorded.logical_session_id is distinct from s.logical_session_id
+       )
+       union
+       select s.plan_id,s.id,b.plan_id,b.session_id
+       from current_sessions s join training_load.builder_rpe_session_baselines b
+         on b.plan_id=s.plan_id and b.logical_session_id=s.logical_session_id
+     ), lineage(plan_id,id,ancestor_plan_id,ancestor_id) as (
+       select plan_id,id,ancestor_plan_id,ancestor_id from anchors
+       union
+       select l.plan_id,l.id,b.source_plan_id,b.source_session_id
+       from lineage l join training_load.builder_rpe_session_baselines b
+         on b.plan_id=l.ancestor_plan_id and b.session_id=l.ancestor_id
+       where b.source_plan_id is not null
      )
      select distinct a.id as source_id,b.id as target_id
-     from current_sessions a cross join current_sessions b
-     where a.plan_id=$1 and b.plan_id=$2 and (a.id=any($3::uuid[]) or b.id=any($4::uuid[]))
-       and (
-         (b.source_plan_id=a.plan_id and b.source_session_id=a.id)
-         or (a.source_plan_id=b.plan_id and a.source_session_id=b.id)
-         or (a.source_plan_id=b.source_plan_id and a.source_session_id=b.source_session_id)
-       )`, [sourcePlanId,targetPlanId,sourceIds,targetIds],
+     from lineage a join lineage b using(ancestor_plan_id,ancestor_id)
+     where a.plan_id=$1 and b.plan_id=$2 and (a.id=any($3::uuid[]) or b.id=any($4::uuid[]))`, [sourcePlanId,targetPlanId,sourceIds,targetIds],
   );
   return rows;
 }

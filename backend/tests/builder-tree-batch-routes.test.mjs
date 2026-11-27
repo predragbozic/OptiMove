@@ -18,6 +18,14 @@ if (needsModuleMocksRelaunch()) {
   }
   mock.module("../src/db.js", { namedExports: { query, pool: { connect: async () => client } } });
   mock.module("../src/access.js", { namedExports: { athleteAccessPredicate: () => "false", athleteViewScopes: () => ({ clubIds: [], teamIds: [] }), programViewScopes: () => ({ clubIds: [], teamIds: [] }), canAccessAllAthletes: () => false, canAccessPlan: async () => true } });
+  mock.module("../src/trainingLoadAccess.js", { namedExports: {
+    canManagePlanTrainingLoadInScope: () => false, isAthleteInWorkspaceScope: async () => false,
+    resolveExternalScheduleWorkspaceScope: async () => ({ type: null }),
+  } });
+  mock.module("../src/programRpeSettingsAccess.js", { namedExports: {
+    lockProgramRpeActor: async () => null, lockProgramRpeSettingsActor: async () => null,
+    nativeProgramRpeScope: () => null, programRpeSettingsRightsStillHold: async () => false,
+  } });
   const { default: router, copyProgramTree, copyDaySessions, copySessionContent, copyWeeklyPlanTree } = await import("../src/routes/builder.js");
   const edit = router.stack.find((layer) => layer.route?.path === "/plans/:planId/edit").route.stack[0].handle;
 
@@ -33,6 +41,8 @@ if (needsModuleMocksRelaunch()) {
       const clean = sql.replace(/\s+/g, " ").trim();
       calls.push({ sql: clean, params });
       if (["begin", "commit", "rollback"].includes(clean)) return result([]);
+      if (clean.startsWith("select pg_advisory_xact_lock_shared(")) return result([]);
+      if (clean.startsWith("select to_regclass(")) return result([{ ready: false }]);
       // docs/ai/builder-batch-edit-plan.md 10.2.3: the edit route's lock of the live plan, FOR SHARE.
       if (clean.startsWith("select name, note,") && clean.endsWith("for share")) return result(source ? [{ ...source, id: params[0] }] : []);
       if (clean.startsWith("delete from plans.plan_")) return result([]);
@@ -63,7 +73,7 @@ if (needsModuleMocksRelaunch()) {
         const rows = [];
         for (let offset = 0; offset < params.length; offset += columns.length) {
           const row = Object.fromEntries(columns.map((column, i) => [column, params[offset + i]]));
-          row.id = `created-${nextId++}`;
+          row.id ??= `created-${nextId++}`;
           rows.push(row);
         }
         inserts[match[1]].push(...rows);
@@ -126,10 +136,12 @@ if (needsModuleMocksRelaunch()) {
     let failure;
     await edit({ params: { planId: "source" }, user: { id: "coach" } }, response, (error) => { failure = error; });
     assert.equal(failure, undefined);
-    // 10.2.3: the live plan is locked FOR SHARE as the transaction's first statement, before anything is copied.
+    // The deployment lock precedes the live plan lock, and the plan is locked before copying.
     assert.equal(client.calls[0].sql, "begin");
-    assert.match(client.calls[1].sql, /^select name, note, .* from plans\.plans where id = \$1 and coalesce\(is_active, true\) for share$/);
-    assert.deepEqual(client.calls[1].params, ["source"]);
+    assert.match(client.calls[1].sql, /^select pg_advisory_xact_lock_shared/);
+    const sourceLock = client.calls.find(({ sql }) => /^select name, note, .* from plans\.plans where id = \$1 and coalesce\(is_active, true\) for share$/.test(sql));
+    assert.deepEqual(sourceLock?.params, ["source"]);
+    assert.ok(client.calls.indexOf(sourceLock) < client.calls.findIndex(({ sql }) => sql.startsWith("insert into plans.plans")));
     assert.equal(client.inserts.plan_days.length, 7);
     assert.deepEqual(client.inserts.plan_sessions.map((row) => row.name), ["monday", "sunday"]);
     assert.deepEqual(client.inserts.plan_sessions.map((row) => row.logical_session_id), ["logical-monday", "logical-sunday"]);

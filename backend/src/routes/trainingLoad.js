@@ -27,6 +27,7 @@ import { activityReadScopeSqlForWorkspace, activityScopeForWorkspace, athleteOwn
 import { recordedByOf, recordedBySql } from "../trainingActivityResults.js";
 import { countSessionResults, writePublishedSessionFlags } from "../plannedSessionFlags.js";
 import { lockProgramRpeSettingsActor } from "../programRpeSettingsAccess.js";
+import { beginBuilderRpeProvenance, recordBuilderRpeUse } from "../builderRpeProvenance.js";
 
 const router = Router();
 
@@ -627,13 +628,14 @@ router.patch("/sessions/:sessionId/rpe-enabled", closedTrainingLoadViewGate, tra
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    const recordRpeUse = await beginBuilderRpeProvenance(client);
     if (!await lockProgramRpeSettingsActor(client, req, scope, { trainingLoadView: true })) {
       await client.query("rollback");
       return res.status(404).json({ error: "Training session not found." });
     }
 
     const sessionResult = await client.query(
-      `select ps.id as session_id, ps.logical_session_id, ps.training_load_enabled, p.id as plan_id, p.athlete_id,
+      `select ps.id as session_id, ps.logical_session_id, ps.training_load_enabled, ps.rpe_enabled, p.id as plan_id, p.athlete_id,
               o.owner_scope, o.owner_user_id, o.owner_club_id, o.owner_team_id
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
@@ -705,10 +707,11 @@ router.patch("/sessions/:sessionId/rpe-enabled", closedTrainingLoadViewGate, tra
     // keeps its own tracking, and a draft copy whose tracking is off keeps
     // RPE off (`draftRpeKeptOff`; before K2a-1b that case failed on the v14
     // CHECK with a 500).
-    const { draftSessionUpdated, draftSessionsKeptRpeOff } = await writePublishedSessionFlags(client, {
+    const { draftSessionUpdated, draftSessionsKeptRpeOff, draftFlagsChanged } = await writePublishedSessionFlags(client, {
       sessions: [{ sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id }],
       rpeEnabled,
     });
+    if (recordRpeUse && (session.rpe_enabled !== rpeEnabled || draftFlagsChanged)) await recordBuilderRpeUse(client);
     await client.query("commit");
     return res.json({ sessionId: session.session_id, rpeEnabled, draftSessionUpdated, draftRpeKeptOff: draftSessionsKeptRpeOff > 0 });
   } catch (error) {
@@ -750,13 +753,14 @@ router.patch("/sessions/:sessionId/training-load-enabled", closedTrainingLoadVie
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    const recordRpeUse = await beginBuilderRpeProvenance(client);
     if (!await lockProgramRpeSettingsActor(client, req, scope, { trainingLoadView: true })) {
       await client.query("rollback");
       return res.status(404).json({ error: "Training session not found." });
     }
 
     const sessionResult = await client.query(
-      `select ps.id as session_id, ps.logical_session_id, ps.rpe_enabled, p.id as plan_id, p.athlete_id,
+      `select ps.id as session_id, ps.logical_session_id, ps.rpe_enabled, ps.training_load_enabled, p.id as plan_id, p.athlete_id,
               o.owner_scope, o.owner_user_id, o.owner_club_id, o.owner_team_id
        from plans.plan_sessions ps
        join plans.plan_days pd on pd.id = ps.plan_day_id
@@ -797,10 +801,13 @@ router.patch("/sessions/:sessionId/training-load-enabled", closedTrainingLoadVie
     // (plannedSessionFlags.js) - a live plan's currently-open edit-draft
     // copy of this same logical session is updated in the SAME transaction,
     // or a later "Save and finish" would silently revert this toggle.
-    const { draftSessionUpdated } = await writePublishedSessionFlags(client, {
+    const { draftSessionUpdated, draftFlagsChanged } = await writePublishedSessionFlags(client, {
       sessions: [{ sessionId: session.session_id, planId: session.plan_id, logicalSessionId: session.logical_session_id }],
       trainingLoadEnabled, rpeEnabled: nextRpeEnabled === true,
     });
+    if (recordRpeUse && (session.training_load_enabled !== trainingLoadEnabled || session.rpe_enabled !== nextRpeEnabled || draftFlagsChanged)) {
+      await recordBuilderRpeUse(client);
+    }
     await client.query("commit");
     return res.json({ sessionId: session.session_id, trainingLoadEnabled, rpeEnabled: nextRpeEnabled, draftSessionUpdated });
   } catch (error) {

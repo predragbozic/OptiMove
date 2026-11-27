@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
 import { fixtures, key, startServer } from "./support/permission-roles-world.mjs";
 import { changeProgramRpeGrant } from "./support/program-rpe-grants.mjs";
+import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
 
 let project, db, http, A, B, coach, viewer, plan, live, athleteId;
 
@@ -23,7 +24,7 @@ async function fixturePlan(athleteId, status, weekStart, ownerClub = A) {
 before(async () => {
   project = await createPagesDatabase({ through: "999999999999", label: "programs_rpe" });
   db = project.client;
-  await changeProgramRpeGrant(db, "club_admin", true);
+  assert.equal((await db.query("select public.permission_word_honoured('programs.rpe_settings') as staged")).rows[0].staged, true);
   const f = fixtures(db);
   A = await f.club();
   B = await f.club();
@@ -55,6 +56,12 @@ after(async () => {
   await http?.stop();
   await project?.drop();
 });
+
+async function setNativeRpeGrant(add) {
+  for (const role of add ? ["club_admin", "team_coach"] : ["team_coach", "club_admin"]) {
+    await changeProgramRpeGrant(db, role, add);
+  }
+}
 
 const settings = id => "/api/builder/plans/" + id + "/training-load-settings";
 const change = (session, path) => "/api/training-load/sessions/" + session + "/" + path;
@@ -111,7 +118,7 @@ test("view-only and a coach in the other club cannot write through any direct ac
 });
 
 test("an exact owner without Manage gets identical missing responses while ordinary program edits still work", async () => {
-  await changeProgramRpeGrant(db, "club_admin", false);
+  await setNativeRpeGrant(false);
   await assertRefused(coach);
   assert.equal((await http.api(coach.cookie, "/api/builder/plans/" + plan.id)).status, 200);
   const renamed = await http.api(coach.cookie, "/api/builder/plans/" + plan.id, { method: "PATCH", body: { name: "Ordinary Builder rename" } });
@@ -171,7 +178,7 @@ test("exact weekly batch default differences require rights on every target befo
   const sync = (path, body) => http.api(coach.cookie, "/api/builder/plans/" + source.id + path, { method: "POST", body });
   const equal = await sync("/sync-batch", {});
   assert.equal(equal.status, 200, equal.text);
-  await changeProgramRpeGrant(db, "club_admin", true);
+  await setNativeRpeGrant(true);
   await db.query("update plans.plans set track_training_load_default=true,request_rpe_default=true where id=$1", [source.id]);
   const snapshot = async () => (await db.query("select id,name,status,track_training_load_default,request_rpe_default,updated_at from plans.plans where id=any($1::uuid[]) order by id", [ids])).rows;
   const before = await snapshot();
@@ -474,14 +481,14 @@ test("v106 nonweekly Submit rechecks the grant for a recorded effect under the e
   const edit = await http.api(coach.cookie, draftSession(lineage.session_id), { method: "PATCH", body: { rpeEnabled: false } });
   assert.equal(edit.status, 200, edit.text);
   const submit = () => http.api(coach.cookie, "/api/builder/plans/" + draftId + "/submit", { method: "POST", body: {} });
-  await changeProgramRpeGrant(db, "club_admin", false);
+  await setNativeRpeGrant(false);
   try {
     const refused = await submit();
     assert.equal(refused.status, 404, refused.text);
     assert.equal((await flags(source.id)).rpe_enabled, true);
     assert.equal((await flags(lineage.session_id)).rpe_enabled, false);
   } finally {
-    await changeProgramRpeGrant(db, "club_admin", true);
+    await setNativeRpeGrant(true);
   }
   const saved = await submit();
   assert.equal(saved.status, 200, saved.text);
@@ -586,14 +593,14 @@ test("v106 single first Submit refuses an explicit edit after the grant is remov
     method: "PATCH", body: { trackTrainingLoadDefault: true, requestRpeDefault: true },
   });
   assert.equal(changed.status, 200, changed.text);
-  await changeProgramRpeGrant(db, "club_admin", false);
+  await setNativeRpeGrant(false);
   const submit = () => http.api(coach.cookie, "/api/builder/plans/" + id + "/submit", { method: "POST", body: {} });
   try {
     const refusal = await submit();
     assert.equal(refusal.status, 404, refusal.text);
     assert.equal((await db.query("select status from plans.plans where id=$1", [id])).rows[0].status, "draft");
   } finally {
-    await changeProgramRpeGrant(db, "club_admin", true);
+    await setNativeRpeGrant(true);
   }
   const accepted = await submit();
   assert.equal(accepted.status, 200, accepted.text);
@@ -676,6 +683,29 @@ test("a weekly batch edit requires a proven sibling for a recorded RPE change, e
   assert.equal(saved.status, 200, saved.text);
   assert.equal((await flags((await onlySession(primary)).id)).rpe_enabled, false);
   assert.equal((await flags(siblingRow.id)).rpe_enabled, false);
+  const draftWithNew = await openEditDraft(primary);
+  const { rows: [newDay] } = await db.query("select id from plans.plan_days where plan_id=$1 and day_order=2", [draftWithNew]);
+  const made = await http.api(coach.cookie, "/api/builder/blocks/" + newDay.id + "/sessions", {
+    method: "POST", body: { name: "Added later", bta: "T" },
+  });
+  assert.equal(made.status, 201, made.text);
+  const onDayTwo = async id => (await db.query(
+    "select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id where pd.plan_id=$1 and pd.day_order=2", [id],
+  )).rows[0].id;
+  const opened = await onDayTwo(draftWithNew);
+  const enabled = await http.api(coach.cookie, draftSession(opened), { method: "PATCH", body: { trackingEnabled: true, rpeEnabled: true } });
+  assert.equal(enabled.status, 200, enabled.text);
+  const saveAll = id => http.api(coach.cookie, "/api/builder/plans/" + id + "/submit", { method: "POST", body: { batchScope: "all" } });
+  const established = await saveAll(draftWithNew);
+  assert.equal(established.status, 200, established.text);
+  const siblingAdded = await onDayTwo(sibling);
+  assert.equal((await flags(siblingAdded)).rpe_enabled, true);
+  const draftAgain = await openEditDraft(primary);
+  const disabled = await http.api(coach.cookie, draftSession(await onDayTwo(draftAgain)), { method: "PATCH", body: { rpeEnabled: false } });
+  assert.equal(disabled.status, 200, disabled.text);
+  const appliedAgain = await saveAll(draftAgain);
+  assert.equal(appliedAgain.status, 200, appliedAgain.text);
+  assert.equal((await flags(siblingAdded)).rpe_enabled, false);
 });
 test("first weekly batch Submit checks the current grant before activating any proven destination", async () => {
   const origin = await fixturePlan(athleteId, "active", "2027-07-05");
@@ -721,14 +751,14 @@ test("first weekly batch Submit checks the current grant before activating any p
   )).rows[0].changed_rpe, true);
   const submit = () => http.api(coach.cookie, "/api/builder/plans/" + primary + "/submit", { method: "POST", body: { syncBatch: true } });
   const statuses = async () => (await db.query("select status from plans.plans where id=any($1::uuid[])", [[primary,sibling]])).rows.map(row => row.status);
-  await changeProgramRpeGrant(db, "club_admin", false);
+  await setNativeRpeGrant(false);
   try {
     const denied = await submit();
     assert.equal(denied.status, 404, denied.text);
     assert.deepEqual(await statuses(), ["draft","draft"]);
     assert.equal((await flags(await onlySession(sibling))).rpe_enabled, false);
   } finally {
-    await changeProgramRpeGrant(db, "club_admin", true);
+    await setNativeRpeGrant(true);
   }
   const accepted = await submit();
   assert.equal(accepted.status, 200, accepted.text);
@@ -780,4 +810,38 @@ test("assembled templates, duplicate weeks and group-day copies record the true 
   const pastedDay = (await inherited(weeklyId))[1];
   assert.equal(pastedDay.source_plan_id, weeklyId);
   assert.equal(pastedDay.source_session_id, sourceWeekSession.session_id);
+});
+
+test("the exact production predecessor can create a legacy draft during the v106 overlap", async () => {
+  const predecessor = "4d7d0ced4f9f2eb5f2eb8d9b726295282d7e0555";
+  const previous = await previousDashboardServer(project.url, {}, predecessor);
+  const oldPost = async (path, body) => {
+    const result = await fetch(previous.baseUrl + path, {
+      method: "POST", headers: { cookie: coach.cookie, "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    const text = await result.text();
+    assert.ok(result.ok, text);
+    return JSON.parse(text);
+  };
+  try {
+    assert.equal(previous.commit, predecessor);
+    const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);
+    const legacy = await oldPost("/api/builder/plans", {
+      name: "Saved by the production predecessor", planType: "weekly", weekStart: "2027-09-06", athleteIds: [athlete.athlete_id],
+    });
+    const legacyId = legacy.plan.id;
+    const session = await oldPost("/api/builder/blocks/" + legacy.blocks[0].id + "/sessions", { name: "Old saved session", bta: "T" });
+    const sessionId = session.blocks.flatMap(block => block.sessions)[0].id;
+    await oldPost(draftSession(sessionId) + "/nodes", { nodeType: "section", name: "Old content" });
+    const before = await flags(sessionId);
+    assert.equal((await db.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [legacyId])).rowCount, 0);
+
+    const submitted = await http.api(coach.cookie, "/api/builder/plans/" + legacyId + "/submit", { method: "POST", body: {} });
+    assert.equal(submitted.status, 200, submitted.text);
+    assert.equal(submitted.body.plan.status, "active");
+    assert.deepEqual(await flags(sessionId), before);
+    assert.equal((await db.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [legacyId])).rowCount, 0);
+  } finally {
+    await previous.stop();
+  }
 });

@@ -3,7 +3,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
-import { beginBuilderRpeProvenance, hasBuilderRpeSiblingLineage, inspectBuilderRpeSubmitEffects, listBuilderRpeExplicitSessions, listBuilderRpeSiblingLineage, recordBuilderRpeCopyIfTracked, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening, recordBuilderRpeSyncedCopy } from "../builderRpeProvenance.js";
+import { beginBuilderRpeProvenance, hasBuilderRpeSiblingLineage, inspectBuilderRpeSubmitEffects, listBuilderRpeExplicitSessions, listBuilderRpeSiblingLineage, recordBuilderRpeCopyIfTracked, recordBuilderRpeNewLogicalCopies, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening, recordBuilderRpeSyncedCopy, recordBuilderRpeUse } from "../builderRpeProvenance.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -3108,10 +3108,11 @@ async function prepareWeeklyRpeSync(client, sourcePlan, req, guard) {
   return { actor, scope };
 }
 
-async function checkSyncRpeDefaults(client, rpe, source, siblings) {
+async function checkSyncRpeDefaults(client, rpe, source, siblings, markUse = false) {
   if (!rpe) return;
   const ids = siblings.filter(row => changesRpeFields(row, source, programRpePlanFields)).map(row => row.id);
   await assertProgramRpeTargets(client, rpe.actor, rpe.scope, ids);
+  if (markUse && ids.length) await recordBuilderRpeUse(client);
 }
 
 async function syncBatchFromPlan(sourcePlan, req, guard = null) {
@@ -3126,7 +3127,7 @@ async function syncBatchFromPlan(sourcePlan, req, guard = null) {
       return;
     }
     const evidence = checkProvenance ? await checkBatchRpeEffects(client, rpe, sourceRow, siblingRows, false) : null;
-    await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows);
+    await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
     await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, evidence);
     await client.query("commit");
   } catch (error) {
@@ -3216,7 +3217,7 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
     // this SAME locked source row, never a second independent lock.
     return { sourceRow, activatedPlans: null };
   }
-  await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows);
+  await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
   await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, checkProvenance ? {} : null);
 
   const emptinessTargets = sourceRow.status === "draft" ? [sourceRow, ...siblingRows] : siblingRows;
@@ -3415,7 +3416,7 @@ async function hasBuilderRpeExplicitPlanEffect(client, planId) {
   return rowCount > 0;
 }
 
-async function checkEditedRpeEffects(client, rpe, source, draft, sessions, batch) {
+async function checkEditedRpeEffects(client, rpe, source, draft, sessions, batch, markUse) {
   if (!rpe) return;
   const before = (await client.query(
     "select track_training_load_default,request_rpe_default from plans.plans where id=$1", [source.id],
@@ -3428,6 +3429,7 @@ async function checkEditedRpeEffects(client, rpe, source, draft, sessions, batch
   const ids = (batch?.apply ?? []).filter(batchMemberChangesRpe).map(member => member.planId);
   if (sourceChanges) ids.push(source.id);
   await assertProgramRpeTargets(client, rpe.actor, rpe.scope, ids.sort());
+  if (markUse && ids.length) await recordBuilderRpeUse(client);
 }
 
 async function applyEditDraft(req, draftPlan, timing) {
@@ -3548,7 +3550,7 @@ async function applyEditDraft(req, draftPlan, timing) {
         if (effects.changed) affected.push(source.id);
         if (rpe) await assertProgramRpeTargets(client, rpe.actor, scope, affected.sort());
       }
-      await checkEditedRpeEffects(client, rpe, source, freshDraft, rpeSessions, batch);
+      await checkEditedRpeEffects(client, rpe, source, freshDraft, rpeSessions, batch, hasProvenance);
     } else if (hasProvenance) {
       const effects = await inspectBuilderRpeSubmitEffects(client, source.id, freshDraft.id);
       if (effects.sourceChanged) {
@@ -3591,8 +3593,10 @@ async function applyEditDraft(req, draftPlan, timing) {
     // sibling plan) is a genuinely different logical session and must
     // never pass this flag.
     await timing.measure("apply_copy", async () => {
-      if (freshDraft.plan_type === "weekly") await copyWeeklyPlanTree(client, freshDraft.id, source.id, freshDraft.week_start, { preserveLogicalId: true });
-      else await copyProgramTree(client, freshDraft.id, source.id);
+      const copies = freshDraft.plan_type === "weekly"
+        ? await copyWeeklyPlanTree(client, freshDraft.id, source.id, freshDraft.week_start, { preserveLogicalId: true })
+        : await copyProgramTree(client, freshDraft.id, source.id);
+      if (hasProvenance) await recordBuilderRpeNewLogicalCopies(client, { planId: source.id, sourcePlanId: freshDraft.id, copies });
     });
     await assertExerciseReuseAllowed(client, req.user.id, { planIds: [source.id], retainedItems: retained.rows });
     // The siblings take the change, ascending, before the edit draft (their
@@ -3600,10 +3604,11 @@ async function applyEditDraft(req, draftPlan, timing) {
     if (batch) {
       await timing.measure("apply_batch", async () => {
         for (const member of batch.apply) {
-          await writeSiblingChange(client, member.planId, member.ops, {
+          const copies = await writeSiblingChange(client, member.planId, member.ops, {
             copyLegacySession,
             assertReuse: (c, planId, retainedItems) => assertExerciseReuseAllowed(c, req.user.id, { planIds: [planId], retainedItems }),
           });
+          if (hasProvenance) await recordBuilderRpeCopyIfTracked(client, { planId: member.planId, sourcePlanId: freshDraft.id, copies });
         }
       });
     }
