@@ -2160,18 +2160,20 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
     if (kindError) return res.status(400).json({ error: kindError });
 
     client = await pool.connect();
-    const nextOrderResult = await client.query(
-      "select coalesce(max(session_order), -1) + 1 as next_order from plans.plan_sessions where plan_day_id = $1",
-      [target.id],
-    );
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    if (source.plan.id !== target.plan.id) {
+      const plans = await client.query(
+        "select id from plans.plans where id=any($1::uuid[]) order by id for no key update", [[source.plan.id, target.plan.id]],
+      );
+      if (plans.rowCount !== 2) throw Object.assign(new Error("Program not found."), { status: 404 });
+    }
     await lockCopyTargetPlan(client,target.plan.id,{dayId:target.id});
     const { rows: [currentSource] } = await client.query(
       `select ps.training_load_enabled, ps.rpe_enabled
        from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id
-       where ps.id=$1 and pd.plan_id=$2`,
+       where ps.id=$1 and pd.plan_id=$2 for update of ps`,
       [source.id, source.plan.id],
     );
     if (!currentSource) {
@@ -2180,6 +2182,10 @@ router.post("/sessions/:sessionId/copy-into/:targetDayId", withBatchReuseGuard(a
       client = null;
       return res.status(404).json({ error: "Source session not found." });
     }
+    const nextOrderResult = await client.query(
+      "select coalesce(max(session_order), -1) + 1 as next_order from plans.plan_sessions where plan_day_id = $1",
+      [target.id],
+    );
     const created = await client.query(
       // session_time/rpe_enabled/training_load_enabled: content
       // properties, always copied unconditionally (session_time was

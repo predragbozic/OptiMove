@@ -175,7 +175,17 @@ export async function recordBuilderRpePlanEffect(client, before, after) {
 
 // Record exact inserted rows only under a known immutable plan baseline.
 export async function recordBuilderRpeSessionOpening(client, planId, sessionId, source = null) {
-  if (source) await assertBuilderRpeCopyProvenance(client, null, [source.id]);
+  if (source) {
+    const copied = await client.query(
+      `select 1 from plans.plan_sessions original
+       join plans.plan_days day on day.id=original.plan_day_id and day.plan_id=$2
+       join plans.plan_sessions destination on destination.id=$3
+       where original.id=$1 and (original.training_load_enabled,original.rpe_enabled)=
+         (destination.training_load_enabled,destination.rpe_enabled)`, [source.id, source.plan.id, sessionId],
+    );
+    if (!copied.rowCount) throw recoveryRequired();
+    await assertBuilderRpeCopyProvenance(client, null, [source.id]);
+  }
   await client.query(
     `insert into training_load.builder_rpe_session_baselines
        (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,opening_tracking,opening_rpe)
@@ -383,6 +393,7 @@ export async function assertBuilderRpeCopyProvenance(client, planId = null, sess
      from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
      where s.id=any($2::uuid[])`, [planId, sessionIds],
   );
+  if (rows.length !== new Set(sessionIds).size + Number(Boolean(planId))) throw recoveryRequired();
   await assertBuilderRpeInheritedRoots(client, rows.filter(hasRpe));
 }
 
