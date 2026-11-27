@@ -2830,7 +2830,9 @@ async function buildSubmitResponse(req, plan) {
 }
 
 async function draftRpeSettingsOffered(plan, req) {
-  if (!isEditableDraftPlan(plan)) return false;
+  if (plan.plan_type !== "weekly" || !isEditableDraftPlan(plan)) return false;
+  const authz = req.authz;
+  if (![authz?.platformRoles, authz?.clubRoles, authz?.teamRoles].every(Array.isArray)) return false;
   const scope = await resolveBuilderRpeWorkspace({ query }, req);
   if (!programRpeSettingsOffered(req.authz, scope)) return false;
   if (scope.type === "platform") return true;
