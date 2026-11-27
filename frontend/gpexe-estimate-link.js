@@ -3,7 +3,7 @@
 // one write path (the Roster tab's), so the review never saves an estimate itself and keeps no second roster state.
 //
 // Who is listed comes from the activity's roster read (GET /api/training-activity/:id/roster), the same read the Roster tab
-// makes: an athlete in state participated_no_values, offered only while the server says estimates are on
+// makes: an athlete in state participated_no_values, offered only while the server authorizes the estimate editor
 // (viewer.estimates). The read is GET only; a failure shows no link (the Roster tab stays reachable from Activities).
 import { api } from "./api.js";
 import { state } from "./state.js";
