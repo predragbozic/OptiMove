@@ -37,6 +37,34 @@ for(const width of [390,1280])test(width+'px: React target table publishes and b
  await chart.locator('.tl-analysis-chart-values summary').click();
  await page.getByRole('button',{name:'Dashboard actions',exact:true}).click();
  const [report]=await Promise.all([page.waitForEvent('popup'),page.getByRole('menuitem',{name:'Export page as PDF',exact:true}).click()]);await report.locator('.report-widget svg').waitFor();assert.equal(await report.locator('.report-values table').count(),0);assert.equal(await report.locator('.tl-chart-controls').count(),0);await report.close();await page.keyboard.press('Escape');
+ const pagesUrl=world.baseUrl+'/api/training-load/dashboards/'+dashboards.get(width)+'/pages';
+ const readPages=async suffix=>{
+  const response=await context.request.get(pagesUrl+suffix);
+  assert.equal(response.status(),200,await response.text());
+  return response.json();
+ };
+ const home=(await readPages('')).pages.find(item=>item.is_home);
+ const original=(await readPages('/'+home.id)).widgets[0];
+ await page.getByLabel('Page actions',{exact:true}).click();
+ await page.getByRole('button',{name:'Copy page',exact:true}).click();
+ await page.getByLabel('Page name',{exact:true}).fill('Radar page copy');
+ const copiedResponse=page.waitForResponse(response=>response.url()===pagesUrl+'/'+home.id+'/copy'&&response.request().method()==='POST');
+ await page.getByRole('button',{name:'Copy and open',exact:true}).click();
+ const copy=await copiedResponse;
+ assert.equal(copy.status(),200,await copy.text());
+ const {receipt}=await copy.json();
+ await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Radar page copy'}).waitFor({state:'attached'});
+ await chart.locator('optimove-dashboard-chart svg').waitFor();
+ const duplicate=(await readPages('/'+receipt.pageId)).widgets[0];
+ const map=new Map(original.series.map(series=>[series.id,duplicate.series.find(item=>item.series_order===series.series_order)?.id]));
+ assert.equal(map.size,3);
+ for(const [source,target] of map){assert.ok(target);assert.notEqual(source,target);}
+ const config=original.presentation_config.referenceConfig;
+ assert.equal(config.axes.length,3);
+ assert.deepEqual(duplicate.presentation_config.referenceConfig,{...config,axes:config.axes.map(axis=>({...axis,seriesId:map.get(axis.seriesId)}))});
+ if(width===390) await page.getByRole('combobox',{name:'Page',exact:true}).selectOption({label:'Home'});
+ else await page.getByRole('navigation',{name:'Dashboard pages'}).getByRole('button',{name:'Home',exact:true}).click();
+ await chart.locator('optimove-dashboard-chart svg').waitFor();
  await page.locator('[data-action="training-load-pages-create"]').click();await page.locator('[data-action="training-load-pages-name"]').fill('Comparison copy');await page.locator('[data-action="training-load-pages-save"]').click();await page.locator('.tl-dashboard-pages nav [aria-current="page"]').filter({hasText:'Comparison copy'}).waitFor({state:'attached'});
  if(width===390) await page.getByRole('combobox',{name:'Page',exact:true}).selectOption({label:'Home'}); else await page.locator('.tl-dashboard-pages nav button').filter({hasText:'Home'}).click();await chart.locator('optimove-dashboard-chart svg').waitFor();assert.equal(await chart.locator('.tl-analysis-chart-values').getAttribute('open'),null);
  await page.getByRole('button',{name:'Widget actions: Position comparison',exact:true}).click();await page.locator('[data-action="training-load-pages-open-copy"]').click();await page.locator('[data-action="training-load-pages-destination"]').selectOption({label:'Comparison copy'});await page.locator('[data-action="training-load-pages-save"]').click();await page.getByText('Widget copied to Comparison copy.',{exact:true}).waitFor();if(width===390) await page.getByRole('combobox',{name:'Page',exact:true}).selectOption({label:'Comparison copy'}); else await page.locator('.tl-dashboard-pages nav button').filter({hasText:'Comparison copy'}).click();await chart.locator('optimove-dashboard-chart svg').waitFor();assert.match(await chart.innerText(),/Game targets.*Version 1/);assert.deepEqual(pageErrors,[]);await page.getByRole('button',{name:'Widget actions: Position comparison',exact:true}).click();await page.getByText('References and Radar',{exact:true}).click();await dialog.getByRole('checkbox',{name:'Minimum',exact:true}).first().uncheck();await dialog.getByRole('button',{name:'Preview comparison',exact:true}).click();await dialog.locator('.tl-reference-preview optimove-dashboard-chart svg').waitFor();await dialog.getByRole('button',{name:'Save references',exact:true}).click();await dialog.waitFor({state:'hidden'});await chart.locator('optimove-dashboard-chart svg').waitFor();assert.deepEqual(pageErrors,[]);
