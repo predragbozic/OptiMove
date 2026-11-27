@@ -1627,7 +1627,7 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
         ? await copyWeeklyPlanTree(client, plan.id, draftId, plan.week_start, { preserveLogicalId: true, targetIsNew: true })
         : await copyProgramTree(client, plan.id, draftId);
       // An older source without an owner snapshot keeps that gap explicit.
-      await copyPlanOwnershipSnapshot(client, plan.id, draftId);
+      if (plan.plan_type === "weekly" || recordRpeOpening) await copyPlanOwnershipSnapshot(client, plan.id, draftId);
       if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: draftId, sourcePlanId: plan.id, copies });
     });
     await client.query("commit");
@@ -3436,12 +3436,12 @@ async function applyEditDraft(req, draftPlan, timing) {
   let client;
   let committed = false;
   try {
-    const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client);
     const hasProvenance = await beginBuilderRpeProvenance(client);
     const nativeCheck = draftPlan.plan_type === "weekly" || hasProvenance;
+    const scope = nativeCheck ? await resolveExternalScheduleWorkspaceScope(req) : null;
     const rpe = nativeCheck && (scope.type !== "platform" || hasProvenance) ? { scope, actor: await lockProgramRpeActor(client, req, scope) } : null;
     // Lock and re-read the draft's OWN plans.plans row fresh, inside this
     // transaction - the caller's draftPlan parameter was read before this

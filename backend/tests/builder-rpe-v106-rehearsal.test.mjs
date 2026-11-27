@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
-import { asActor, fixtures, ROLE_IDS } from "./support/permission-roles-world.mjs";
+import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
+import { asActor, fixtures, key, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 
 async function seedNativeRoleLayers(fixture) {
   const f = fixtures(fixture.client);
@@ -12,6 +13,8 @@ async function seedNativeRoleLayers(fixture) {
   const coach = await f.user("Builder native coach");
   await f.grantPlatform(platform);
   await f.grantTeam(coach, team);
+  const versionCoach = await f.user("Builder version coach");
+  await f.grantTeam(versionCoach, team);
   const role = ROLE_IDS.team_coach;
   return asActor(fixture.url, platform, async tx => {
     await tx.query("select public.lock_club_ceiling($1::uuid[],'exclusive')", [[club]]);
@@ -42,7 +45,7 @@ async function seedNativeRoleLayers(fixture) {
        values($1,1,'create',$2,'platform_admin','Rehearsal custom',
          array(select permission_word from public.permission_custom_role_items where custom_role_id=$1))`, [custom.id,platform],
     );
-    return { versionId: version.id, customId: custom.id };
+    return { versionId: version.id, customId: custom.id, club, team, platform, coach, versionCoach };
   });
 }
 
@@ -108,6 +111,129 @@ test("v106 apply, unused rollback restores the catalogue, then reapply", async (
     assert.deepEqual(await wordState(), { honoured: true, grants: 2 });
     assert.equal((await client.query("select * from training_load.builder_rpe_provenance_use")).rowCount, 0);
   } finally {
+    await fixture.drop();
+  }
+});
+
+test("both Settings builds preserve the staged word and both native layers can write", async () => {
+  const fixture = await createPagesDatabase({ through: "202612071000", label: "rpe_overlap" });
+  const { client } = fixture;
+  let current, previous;
+  try {
+    const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
+    const f = fixtures(client);
+    const viewer = await f.user("No role");
+    const athleteUser = await f.user("Builder athlete");
+    await f.makeAthlete(athleteUser);
+    const { rows: [athlete] } = await client.query("select id,athlete_id from public.athletes where user_id=$1", [athleteUser]);
+    await client.query("insert into public.athlete_memberships(athlete_id,club_id,team_id,membership_type,status) values($1,$2,$3,'team','active')", [athlete.id,club,team]);
+    await client.query(
+      "insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'team',$4),($3,'team',$4)",
+      [platform,coach,versionCoach,team],
+    );
+    current = await startServer(fixture.url);
+    previous = await previousDashboardServer(fixture.url, {}, "4d7d0ced4f9f2eb5f2eb8d9b726295282d7e0555");
+    const platformCookie = await current.cookieFor(platform);
+    const customCookie = await current.cookieFor(coach);
+    const versionCookie = await current.cookieFor(versionCoach);
+    const viewerCookie = await current.cookieFor(viewer);
+    const oldPost = async (cookie, path, body) => {
+      const response = await fetch(previous.baseUrl + path, {
+        method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body),
+      });
+      const text = await response.text();
+      return { status: response.status, body: JSON.parse(text), text };
+    };
+    const oldDraft = async (cookie, weekStart) => {
+      const draft = await oldPost(cookie, "/api/builder/plans", {
+        name: "Saved by the previous build", planType: "weekly", weekStart, athleteIds: [athlete.athlete_id],
+      });
+      assert.equal(draft.status, 201, draft.text);
+      return draft.body.plan.id;
+    };
+    const legacyId = await oldDraft(versionCookie, "2027-09-13");
+    await fixture.applyThrough("202612081000");
+    const marker = () => client.query("select 1 from training_load.builder_rpe_provenance_use").then(result => result.rowCount);
+    const tracked = (id) => client.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [id]).then(result => result.rowCount);
+    assert.equal(await marker(), 0);
+    assert.equal(await tracked(legacyId), 0);
+
+    const root = "/api/organization/roles";
+    const roleId = ROLE_IDS.team_coach;
+    const word = "programs.rpe_settings";
+    const roleChange = root + "/" + roleId + "/change";
+    const versionPath = root + "/" + roleId + "/clubs/" + club + "/version";
+    const customPath = root + "/users/" + coach + "/clubs/" + club + "/custom";
+    const customScope = { roleId, scopeType: "team", scopeId: team };
+    const words = async () => (await client.query(
+      `select array(select permission_word from public.permission_role_items where role_id=$1 order by 1) as "default",
+         array(select permission_word from public.permission_club_role_version_items where version_id=$2 order by 1) as version,
+         array(select permission_word from public.permission_custom_role_items where custom_role_id=$3 order by 1) as custom`,
+      [roleId,versionId,customId],
+    )).rows[0];
+    const revisions = async () => (await client.query(
+      `select (select revision from public.permission_roles where id=$1) as "default",
+        (select revision from public.permission_club_role_versions where id=$2) as version,
+        (select revision from public.permission_custom_roles where id=$3) as custom`, [roleId,versionId,customId],
+    )).rows[0];
+    for (const send of [
+      (path, body) => oldPost(platformCookie, path, body),
+      (path, body) => current.api(platformCookie, path, { method: "POST", body }),
+    ]) {
+      const before = await words();
+      const revision = await revisions();
+      for (const [path, input] of [
+        [roleChange, { expectedRevision: revision.default, items: before.default.filter(item => item !== word) }],
+        [versionPath, { expectedRevision: revision.version, remove: [word] }],
+        [customPath, { ...customScope, expectedRevision: revision.custom, remove: [word] }],
+      ]) {
+        const rejected = await send(path, { requestKey: key(), reason: "Staged item remains locked", ...input });
+        assert.equal(rejected.status, 409, rejected.text);
+        assert.equal(rejected.body.error, "permission_not_available_yet", rejected.text);
+      }
+      assert.deepEqual(await words(), before);
+      assert.deepEqual(await revisions(), revision);
+      const unrelated = await send(roleChange, {
+        requestKey: key(), reason: "Keep staged item", expectedRevision: revision.default,
+        items: before.default, description: "Overlap " + key(),
+      });
+      assert.equal(unrelated.status, 200, unrelated.text);
+      for (const [path, input, field] of [
+        [versionPath, { expectedRevision: revision.version }, "version"],
+        [customPath, { ...customScope, expectedRevision: revision.custom }, "custom"],
+      ]) {
+        const change = before[field].includes("athletes.remove") ? { remove: ["athletes.remove"] } : { add: ["athletes.remove"] };
+        const allowed = await send(path, { ...input, ...change, requestKey: key(), reason: "Unrelated role adjustment" });
+        assert.equal(allowed.status, 200, allowed.text);
+      }
+      assert.ok(Object.values(await words()).every(items => items.includes(word)));
+    }
+
+    const patchDefaults = (cookie, id, enabled) => current.api(cookie, "/api/builder/plans/" + id + "/training-load-settings", {
+      method: "PATCH", body: { trackTrainingLoadDefault: enabled, requestRpeDefault: enabled },
+    });
+    const noOp = await patchDefaults(versionCookie, legacyId, false);
+    assert.equal(noOp.status, 200, noOp.text);
+    assert.equal(await marker(), 0);
+    const denied = await patchDefaults(viewerCookie, legacyId, true);
+    assert.ok([403,404].includes(denied.status), denied.text);
+    assert.equal(await marker(), 0);
+    const accepted = await patchDefaults(versionCookie, legacyId, true);
+    assert.equal(accepted.status, 200, accepted.text);
+    assert.equal(await tracked(legacyId), 0);
+    assert.equal(await marker(), 1);
+    const rollback = await readFile(new URL("../../docs/runbooks/builder-rpe-v106-rollback.sql", import.meta.url), "utf8");
+    await assert.rejects(client.query(rollback), /refuses recorded Builder provenance or checked writer use/);
+    await client.query("rollback");
+    const customLegacy = await oldDraft(customCookie, "2027-09-20");
+    const customAccepted = await patchDefaults(customCookie, customLegacy, true);
+    assert.equal(customAccepted.status, 200, customAccepted.text);
+    const { rows } = await client.query("select request_rpe_default from plans.plans where id=any($1::uuid[]) order by id", [[legacyId,customLegacy]]);
+    assert.deepEqual(rows.map(row => row.request_rpe_default), [true,true]);
+  } finally {
+    await client.query("rollback").catch(() => {});
+    await previous?.stop();
+    await current?.stop();
     await fixture.drop();
   }
 });
