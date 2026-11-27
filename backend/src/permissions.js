@@ -242,6 +242,8 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   // Program Library and the plan reads); routes/exercises.js holds the exercise library's coach gate.
   "programs.view": Object.freeze(["access.js", "programRpeSettingsAccess.js"]),
   "programs.edit": Object.freeze(["programEditAccess.js"]),
+  "programs.assign": Object.freeze(["programEditAccess.js"]),
+  "programs.publish": Object.freeze(["programEditAccess.js"]),
   "programs.rpe_settings": Object.freeze(["programRpeSettingsAccess.js"]),
   "exercises.use": Object.freeze(["routes/exercises.js"]),
   "exercises.add": Object.freeze(["routes/exercises.js", "routes/builder.js"]),

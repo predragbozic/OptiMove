@@ -51,6 +51,13 @@ test("A1. every listed gate file checks its word through can() or its named tran
         assert.match(guard, /user_has_permission\(\$2,\$1,\$3,\$4\)/);
         words.push(...[...src.text.matchAll(/lockExerciseWriter\(client, req, workspace, "(exercises\.(?:add|remove))"/g)].map(match => match[1]));
       }
+      if (gate === "programEditAccess.js" && ["programs.assign", "programs.publish"].includes(word)) {
+        const check = src.text.match(/export async function assertProgramAssignmentHeld\([\s\S]*?\n\}/)?.[0];
+        assert.ok(check);
+        assert.match(check, /public\.permission_word_honoured\(required\.word\)/);
+        assert.match(check, /public\.user_has_permission\(\$1,required\.word,\$2,\$3\)/);
+        words.push(...[...check.matchAll(/words\.push\("(programs\.(?:assign|publish))"\)/g)].map(match => match[1]));
+      }
       assert.ok(words.includes(word), `${word}: ${gate} checks the word`);
     }
   }

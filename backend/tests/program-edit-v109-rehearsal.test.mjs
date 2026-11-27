@@ -67,6 +67,7 @@ function roleData(client) {
 
 const previousBuild = "234e2eab4f7aea6376ddcdc26800bc516f6ec6e6";
 const stagedBuild = "aa7e62cbf9dcc4aaab538a83b7f9f16a08526a56";
+const editExposureBuild = "58762744039fa00577d50926c50b1cacfcf3b6ea";
 const migration = "202612111000";
 const bridgeWords = ["programs.edit"];
 const read = name => readFile(new URL(`../../docs/runbooks/program-edit-v109-${name}.sql`, import.meta.url), "utf8");
@@ -74,7 +75,7 @@ const read = name => readFile(new URL(`../../docs/runbooks/program-edit-v109-${n
 test("Programs Edit stages only existing native View holders, preserves old Settings and writes, and rolls back only before use", async () => {
   const fixture = await createPagesDatabase({ through: "202612101000", label: "program_edit_v109" });
   const { client } = fixture;
-  let current, previous, staged;
+  let current, previous, staged, editExposure;
   try {
     const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'team',$4),($3,'team',$4)", [platform,coach,versionCoach,team]);
@@ -130,6 +131,7 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, previousBuild);
     staged = await previousDashboardServer(fixture.url, {}, stagedBuild);
+    editExposure = await previousDashboardServer(fixture.url, {}, editExposureBuild);
     const platformCookie = await current.cookieFor(platform);
     const versionCookie = await current.cookieFor(versionCoach);
     const call = async (server, cookie, path, body, method = "POST") => {
@@ -186,7 +188,7 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
       assert.equal(me.status, 200, me.text);
       assert.equal(me.body.user.permissions.includes("programs.edit"), false);
     }
-    const exposed = await current.api(platformCookie, root + "/catalog?clubId=" + club, { method: "GET" });
+    const exposed = await call(editExposure, platformCookie, root + "/catalog?clubId=" + club, undefined, "GET");
     assert.equal(exposed.status, 200, exposed.text);
     for (const word of ["programs.edit", "programs.assign", "programs.publish", "programs.rpe_settings"]) {
       const checked = word === "programs.edit" || word === "programs.rpe_settings";
@@ -260,7 +262,7 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
     assert.equal(editable.status, 201, editable.text);
     const target = "/api/builder/plans/" + editable.body.plan.id;
     const me = async cookie => {
-      const result = await current.api(cookie, "/api/auth/me", { method: "GET" });
+      const result = await call(editExposure, cookie, "/api/auth/me", undefined, "GET");
       assert.equal(result.status, 200, result.text);
       return result.body.user.permissions;
     };
@@ -276,23 +278,23 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
     for (const layer of layers) {
       assert.ok((await me(layer.cookie)).includes("programs.edit"));
       for (const word of ["programs.assign", "programs.publish"]) {
-        const refused = await current.api(platformCookie, layer.path, { method: "POST", body: {
+        const refused = await call(editExposure, platformCookie, layer.path, {
           requestKey: key(), expectedRevision: await revisionOf(layer.kind, layer.id), reason: "Permission is still staged",
           ...layer.scope, add: [word],
-        } });
+        });
         assert.equal(refused.status, 409, refused.text);
         assert.equal(refused.body.error, "permission_not_honoured");
       }
       const revise = async change => {
         const body = { requestKey: key(), expectedRevision: await revisionOf(layer.kind, layer.id),
           reason: "Program Edit exposure rehearsal", ...layer.scope, [change]: bridgeWords };
-        const response = await current.api(platformCookie, layer.path, { method: "POST", body });
+        const response = await post(editExposure, platformCookie, layer.path, body);
         assert.equal(response.status, 200, response.text);
         const replay = await post(staged, platformCookie, layer.path, body);
         assert.equal(replay.status, 200, replay.text);
         assert.equal(replay.body.replayed, true);
       };
-      const rename = name => current.api(layer.cookie, target, { method: "PATCH", body: { name } });
+      const rename = name => call(editExposure, layer.cookie, target, { name }, "PATCH");
       await revise("remove");
       assert.ok(!(await me(layer.cookie)).includes("programs.edit"));
       const denied = await rename("Revoked edit");
@@ -312,7 +314,7 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
     await assert.rejects(client.query(rollback), /checked Programs Edit writer use/);
     await client.query("rollback");
   } finally {
-    try { await Promise.all([previous?.stop(), staged?.stop()]); } finally {
+    try { await Promise.all([previous?.stop(), staged?.stop(), editExposure?.stop()]); } finally {
       try { await current?.stop(); } finally { await fixture.drop(); }
     }
   }
