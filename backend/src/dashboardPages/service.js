@@ -17,7 +17,7 @@ import {canViewDashboardRow,canManageDashboardRow,dashboardWidgetsForViewer,dash
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
-import {dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor} from '../dashboardManageAccess.js';
+import {dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor,markDashboardManageWrite} from '../dashboardManageAccess.js';
 
 export const pageError=(code='notFound',status=404)=>Object.assign(new Error(code),{code,httpStatus:status,status});
 const requestWindow=7*24*60*60*1000;
@@ -68,7 +68,7 @@ async function lockManagedPageTarget(q,req,dashboardId,{status=false}={}){
  if(!dashboard||!canManageDashboardRow(target.req,dashboard)
    ||canonicalKey(dashboardOwnerWriteScope(dashboard))!==canonicalKey(dashboardOwnerWriteScope(initial.dashboard)))throw pageError();
  if(!status&&dashboard.status!=='active')throw pageError('dashboardArchived',409);
- return {...target,dashboard};
+ return {...target,dashboard,manageScopes:scopes};
 }
 export async function requirePage(q,dashboardId,pageId){
  if(!isUuid(pageId))throw pageError();
@@ -98,6 +98,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
 
    const receipt=(await q('select training_load.mutate_dashboard_page($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) receipt',
     [dashboardId,req.user.id,target.workspace,body.requestId,hash,body.expectedPagesRevision,operation,pageId,body.input,body.requestIssuedAt])).rows[0].receipt;
+   await markDashboardManageWrite(q,target.req,target.manageScopes);
    return {receipt};
   });
  }
@@ -168,6 +169,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    await q('select id from training_load.dashboard_widget_series where widget_id=$1 order by id for update',[widgetId]);
 
    const receipt=(await q('select training_load.copy_dashboard_page_widget($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) receipt',[dashboardId,req.user.id,target.workspace,body.requestId,hash,pageId,widgetId,body.expectedWidgetRevision,body.destinationPageId,body.expectedPageRevision,body.requestIssuedAt])).rows[0].receipt;
+   await markDashboardManageWrite(q,target.req,target.manageScopes);
    return {receipt};
   });
  }
@@ -202,7 +204,9 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    if(body.sourceConnectionId){const {visible,conn}=await isSourceConnectionVisibleToDashboard(target.dashboard,body.sourceConnectionId,q);if(!visible||!conn||conn.state!=='active')throw pageError();await q('select id from training_load.metric_source_connections where id=$1 for share',[body.sourceConnectionId]);}
    if(body.widgetType){const type=(await q('select key from training_load.dashboard_widget_types where key=$1 and is_active for share',[body.widgetType])).rows[0];if(!type)throw pageError('invalidRequest',400);}
    if(body.builtInSeriesKey)await q('select key from training_load.dashboard_builtin_series where key=$1 for share',[body.builtInSeriesKey]);
-   return (await q('select training_load.write_dashboard_page_widget($1,$2,$3,$4,$5,$6,$7,$8) result',[dashboardId,pageId,body.expectedPageRevision??null,operation,widgetId,seriesId,req.user.id,normalized])).rows[0].result;
+   const result=(await q('select training_load.write_dashboard_page_widget($1,$2,$3,$4,$5,$6,$7,$8) result',[dashboardId,pageId,body.expectedPageRevision??null,operation,widgetId,seriesId,req.user.id,normalized])).rows[0].result;
+   await markDashboardManageWrite(q,target.req,target.manageScopes);
+   return result;
   });
  }
  return {read,detail,queryPage,mutate,status,copy,writeWidget};

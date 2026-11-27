@@ -6,7 +6,7 @@ import { createSimpleCapabilityReader } from './capabilities.js';
 import { authorizePreviewTarget, loadPreviewExisting, loadPreviewContext } from './previewContext.js';
 import { buildSimplePreviewBinding } from './previewBinding.js';
 import { canManageDashboardRow, dataWorkspaceMatches } from '../trainingLoadDashboardAccess.js';
-import { dashboardWorkspaceWriteScope, dashboardOwnerWriteScope, lockDashboardManageCeilings, dashboardManageRightsStillHold, lockDashboardActor } from '../dashboardManageAccess.js';
+import { dashboardWorkspaceWriteScope, dashboardOwnerWriteScope, lockDashboardManageCeilings, dashboardManageRightsStillHold, lockDashboardActor, markDashboardManageWrite } from '../dashboardManageAccess.js';
 import { withPreviewTransaction, previewError } from './previewTransaction.js';
 import { runSimpleSaveTransaction } from './saveTransaction.js';
 import { validateSimpleSaveRequest, simpleSavePayloadHash, SIMPLE_REQUEST_WINDOW_MS } from './saveRequest.js';
@@ -28,7 +28,7 @@ async function lockManagedSaveTarget(queryRunner, req, dashboardId, { receipt = 
   const dashboard = (await queryRunner('select * from training_load.dashboards where id=$1 ' + lock, [dashboardId])).rows[0];
   if (!dashboard || !canManageDashboardRow(target.req, dashboard) || !dataWorkspaceMatches(target.workspace, dashboard) ||
       canonicalKey(dashboardOwnerWriteScope(dashboard)) !== canonicalKey(dashboardOwnerWriteScope(initial.dashboard))) throw previewError('notFound', 404);
-  return { ...target, dashboard };
+  return { ...target, dashboard, manageScopes: scopes };
 }
 
 async function lockCatalog(queryRunner, envelope, existing) {
@@ -134,6 +134,7 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
           ? await queryRunner('select training_load.save_simple_page_widget($1::uuid,$2::integer,$3::uuid,$4::uuid,$5::text,$6::timestamptz,$7::uuid,$8::uuid,$9::integer,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb) as receipt', [target.page.id, target.page.defaults_revision, ...args, body.input.draft.periodIntent.savePageDefaults ? JSON.stringify(body.input.draft.periodIntent.periodConfig) : null])
           : await queryRunner('select training_load.save_simple_widget($1::uuid,$2::uuid,$3::text,$4::timestamptz,$5::uuid,$6::uuid,$7::integer,$8::jsonb,$9::jsonb,$10::jsonb) as receipt', args);
         if (!result.rows[0]?.receipt) throw previewError('saveFailed');
+        await markDashboardManageWrite(queryRunner, target.req, target.manageScopes);
         return { receipt: result.rows[0].receipt, replayed: false };
       } });
     } catch (error) { throw stableSaveError(error); }

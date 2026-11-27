@@ -23,7 +23,7 @@ import { resolveTemplateSeriesBatchForWorkspace } from "./trainingLoadDashboardW
 import { isSourceConnectionVisibleToDashboard } from "./trainingLoadDashboardAccess.js";
 import { calculatedDefinitionSql } from "./calculatedValues.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
-import { dashboardWorkspaceWriteScope, dashboardOwnerWriteScope, lockDashboardManageCeilings, dashboardManageRightsStillHold, lockDashboardActor, loadDashboardWriteActor } from "./dashboardManageAccess.js";
+import { dashboardWorkspaceWriteScope, dashboardOwnerWriteScope, lockDashboardManageCeilings, dashboardManageRightsStillHold, lockDashboardActor, loadDashboardWriteActor, markDashboardManageWrite } from "./dashboardManageAccess.js";
 
 function httpError(status, message, code) {
   const e = new Error(message);
@@ -87,7 +87,9 @@ export async function withLegacyDashboardWrite(req, dataWorkspace, dashboard, ru
     const { rows: [current] } = await runQuery("select * from training_load.dashboards where id=$1 for update", [dashboard.id]);
     if (!current || !canManageDashboardRow(actor, current) ||
         JSON.stringify(dashboardOwnerWriteScope(current)) !== JSON.stringify(owner)) throw deny();
-    return run(runQuery, current, actor);
+    const result = await run(runQuery, current, actor);
+    if (result !== null) await markDashboardManageWrite(runQuery, actor, scopes);
+    return result;
   });
 }
 
@@ -207,7 +209,9 @@ export async function createDashboard(req, body) {
   return legacyDashboardTransaction(async runQuery => {
     const { actor, freshWorkspace } = await authorizeLegacyDashboardActor(runQuery, req, workspace, [scope], deny);
     if ((await resolveDashboardCreateContext(actor, body, freshWorkspace)).error) throw deny();
-    return insert(runQuery);
+    const result = await insert(runQuery);
+    await markDashboardManageWrite(runQuery, actor, [scope]);
+    return result;
   });
 }
 
@@ -374,6 +378,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
     const sourceScope = dashboardWorkspaceWriteScope(dataWorkspace);
     let actor = req;
     let workspace = dataWorkspace;
+    let checkedDestination;
     if (sourceScope || ["club", "team"].includes(targetBody.ownerScope)) {
       const initial = (await runQuery("select * from training_load.dashboards where id = $1", [templateId])).rows[0];
       checkCloneTemplate(req, dataWorkspace, initial);
@@ -387,6 +392,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       });
       actor = locked.actor;
       workspace = locked.freshWorkspace;
+      checkedDestination = destination;
     }
     const templateRow = (await runQuery(`select * from training_load.dashboards where id = $1 for share`, [templateId])).rows[0];
     checkCloneTemplate(actor, workspace, templateRow);
@@ -559,6 +565,7 @@ export async function cloneDashboard(req, dataWorkspace, templateId, body) {
       const presentation=remapGalleryPresentation(sourceWidget.presentation_config,idMap);
       await c.query('update training_load.dashboard_widgets set presentation_config=$2 where id=$1',[widgetIdMap.get(sourceWidget.id),JSON.stringify(presentation)]);
     }
+    if (checkedDestination) await markDashboardManageWrite(runQuery, actor, [checkedDestination]);
     await c.query("commit");
     return { dashboard: newDashboard, cloneReport };
   } catch (error) {
