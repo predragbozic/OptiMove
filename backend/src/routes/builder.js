@@ -2834,12 +2834,15 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
       throw Object.assign(new Error("Forbidden"), { status: 403 });
     }
     // Match DELETE/apply: plan before child node, exercise and media locks.
-    const lockedPlan=await runQuery('select id from plans.plans where id=$1 for no key update',[node.plan.id]);
-    if(!lockedPlan.rowCount)throw Object.assign(new Error('Program not found'),{status:404});
+    const { rows: [lockedPlan] } = await runQuery(
+      "select id,plan_type,visibility,is_template,athlete_id as athlete_uuid from plans.plans where id=$1 for no key update",
+      [node.plan.id],
+    );
+    if (!lockedPlan) throw refuseProgramEdit(404, "Program not found");
     const target=await runQuery('select id from plans.plan_nodes where id=$1 for update',[node.id]);
     if(!target.rowCount)throw Object.assign(new Error('Program node not found'),{status:404});
     if(!await canAccessPlan(runQuery,exerciseProgramActor(actor),node.plan.id,{editable:true}))throw Object.assign(new Error('Forbidden'),{status:403});
-    const checkedProgramEdit = await combinedProgramEditIsChecked(client, actor, node.plan);
+    const checkedProgramEdit = await combinedProgramEditIsChecked(client, actor, lockedPlan);
     const created = await runQuery(
       `insert into library.exercises (owner_scope, owner_user_id, created_by_user_id, exercise_code, slug, name, instruction, image_url, video_url, is_active)
        values ('user', $1, $1, concat('CUSTOM-', substring(gen_random_uuid()::text from 1 for 8)), concat('custom-', gen_random_uuid()), $2, $3, $4, $5, true)
@@ -5012,5 +5015,37 @@ function doseFields(body) {
 }
 function phaseValue(value, allowed) { const clean = text(value).toUpperCase(); return allowed.includes(clean) ? clean : null; }
 function sessionTimeValue(value) { return /^\d{2}:\d{2}$/.test(text(value)) ? text(value) : null; }
+
+// A resource rejected by the scoped Edit guard has the same response as
+// a missing resource at each existing Builder entry point.
+const PROGRAM_EDIT_MISSING = Object.freeze({
+  "/plans/:planId/edit": "Program not found or not editable.",
+  "/plans/:planId/duplicate": "Program or template not found.",
+  "/plans/:planId/assign-weekly": "Template not found.",
+  "/weekly-templates": "Weekly plan not found.",
+  "/blocks/:blockId": "Program block not found",
+  "/blocks/:blockId/copy": "Program block not found",
+  "/blocks/:blockId/sessions": "Program block not found",
+  "/sessions/:sessionId": "Program session not found",
+  "/sessions/:sessionId/nodes": "Program session not found",
+  "/sessions/:sessionId/copy-into/:targetDayId": "Target day not found.",
+  "/blocks/:blockId/copy-into/:targetDayId": "Target day not found.",
+  "/days/:dayId/copy-into/:targetDayId": "Target day not found.",
+  "/nodes/:nodeId": "Program node not found",
+  "/nodes/:nodeId/move": "Program node not found",
+  "/nodes/:nodeId/exercises": "Program node not found",
+  "/nodes/:nodeId/custom-exercise": "Program node not found",
+  "/nodes/:nodeId/copy": "Source node or target session not found",
+  "/items/:itemId": "Program item not found",
+  "/items/:itemId/move": "Program item not found",
+});
+
+router.use((error, req, res, next) => {
+  if (error?.code !== "program_edit_scope") return next(error);
+  const message = error.status === 404 && ["Draft program not found", "Program content not found"].includes(error.message)
+    ? PROGRAM_EDIT_MISSING[req.route?.path] ?? error.message
+    : error.message;
+  return res.status(error.status).json({ error: message });
+});
 
 export default router;

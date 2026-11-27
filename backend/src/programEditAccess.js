@@ -58,6 +58,7 @@ export async function assertProgramEditOwnership(client, scope, plan, { legacyPu
   // Historical non-weekly plans have no workspace record. Their unchanged
   // legacy author/athlete predicate provides the remaining authority.
   if (!owner && plan.plan_type !== "weekly") {
+    if (legacyPublicTarget && plan.visibility === "public" && !plan.is_template) return;
     if (nativeProgramRpeScope(scope) && plan.athlete_uuid &&
         !await isAthleteInWorkspaceScope(scope, plan.athlete_uuid, client.query.bind(client))) {
       throw refuseProgramEdit(404, "Draft program not found");

@@ -1088,4 +1088,10 @@ function booleanValue(value, fallback = false) {
   return fallback;
 }
 
+router.use((error, req, res, next) => {
+  if (error?.code !== "program_edit_scope") return next(error);
+  const message = error.status === 404 && error.message === "Draft program not found" ? "Template not found." : error.message;
+  return res.status(error.status).json({ error: message });
+});
+
 export default router;

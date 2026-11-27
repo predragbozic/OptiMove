@@ -47,7 +47,7 @@ test("native Exercise content and lifecycle writes have independent staged permi
       await sql.query("select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive')");
       await sql.query(staged);
       await sql.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values($1,repeat('0',64),'test')", [fixtureMigration]);
-      for (const [roleId, words] of [[ROLE_IDS.club_admin, ["exercises.add", "exercises.remove"]], [ROLE_IDS.team_coach, ["exercises.add", "programs.edit"]]]) {
+      for (const [roleId, words] of [[ROLE_IDS.club_admin, ["exercises.add", "exercises.remove", "programs.edit"]], [ROLE_IDS.team_coach, ["exercises.add", "programs.edit"]]]) {
         const { rows: [role] } = await sql.query("update public.permission_roles set revision=revision+1,updated_at=now() where id=$1 returning revision", [roleId]);
         await sql.query("insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_added) values($1,$2,'migration',$3,$4)",
           [roleId, role.revision, fixtureMigration, words]);

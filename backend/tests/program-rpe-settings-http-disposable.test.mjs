@@ -294,10 +294,11 @@ test("exact weekly batch default differences require rights on every target befo
   const ids = [source.id, eligible.id, foreign.id];
   await db.query("update plans.plan_sessions set training_load_enabled=false,rpe_enabled=false where id=any($1::uuid[])",
     [[source.sessionId, eligible.sessionId, foreign.sessionId]]);
-  await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [batch, ids]);
+  await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [batch, [source.id, eligible.id]]);
   const sync = (path, body) => http.api(coach.cookie, "/api/builder/plans/" + source.id + path, { method: "POST", body });
   const equal = await sync("/sync-batch", {});
   assert.equal(equal.status, 200, equal.text);
+  await db.query("update plans.plans set builder_batch_id=$1 where id=$2", [batch, foreign.id]);
   await setNativeRpeGrant(true);
   await db.query("update plans.plans set track_training_load_default=true,request_rpe_default=true where id=$1", [source.id]);
   const snapshot = async () => (await db.query("select id,name,status,track_training_load_default,request_rpe_default,updated_at from plans.plans where id=any($1::uuid[]) order by id", [ids])).rows;
@@ -469,7 +470,10 @@ test("opening an existing program copies only its stored workspace owner", async
     );
     return openEditDraft(source.id);
   };
-  const resolved = await openProgram("Programme with a stored owner", B);
+  await selectWorkspace(db, "club", B);
+  let resolved;
+  try { resolved = await openProgram("Programme with a stored owner", B); }
+  finally { await selectWorkspace(db, "club", A); }
   const unresolved = await openProgram("Programme without a stored owner", null);
   const { rows } = await db.query(
     "select plan_id,owner_scope,owner_club_id from training_load.plan_workspace_ownership where plan_id=any($1::uuid[])",
