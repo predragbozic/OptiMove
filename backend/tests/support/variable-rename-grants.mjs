@@ -37,4 +37,9 @@ export async function varyRenameGrant(client, basicKey, add) {
 export async function seedVariableRenameGrants(client) {
   await varyRenameGrant(client, "club_admin", true);
   await varyRenameGrant(client, "team_coach", true);
+  // Until the real bridge is composed, this table exists only in the disposable fixture.
+  await client.query(
+    "create table if not exists training_load.variable_rename_archive_v112_use (singleton boolean primary key check (singleton), first_checked_write_at timestamptz);"
+    + " insert into training_load.variable_rename_archive_v112_use(singleton) values(true) on conflict do nothing",
+  );
 }

@@ -821,3 +821,38 @@ test("uncertain shared icon write cannot verify a different operation's reused r
   assert.equal((await defRow(other.id)).icon_url, "icon:" + body.iconKey);
   assert.equal((await changesOf(other.id)).length, 1);
 });
+
+test("native shared icon use and variable audit commit together, while platform and replay leave the marker unchanged", async () => {
+  const variable = await created(W.caA.cookie);
+  const system = await created(W.pa.cookie);
+  const useTable = "training_load.variable_rename_archive_v112_use";
+  const marker = async () => (await one(k, "select first_checked_write_at as first from " + useTable)).first;
+  const [firstIcon, secondIcon] = ICON_KEYS;
+  const path = "/variables/" + variable.id + "/icon";
+  const body = { requestKey: key(), expectedIconKey: null, iconKey: firstIcon };
+  await k.query("update " + useTable + " set first_checked_write_at=null");
+  ok200(await setIcon(W.pa, system.id, null, firstIcon));
+  assert.equal(await marker(), null);
+  const refusal = await post(path, W.coachB1.cookie, body);
+  assert.equal(refusal.status, 404, refusal.text);
+  assert.equal(await marker(), null);
+
+  await k.query("delete from " + useTable);
+  try {
+    const failed = await post(path, W.coachA1.cookie, body);
+    assert.equal(failed.status, 500, failed.text);
+    assert.deepEqual(await changesOf(variable.id), []);
+    assert.equal((await defRow(variable.id)).icon_url, null);
+    assert.equal((await one(k, "select count(*)::int as n from training_load.metric_variable_requests where request_key=$1", [body.requestKey])).n, 0);
+  } finally {
+    await k.query("insert into " + useTable + "(singleton) values(true)");
+  }
+  assert.equal(ok200(await post(path, W.coachA1.cookie, body)).variable.icon, firstIcon);
+  const first = await marker();
+  assert.ok(first instanceof Date);
+  assert.equal(ok200(await post(path, W.coachA1.cookie, body)).replayed, true);
+  assert.deepEqual(await marker(), first);
+  ok200(await setIcon(W.coachA1, variable.id, firstIcon, secondIcon));
+  assert.deepEqual(await marker(), first);
+  assert.equal((await changesOf(variable.id)).length, 2);
+});

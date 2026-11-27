@@ -1231,6 +1231,16 @@ async function authorizeVariableChange(client, ctx, id) {
   return true;
 }
 
+async function recordVariableRenameArchiveUse(client) {
+  const result = await client.query(
+    "update training_load.variable_rename_archive_v112_use set first_checked_write_at=clock_timestamp()"
+    + " where singleton and first_checked_write_at is null",
+  );
+  if (!result.rowCount && !(await client.query(
+    "select 1 from training_load.variable_rename_archive_v112_use where singleton and first_checked_write_at is not null",
+  )).rowCount) throw new Error("Variables Rename and Archive first-use record is missing.");
+}
+
 async function runChange({ ctx, variableId, operation, requestKey, requestHash, reason, check, update, texts }) {
   const id = variableId.toLowerCase();
   const authorizeTarget = ctx.basis === "platform_admin" ? undefined : (client) => authorizeVariableChange(client, ctx, id);
@@ -1270,6 +1280,7 @@ async function runChange({ ctx, variableId, operation, requestKey, requestHash, 
         [requestKey, ctx.userId, operation, requestHash, ctx.owner.scope, ctx.owner.clubId, ctx.basis,
           ctx.basis === "team_coach" ? ctx.teamId : null, id, changes[0].id, reason],
       );
+      if (targetAuthorized) await recordVariableRenameArchiveUse(client);
       return { operation, metric_definition_id: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
     },
   });
