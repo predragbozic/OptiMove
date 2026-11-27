@@ -11,9 +11,12 @@ and explicit plan/default or session flag PATCH effects against those known
 baselines. It leaves older drafts unclassified and existing feedback IDs intact.
 It also tracks direct new plans and sessions, standalone session copy and the three
 explicit bulk settings actions. A nonweekly edit Submit rechecks the current
-permission and exact owner for a recorded effect. Whole-plan duplication,
-template/assignment/day and block paste, exact sibling correspondence, first
-Submit and the complete weekly Submit policy still require a follow-up.
+permission and exact owner for a recorded effect. Whole-plan duplicates and
+dated assignments into new weeks record exact copied session IDs. Single
+first Submit rechecks authority for recorded explicit effects. Assignments
+that replace existing weeks, templates saved from multiple weeks, day and
+block paste, exact sibling correspondence and the full weekly batch Submit
+policy still require a follow-up.
 Keep Roles exposure closed. Releasing these changes as a complete rollout
 requires the remaining writer inventory and exact overlap evidence.
 

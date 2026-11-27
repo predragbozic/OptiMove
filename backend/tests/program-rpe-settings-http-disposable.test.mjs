@@ -492,3 +492,84 @@ test("v106 nonweekly Submit rechecks the grant for a recorded effect under the e
   );
   assert.deepEqual(published, { rpe_enabled: false, training_load_enabled: true });
 });
+
+test("v106 uses exact inserted IDs for whole-plan duplicates and dated assignments", async () => {
+  const template = await http.api(coach.cookie, "/api/builder/plans", {
+    method: "POST", body: { planType: "program", templateKind: "weekly", weeks: 1, name: "Provenance template" },
+  });
+  assert.equal(template.status, 201, template.text);
+  const source = template.body.plan.id;
+  const days = (await db.query("select id from plans.plan_days where plan_id=$1 order by block_index limit 2", [source])).rows;
+  const sessionIds = (await db.query(
+    `insert into plans.plan_sessions(plan_day_id,name,bta,training_load_enabled,rpe_enabled)
+     values ($1,'Training', 'T', true, true),($2,'Training','T', false, false) returning id`,
+    days.map(day => day.id),
+  )).rows.map(row => row.id);
+  const copy = await http.api(coach.cookie, "/api/builder/plans/" + source + "/duplicate", { method: "POST", body: {} });
+  assert.equal(copy.status, 201, copy.text);
+  const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);
+  const assignmentPath = "/api/builder/plans/" + source + "/assign-weekly";
+  const request = { method: "POST", body: { athleteIds: [athlete.athlete_id], startDate: "2027-05-03", assignmentRequestId: randomUUID() } };
+  const assigned = await http.api(coach.cookie, assignmentPath, request);
+  assert.equal(assigned.status, 201, assigned.text);
+  const retry = await http.api(coach.cookie, assignmentPath, request);
+  assert.deepEqual(retry.body, assigned.body);
+  for (const id of [copy.body.plan.id, assigned.body.created[0].planId]) {
+    const opening = (await db.query("select origin,source_plan_id,owner_club_id from training_load.builder_rpe_plan_baselines where plan_id=$1", [id])).rows[0];
+    assert.deepEqual(opening, { origin: "copy", source_plan_id: source, owner_club_id: A });
+    const rows = (await db.query(
+      `select b.*, src.logical_session_id as source_logical_session_id, dst.id as actual_session_id, dd.plan_id as actual_plan_id
+       from training_load.builder_rpe_session_baselines b
+       join plans.plan_sessions src on src.id=b.source_session_id
+       join plans.plan_sessions dst on dst.id=b.session_id
+       join plans.plan_days dd on dd.id=dst.plan_day_id
+       where b.plan_id=$1 order by b.opening_tracking desc`, [id],
+    )).rows;
+    assert.deepEqual(rows.map(row => [row.source_session_id, row.opening_tracking, row.opening_rpe]), [
+      [sessionIds[0], true, true], [sessionIds[1], false, false],
+    ]);
+    for (const row of rows) {
+      assert.equal(row.source_plan_id, source);
+      assert.equal(row.actual_plan_id, id);
+      assert.equal(row.actual_session_id, row.session_id);
+      assert.equal(row.retained_from_opening, false);
+      assert.notEqual(row.session_id, row.source_session_id);
+      assert.notEqual(row.logical_session_id, row.source_logical_session_id);
+    }
+  }
+});
+
+test("v106 single first Submit refuses an explicit edit after the grant is removed", async () => {
+  const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);
+  const created = await http.api(coach.cookie, "/api/builder/plans", {
+    method: "POST", body: { planType: "weekly", weekStart: "2027-05-17", athleteIds: [athlete.athlete_id], name: "First Submit provenance" },
+  });
+  assert.equal(created.status, 201, created.text);
+  const id = created.body.plan.id;
+  const { rows: [day] } = await db.query("select id from plans.plan_days where plan_id=$1 order by block_index limit 1", [id]);
+  const session = await http.api(coach.cookie, "/api/builder/blocks/" + day.id + "/sessions", {
+    method: "POST", body: { name: "Training", bta: "T" },
+  });
+  assert.equal(session.status, 201, session.text);
+  const sessionId = (await db.query("select id from plans.plan_sessions where plan_day_id=$1", [day.id])).rows[0].id;
+  const node = await http.api(coach.cookie, draftSession(sessionId) + "/nodes", {
+    method: "POST", body: { nodeType: "section", name: "Warm-up" },
+  });
+  assert.equal(node.status, 201, node.text);
+  const changed = await http.api(coach.cookie, settings(id), {
+    method: "PATCH", body: { trackTrainingLoadDefault: true, requestRpeDefault: true },
+  });
+  assert.equal(changed.status, 200, changed.text);
+  await changeProgramRpeGrant(db, "club_admin", false);
+  const submit = () => http.api(coach.cookie, "/api/builder/plans/" + id + "/submit", { method: "POST", body: {} });
+  try {
+    const refusal = await submit();
+    assert.equal(refusal.status, 404, refusal.text);
+    assert.equal((await db.query("select status from plans.plans where id=$1", [id])).rows[0].status, "draft");
+  } finally {
+    await changeProgramRpeGrant(db, "club_admin", true);
+  }
+  const accepted = await submit();
+  assert.equal(accepted.status, 200, accepted.text);
+  assert.equal((await db.query("select status from plans.plans where id=$1", [id])).rows[0].status, "active");
+});

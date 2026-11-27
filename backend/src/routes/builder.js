@@ -814,6 +814,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
         activatedPlans = updated.rows;
       }
     } else {
+      await checkFirstRpeSubmit(client, req, plan.id);
       const updated = await client.query(
         `update plans.plans set status = 'active', updated_at = now()
          where id = $1 and status = 'draft'
@@ -938,15 +939,28 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     // above, rather than a second, independent resolveActiveWorkspace
     // read - a workspace switch landing between the two could otherwise
     // validate targets against workspace A but stamp ownership from
-    // workspace B. A plain program/template duplicate (plan_type !==
-    // "weekly") never needs one at all.
-    const planOwner = source.plan_type === "weekly" ? weeklyPlanOwnerScope.ownerContext : null;
+    // workspace B. The provenance bridge also snapshots ordinary program copies when their authoring scope is known.
+    let planOwner = source.plan_type === "weekly" ? weeklyPlanOwnerScope.ownerContext : null;
     client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    if (recordRpeOpening) {
+      const expected = weeklyPlanOwnerScope ?? await resolveExternalScheduleWorkspaceScope(req);
+      const actor = await lockProgramRpeActor(client, req, expected);
+      const currentTargets = [];
+      for (const target of targets) {
+        if (target?.id) currentTargets.push(await isAthleteInWorkspaceScope(expected, target.id, client.query.bind(client)));
+      }
+      if (actor && currentTargets.every(Boolean)) planOwner = expected.ownerContext;
+      else if (weeklyPlanOwnerScope) throw Object.assign(new Error("Your workspace changed. Open the plan again."), { status: 409 });
+    }
 
     // Source must remain stable until the copied grant upsert finishes.
     await lockCopyTargetPlan(client,source.id);
+    const sourceDefaults = (await client.query(
+      "select track_training_load_default,request_rpe_default from plans.plans where id=$1", [source.id],
+    )).rows[0];
 
     if (intent === "assign") {
       let claimed = false;
@@ -1035,15 +1049,17 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         `insert into plans.plans (plan_type, created_by_user_id, athlete_id, name, note, icon_url, color, visibility, is_template, status, source_type, start_date, duration_days, week_start, builder_batch_id, track_training_load_default, request_rpe_default)
          values ($1, $2, $3, $4, $5, $6, $7, 'private', $8, $9, 'builder', $10, $11, $12, $13, $14, $15)
          returning id`,
-        [source.plan_type, req.user.id, target?.id || null, planName, source.note, source.icon_url, source.color, isTemplate, status, source.start_date, source.duration_days, targetWeekStart, batchId, Boolean(source.track_training_load_default), Boolean(source.request_rpe_default)],
+        [source.plan_type, req.user.id, target?.id || null, planName, source.note, source.icon_url, source.color, isTemplate, status, source.start_date, source.duration_days, targetWeekStart, batchId, Boolean(sourceDefaults.track_training_load_default), Boolean(sourceDefaults.request_rpe_default)],
       );
       createdIds.push(created.rows[0].id);
       await timing.measure("copy", async () => {
-        if (source.plan_type === "weekly") {
-          await copyWeeklyPlanTree(client, source.id, created.rows[0].id, targetWeekStart, { targetIsNew: true });
-          await insertPlanOwnershipSnapshot(client, created.rows[0].id, planOwner);
-        } else {
-          await copyProgramTree(client, source.id, created.rows[0].id);
+        const planId = created.rows[0].id;
+        const copies = source.plan_type === "weekly"
+          ? await copyWeeklyPlanTree(client, source.id, planId, targetWeekStart, { targetIsNew: true })
+          : await copyProgramTree(client, source.id, planId);
+        if (planOwner) {
+          await insertPlanOwnershipSnapshot(client, planId, planOwner);
+          if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId, sourcePlanId: source.id, origin: "copy", copies });
         }
       });
       // target is never null here - intent === "assign" already required at
@@ -1147,7 +1163,24 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const recordRpeOpening = await beginBuilderRpeProvenance(client);
+    if (recordRpeOpening) {
+      const actor = await lockProgramRpeActor(client, req, scope);
+      const targetsAllowed = [];
+      for (const athlete of athletes) {
+        targetsAllowed.push(await isAthleteInWorkspaceScope(scope, athlete.id, client.query.bind(client)));
+      }
+      if (!actor || !targetsAllowed.every(Boolean)) {
+        await client.query("rollback");
+        client.release();
+        client = null;
+        return res.status(409).json({ error: "Your workspace changed. Open the plan again." });
+      }
+    }
     await lockCopyTargetPlan(client, source.id);
+    const sourceDefaults = (await client.query(
+      "select track_training_load_default,request_rpe_default from plans.plans where id=$1", [source.id],
+    )).rows[0];
     const claim = await claimAssignmentRequest(client, { id: assignmentRequestId, userId: req.user.id, sourcePlanId: source.id, payloadKey });
     if (claim.conflict || claim.failed) {
       await client.query("rollback");
@@ -1311,13 +1344,14 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
            values ('weekly', $1, $2, $3, $4, $5, $6, 'private', false, 'active', 'builder', $7, $8, $9, $10)
            returning id, athlete_id, name, plan_type, week_start::text as week_start`,
           [req.user.id, entry.athleteUuid, source.name || "Weekly program", source.note, source.icon_url, source.color, entry.weekStart,
-            batchByWeek.get(entry.weekStart) || null, Boolean(source.track_training_load_default), Boolean(source.request_rpe_default)],
+            batchByWeek.get(entry.weekStart) || null, Boolean(sourceDefaults.track_training_load_default), Boolean(sourceDefaults.request_rpe_default)],
         )).rows[0];
         await createWeeklyDays(client, row.id, entry.weekStart);
         await insertPlanOwnershipSnapshot(client, row.id, scope.ownerContext);
         const targetDays = (await client.query("select id, date::text as date from plans.plan_days where plan_id = $1", [row.id])).rows;
         entry.targetDays = new Map(targetDays.map((d) => [d.date.slice(0, 10), d.id]));
-        await writeTemplateDays(client, entry, new Map());
+        const copies = await writeTemplateDays(client, entry, new Map());
+        if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: row.id, sourcePlanId: source.id, origin: "copy", copies });
         newPlanIds.push(row.id);
         created.push({ athleteId: entry.athleteId, weekStart: entry.weekStart, planId: row.id });
         notify.push(row);
@@ -1392,7 +1426,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       const afterKept = keptOrder.has(String(targetDayId));
       pairs.push({ sourceDayId: day.sourceDayId, targetDayId, afterKept, orderOffset: afterKept ? keptOrder.get(String(targetDayId)) : 0 });
     }
-    await copyTemplateDaySessions(client, pairs, copyLegacySession);
+    return copyTemplateDaySessions(client, pairs, copyLegacySession);
   }
 }));
 
@@ -3260,6 +3294,26 @@ async function assertProgramRpeTargets(client, actor, scope, ids) {
   }
 }
 
+async function checkFirstRpeSubmit(client, req, planId) {
+  await lockExerciseReuse(client, req.exerciseReuseGuard);
+  if (!await beginBuilderRpeProvenance(client)) return;
+  const scope = await resolveExternalScheduleWorkspaceScope(req);
+  if (scope.type === "platform") return;
+  const actor = await lockProgramRpeActor(client, req, scope);
+  const locked = await client.query("select id from plans.plans where id=$1 and status='draft' for update", [planId]);
+  if (!locked.rowCount) return;
+  const { rows: [effects] } = await client.query(
+    `select exists(select 1 from training_load.builder_rpe_plan_effects where plan_id=$1)
+       or exists(
+         select 1 from training_load.builder_rpe_session_effects e
+         join plans.plan_sessions s on s.id=e.session_id
+         join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=e.plan_id
+         where e.plan_id=$1
+       ) as changed`, [planId],
+  );
+  if (effects.changed) await assertProgramRpeTargets(client, actor, scope, [planId]);
+}
+
 async function checkEditedRpeEffects(client, rpe, source, draft, sessions, batch) {
   if (!rpe) return;
   const before = (await client.query(
@@ -3470,18 +3524,19 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   const dayValues = [];
   const dayParams = [];
   let dayColumn = 0;
-  days.rows.forEach((day) => {
-    const row = [targetPlanId, day.date, day.day_note, day.day_order, day.block_index, day.block_name, day.block_type, day.block_order];
+  const sourceDayIdToTargetDayId = new Map();
+  for (const day of days.rows) {
+    const targetId = randomUUID();
+    sourceDayIdToTargetDayId.set(day.id, targetId);
+    const row = [targetId, targetPlanId, day.date, day.day_note, day.day_order, day.block_index, day.block_name, day.block_type, day.block_order];
     dayValues.push(`(${row.map(() => `$${++dayColumn}`).join(", ")})`);
     dayParams.push(...row);
-  });
-  const createdDays = await client.query(
-    `insert into plans.plan_days (plan_id, date, day_note, day_order, block_index, block_name, block_type, block_order)
-     values ${dayValues.join(", ")} returning id`,
+  }
+  await client.query(
+    `insert into plans.plan_days (id, plan_id, date, day_note, day_order, block_index, block_name, block_type, block_order)
+     values ${dayValues.join(", ")}`,
     dayParams,
   );
-  const sourceDayIdToTargetDayId = new Map();
-  days.rows.forEach((day, index) => sourceDayIdToTargetDayId.set(day.id, createdDays.rows[index].id));
 
   const sessions = await client.query(
     "select * from plans.plan_sessions where plan_day_id = any($1::uuid[]) order by plan_day_id, session_order",

@@ -8,18 +8,22 @@ export async function beginBuilderRpeProvenance(client) {
   return schema.ready;
 }
 
-export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = null, copies = new Map() }) {
+export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = null, origin = sourcePlanId ? "edit" : "created", copies = new Map() }) {
   const { rowCount } = await client.query(
     `insert into training_load.builder_rpe_plan_baselines
        (plan_id,origin,source_plan_id,source_updated_at,owner_scope,owner_user_id,owner_club_id,owner_team_id,opening_tracking,opening_rpe)
-     select p.id,case when src.id is null then 'created' else 'edit' end,
+     select p.id,$3,
             src.id,src.updated_at,o.owner_scope,o.owner_user_id,o.owner_club_id,o.owner_team_id,
             p.track_training_load_default,p.request_rpe_default
      from plans.plans p
-     left join plans.plans src on src.id=$2 and p.edit_source_plan_id=src.id
+     left join plans.plans src on src.id=$2
      left join training_load.plan_workspace_ownership o on o.plan_id=p.id
-     where p.id=$1 and ($2::uuid is null and p.edit_source_plan_id is null or src.id is not null)`,
-    [planId, sourcePlanId],
+     where p.id=$1 and (
+       ($3 = 'created' and $2::uuid is null and p.edit_source_plan_id is null)
+       or ($3 = 'edit' and p.edit_source_plan_id=src.id)
+       or ($3 = 'copy' and src.id is not null and p.edit_source_plan_id is null)
+     )`,
+    [planId, sourcePlanId, origin],
   );
   if (rowCount !== 1) throw new Error("Builder RPE opening plan was not recorded.");
 
@@ -27,14 +31,14 @@ export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = n
     const { rowCount: sessions } = await client.query(
       `insert into training_load.builder_rpe_session_baselines
          (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe)
-       select $1,dst.id,dst.logical_session_id,$2,src.id,true,dst.training_load_enabled,dst.rpe_enabled
+       select $1,dst.id,dst.logical_session_id,$2,src.id,$5,dst.training_load_enabled,dst.rpe_enabled
        from unnest($3::uuid[],$4::uuid[]) pair(source_id,target_id)
        join plans.plan_sessions src on src.id=pair.source_id
        join plans.plan_days sd on sd.id=src.plan_day_id and sd.plan_id=$2
        join plans.plan_sessions dst on dst.id=pair.target_id
        join plans.plan_days dd on dd.id=dst.plan_day_id and dd.plan_id=$1
        where (dst.training_load_enabled,dst.rpe_enabled) = (src.training_load_enabled,src.rpe_enabled)`,
-      [planId, sourcePlanId, [...copies.keys()], [...copies.values()]],
+      [planId, sourcePlanId, [...copies.keys()], [...copies.values()], origin === "edit"],
     );
     if (sessions !== copies.size) throw new Error("Builder RPE session copy does not match its source.");
   }
