@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
+import { stageScheduleManageForTest } from "./support/tests-schedule-manage-fixture.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATION_FILES = [
@@ -215,6 +216,7 @@ before(async () => {
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
   // Roles V-4: the server's role read (v84, v92) that the Tests paths now ask (_gpexe-disposable-db.mjs).
   await applyRoleReadMigrations(db.url);
+  await stageScheduleManageForTest(adminClient);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");
@@ -732,4 +734,42 @@ test("14. a malformed id anywhere in the batch fails the WHOLE request - never a
     [[validId1, validId2]],
   );
   assert.equal(notifCount.rows[0].n, 0, "neither valid assignment may have been notified - the malformed id in the same batch must roll back everything");
+});
+
+// Request setup still uses the same native coach and leaves View available.
+test("Manage: reminder denies an existing schedule whose coach cannot manage it and distinguishes missing", async () => {
+  const { clubId, coachCookie, athletes } = await makeClubWithAthletes("manage-reminder", 1);
+  const schedule = await createSchedule(coachCookie, [{ kind: "club", id: clubId }]);
+  const { occurrence } = await ensureOccurrenceAndAssignments(schedule.id);
+  const assignmentId = await getAssignmentId(occurrence.id, athletes[0].athleteId);
+  const readStamp = async () => (await query(
+    "select first_checked_write_at from tests.schedule_manage_bridge_use where singleton",
+  )).rows[0].first_checked_write_at;
+  await query("update tests.schedule_manage_bridge_use set first_checked_write_at=null where singleton");
+  const { rows: [permission] } = await query(
+    "select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as ddl",
+  );
+  try {
+    await query(permission.ddl.replace("'tests.schedule.manage', ", ""));
+    assert.deepEqual(await remind(schedule.id, coachCookie, [assignmentId]), {
+      status: 403, body: { error: "Forbidden" },
+    });
+    assert.deepEqual(await remind(crypto.randomUUID(), coachCookie, [assignmentId]), {
+      status: 404, body: { error: "Schedule not found." },
+    });
+    assert.equal((await api(`/api/tests/schedules/${schedule.id}`, { cookie: coachCookie })).status, 200);
+    const denied = await query("select 1 from public.app_notifications where type='test_manual_reminder' and entity_id=$1", [assignmentId]);
+    assert.equal(denied.rowCount, 0);
+    assert.equal(await readStamp(), null);
+  } finally {
+    await query(permission.ddl);
+  }
+  const allowed = await remind(schedule.id, coachCookie, [assignmentId]);
+  assert.equal(allowed.status, 200, JSON.stringify(allowed.body));
+  assert.equal(allowed.body.notifiedCount, 1);
+  assert.ok(await readStamp());
+  await query("update tests.schedule_manage_bridge_use set first_checked_write_at=null where singleton");
+  const cooldown = await remind(schedule.id, coachCookie, [assignmentId]);
+  assert.equal(cooldown.body.results[0].outcome, "skippedCooldown");
+  assert.equal(await readStamp(), null);
 });

@@ -12,6 +12,7 @@ import pg from "pg";
 import { createSession, hashPassword } from "../../backend/src/auth.js";
 import { WELLNESS_TEST_VERSION_ID } from "../../backend/src/testsScheduleWriter.js";
 import { startWorld } from "../lib/world.mjs";
+import { stageScheduleManageForTest } from "../../backend/tests/support/tests-schedule-manage-fixture.mjs";
 import { launch, navTo, openAs, request, WIDTHS } from "../lib/browser.mjs";
 
 let world;
@@ -31,6 +32,7 @@ before(async () => {
   const client = new pg.Client({ connectionString: world.databaseUrl });
   await client.connect();
   try {
+    await stageScheduleManageForTest(client);
     athleteName = (await client.query(`select display_name from public.athletes where id = $1`, [world.ids.athleteIds[0]])).rows[0].display_name;
     const id = (await client.query(
       `insert into public.users (email, first_name, last_name, full_name, display_name, password_hash) values ($1,'Viewer','Example','Viewer Example','Viewer Example',$2) returning id`,
@@ -85,6 +87,12 @@ for (const [label, width] of [["1280 px", WIDTHS.desktop], ["390 px", WIDTHS.pho
     try {
       const me = JSON.parse((await request(context, world, "/api/auth/me")).text).user;
       assert.equal(me.activeWorkspace.type, "club_view");
+      const detail = await request(context, world, `/api/tests/schedules/${scheduleId}`);
+      assert.equal(detail.status, 200, detail.text);
+      assert.ok(!Object.hasOwn(JSON.parse(detail.text), "link"));
+      const denied = await request(context, world, `/api/tests/schedules/${scheduleId}/link`, { method: "POST", body: {} });
+      assert.equal(denied.status, 403, denied.text);
+      assert.deepEqual(JSON.parse(denied.text), { error: "Forbidden" });
       assert.deepEqual([...me.permissions].sort(), ["org.view", "tests.results.view", "tests.view"]);
       await navTo(page, '[data-library-tab="tests"]');
       await page.waitForSelector(".tests-section-tabs");

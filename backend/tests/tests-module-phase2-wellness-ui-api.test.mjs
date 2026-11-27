@@ -19,6 +19,7 @@
 // workspace resolution, not just Phase 1's own FK targets.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { stageScheduleManageForTest } from "./support/tests-schedule-manage-fixture.mjs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -227,6 +228,7 @@ before(async () => {
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
   // Roles V-4: the server's role read (v84, v92) that the Tests paths now ask (_gpexe-disposable-db.mjs).
   await applyRoleReadMigrations(db.url);
+  await stageScheduleManageForTest(adminClient);
 
   // Point the app's own pool at the temp database BEFORE importing it for
   // the first time - db.js reads process.env.DATABASE_URL once, at module

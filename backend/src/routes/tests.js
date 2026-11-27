@@ -10,6 +10,7 @@ import {
   viewScopeReadsSchedule,
 } from "../testsAccess.js";
 import { canView, viewEntryGate } from "../moduleView.js";
+import { lockTestsScheduleCreateAccess, lockTestsScheduleMutation, lockTestsScheduleReminder, markTestsScheduleWrite, targetMatchesTestsScheduleOwner, tracksTestsScheduleWrite } from "../testsScheduleWriteAccess.js";
 import { ensureCurrentOccurrence, assignmentIsOpen, loadAthleteTodayTestAssignments } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -837,8 +838,6 @@ router.post("/schedules", async (req, res, next) => {
     if (!timezone || !startDate || !opensTime || !closesTime) {
       return res.status(400).json({ error: "Timezone, start date, opens time and closes time are required." });
     }
-    const resolved = await resolveValidTargets(req, body.targets);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
     const resolvedRules = resolveNotificationRules(body.notificationRules);
     if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
@@ -849,6 +848,16 @@ router.post("/schedules", async (req, res, next) => {
     const skipRefusal = await skipDaysOffRefusal(client, { skipDaysOff: body.skipDaysOff, scheduleKind, owner });
     if (skipRefusal) return res.status(400).json(skipRefusal);
     await client.query("begin");
+    const writeRequest = await lockTestsScheduleCreateAccess(client, req, owner);
+    if (!writeRequest) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client), ownerRowOf(owner));
+    if (!resolved.ok) {
+      await client.query("rollback");
+      return res.status(resolved.status).json({ error: resolved.error });
+    }
     const schedule = await insertScheduleRow(client, {
       scheduleKind, timezone, startDate, endDate, opensTime, dueTime, closesTime, userId: req.user.id, owner, skipDaysOff: body.skipDaysOff === true,
     });
@@ -859,6 +868,7 @@ router.post("/schedules", async (req, res, next) => {
     // this schedule stays unconfigured (the worker sends nothing for it)
     // until a coach explicitly saves rules for it.
     if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
+    await markTestsScheduleWrite(client, writeRequest, owner.ownerScope);
     await client.query("commit");
     res.status(201).json({ schedule: formatScheduleRow({ ...schedule, test_name: "WELLNESS" }), notificationRules: resolvedRules.rules || [] });
   } catch (error) {
@@ -919,8 +929,6 @@ router.post("/schedules/bulk", async (req, res, next) => {
     // exact same resolveValidTargets used by POST/PATCH /schedules, so a
     // bulk request is never held to a looser standard. Nothing is written
     // until every date and every target has passed.
-    const resolved = await resolveValidTargets(req, body.targets);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
     const resolvedRules = resolveNotificationRules(body.notificationRules);
     if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
@@ -929,6 +937,16 @@ router.post("/schedules/bulk", async (req, res, next) => {
     // closes the module, writes included).
     if (!canManageSchedule(req, ownerRowOf(owner))) return res.status(403).json({ error: "Forbidden" });
     await client.query("begin");
+    const writeRequest = await lockTestsScheduleCreateAccess(client, req, owner);
+    if (!writeRequest) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client), ownerRowOf(owner));
+    if (!resolved.ok) {
+      await client.query("rollback");
+      return res.status(resolved.status).json({ error: resolved.error });
+    }
     const created = [];
     for (const date of dates) {
       const schedule = await insertScheduleRow(client, {
@@ -940,6 +958,7 @@ router.post("/schedules/bulk", async (req, res, next) => {
       if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
       created.push(schedule);
     }
+    await markTestsScheduleWrite(client, writeRequest, owner.ownerScope);
     await client.query("commit");
     res.status(201).json({
       schedules: created.map((row) => formatScheduleRow({ ...row, test_name: "WELLNESS" })),
@@ -959,9 +978,9 @@ function ownerRowOf(owner) {
   return { owner_scope: owner.ownerScope, owner_user_id: owner.ownerUserId, owner_club_id: owner.ownerClubId, owner_team_id: owner.ownerTeamId };
 }
 
-async function validateTarget(req, target) {
+async function validateTarget(req, target, queryRunner) {
   if (!target || !target.id) return false;
-  if (target.kind === "athlete") return canAccessAthlete(query, req, target.id);
+  if (target.kind === "athlete") return canAccessAthlete(queryRunner, req, target.id);
   if (target.kind === "team") return canManageTeamById(req.authz, target.id);
   if (target.kind === "club") return canManageClub(req.authz, target.id);
   return false;
@@ -994,16 +1013,26 @@ function dedupeTargets(rawTargets) {
 // client's own filtering. Returns {ok:false, status, error} on the first
 // problem found (empty list or any one unauthorized target - the whole
 // request is rejected, never a partial target set).
-async function resolveValidTargets(req, rawTargets) {
+async function resolveValidTargets(req, rawTargets, queryRunner, owner) {
   const targets = dedupeTargets(rawTargets);
   if (!targets.length) return { ok: false, status: 400, error: "Choose at least one athlete, team or club." };
   for (const target of targets) {
-    const allowed = await validateTarget(req, target);
+    const allowed = await targetMatchesTestsScheduleOwner(queryRunner, req, owner, target)
+      && await validateTarget(req, target, queryRunner);
     if (!allowed) return { ok: false, status: 403, error: "One of the chosen targets is outside your access." };
   }
   return { ok: true, targets };
 }
 
+async function resolveStoredNativeTargets(queryRunner, req, schedule) {
+  if (!tracksTestsScheduleWrite(req, schedule.owner_scope)) return { ok: true };
+  const { rows } = await queryRunner(
+    `select target_kind as kind, coalesce(target_athlete_id,target_team_id,target_club_id) as id
+     from tests.test_schedule_targets where schedule_id=$1 order by target_kind,id`,
+    [schedule.id],
+  );
+  return resolveValidTargets(req, rows, queryRunner, schedule);
+}
 
 function formatScheduleRow(row) {
   return {
@@ -1288,6 +1317,7 @@ router.get("/schedules/:scheduleId", async (req, res, next) => {
         [schedule.id],
       ),
       // Roles V-4: a view workspace's read never reads the link (its token is never in a view answer).
+      // Native detail retains an issued token under View. Narrowing that read is a separate product decision.
       req.moduleView ? Promise.resolve({ rows: [] }) : query(`select id, public_token, status, created_at from tests.test_access_links where schedule_id = $1 and link_kind = 'schedule' and status = 'active'`, [schedule.id]),
       loadScheduleActivity(query, schedule.id),
       loadNotificationRules(query, schedule.id),
@@ -1349,6 +1379,24 @@ router.get("/schedules/:scheduleId/group", async (req, res, next) => {
 // can still optionally include status in the same request.
 const FULL_EDIT_BODY_KEYS = ["targets", "scheduleKind", "timezone", "startDate", "endDate", "opensTime", "dueTime", "closesTime"];
 
+
+async function scheduleEditEffect(client, id) {
+  // A same-value edit may still refresh bookkeeping fields or replace rows
+  // with equivalent contents. Neither proves a new schedule effect.
+  return (await client.query(
+    `select jsonb_build_array(
+        to_jsonb(s) - array['updated_at', 'created_at'],
+        (select jsonb_agg(to_jsonb(t) - array['id','created_at','updated_at']
+                          order by t.target_kind,t.target_athlete_id,t.target_team_id,t.target_club_id)
+         from tests.test_schedule_targets t where t.schedule_id=s.id),
+        (select jsonb_agg(to_jsonb(n) - array['id','created_at','updated_at'] order by n.notification_kind)
+         from tests.test_schedule_notification_rules n where n.schedule_id=s.id)
+      )::text as effect
+      from tests.test_schedules s where s.id=$1`,
+    [id],
+  )).rows[0].effect;
+}
+
 router.patch("/schedules/:scheduleId", async (req, res, next) => {
   const client = await pool.connect();
   try {
@@ -1359,12 +1407,12 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     // Locks the schedule row for the rest of this transaction - a
     // concurrent PATCH/DELETE on the same schedule serializes behind this
     // one instead of racing it.
-    const scheduleResult = await client.query(`select * from tests.test_schedules where id = $1 for update`, [req.params.scheduleId]);
-    const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageSchedule(req, schedule)) {
+    const mutation = await lockTestsScheduleMutation(client, req, req.params.scheduleId);
+    if (!mutation) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
+    const { schedule, writeRequest } = mutation;
     // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
     if (await scheduleManagedByCalendar(client, "test", schedule.id)) {
       await client.query("rollback");
@@ -1381,6 +1429,13 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       await client.query("rollback");
       return res.status(409).json({ error: "This schedule is cancelled and can no longer be edited or reactivated. Create a new schedule instead." });
     }
+
+    const before = tracksTestsScheduleWrite(writeRequest, schedule.owner_scope) ? await scheduleEditEffect(client, schedule.id) : null;
+    const markEdit = async (regenerated = false) => {
+      if (before !== null && (regenerated || before !== await scheduleEditEffect(client, schedule.id))) {
+        await markTestsScheduleWrite(client, writeRequest, schedule.owner_scope);
+      }
+    };
 
     // Validated up front, before either branch below, so a bad rule rolls
     // back a status-only PATCH exactly the same way it rolls back a full
@@ -1411,6 +1466,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
         await client.query(`update tests.test_schedules set skip_days_off = $2, updated_at = now() where id = $1`, [schedule.id, body.skipDaysOff]);
       }
       if (body.status === undefined && body.notificationRules === undefined && !FULL_EDIT_BODY_KEYS.some((key) => body[key] !== undefined)) {
+        await markEdit();
         await client.query("commit");
         return res.json({ ok: true, skipDaysOff: body.skipDaysOff });
       }
@@ -1438,12 +1494,20 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
           await client.query("rollback");
           return res.status(400).json({ error: "Invalid status - use DELETE to cancel a schedule." });
         }
+        if (status === "active" && schedule.status !== "active") {
+          const effective = await resolveStoredNativeTargets(client.query.bind(client), writeRequest, schedule);
+          if (!effective.ok) {
+            await client.query("rollback");
+            return res.status(effective.status).json({ error: effective.error });
+          }
+        }
         await client.query(`update tests.test_schedules set status = $2, updated_at = now() where id = $1`, [schedule.id, status]);
       }
       // A coach adjusting only notification settings (no status, no full
       // edit fields) must not have to resend a status just to trip this
       // branch - see the up-front validation/comment above.
       if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
+      await markEdit();
       await client.query("commit");
       return res.json({ ok: true, status, notificationRules: resolvedRules.rules || undefined });
     }
@@ -1573,15 +1637,15 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       }
     }
 
-    let resolvedTargets = null;
-    if (body.targets !== undefined) {
-      const resolved = await resolveValidTargets(req, body.targets);
-      if (!resolved.ok) {
-        await client.query("rollback");
-        return res.status(resolved.status).json({ error: resolved.error });
-      }
-      resolvedTargets = resolved.targets;
+    const queryRunner = client.query.bind(client);
+    const effectiveTargets = body.targets === undefined
+      ? await resolveStoredNativeTargets(queryRunner, writeRequest, schedule)
+      : await resolveValidTargets(writeRequest, body.targets, queryRunner, schedule);
+    if (!effectiveTargets.ok) {
+      await client.query("rollback");
+      return res.status(effectiveTargets.status).json({ error: effectiveTargets.error });
     }
+    const resolvedTargets = body.targets === undefined ? null : effectiveTargets.targets;
 
     await client.query(
       `update tests.test_schedules set
@@ -1624,6 +1688,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
 
     if (resolvedRules.rules) await replaceNotificationRules(client, schedule.id, resolvedRules.rules);
 
+    let regenerated = false;
     if (regenerateOneTimeOccurrence) {
       // Cascades to test_assignments (on delete cascade, Phase 1 schema) -
       // safe because every one of those assignment rows was just locked and
@@ -1634,9 +1699,10 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       // schedule row's now-current start_date/opens_time/closes_time and
       // materializes assignments from its now-current targets, exactly the
       // same as a schedule that never had an occurrence in the first place.
-      await client.query(`delete from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id]);
+      regenerated = (await client.query(`delete from tests.test_schedule_occurrences where schedule_id = $1`, [schedule.id])).rowCount > 0;
     }
 
+    await markEdit(regenerated);
     await client.query("commit");
     const [updated, updatedActivity, updatedRules] = await Promise.all([
       query(
@@ -1662,12 +1728,12 @@ router.delete("/schedules/:scheduleId", async (req, res, next) => {
   try {
     if (!requireCoachWorkspace(req, res)) return;
     await client.query("begin");
-    const scheduleResult = await client.query(`select * from tests.test_schedules where id = $1 for update`, [req.params.scheduleId]);
-    const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageSchedule(req, schedule)) {
+    const mutation = await lockTestsScheduleMutation(client, req, req.params.scheduleId);
+    if (!mutation) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
+    const { schedule, writeRequest } = mutation;
     // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
     if (await scheduleManagedByCalendar(client, "test", schedule.id)) {
       await client.query("rollback");
@@ -1697,16 +1763,18 @@ router.delete("/schedules/:scheduleId", async (req, res, next) => {
     // backend/tests/tests-module-schedule-management.test.mjs.
     const hasOccurrence = await client.query(`select 1 from tests.test_schedule_occurrences where schedule_id = $1 limit 1`, [schedule.id]);
     if (!hasOccurrence.rowCount) {
-      await client.query(`delete from tests.test_schedules where id = $1`, [schedule.id]);
+      const deleted = await client.query(`delete from tests.test_schedules where id = $1`, [schedule.id]);
+      if (deleted.rowCount) await markTestsScheduleWrite(client, writeRequest, schedule.owner_scope);
       await client.query("commit");
       return res.json({ action: "deleted" });
     }
 
     await client.query(`update tests.test_schedules set status = 'cancelled', updated_at = now() where id = $1`, [schedule.id]);
-    await client.query(
+    const revoked = await client.query(
       `update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where schedule_id = $1 and status = 'active'`,
       [schedule.id, req.user.id],
     );
+    if (schedule.status !== "cancelled" || revoked.rowCount) await markTestsScheduleWrite(client, writeRequest, schedule.owner_scope);
     await client.query("commit");
     res.json({ action: "cancelled", historyPreserved: true });
   } catch (error) {
@@ -1990,18 +2058,32 @@ router.post("/schedules/:scheduleId/link", async (req, res, next) => {
   const client = await pool.connect();
   try {
     if (!requireCoachWorkspace(req, res)) return;
-    const schedule = await loadManageableSchedule(req, req.params.scheduleId);
-    if (!schedule) {
+    await client.query("begin");
+    const mutation = await lockTestsScheduleMutation(client, req, req.params.scheduleId, { link: true });
+    if (!mutation) {
+      await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
-    await client.query("begin");
-    await client.query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where schedule_id = $1 and link_kind = 'schedule' and status = 'active'`, [schedule.id, req.user.id]);
+    const { schedule } = mutation;
+    // Preserve schedule-first ordering without blocking the foreign key
+    // check of a link insert by the previous binary during rollout.
+    const { rows: activeLinks } = await client.query(
+      `select id from tests.test_access_links
+       where schedule_id=$1 and link_kind='schedule' and status='active' order by id for update`,
+      [schedule.id],
+    );
+    await client.query(
+      `update tests.test_access_links set status='revoked', revoked_at=now(), revoked_by_user_id=$2
+       where id=any($1::uuid[])`,
+      [activeLinks.map(({ id }) => id), req.user.id],
+    );
     const publicToken = crypto.randomBytes(24).toString("base64url");
     const inserted = await client.query(
       `insert into tests.test_access_links (link_kind, schedule_id, auth_mode, public_token, created_by_user_id)
        values ('schedule', $1, 'authenticated_group', $2, $3) returning id, public_token, created_at`,
       [schedule.id, publicToken, req.user.id],
     );
+    await markTestsScheduleWrite(client, mutation.writeRequest, schedule.owner_scope);
     await client.query("commit");
     res.status(201).json({ link: { id: inserted.rows[0].id, publicToken: inserted.rows[0].public_token, createdAt: inserted.rows[0].created_at } });
   } catch (error) {
@@ -2013,16 +2095,35 @@ router.post("/schedules/:scheduleId/link", async (req, res, next) => {
 });
 
 router.post("/links/:linkId/revoke", async (req, res, next) => {
+  if (!requireCoachWorkspace(req, res)) return;
+  const client = await pool.connect();
   try {
-    if (!requireCoachWorkspace(req, res)) return;
-    const linkResult = await query(`select * from tests.test_access_links where id = $1`, [req.params.linkId]);
-    const link = linkResult.rows[0];
-    if (!link) return res.status(404).json({ error: "Link not found." });
-    const schedule = link.schedule_id ? await loadManageableSchedule(req, link.schedule_id) : null;
-    if (!schedule) return res.status(404).json({ error: "Link not found." });
-    await query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where id = $1 and status = 'active'`, [link.id, req.user.id]);
+    await client.query("begin");
+    const { rows: [hint] } = await client.query(
+      "select schedule_id from tests.test_access_links where id=$1",
+      [req.params.linkId],
+    );
+    const mutation = hint?.schedule_id
+      ? await lockTestsScheduleMutation(client, req, hint.schedule_id, { link: true })
+      : null;
+    const link = mutation ? (await client.query(
+      "select id from tests.test_access_links where id=$1 and schedule_id=$2 for update",
+      [req.params.linkId, mutation.schedule.id],
+    )).rows[0] : null;
+    if (!link) {
+      await client.query("rollback");
+      return res.status(404).json({ error: "Link not found." });
+    }
+    const revoked = await client.query(`update tests.test_access_links set status = 'revoked', revoked_at = now(), revoked_by_user_id = $2 where id = $1 and status = 'active'`, [link.id, req.user.id]);
+    if (revoked.rowCount) await markTestsScheduleWrite(client, mutation.writeRequest, mutation.schedule.owner_scope);
+    await client.query("commit");
     res.json({ ok: true });
-  } catch (error) { next(error); }
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    next(error);
+  } finally {
+    client.release();
+  }
 });
 
 // ------------------------------------------------------------
@@ -2063,25 +2164,12 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
   try {
     await client.query("begin");
 
-    // Lock + re-read the schedule FIRST - a concurrent PATCH/DELETE (both
-    // take `for update` on this same row) queues behind our `for share`
-    // (or vice versa), so nothing about this schedule's status can change
-    // out from under the rest of this call.
-    const scheduleResult = await client.query(
-      `select sch.*, tv.name as test_name from tests.test_schedules sch join tests.test_versions tv on tv.id = sch.test_version_id where sch.id = $1 for share`,
-      [req.params.scheduleId],
-    );
-    const schedule = scheduleResult.rows[0];
+    const { schedule, status, writeRequest } = await lockTestsScheduleReminder(client, req, req.params.scheduleId);
     if (!schedule) {
       await client.query("rollback");
-      return res.status(404).json({ error: "Schedule not found." });
-    }
-    // Explicit 403 (not the info-hiding 404 most of this file's other
-    // routes use for "not found or not yours") - the schedule genuinely
-    // exists, the coach just isn't allowed to act on it.
-    if (!canManageSchedule(req, schedule)) {
-      await client.query("rollback");
-      return res.status(403).json({ error: "Forbidden" });
+      // Existing reminder behavior distinguishes an unavailable schedule
+      // from an existing schedule the caller cannot act on.
+      return res.status(status).json({ error: status === 404 ? "Schedule not found." : "Forbidden" });
     }
     // Schedule-level gates - checked ONCE, under the lock above, not per
     // assignment: a cancelled schedule's assignments are frozen history
@@ -2145,7 +2233,9 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
     results = [];
     for (const assignmentId of assignmentIds) {
       const row = rowsById.get(assignmentId);
-      if (!row) {
+      if (!row || !await targetMatchesTestsScheduleOwner(client.query.bind(client), writeRequest, schedule, {
+        kind: "athlete", id: row.athlete_id,
+      })) {
         results.push({ assignmentId, outcome: "skippedNotFound" });
         continue;
       }
@@ -2229,6 +2319,7 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
       results.push({ ...base, outcome: "notified" });
     }
 
+    if (toEmit.length) await markTestsScheduleWrite(client, writeRequest, schedule.owner_scope);
     await client.query("commit");
   } catch (error) {
     await client.query("rollback").catch(() => {});

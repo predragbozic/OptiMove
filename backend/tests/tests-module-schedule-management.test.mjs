@@ -19,6 +19,8 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
+import { asActor } from "./support/permission-roles-world.mjs";
+import { stageScheduleManageForTest } from "./support/tests-schedule-manage-fixture.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.resolve(__dirname, "../../migrations_v2/202608220900_tests_v42_schema.sql");
@@ -219,6 +221,7 @@ before(async () => {
   // Roles V-2: the server's role read (v84, v92). A coach's Tests routes reach canAccessAthlete, which asks
   // athletes.view through can() and fails closed (503 permissions_unavailable) without it.
   await applyRoleReadMigrations(db.url);
+  await stageScheduleManageForTest(adminClient);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");
@@ -238,9 +241,9 @@ before(async () => {
 
 after(async () => {
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
-  await new Promise((resolve) => server.close(resolve));
-  await pool.end();
-  await adminClient.end();
+  if (server?.listening) await new Promise((resolve) => server.close(resolve));
+  await pool?.end();
+  await adminClient?.end();
   await fsp.rm(migrationsDir, { recursive: true, force: true });
   await dropTempDb(db);
 });
@@ -1349,4 +1352,366 @@ test("O2. a one_time schedule without activity converts cleanly to daily via the
   // fresh one under the now-daily schedule.
   const afterConvert = await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
   assert.equal(afterConvert.body.assignments.length, 1, "a fresh occurrence/assignment must be generated under the new daily schedule");
+});
+
+// A failed Manage gate leaves both single and bulk creation untouched while
+// the existing View-only schedule listing stays available.
+test("Manage: native schedule creation and bulk creation require the staged word", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("manage-create", 1);
+  const input = baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]);
+  const options = { method: "POST", cookie: coachCookie };
+  const scheduleRows = async () => (await query(
+    "select id from tests.test_schedules order by id",
+  )).rows;
+  const previous = (await query(
+    "select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as ddl",
+  )).rows[0].ddl;
+  const beforeDenied = await scheduleRows();
+  try {
+    await query(previous.replace("'tests.schedule.manage', ", ""));
+    const single = await api("/api/tests/schedules", { ...options, body: input });
+    const bulk = await api("/api/tests/schedules/bulk", { ...options, body: { ...input, dates: [input.startDate] } });
+    assert.deepEqual([single.status, single.body], [403, { error: "Forbidden" }]);
+    assert.deepEqual([bulk.status, bulk.body], [403, { error: "Forbidden" }]);
+    assert.deepEqual(await scheduleRows(), beforeDenied);
+    assert.equal((await api("/api/tests/schedules", { cookie: coachCookie })).status, 200);
+  } finally {
+    await query(previous);
+  }
+  assert.equal((await api("/api/tests/schedules", { ...options, body: input })).status, 201);
+  assert.equal((await api("/api/tests/schedules/bulk", { ...options, body: { ...input, dates: [input.startDate] } })).status, 201);
+});
+
+test("Manage: edits and deletes honor the destination holding, including delegated and off-active access", async () => {
+  const destination = await makeClubWithAthletes("manage-destination", 1);
+  const other = await makeClubWithAthletes("manage-other", 0);
+  const teamId = await makeTeam(destination.clubId, "Destination team");
+  const otherTeamId = await makeTeam(other.clubId, "Other team");
+  await addMembership(destination.athletes[0].athleteId, { teamId });
+  const coachId = await makeUser({ email: "manage-destination-team@test.local" });
+  await grantTeamCoach(coachId, teamId);
+  await grantTeamCoach(coachId, otherTeamId);
+  const coach = await loginCookie(coachId);
+  const pick = async (cookie, type, scopeId) => {
+    const result = await api("/api/auth/workspace", { method: "PUT", cookie, body: { type, scopeId } });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  };
+  await pick(coach, "team", teamId);
+  const input = baseCreateBody([{ kind: "team", id: teamId }]);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coach, body: input });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.schedule.ownerScope, "team");
+  const path = `/api/tests/schedules/${created.body.schedule.id}`;
+  const issued = await api(`${path}/link`, { method: "POST", cookie: coach });
+  assert.equal(issued.status, 201, JSON.stringify(issued.body));
+  const missing = "/api/tests/schedules/00000000-0000-0000-0000-000000000000";
+  const patch = (cookie, status = "paused", target = path) => api(target, { method: "PATCH", cookie, body: { status } });
+  const remove = (cookie, target = path) => api(target, { method: "DELETE", cookie });
+  assert.deepEqual(await patch(other.coachCookie), await patch(other.coachCookie, "paused", missing));
+  assert.deepEqual(await remove(other.coachCookie), await remove(other.coachCookie, missing));
+
+  await pick(coach, "team", otherTeamId);
+  assert.equal((await patch(coach)).status, 200, "a direct coach can edit from another held team");
+  await grantClubAdmin(destination.coachId, other.clubId);
+  await pick(destination.coachCookie, "club", other.clubId);
+  assert.equal((await patch(destination.coachCookie, "active")).status, 200, "an off-active club holding can delegate to the destination team");
+
+  const platformId = await makeUser({ email: "manage-destination-platform@test.local" });
+  await query("insert into public.user_global_roles(user_id,role) values ($1,'platform_admin')", [platformId]);
+  const platform = await loginCookie(platformId);
+  const licence = (change) => api(`/api/organization/roles/clubs/${destination.clubId}/ceiling`, {
+    method: "POST", cookie: platform, body: { requestKey: crypto.randomUUID(), reason: "Test destination licence", ...change },
+  });
+  // Hold the uncommitted closure while PATCH sees the old entry snapshot.
+  const blocker = new pg.Client({ connectionString: db.url });
+  await blocker.connect();
+  let queued;
+  try {
+    await blocker.query("begin");
+    await blocker.query(
+      "select set_config('optimove.permission_actor',$1 || ':' || pg_current_xact_id()::text,true)",
+      [platformId],
+    );
+    await blocker.query("select public.lock_club_ceiling($1,'exclusive')", [[destination.clubId]]);
+    await blocker.query(
+      "insert into public.club_permission_ceiling(club_id,module_word,closed_by_user_id,reason) values ($1,'tests',$2,'Test destination licence')",
+      [destination.clubId, platformId],
+    );
+    await blocker.query(
+      "insert into public.club_permission_ceiling_changes(club_id,module_word,action,performed_by_user_id,reason) values ($1,'tests','close',$2,'Test destination licence')",
+      [destination.clubId, platformId],
+    );
+    const { rows: [{ pid }] } = await blocker.query("select pg_backend_pid() as pid");
+    queued = patch(coach);
+    await waitUntilBlockedBy(pid);
+    await blocker.query("commit");
+  } finally {
+    await blocker.query("rollback").catch(() => {});
+    await blocker.end();
+  }
+  assert.deepEqual(await queued, await patch(coach, "paused", missing));
+  const unchanged = () => query("select owner_scope,status from tests.test_schedules where id=$1", [created.body.schedule.id]);
+  const before = (await unchanged()).rows;
+  assert.deepEqual(await patch(coach), await patch(coach, "paused", missing));
+  assert.deepEqual(await remove(destination.coachCookie), await remove(destination.coachCookie, missing));
+  assert.deepEqual((await unchanged()).rows, before);
+  const reopened = await licence({ open: ["tests"] });
+  assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
+  await asActor(db.url, platformId, async (client) => {
+    await client.query("select public.lock_club_ceiling($1,'exclusive')", [[destination.clubId]]);
+    const { rows: [role] } = await client.query(
+      "select id,revision from public.permission_roles where basic_key='team_coach'",
+    );
+    const { rows: [version] } = await client.query(
+      `insert into public.permission_club_role_versions(club_id,system_role_id,based_on_revision,answered_revision,created_by_user_id)
+       values ($1,$2,$3,$3,$4) returning id`,
+      [destination.clubId, role.id, role.revision, platformId],
+    );
+    const { rows: [items] } = await client.query(
+      `select array_agg(permission_word order by permission_word) as words
+       from public.permission_role_items where role_id=$1 and permission_word<>'tests.schedule.manage'`,
+      [role.id],
+    );
+    await client.query(
+      "insert into public.permission_club_role_version_items(version_id,permission_word) select $1,unnest($2::text[])",
+      [version.id, items.words],
+    );
+    await client.query(
+      `insert into public.permission_club_role_version_changes(version_id,revision_after,kind,performed_by_user_id,basis,reason,items_added)
+       values ($1,1,'create',$2,'platform_admin','Test manage revocation',$3)`,
+      [version.id, platformId, items.words],
+    );
+  });
+  const deniedIssue = await api(`${path}/link`, { method: "POST", cookie: coach });
+  const absentIssue = await api(`${missing}/link`, { method: "POST", cookie: coach });
+  assert.deepEqual(deniedIssue, absentIssue);
+  const revoke = (cookie, id) => api(`/api/tests/links/${id}/revoke`, { method: "POST", cookie });
+  assert.deepEqual(await revoke(coach, issued.body.link.id), await revoke(coach, crypto.randomUUID()));
+  const detail = await api(path, { cookie: coach });
+  assert.equal(detail.status, 200, "View stays available when Manage is removed");
+  assert.deepEqual(detail.body.link, issued.body.link, "native View retains the already-issued token");
+  const rotated = await api(`${path}/link`, { method: "POST", cookie: destination.coachCookie });
+  assert.equal(rotated.status, 201, JSON.stringify(rotated.body));
+  assert.notEqual(rotated.body.link.publicToken, issued.body.link.publicToken);
+  const { rows: links } = await query(
+    "select id,status,auth_mode from tests.test_access_links where schedule_id=$1 order by status",
+    [created.body.schedule.id],
+  );
+  assert.deepEqual(links, [
+    { id: rotated.body.link.id, status: "active", auth_mode: "authenticated_group" },
+    { id: issued.body.link.id, status: "revoked", auth_mode: "authenticated_group" },
+  ]);
+  assert.deepEqual(await revoke(destination.coachCookie, rotated.body.link.id), { status: 200, body: { ok: true } });
+  assert.deepEqual(await revoke(destination.coachCookie, rotated.body.link.id), { status: 200, body: { ok: true } });
+  assert.equal((await api(path, { cookie: coach })).body.link, null);
+  assert.deepEqual(await patch(coach), await patch(coach, "paused", missing));
+  assert.deepEqual(await remove(coach), await remove(coach, missing));
+  assert.deepEqual((await unchanged()).rows, before);
+  assert.equal((await remove(destination.coachCookie)).status, 200, "the delegated admin can remove the idle schedule");
+  assert.equal((await unchanged()).rowCount, 0);
+});
+
+test("The Tests bridge records committed native effects once and ignores no-ops and refusals", async () => {
+  const host = await makeClubWithAthletes("first-checked-tests", 1);
+  const input = baseCreateBody([{ kind: "athlete", id: host.athletes[0].athleteId }]);
+  const rules = [{ kind: "athlete_invitation", enabled: true }];
+  const write = (path, method, body) => api(path, { method, body, cookie: host.coachCookie });
+  const readStamp = async () => (await query(
+    "select first_checked_write_at from tests.schedule_manage_bridge_use where singleton",
+  )).rows[0].first_checked_write_at;
+  const resetStamp = async () => query("update tests.schedule_manage_bridge_use set first_checked_write_at=null where singleton");
+
+  await resetStamp();
+  const created = await write("/api/tests/schedules", "POST", { ...input, notificationRules: rules });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.ok(await readStamp());
+  const path = `/api/tests/schedules/${created.body.schedule.id}`;
+
+  await resetStamp();
+  const same = await write(path, "PATCH", { ...input, status: "active", notificationRules: rules });
+  assert.equal(same.status, 200, JSON.stringify(same.body));
+  assert.equal(await readStamp(), null);
+  const refused = await write(path, "PATCH", { skipDaysOff: false, status: "invalid" });
+  assert.equal(refused.status, 400);
+  assert.equal(await readStamp(), null);
+  const changed = await write(path, "PATCH", { status: "paused" });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  const first = await readStamp();
+  assert.ok(first);
+
+  const issued = await write(`${path}/link`, "POST", {});
+  assert.equal(issued.status, 201, JSON.stringify(issued.body));
+  assert.deepEqual(await readStamp(), first);
+  const revoke = `/api/tests/links/${issued.body.link.id}/revoke`;
+  await resetStamp();
+  assert.equal((await write(revoke, "POST", {})).status, 200);
+  assert.ok(await readStamp());
+  await resetStamp();
+  assert.equal((await write(revoke, "POST", {})).status, 200);
+  assert.equal(await readStamp(), null);
+  assert.equal((await write(`${path}/link`, "POST", {})).status, 201);
+  assert.ok(await readStamp());
+
+  await resetStamp();
+  assert.deepEqual((await write(path, "DELETE")).body, { action: "deleted" });
+  assert.ok(await readStamp());
+  await resetStamp();
+  const bulk = await write("/api/tests/schedules/bulk", "POST", { ...input, dates: [input.startDate] });
+  assert.equal(bulk.status, 201, JSON.stringify(bulk.body));
+  assert.ok(await readStamp());
+  const bulkPath = `/api/tests/schedules/${bulk.body.schedules[0].id}`;
+  assert.equal((await api("/api/tests/athlete/today", { cookie: host.athletes[0].cookie })).status, 200);
+  await resetStamp();
+  assert.deepEqual((await write(bulkPath, "DELETE")).body, { action: "cancelled", historyPreserved: true });
+  assert.ok(await readStamp());
+  await resetStamp();
+  assert.deepEqual((await write(bulkPath, "DELETE")).body, { action: "cancelled", historyPreserved: true });
+  assert.equal(await readStamp(), null);
+});
+
+test("The Tests bridge rolls back a native write when its expected first-use schema is absent", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("missing-tests-first-use", 1);
+  const before = await query("select count(*)::int as count from tests.test_schedules");
+  await query("alter table tests.schedule_manage_bridge_use rename to schedule_manage_bridge_use_hidden");
+  try {
+    const refused = await api("/api/tests/schedules", {
+      method: "POST", cookie: coachCookie,
+      body: baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]),
+    });
+    assert.equal(refused.status, 500, JSON.stringify(refused.body));
+    assert.deepEqual((await query("select count(*)::int as count from tests.test_schedules")).rows, before.rows);
+  } finally {
+    await query("alter table tests.schedule_manage_bridge_use_hidden rename to schedule_manage_bridge_use");
+  }
+});
+
+test("Platform and personal Tests writers keep their existing access without marking native use", async () => {
+  const host = await makeClubWithAthletes("untracked-tests-writers", 1);
+  const target = host.athletes[0].athleteId;
+  const input = baseCreateBody([{ kind: "athlete", id: target }]);
+  const native = await api("/api/tests/schedules", { method: "POST", cookie: host.coachCookie, body: input });
+  assert.equal(native.status, 201, JSON.stringify(native.body));
+  await query("update tests.schedule_manage_bridge_use set first_checked_write_at=null where singleton");
+
+  const platformId = await makeUser({ email: "untracked-tests-platform@test.local" });
+  await query("insert into public.user_global_roles(user_id,role) values ($1,'platform_admin')", [platformId]);
+  const platform = await loginCookie(platformId);
+  const nativePath = `/api/tests/schedules/${native.body.schedule.id}`;
+  assert.equal((await api(`${nativePath}/link`, { method: "POST", cookie: platform, body: {} })).status, 201);
+
+  const coachId = await makeUser({ email: "untracked-tests-coach@test.local" });
+  await query("insert into public.user_global_roles(user_id,role) values ($1,'independent_coach')", [coachId]);
+  await query("insert into public.user_athletes(user_id,athlete_id,relationship_type) values ($1,$2,'coach')", [coachId, target]);
+  const cookie = await loginCookie(coachId);
+  const personal = await api("/api/tests/schedules", { method: "POST", cookie, body: input });
+  assert.equal(personal.status, 201, JSON.stringify(personal.body));
+  assert.equal(personal.body.schedule.ownerScope, "user");
+  const personalPath = `/api/tests/schedules/${personal.body.schedule.id}`;
+  assert.equal((await api(personalPath, { method: "PATCH", cookie, body: { status: "paused" } })).status, 200);
+  assert.equal((await api(personalPath, { method: "DELETE", cookie })).status, 200);
+
+  const { rows: [marker] } = await query("select first_checked_write_at from tests.schedule_manage_bridge_use where singleton");
+  assert.equal(marker.first_checked_write_at, null);
+});
+
+test("Manage: target checks use the schedule owner across two native workspaces", async () => {
+  const home = await makeClubWithAthletes("manage-target-home", 1);
+  const away = await makeClubWithAthletes("manage-target-away", 1);
+  const awayTeam = await makeTeam(away.clubId, "Away target team");
+  await grantClubAdmin(home.coachId, away.clubId);
+  const cookie = home.coachCookie;
+  const pick = async scopeId => {
+    const result = await api("/api/auth/workspace", { method: "PUT", cookie, body: { type: "club", scopeId } });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  };
+  const post = (path, body) => api(path, { method: "POST", cookie, body });
+  const targetsOf = athlete => [{ kind: "athlete", id: athlete.athleteId }];
+  const homeInput = baseCreateBody(targetsOf(home.athletes[0]));
+  const awayInput = baseCreateBody(targetsOf(away.athletes[0]));
+  const path = "/api/tests/schedules";
+  await pick(away.clubId);
+  const awaySchedule = await post(path, awayInput);
+  assert.equal(awaySchedule.status, 201, JSON.stringify(awaySchedule.body));
+  const awayPath = path + "/" + awaySchedule.body.schedule.id;
+  await pick(home.clubId);
+  const created = await post(path, homeInput);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const ownPath = path + "/" + created.body.schedule.id;
+  const patch = (schedule, targets) => api(schedule, { method: "PATCH", cookie, body: { ...homeInput, targets } });
+  const snapshot = async () => (await query(
+    `select (select jsonb_agg(s order by s.id) from tests.test_schedules s) as schedules,
+            (select jsonb_agg(t order by t.id) from tests.test_schedule_targets t) as targets`,
+  )).rows[0];
+  const earlier = await snapshot();
+  const outside = { status: 403, body: { error: "One of the chosen targets is outside your access." } };
+  const missing = [{ kind: "athlete", id: crypto.randomUUID() }];
+  for (const foreign of [awayInput.targets, [{ kind: "team", id: awayTeam }], [{ kind: "club", id: away.clubId }], missing]) {
+    const targets = [...homeInput.targets, ...foreign];
+    for (const result of [
+      await post(path, { ...homeInput, targets }),
+      await post(path + "/bulk", { ...homeInput, targets, dates: [homeInput.startDate] }),
+      await patch(ownPath, targets),
+    ]) assert.deepEqual(result, outside);
+  }
+  assert.deepEqual(await snapshot(), earlier);
+  assert.deepEqual(await patch(awayPath, homeInput.targets), outside);
+  assert.equal((await patch(awayPath, awayInput.targets)).status, 200, "the off-active destination owner remains authorized");
+  await query(
+    "insert into tests.test_schedule_targets (schedule_id,target_kind,target_athlete_id) values ($1,'athlete',$2)",
+    [created.body.schedule.id, away.athletes[0].athleteId],
+  );
+  await query(`create table public.app_notifications (
+    id uuid primary key default gen_random_uuid(), recipient_user_id uuid not null, actor_user_id uuid,
+    type varchar(80) not null, title text not null, body text, entity_type varchar(80), entity_id uuid, href text,
+    metadata jsonb not null default '{}'::jsonb, read_at timestamptz, created_at timestamptz not null default now(),
+    dedupe_key varchar(300)
+  )`);
+  await query("create unique index app_notifications_dedupe_key_idx on public.app_notifications(dedupe_key) where dedupe_key is not null");
+  await getTodayAssignmentId(away.athletes[0].cookie);
+  const historicalAssignment = (await query(
+    `select a.id from tests.test_assignments a join tests.test_schedule_occurrences o on o.id=a.occurrence_id
+     where o.schedule_id=$1 and a.athlete_id=$2`,
+    [created.body.schedule.id, away.athletes[0].athleteId],
+  )).rows[0];
+  assert.ok(historicalAssignment, "the old foreign target has a materialized assignment");
+  const sent = await post(ownPath + "/remind", { assignmentIds: [historicalAssignment.id] });
+  const missingReminder = await post(ownPath + "/remind", { assignmentIds: [crypto.randomUUID()] });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.equal(sent.body.results[0].outcome, missingReminder.body.results[0].outcome);
+  assert.deepEqual(Object.keys(sent.body.results[0]).sort(), ["assignmentId", "outcome"]);
+  assert.equal((await query(
+    "select id from public.app_notifications where entity_id=$1 and type='test_manual_reminder'",
+    [historicalAssignment.id],
+  )).rowCount, 0);
+
+  const status = value => api(ownPath, { method: "PATCH", cookie, body: { status: value } });
+  assert.equal((await status("paused")).status, 200, "pause remains available for a historical target");
+  const paused = await snapshot();
+  assert.deepEqual(await status("active"), outside);
+  assert.deepEqual(await api(ownPath, { method: "PATCH", cookie, body: { startDate: homeInput.startDate } }), outside);
+  assert.deepEqual(await snapshot(), paused);
+  assert.equal((await patch(ownPath, homeInput.targets)).status, 200, "an explicit in-scope target fixes the legacy schedule");
+  assert.equal((await status("active")).status, 200);
+
+});
+
+test("Manage: a native team can target its own team and athletes, without widening to its club", async () => {
+  const club = await makeClubWithAthletes("manage-team-boundary", 2);
+  const team = await makeTeam(club.clubId, "Schedule owner team");
+  const otherTeam = await makeTeam(club.clubId, "Sibling team");
+  await grantTeamCoach(club.coachId, team);
+  await grantTeamCoach(club.coachId, otherTeam);
+  await addMembership(club.athletes[0].athleteId, { teamId: team });
+  await addMembership(club.athletes[1].athleteId, { teamId: otherTeam });
+  const cookie = club.coachCookie;
+  const workspace = await api("/api/auth/workspace", { method: "PUT", cookie, body: { type: "team", scopeId: team } });
+  assert.equal(workspace.status, 200, JSON.stringify(workspace.body));
+  const create = targets => api("/api/tests/schedules", { method: "POST", cookie, body: baseCreateBody(targets) });
+  const actual = await create([{ kind: "team", id: team }, { kind: "athlete", id: club.athletes[0].athleteId }]);
+  assert.equal(actual.status, 201, JSON.stringify(actual.body));
+  assert.equal(actual.body.schedule.ownerScope, "team");
+  for (const target of [{ kind: "club", id: club.clubId }, { kind: "team", id: otherTeam }, { kind: "athlete", id: club.athletes[1].athleteId }]) {
+    const denied = await create([target]);
+    assert.deepEqual(denied, { status: 403, body: { error: "One of the chosen targets is outside your access." } });
+  }
 });
