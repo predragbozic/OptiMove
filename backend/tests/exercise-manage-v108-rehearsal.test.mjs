@@ -104,12 +104,14 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
     ]);
     await client.query("begin");
     try {
+      await client.query("alter table public.permission_role_changes disable trigger permission_role_changes_guard; alter table public.permission_role_changes disable trigger permission_role_changes_complete");
       const extra = await client.query(`insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_added)
         select id,revision+100,'migration','migrations_v2/202612101000_exercises_v108_manage_bridge.sql',array['exercises.add']
         from public.permission_roles r where not exists(
           select 1 from library.exercise_manage_v108_seed s where s.layer='role' and s.id=r.id
         ) order by r.id limit 1`);
       assert.equal(extra.rowCount, 1);
+      await client.query("alter table public.permission_role_changes enable trigger permission_role_changes_guard; alter table public.permission_role_changes enable trigger permission_role_changes_complete");
       await assert.rejects(client.query(rollback), /staged audit entry changed/);
     } finally {
       await client.query("rollback");

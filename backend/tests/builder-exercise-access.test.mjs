@@ -115,6 +115,7 @@ before(async () => {
     -- Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a published plan's sessions are checked for results and
     -- live event links before they are removed or moved; the tables that check reads, empty here.
     create schema training_load;
+    create table training_load.plan_workspace_ownership(plan_id uuid primary key, owner_scope text, owner_user_id uuid, owner_club_id uuid, owner_team_id uuid);
     create schema training;
     create schema calendar;
     create table training_load.session_feedback (athlete_id uuid, logical_session_id uuid);
