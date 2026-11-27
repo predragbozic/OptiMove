@@ -246,6 +246,7 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   // Roles M-2: the transaction holds and rechecks the native scope before any external schedule write.
   "load.schedule.manage": Object.freeze(["externalScheduleWriteAccess.js"]),
   "load.roster.decide": Object.freeze(["activityRosterCommands.js"]),
+  "load.activities.manage": Object.freeze(["trainingActivityWriteAccess.js"]),
   "load.estimates.manage": Object.freeze(["metricEstimateAccess.js"]),
 });
 
