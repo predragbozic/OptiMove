@@ -192,3 +192,16 @@ test("an acknowledged save invalidates drafts even when the user navigated durin
   assert.ok(!getCacheEntry("builderDrafts", key));
   assert.equal(currentBuilderRpeReview(), null);
 });
+
+test("a stale confirmation asks to review the saved draft again", async () => {
+  const draft = state.builder.draft;
+  respond(body => body.rpeReviewToken
+    ? new Response(JSON.stringify({ code: "rpe_recovery_required" }), { status: 409 })
+    : reviewResponse());
+  await activate("builder-batch-edit-only");
+  await activate("builder-rpe-review-confirm");
+  assert.equal(requests.length, 2);
+  assert.equal(state.builder.draft, draft);
+  assert.equal(currentBuilderRpeReview(), null);
+  assert.deepEqual(errors, ["The draft is still saved. Save again to review the current Training Load settings."]);
+});

@@ -1645,7 +1645,9 @@ export async function handleBuilderDraftAction(action, handlers) {
             state.builder.batchEditChoice = { stage: "scope" };
             handlers.renderBuilder();
           } else if (confirming) handlers.renderBuilder();
-          const nextStep = group
+          const nextStep = confirming
+            ? "Save again to review the current Training Load settings."
+            : group
             ? isBatchEditDraft() ? "Choose this athlete only to review the Training Load settings."
               : "Turn off Apply changes to all athletes to review this plan."
             : "Ask someone with access to confirm its Training Load settings.";
