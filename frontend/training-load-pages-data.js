@@ -19,7 +19,7 @@ export async function loadDashboardPages(render,{pageId=null}={}){
   if(!model.pageResolvedPeriod||JSON.stringify(model.period)!==JSON.stringify(model.pageResolvedPeriod))personalPeriods.set(periodKey,{config:JSON.stringify(model.page.period_config),period:structuredClone(model.period)});
   else personalPeriods.delete(periodKey);
  }
- model.pageLoading=true;render?.();
+ model.pageLoading=true;model.pageCanManage=false;render?.();
  try{
   const list=await api(pageApiPath(dashboardId));
   if(ticket!==generation||key(a().selectedDashboardId)!==context)return;

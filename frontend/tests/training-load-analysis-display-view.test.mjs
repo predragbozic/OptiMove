@@ -7,6 +7,8 @@ import { emptyTrainingLoadState, state } from "../state.js";
 function setup(type, current, { config = { schemaVersion: 1 }, comparison = [], resultStatus = "ok" } = {}) {
   state.trainingLoad = emptyTrainingLoadState();
   const analysis = state.trainingLoad.analysis;
+  analysis.dashboardCanManage = true;
+  analysis.canCreateDashboard = true;
   analysis.dashboard = { id: "dashboard-1", name: "Legacy dashboard", status: "active", is_template: false };
   analysis.widgets = [{ id: "widget-1", widget_type: type, title: "Legacy widget", width: 4, height: 3, x: 0, y: 0, mobile_order: 1, group_by: "cohort", display_config: config, series: [{ id: "series-1", built_in_series_key: "srpe", resolution_status: "resolved", source_policy: "not_applicable", display_label: "sRPE" }] }];
   analysis.period = { dateFrom: "2026-10-01", dateTo: "2026-10-14" };

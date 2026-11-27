@@ -98,18 +98,18 @@ function readOnlyView() {
 }
 
 function canCreateDashboard() {
-  return !readOnlyView() && state.trainingLoad.analysis.canCreateDashboard !== false;
+  return !readOnlyView() && state.trainingLoad.analysis.canCreateDashboard === true;
 }
 
 function canEdit() {
   const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.status !== "archived" && !d.is_template && !readOnlyView() && state.trainingLoad.analysis.dashboardCanManage !== false;
+  return Boolean(d) && d.status !== "archived" && !d.is_template && !readOnlyView() && state.trainingLoad.analysis.dashboardCanManage === true;
 }
 
 // Archived dashboards may still be deleted by an authorized owner.
 function canDeleteDashboard() {
   const d = state.trainingLoad.analysis.dashboard;
-  return Boolean(d) && d.owner_scope !== "system" && !readOnlyView() && state.trainingLoad.analysis.dashboardCanManage !== false;
+  return Boolean(d) && d.owner_scope !== "system" && !readOnlyView() && state.trainingLoad.analysis.dashboardCanManage === true;
 }
 
 // 3B3 UX slice: the "Choose activity" chip replaces the old raw Activity/
