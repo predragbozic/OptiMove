@@ -118,7 +118,7 @@ test("v106 apply, unused rollback restores the catalogue, then reapply", async (
 test("both Settings builds preserve the staged word and both native layers can write", async () => {
   const fixture = await createPagesDatabase({ through: "202612071000", label: "rpe_overlap" });
   const { client } = fixture;
-  let current, previous;
+  let current, previous, bridge;
   try {
     const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     const f = fixtures(client);
@@ -133,19 +133,21 @@ test("both Settings builds preserve the staged word and both native layers can w
     );
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, "4d7d0ced4f9f2eb5f2eb8d9b726295282d7e0555");
+    // The v106 overlap predates public exposure of the staged RPE permission.
+    bridge = await previousDashboardServer(fixture.url, {}, "66220c1224abdbdc0eaa1a23fa8d53591064a98a");
     const platformCookie = await current.cookieFor(platform);
     const customCookie = await current.cookieFor(coach);
     const versionCookie = await current.cookieFor(versionCoach);
     const viewerCookie = await current.cookieFor(viewer);
-    const oldPost = async (cookie, path, body) => {
-      const response = await fetch(previous.baseUrl + path, {
+    const post = async (server, cookie, path, body) => {
+      const response = await fetch(server.baseUrl + path, {
         method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body),
       });
       const text = await response.text();
       return { status: response.status, body: JSON.parse(text), text };
     };
     const oldDraft = async (cookie, weekStart) => {
-      const draft = await oldPost(cookie, "/api/builder/plans", {
+      const draft = await post(previous, cookie, "/api/builder/plans", {
         name: "Saved by the previous build", planType: "weekly", weekStart, athleteIds: [athlete.athlete_id],
       });
       assert.equal(draft.status, 201, draft.text);
@@ -177,8 +179,8 @@ test("both Settings builds preserve the staged word and both native layers can w
         (select revision from public.permission_custom_roles where id=$3) as custom`, [roleId,versionId,customId],
     )).rows[0];
     for (const send of [
-      (path, body) => oldPost(platformCookie, path, body),
-      (path, body) => current.api(platformCookie, path, { method: "POST", body }),
+      (path, body) => post(previous, platformCookie, path, body),
+      (path, body) => post(bridge, platformCookie, path, body),
     ]) {
       const before = await words();
       const revision = await revisions();
@@ -233,6 +235,7 @@ test("both Settings builds preserve the staged word and both native layers can w
   } finally {
     await client.query("rollback").catch(() => {});
     await previous?.stop();
+    await bridge?.stop();
     await current?.stop();
     await fixture.drop();
   }

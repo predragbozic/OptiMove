@@ -297,9 +297,10 @@ function isInlineAddHere(session, parentId, context) {
 // constraint enforces) - the RPE button is rendered disabled, with a
 // short explanation replacing it, so the session stays visibly IN the
 // plan without looking like it silently expects a Training Load result.
-function renderSessionTrainingLoadControls(session) {
+function renderSessionTrainingLoadControls(session, canEdit) {
   const trackingOn = session.trackingEnabled === true;
   const rpeOn = trackingOn && session.rpeEnabled !== false;
+  if (!canEdit) return `<p class="builder-session-tracking-hint muted">Tracking ${trackingOn ? "on" : "off"} · RPE ${rpeOn ? "requested" : "off"}</p>`;
   return `
     <div class="builder-session-training-load-controls">
       <button type="button" class="plain-button compact-button builder-session-rpe-toggle builder-session-tracking-toggle ${trackingOn ? "is-on" : "is-off"}" data-action="builder-toggle-session-tracking" data-session-id="${escapeAttr(session.id)}" aria-pressed="${trackingOn ? "true" : "false"}" title="${trackingOn ? "This session is tracked in Training Load - click to turn it off" : "This session is not tracked in Training Load - click to turn it on"}">
@@ -343,6 +344,12 @@ function countBuilderTrainingLoadBulkTargets(draft, trackOn, rpeOn) {
 export function renderBuilderTrainingLoadSettings(draft) {
   const trackOn = draft.plan.trackTrainingLoadDefault === true;
   const rpeOn = trackOn && draft.plan.requestRpeDefault === true;
+  if (draft.plan.canEditRpeSettings !== true) return `
+    <section class="panel builder-training-load-settings">
+      <h3>New session defaults</h3>
+      <p>Tracking ${trackOn ? "on" : "off"} · RPE ${rpeOn ? "requested" : "off"}.</p>
+      <p class="muted">Ask your administrator to change the Training Load settings.</p>
+    </section>`;
   const { applyCount, beforeAfterOnCount, rpeOnCount } = countBuilderTrainingLoadBulkTargets(draft, trackOn, rpeOn);
   const hasBulkActions = applyCount > 0 || beforeAfterOnCount > 0 || rpeOnCount > 0;
   return `
@@ -400,7 +407,7 @@ export function renderBuilderBlock(block, selectedSessionId, selectedNodeId, isW
           <div class="builder-session-row"><button class="builder-session ${session.id === selectedSessionId ? "is-active" : ""}" data-action="builder-select-session" data-session-id="${escapeAttr(session.id)}">
             ${session.name ? `<strong class="builder-session-name">${escapeHtml(session.name)}</strong>` : ""}
             <span class="builder-session-badge-row"><span>${escapeHtml(context.sessionLabel(session))}</span><span>${session.nodes.reduce((total, node) => total + node.items.length, 0)} exercises</span></span>
-          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${isWeekly ? renderSessionTrainingLoadControls(session) : ""}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div>${isWeekly ? context.k3Session?.(block, session) || "" : ""}${isWeekly ? context.sessionEvent?.(block, session) || "" : ""}</div>
+          </button><div class="builder-session-actions"><form class="builder-session-time-inline" data-builder-form="update-session" data-builder-autosave data-session-id="${escapeAttr(session.id)}"><input type="text" name="name" class="builder-text-input builder-session-name-input" value="${escapeAttr(session.name || "")}" placeholder="Session name (optional)" aria-label="Session name (optional)" title="Session name (optional) - shown alongside the AM/PM and training-phase labels, not instead of them">${renderSessionEditPhaseSelects(session)}<input type="time" name="time" class="builder-text-input builder-session-time-input" value="${escapeAttr(session.time || "")}" aria-label="Specific session time (optional)" title="Specific session time (optional)"></form>${isWeekly ? renderSessionTrainingLoadControls(session, context.canEditRpeSettings) : ""}${renderBuilderAddTriggers(session, "", ALL_NODE_TYPES, context)}${renderDeleteIconButton("builder-delete-session", `data-session-id="${escapeAttr(session.id)}"`, "Delete session")}${renderNodePasteButton(session.id, "", "session", context)}</div>${isWeekly ? context.k3Session?.(block, session) || "" : ""}${isWeekly ? context.sessionEvent?.(block, session) || "" : ""}</div>
           ${isWeekly ? context.k3SessionNote?.(block, session) || "" : ""}
           ${isWeekly ? context.sessionEventNote?.(block, session) || "" : ""}
           ${isInlineAddHere(session, "", context) ? renderBuilderInlineAddForm(session, "", context) : ""}

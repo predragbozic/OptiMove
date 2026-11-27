@@ -91,6 +91,7 @@ function builderStructureContext() {
     exerciseNodeLabel,
     findBuilderSession: (id) => findBuilderSession(state.builder.draft, id),
     selectedSessionId: state.builder.selectedSessionId,
+    canEditRpeSettings: state.builder.draft?.plan?.canEditRpeSettings === true,
     sessionLabel,
     inlineAddOpen: state.builder.inlineAddOpen,
     inlineAddType: state.builder.inlineAddType,
