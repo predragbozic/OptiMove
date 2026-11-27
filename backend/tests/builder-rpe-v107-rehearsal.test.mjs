@@ -46,7 +46,7 @@ test("v107 is additive for legacy writers and restores the catalogue on an unuse
     const legacy = await insertPlan(actor);
     const original = await catalogue(db);
     await checks("preflight");
-    await db.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values('migrations_v2/202612091000_fixture_collision.sql','collision','fixture')");
+    await db.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values('migrations_v2/202612091000_fixture_collision.sql',repeat('a',64),'fixture')");
     const collision = await db.query(await read("preflight"));
     assert.equal(collision.rows[0].v107_pending, false);
     await db.query("delete from public.schema_migrations where migration_name='migrations_v2/202612091000_fixture_collision.sql'");
@@ -59,7 +59,7 @@ test("v107 is additive for legacy writers and restores the catalogue on an unuse
     );
     assert.equal((await db.query(`select opening_verified from ${baseline} where plan_id=$1`, [legacy])).rows[0].opening_verified, false);
     await assert.rejects(db.query(`update ${baseline} set opening_verified=true where plan_id=$1`, [legacy]), /attestation is immutable/);
-    await db.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values('migrations_v2/202612101000_fixture_later.sql','later','fixture')");
+    await db.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values('migrations_v2/202612101000_fixture_later.sql',repeat('b',64),'fixture')");
     await refuseRollback(/later migration/);
     await db.query("delete from public.schema_migrations where migration_name='migrations_v2/202612101000_fixture_later.sql'");
     await db.query(await read("rollback"));
