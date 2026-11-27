@@ -49,7 +49,7 @@ function programEditActor(actor, scope) {
   };
 }
 
-export async function assertProgramEditOwnership(client, scope, plan) {
+export async function assertProgramEditOwnership(client, scope, plan, { legacyPublicTarget = false } = {}) {
   if (scope.type === "platform") return;
   const { rows: [owner] } = await client.query(
     "select * from training_load.plan_workspace_ownership where plan_id=$1 for share",
@@ -69,7 +69,7 @@ export async function assertProgramEditOwnership(client, scope, plan) {
 
 export async function combinedProgramEditIsChecked(client, actor, plan) {
   const scope = externalScheduleScopeForWorkspace(actor.workspace, actor);
-  await assertProgramEditOwnership(client, scope, plan);
+  await assertProgramEditOwnership(client, scope, plan, { legacyPublicTarget: true });
   if (!nativeProgramRpeScope(scope)) return false;
   const { rows: [stage] } = await client.query("select public.permission_word_honoured('programs.edit') as checked");
   if (stage?.checked !== true) throw refuseProgramEdit();

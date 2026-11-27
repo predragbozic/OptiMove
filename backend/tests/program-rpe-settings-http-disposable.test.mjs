@@ -390,7 +390,10 @@ test("private coaching rejects native-owned RPE effects even when the actor crea
     const legacy = await http.api(coach.cookie, draftSession(programSession), { method: "PATCH", body: { rpeEnabled: false } });
     assert.equal(legacy.status, 200, legacy.text);
     assert.equal((await flags(programSession)).rpe_enabled, false);
-    const normal = await http.api(coach.cookie, "/api/builder/plans/" + nativeDraft.id, { method: "PATCH", body: { name: "Ordinary private edit" } });
+    const foreignEdit = await http.api(coach.cookie, "/api/builder/plans/" + nativeDraft.id, { method: "PATCH", body: { name: "Edit in the wrong workspace" } });
+    assert.equal(foreignEdit.status, 404, foreignEdit.text);
+    assert.deepEqual(await snapshot(), before);
+    const normal = await http.api(coach.cookie, "/api/builder/plans/" + ownPrivate.id, { method: "PATCH", body: { name: "Ordinary private edit" } });
     assert.equal(normal.status, 200, normal.text);
     assert.equal(normal.body.plan.name, "Ordinary private edit");
   } finally {
