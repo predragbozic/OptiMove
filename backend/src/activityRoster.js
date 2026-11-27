@@ -276,7 +276,8 @@ async function readInSnapshot(fn) {
 // `deferGate`: a command asks for the v44 gate's answer instead of the 409,
 // because its requestKey replay must come first (a saved answer wins over the
 // present state); the read lets the 409 be thrown here.
-export async function resolveRosterTarget(client, ctx, activityId, { deferGate = false, viewScope = null } = {}) {
+// `deferApplicability` lets the estimate editor check current authority before applying either roster rule.
+export async function resolveRosterTarget(client, ctx, activityId, { deferGate = false, deferApplicability = false, viewScope = null } = {}) {
   const one = async (sql, params) => (await client.query(sql, params)).rows;
   const found = (await one(
     `select training.resolve_canonical_activity_id(id) as canonical_id from training.activities where id = $1`,
@@ -296,6 +297,7 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
     if (viewScope) throw notFound();
     const scope = activityScopeForWorkspace(ctx.workspace, { user: { id: ctx.userId } });
     if (scope.type !== null && canManageActivityInScope(scope, activity)) {
+      if (deferApplicability) return { canonicalId, activity, team: null, basis: null };
       throw new RosterError(409, "roster_not_applicable", "Only a team session has a roster.");
     }
     throw notFound();
@@ -312,6 +314,7 @@ export async function resolveRosterTarget(client, ctx, activityId, { deferGate =
       || (viewScope.type === "club" && String(team.club_id) === viewScope.id)) ? "view" : null)
     : rosterBasisForWorkspace(ctx.workspace, ctx.authz, team);
   if (!basis) throw notFound();
+  if (deferApplicability) return { canonicalId, activity, team, basis };
   // A self-report activity (v44): the caller may decide on this team's
   // sessions, but this one holds one athlete's own result and has no roster.
   // Read only now, after the basis: a caller without one never pays for it.

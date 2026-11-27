@@ -2,6 +2,7 @@
 // the mapper's scaleRecording, the scale_recording save after the import, the flag, the undo and the migration's round trip.
 // Disposable databases only; GPEXE is the fake server3 source.
 import { after, before, test } from "node:test";
+import { applyEstimateBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 import assert from "node:assert/strict";
 import http from "node:http";
 import pg from "pg";
@@ -40,6 +41,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyEstimateBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.ESTIMATES_ENABLED = "true";
