@@ -1,0 +1,321 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { test } from "node:test";
+import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
+import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
+import { asActor, fixtures, key, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
+
+async function seedNativeRoleLayers(fixture) {
+  const f = fixtures(fixture.client);
+  const club = await f.club("Programs Edit staging");
+  const team = await f.team(club);
+  const platform = await f.user("Programs Edit staging admin");
+  const coach = await f.user("Programs Edit native coach");
+  await f.grantPlatform(platform);
+  await f.grantTeam(coach, team);
+  const versionCoach = await f.user("Programs Edit version coach");
+  await f.grantTeam(versionCoach, team);
+  const role = ROLE_IDS.team_coach;
+  return asActor(fixture.url, platform, async tx => {
+    await tx.query("select public.lock_club_ceiling($1::uuid[],'exclusive')", [[club]]);
+    const { rows: [version] } = await tx.query(
+      `insert into public.permission_club_role_versions
+         (club_id,system_role_id,based_on_revision,answered_revision,created_by_user_id)
+       select $1,id,revision,revision,$3 from public.permission_roles where id=$2 returning id`, [club,role,platform],
+    );
+    await tx.query("insert into public.permission_club_role_version_items select $1,permission_word from public.permission_role_items where role_id=$2", [version.id,role]);
+    await tx.query(
+      `insert into public.permission_club_role_version_changes
+         (version_id,revision_after,kind,performed_by_user_id,basis,reason,items_added)
+       values($1,1,'create',$2,'platform_admin','Rehearsal version',
+         array(select permission_word from public.permission_club_role_version_items where version_id=$1))`, [version.id,platform],
+    );
+    const { rows: [custom] } = await tx.query(
+      `insert into public.permission_custom_roles
+        (user_id,base_role_id,scope_type,scope_id,club_id,holding_row_table,holding_row_id,holding_row_version,
+        frozen_from,frozen_from_revision,created_by_user_id)
+       select $1,$2,'team',$3,$4,'user_team_roles',r.id,r.updated_at,'default',p.revision,$5
+       from public.user_team_roles r join public.permission_roles p on p.id=$2
+       where r.user_id=$1 and r.team_id=$3 returning id`, [coach,role,team,club,platform],
+    );
+    await tx.query("insert into public.permission_custom_role_items select $1,permission_word from public.permission_role_items where role_id=$2", [custom.id,role]);
+    await tx.query(
+      `insert into public.permission_custom_role_changes
+         (custom_role_id,revision_after,kind,performed_by_user_id,basis,reason,items_added)
+       values($1,1,'create',$2,'platform_admin','Rehearsal custom',
+         array(select permission_word from public.permission_custom_role_items where custom_role_id=$1))`, [custom.id,platform],
+    );
+    return { versionId: version.id, customId: custom.id, club, team, platform, coach, versionCoach };
+  });
+}
+
+function roleData(client) {
+  return client.query(
+    `select
+      (select jsonb_agg(r order by id) from public.permission_roles r) as roles,
+      (select jsonb_agg(i order by role_id,permission_word) from public.permission_role_items i) as role_items,
+      (select jsonb_agg(a order by role_id,revision_after) from public.permission_role_changes a) as role_audit,
+      (select jsonb_agg(r order by id) from public.permission_club_role_versions r) as versions,
+      (select jsonb_agg(i order by version_id,permission_word) from public.permission_club_role_version_items i) as version_items,
+      (select jsonb_agg(a order by version_id,revision_after) from public.permission_club_role_version_changes a) as version_audit,
+      (select jsonb_agg(r order by id) from public.permission_custom_roles r) as custom,
+      (select jsonb_agg(i order by custom_role_id,permission_word) from public.permission_custom_role_items i) as custom_items,
+      (select jsonb_agg(a order by custom_role_id,revision_after) from public.permission_custom_role_changes a) as custom_audit`,
+  ).then(({ rows }) => rows[0]);
+}
+
+
+const previousBuild = "234e2eab4f7aea6376ddcdc26800bc516f6ec6e6";
+const stagedBuild = "aa7e62cbf9dcc4aaab538a83b7f9f16a08526a56";
+const editExposureBuild = "58762744039fa00577d50926c50b1cacfcf3b6ea";
+const migration = "202612111000";
+const bridgeWords = ["programs.edit"];
+const read = name => readFile(new URL(`../../docs/runbooks/program-edit-v109-${name}.sql`, import.meta.url), "utf8");
+
+test("Programs Edit stages only existing native View holders, preserves old Settings and writes, and rolls back only before use", async () => {
+  const fixture = await createPagesDatabase({ through: "202612101000", label: "program_edit_v109" });
+  const { client } = fixture;
+  let current, previous, staged, editExposure;
+  try {
+    const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
+    await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'team',$4),($3,'team',$4)", [platform,coach,versionCoach,team]);
+    const catalogue = async () => (await client.query("select relname,relkind from pg_class where relnamespace='plans'::regnamespace order by relname,relkind")).rows;
+    const beforeCatalogue = await catalogue();
+    const beforeRoles = await roleData(client);
+    const rollback = await read("rollback");
+    const { rows: [preflight] } = await client.query(await read("preflight"));
+    assert.ok(Object.values(preflight).every(check => check === true), JSON.stringify(preflight));
+    await client.query("begin");
+    try {
+      await client.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
+      await client.query("delete from public.permission_role_items where role_id=$1 and permission_word='programs.view'", [ROLE_IDS.team_coach]);
+      const { rows: [ineligible] } = await client.query(await read("preflight"));
+      assert.equal(ineligible.exact_native_seed_roles, false);
+    } finally {
+      await client.query("rollback");
+    }
+    await fixture.applyThrough(migration);
+    const installed = await catalogue();
+    assert.notDeepEqual(installed, beforeCatalogue);
+    const [postcheck] = await client.query(await read("postcheck"));
+    assert.ok(Object.values(postcheck.rows[0]).every(check => check === true), JSON.stringify(postcheck.rows[0]));
+    const { rows: seed } = await client.query("select layer,id,words from plans.program_manage_v109_seed order by layer,id");
+    assert.deepEqual(seed.filter(row => row.layer !== "role"), [
+      { layer: "custom", id: customId, words: bridgeWords },
+      { layer: "version", id: versionId, words: bridgeWords },
+    ]);
+    await client.query("begin");
+    try {
+      await client.query("alter table public.permission_role_changes disable trigger permission_role_changes_guard; alter table public.permission_role_changes disable trigger permission_role_changes_complete");
+      const extra = await client.query(`insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_added)
+        select id,revision+100,'migration','migrations_v2/202612111000_programs_v109_edit_bridge.sql',array['programs.edit']
+        from public.permission_roles r where not exists(
+          select 1 from plans.program_manage_v109_seed s where s.layer='role' and s.id=r.id
+        ) order by r.id limit 1`);
+      assert.equal(extra.rowCount, 1);
+      await client.query("alter table public.permission_role_changes enable trigger permission_role_changes_guard; alter table public.permission_role_changes enable trigger permission_role_changes_complete");
+      await assert.rejects(client.query(rollback), /staged audit entry changed/);
+    } finally {
+      await client.query("rollback");
+    }
+    await client.query(rollback);
+    assert.deepEqual(await catalogue(), beforeCatalogue);
+    assert.deepEqual(await roleData(client), beforeRoles);
+    await fixture.applyThrough(migration);
+    assert.deepEqual(await catalogue(), installed);
+    await client.query("insert into public.schema_migrations(migration_name,checksum,runner_version,applied_at) values('migrations_v2/202612111100_program_edit_rehearsal.sql',repeat('0',64),'test',now()-interval '1 day')");
+    await assert.rejects(client.query(rollback), /later migration/);
+    await client.query("rollback");
+    await client.query("delete from public.schema_migrations where migration_name='migrations_v2/202612111100_program_edit_rehearsal.sql'");
+
+    current = await startServer(fixture.url);
+    previous = await previousDashboardServer(fixture.url, {}, previousBuild);
+    staged = await previousDashboardServer(fixture.url, {}, stagedBuild);
+    editExposure = await previousDashboardServer(fixture.url, {}, editExposureBuild);
+    const platformCookie = await current.cookieFor(platform);
+    const versionCookie = await current.cookieFor(versionCoach);
+    const call = async (server, cookie, path, body, method = "POST") => {
+      const response = await fetch(server.baseUrl + path, {
+        method, headers: { cookie, ...(body ? { "content-type": "application/json" } : {}) }, body: JSON.stringify(body),
+      });
+      const text = await response.text();
+      return { status: response.status, body: JSON.parse(text), text };
+    };
+
+    const post = call;
+    const legacy = await post(previous, versionCookie, "/api/builder/plans", { name: "Old binary program" });
+    assert.equal(legacy.status, 201, legacy.text);
+    const marker = () => client.query("select 1 from plans.program_manage_v109_use").then(result => result.rowCount);
+    assert.equal(await marker(), 0);
+    const root = "/api/organization/roles";
+    const roleId = ROLE_IDS.team_coach;
+    const roleChange = root + "/" + roleId + "/change";
+    const versionPath = root + "/" + roleId + "/clubs/" + club + "/version";
+    const customPath = root + "/users/" + coach + "/clubs/" + club + "/custom";
+    for (const send of [
+      (path, body) => post(previous, platformCookie, path, body),
+      (path, body) => post(staged, platformCookie, path, body),
+    ]) {
+      const { rows: [roles] } = await client.query(`select
+        (select revision from public.permission_roles where id=$1) as role_revision,
+        (select revision from public.permission_club_role_versions where id=$2) as version_revision,
+        (select revision from public.permission_custom_roles where id=$3) as custom_revision,
+        array(select permission_word from public.permission_role_items where role_id=$1 order by 1) as items`,
+      [roleId,versionId,customId]);
+      for (const [path, input] of [
+        [roleChange, { expectedRevision: roles.role_revision, items: roles.items.filter(item => !bridgeWords.includes(item)) }],
+        [versionPath, { expectedRevision: roles.version_revision, remove: bridgeWords }],
+        [customPath, { roleId, scopeType: "team", scopeId: team, expectedRevision: roles.custom_revision, remove: bridgeWords }],
+      ]) {
+        const rejected = await send(path, { requestKey: key(), reason: "Programs Edit is staged", ...input });
+        assert.equal(rejected.status, 409, rejected.text);
+        assert.equal(rejected.body.error, "permission_not_available_yet");
+      }
+      const allowed = await send(roleChange, {
+        requestKey: key(), reason: "Keep staged words", expectedRevision: roles.role_revision,
+        items: roles.items, description: "Programs Edit overlap " + key(),
+      });
+      assert.equal(allowed.status, 200, allowed.text);
+    }
+    const roleCatalog = await call(staged, platformCookie, root + "/catalog?clubId=" + club, undefined, "GET");
+    assert.equal(roleCatalog.status, 200, roleCatalog.text);
+    for (const word of ["programs.edit", "programs.assign", "programs.publish"]) {
+      assert.equal(roleCatalog.body.permissions.find(entry => entry.word === word)?.checked, false);
+    }
+    for (const user of [coach, versionCoach]) {
+      const cookie = await current.cookieFor(user);
+      const me = await call(staged, cookie, "/api/auth/me", undefined, "GET");
+      assert.equal(me.status, 200, me.text);
+      assert.equal(me.body.user.permissions.includes("programs.edit"), false);
+    }
+    const exposed = await call(editExposure, platformCookie, root + "/catalog?clubId=" + club, undefined, "GET");
+    assert.equal(exposed.status, 200, exposed.text);
+    for (const word of ["programs.edit", "programs.assign", "programs.publish", "programs.rpe_settings"]) {
+      const checked = word === "programs.edit" || word === "programs.rpe_settings";
+      assert.equal(exposed.body.permissions.find(entry => entry.word === word)?.checked, checked, word);
+    }
+    const { rows: [athlete] } = await client.query(`insert into public.athletes
+      (athlete_id,source_external_id,first_name,last_name,full_name,is_active)
+      values('v109-rehearsal','v109-rehearsal','Old','Athlete','Old Athlete',true) returning id,athlete_id`);
+    await client.query(`insert into public.athlete_memberships(athlete_id,membership_type,club_id,team_id,status)
+      values($1,'team',$2,$3,'active')`, [athlete.id,club,team]);
+    const template = await post(previous, versionCookie, "/api/builder/plans", {
+      planType: "program", templateKind: "weekly", weeks: 1, name: "Old weekly program",
+    });
+    assert.equal(template.status, 201, template.text);
+    const dayId = template.body.blocks[0].id;
+    const session = await post(previous, versionCookie, `/api/builder/blocks/${dayId}/sessions`, { name: "Old weekly session", bta: "T" });
+    assert.equal(session.status, 201, session.text);
+    const oldPath = `/api/builder/plans/${template.body.plan.id}/assign-weekly`;
+    const oldRequest = { assignmentRequestId: key(), startDate: "2027-04-05", athleteIds: [athlete.athlete_id] };
+    const oldAssignment = await post(previous, versionCookie, oldPath, oldRequest);
+    assert.equal(oldAssignment.status, 201, oldAssignment.text);
+    assert.deepEqual(Object.keys(oldAssignment.body).sort(), ["created", "kept", "replaced", "skipped"]);
+    const proofTable = "plans.program_edit_v109_assignment_evidence";
+    const evidence = () => client.query("select * from " + proofTable).then(result => result.rows);
+    assert.deepEqual(await evidence(), []);
+    const insertEvidence = (scopeType, scopeId, edited = [], removed = []) => client.query(
+      `insert into plans.program_edit_v109_assignment_evidence
+        (request_id,edited_plan_ids,removed_plan_ids,scope_type,scope_id) values($1,$2,$3,$4,$5)`,
+      [oldRequest.assignmentRequestId,edited,removed,scopeType,scopeId],
+    );
+    await assert.rejects(insertEvidence("team", null), { code: "23514" });
+    await assert.rejects(insertEvidence("private_coach", team), { code: "23514" });
+    const planId = oldAssignment.body.created[0].planId;
+    await assert.rejects(insertEvidence("team", team, [planId], [planId]), { code: "23514" });
+
+    // The old binary has no dependency on the extra relation and still
+    // returns the original result exactly if a bridge-owned row exists.
+    const legacyReplay = await post(previous, versionCookie, oldPath, oldRequest);
+    assert.equal(legacyReplay.status, oldAssignment.status);
+    assert.deepEqual(legacyReplay.body, oldAssignment.body);
+    await insertEvidence("team", team);
+    assert.deepEqual(await post(previous, versionCookie, oldPath, oldRequest), legacyReplay);
+    for (const action of ["delete from", "truncate", "update"]) {
+      const command = action + " " + proofTable + (action === "update" ? " set scope_type='club'" : "");
+      await assert.rejects(client.query(command), /assignment evidence is immutable/);
+    }
+    await assert.rejects(client.query(rollback), /refuses recorded Programs Edit assignment evidence/);
+    await client.query("rollback");
+    await client.query("delete from public.builder_assignment_requests where id=$1", [oldRequest.assignmentRequestId]);
+    assert.deepEqual(await evidence(), [], "Removing the old receipt cascades only its dependent evidence");
+
+    const duplicatePath = `/api/builder/plans/${legacy.body.plan.id}/duplicate`;
+    const duplicateRequest = { assignmentRequestId: key(), intent: "assign", athleteIds: [athlete.athlete_id] };
+    const oldDuplicate = await post(previous, versionCookie, duplicatePath, duplicateRequest);
+    assert.equal(oldDuplicate.status, 201, oldDuplicate.text);
+    assert.equal(oldDuplicate.body.assignments.length, 1);
+    assert.deepEqual(await evidence(), []);
+    const oldDuplicateReplay = await post(previous, versionCookie, duplicatePath, duplicateRequest);
+    assert.equal(oldDuplicateReplay.status, 201, oldDuplicateReplay.text);
+    await client.query(`insert into plans.program_edit_v109_assignment_evidence
+      (request_id,edited_plan_ids,removed_plan_ids,scope_type,scope_id) values($1,'{}','{}','team',$2)`,
+    [duplicateRequest.assignmentRequestId, team]);
+    assert.deepEqual(await post(previous, versionCookie, duplicatePath, duplicateRequest), oldDuplicateReplay);
+    await assert.rejects(client.query(rollback), /refuses recorded Programs Edit assignment evidence/);
+    await client.query("rollback");
+    await client.query("delete from public.builder_assignment_requests where id=$1", [duplicateRequest.assignmentRequestId]);
+    assert.deepEqual(await evidence(), []);
+    const editable = await post(previous, versionCookie, "/api/builder/plans", {
+      name: "Exposure draft", planType: "weekly", weekStart: "2027-04-12", athleteIds: [athlete.athlete_id],
+    });
+    assert.equal(editable.status, 201, editable.text);
+    const target = "/api/builder/plans/" + editable.body.plan.id;
+    const me = async cookie => {
+      const result = await call(editExposure, cookie, "/api/auth/me", undefined, "GET");
+      assert.equal(result.status, 200, result.text);
+      return result.body.user.permissions;
+    };
+    const revisionOf = async (kind, id) => (await client.query(
+      kind === "version" ? "select revision from public.permission_club_role_versions where id=$1"
+        : "select revision from public.permission_custom_roles where id=$1", [id],
+    )).rows[0].revision;
+    const layers = [
+      { path: versionPath, kind: "version", id: versionId, cookie: versionCookie, scope: {} },
+      { path: customPath, kind: "custom", id: customId, cookie: await current.cookieFor(coach),
+        scope: { roleId, scopeType: "team", scopeId: team } },
+    ];
+    for (const layer of layers) {
+      assert.ok((await me(layer.cookie)).includes("programs.edit"));
+      for (const word of ["programs.assign", "programs.publish"]) {
+        const refused = await call(editExposure, platformCookie, layer.path, {
+          requestKey: key(), expectedRevision: await revisionOf(layer.kind, layer.id), reason: "Permission is still staged",
+          ...layer.scope, add: [word],
+        });
+        assert.equal(refused.status, 409, refused.text);
+        assert.equal(refused.body.error, "permission_not_honoured");
+      }
+      const revise = async change => {
+        const body = { requestKey: key(), expectedRevision: await revisionOf(layer.kind, layer.id),
+          reason: "Program Edit exposure rehearsal", ...layer.scope, [change]: bridgeWords };
+        const response = await post(editExposure, platformCookie, layer.path, body);
+        assert.equal(response.status, 200, response.text);
+        const replay = await post(staged, platformCookie, layer.path, body);
+        assert.equal(replay.status, 200, replay.text);
+        assert.equal(replay.body.replayed, true);
+      };
+      const rename = name => call(editExposure, layer.cookie, target, { name }, "PATCH");
+      await revise("remove");
+      assert.ok(!(await me(layer.cookie)).includes("programs.edit"));
+      const denied = await rename("Revoked edit");
+      assert.equal(denied.status, 403, denied.text);
+      const unchanged = await client.query("select name from plans.plans where id=$1", [editable.body.plan.id]);
+      assert.notEqual(unchanged.rows[0].name, "Revoked edit");
+      await revise("add");
+      assert.ok((await me(layer.cookie)).includes("programs.edit"));
+      const accepted = await rename("Allowed " + layer.kind);
+      assert.equal(accepted.status, 200, accepted.text);
+    }
+    for (const action of ["delete from", "truncate", "update"]) {
+      const command = action + " plans.program_manage_v109_use" + (action === "update" ? " set first_used_at=now()" : "");
+      await assert.rejects(client.query(command), /first-use evidence is immutable/);
+    }
+    assert.equal(await marker(), 1);
+    await assert.rejects(client.query(rollback), /checked Programs Edit writer use/);
+    await client.query("rollback");
+  } finally {
+    try { await Promise.all([previous?.stop(), staged?.stop(), editExposure?.stop()]); } finally {
+      try { await current?.stop(); } finally { await fixture.drop(); }
+    }
+  }
+});

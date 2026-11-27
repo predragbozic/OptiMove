@@ -11,7 +11,7 @@ const coachId = crypto.randomUUID();
 const otherCoachId = crypto.randomUUID();
 const athleteUserId = crypto.randomUUID();
 const coachSessionToken = crypto.randomUUID();
-const coachAuthz = { platformRoles: [], clubRoles: [], teamRoles: [], isIndependentCoach: true };
+const coachAuthz = { platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [], isIndependentCoach: true, capabilities: { coachWorkspace: true } };
 let database;
 let client;
 let pool;
@@ -33,6 +33,18 @@ before(async () => {
     create table public.user_global_roles (id uuid primary key default gen_random_uuid(), user_id uuid, role text, is_active boolean);
     create table public.auth_sessions(user_id uuid, token_hash text, expires_at timestamptz);
     create function public.lock_permission_actor(uuid,text,uuid) returns void language plpgsql as $$ begin return; end $$;
+    create table public.teams (id uuid primary key, club_id uuid);
+    create table public.permission_role_items (role_id uuid);
+    create table public.permission_club_role_version_items (version_id uuid);
+    create table public.permission_custom_role_items (custom_role_id uuid);
+    create table public.club_permission_ceiling (club_id uuid);
+    create function public.permission_club_closed_modules(uuid) returns text[] language sql as $program_edit_fixture$ select '{}'::text[] $program_edit_fixture$;
+    create function public.permission_user_holdings(uuid)
+      returns table(scope_type text, scope_id uuid, role_id uuid, assignment_id uuid, expires_at timestamptz, club_id uuid, custom_role_id uuid, words text[])
+      language sql as $program_edit_fixture$ select null::text,null::uuid,null::uuid,null::uuid,null::timestamptz,null::uuid,null::uuid,null::text[] where false $program_edit_fixture$;
+    create table plans.program_edit_v109_assignment_evidence (
+      request_id uuid primary key, edited_plan_ids uuid[], removed_plan_ids uuid[], scope_type text, scope_id uuid
+    );
     create table public.athletes (
       id uuid primary key, user_id uuid, athlete_id text, source_external_id text,
       display_name text, full_name text, first_name text, last_name text,
@@ -178,7 +190,8 @@ before(async () => {
   app.use(["/api/templates", "/api/plans", "/api/organization"], (req, res, next) => {
     const athlete = req.headers["x-test-athlete"] === "true";
     req.user = { id: athlete ? athleteUserId : coachId };
-    req.authz = { platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [], isAthlete: athlete, capabilities: { coachWorkspace: !athlete } };
+    req.authz = athlete ? { platformRoles: [], clubRoles: [], teamRoles: [], managedTeamIds: [], isAthlete: true, capabilities: { coachWorkspace: false } } : coachAuthz;
+    if (!athlete) req.sessionToken = coachSessionToken;
     next();
   });
   app.use("/api/templates", templatesRouter);
@@ -509,6 +522,7 @@ async function makeReuseFixture(personal = false) {
     from plans.plan_nodes node join plans.plan_sessions session on session.id=node.plan_session_id
     join plans.plan_days day on day.id=session.plan_day_id where node.id=$1`, [targetNode])).rows[0];
   await client.query("update plans.plans set plan_type='weekly' where id=$1", [target.plan]);
+  await client.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_user_id) values($1,'user',$2)", [target.plan,coachId]);
   target.parent = (await client.query("insert into plans.plan_nodes (plan_session_id,node_type) values ($1,'domain') returning id", [target.session])).rows[0].id;
   const athleteId = crypto.randomUUID();
   const athleteCode = crypto.randomUUID();
@@ -609,6 +623,7 @@ for (const personal of [false, true]) {
       const { source, target } = fixture;
       if (operation === "day") {
         await client.query("update plans.plans set plan_type='weekly' where id=$1", [source.plan]);
+        await client.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_user_id) values($1,'user',$2)", [source.plan,coachId]);
         await client.query("update plans.plan_days set plan_id=$1 where id=$2", [source.plan, target.day]);
       }
       if (operation === "submit") await client.query("update plans.plans set status='draft' where id=$1", [source.plan]);

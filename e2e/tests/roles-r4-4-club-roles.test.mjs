@@ -170,7 +170,7 @@ test("3. Users: a custom Team coach for one coach, then back to the role", async
     await end.locator("textarea").fill("Season over");
     await end.getByRole("button", { name: "Back to Team coach" }).click();
     await page.getByText("Coach Example is back to Team coach.").waitFor();
-    assert.equal(await holding.getByText("Team coach (custom)").count(), 0);
+    await holding.getByText("Team coach (custom)").waitFor({ state: "detached" });
     const read = JSON.parse((await request(context, world, `${R}/users/${coach.id}/clubs/${world.ids.clubA}`)).text);
     assert.ok(read.holdings.every((h) => !h.custom?.live), "the server ended it");
     assert.deepEqual(pageErrors, []);
@@ -206,3 +206,45 @@ for (const width of [360, 375, 390]) {
     }
   });
 }
+
+test("Programs Assign and Publish can be changed independently in Settings", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "club_admin", WIDTHS.phone);
+  try {
+    await openRoles(page);
+    await page.locator(`[data-club-role="${coachRoleId}"]`).getByRole("button", { name: "Open" }).click();
+    const editor = page.locator(`[data-club-roles-editor="${coachRoleId}"]`);
+    const programs = editor.locator('[data-role-words-group="programs"]');
+    await programs.waitFor();
+    const assign = programs.locator('[data-role-word="programs.assign"]');
+    const publish = programs.locator('[data-role-word="programs.publish"]');
+    for (const checkbox of [assign, publish]) {
+      assert.ok(await checkbox.isEnabled());
+      assert.ok(await checkbox.isChecked());
+    }
+    const save = page.locator("[data-club-roles-save]");
+    const apply = async reason => {
+      await save.locator("textarea").fill(reason);
+      await save.getByRole("button", { name: /Save for Example Club/ }).click();
+      await page.getByText("Saved for this club: Team coach.").waitFor();
+    };
+    const items = async () => JSON.parse((await request(context, world, `${R}/clubs/${world.ids.clubA}/roles`)).text)
+      .systemRoles.find(role => role.roleId === coachRoleId).effectiveItems;
+    for (const [control, word, other] of [
+      [assign, "programs.assign", "programs.publish"],
+      [publish, "programs.publish", "programs.assign"],
+    ]) {
+      await control.uncheck();
+      await apply("Review program permission");
+      const reduced = await items();
+      assert.ok(!reduced.includes(word));
+      assert.ok(reduced.includes(other) && reduced.includes("programs.edit"));
+      await control.check();
+      await apply("Restore program permission");
+      const restored = await items();
+      assert.ok(restored.includes(word) && restored.includes(other) && restored.includes("programs.edit"));
+    }
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});

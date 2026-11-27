@@ -294,10 +294,11 @@ test("exact weekly batch default differences require rights on every target befo
   const ids = [source.id, eligible.id, foreign.id];
   await db.query("update plans.plan_sessions set training_load_enabled=false,rpe_enabled=false where id=any($1::uuid[])",
     [[source.sessionId, eligible.sessionId, foreign.sessionId]]);
-  await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [batch, ids]);
+  await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [batch, [source.id, eligible.id]]);
   const sync = (path, body) => http.api(coach.cookie, "/api/builder/plans/" + source.id + path, { method: "POST", body });
   const equal = await sync("/sync-batch", {});
   assert.equal(equal.status, 200, equal.text);
+  await db.query("update plans.plans set builder_batch_id=$1 where id=$2", [batch, foreign.id]);
   await setNativeRpeGrant(true);
   await db.query("update plans.plans set track_training_load_default=true,request_rpe_default=true where id=$1", [source.id]);
   const snapshot = async () => (await db.query("select id,name,status,track_training_load_default,request_rpe_default,updated_at from plans.plans where id=any($1::uuid[]) order by id", [ids])).rows;
@@ -390,7 +391,10 @@ test("private coaching rejects native-owned RPE effects even when the actor crea
     const legacy = await http.api(coach.cookie, draftSession(programSession), { method: "PATCH", body: { rpeEnabled: false } });
     assert.equal(legacy.status, 200, legacy.text);
     assert.equal((await flags(programSession)).rpe_enabled, false);
-    const normal = await http.api(coach.cookie, "/api/builder/plans/" + nativeDraft.id, { method: "PATCH", body: { name: "Ordinary private edit" } });
+    const foreignEdit = await http.api(coach.cookie, "/api/builder/plans/" + nativeDraft.id, { method: "PATCH", body: { name: "Edit in the wrong workspace" } });
+    assert.equal(foreignEdit.status, 404, foreignEdit.text);
+    assert.deepEqual(await snapshot(), before);
+    const normal = await http.api(coach.cookie, "/api/builder/plans/" + ownPrivate.id, { method: "PATCH", body: { name: "Ordinary private edit" } });
     assert.equal(normal.status, 200, normal.text);
     assert.equal(normal.body.plan.name, "Ordinary private edit");
   } finally {
@@ -466,7 +470,14 @@ test("opening an existing program copies only its stored workspace owner", async
     );
     return openEditDraft(source.id);
   };
-  const resolved = await openProgram("Programme with a stored owner", B);
+  const selectOwnerWorkspace = async id => {
+    const selected = await http.api(coach.cookie, "/api/auth/workspace", { method: "PUT", body: { type: "club", scopeId: id } });
+    assert.equal(selected.status, 200, selected.text);
+  };
+  await selectOwnerWorkspace(B);
+  let resolved;
+  try { resolved = await openProgram("Programme with a stored owner", B); }
+  finally { await selectOwnerWorkspace(A); }
   const unresolved = await openProgram("Programme without a stored owner", null);
   const { rows } = await db.query(
     "select plan_id,owner_scope,owner_club_id from training_load.plan_workspace_ownership where plan_id=any($1::uuid[])",

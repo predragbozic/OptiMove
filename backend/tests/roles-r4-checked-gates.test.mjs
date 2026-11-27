@@ -31,6 +31,7 @@ const SQL_CHECKED = Object.freeze({
   "trainingActivityWriteAccess.js": Object.freeze(["load.activities.manage"]),
   "metricEstimateAccess.js": Object.freeze(["load.estimates.manage"]),
   "externalScheduleWriteAccess.js": Object.freeze(["load.schedule.manage"]),
+  "programEditAccess.js": Object.freeze(["programs.edit"]),
 });
 const GLOBAL_ONLY = new Set(["accounts.manage", "platform.admin"]);
 
@@ -42,13 +43,20 @@ test("A1. every listed gate file checks its word through can() or its named tran
       const src = SOURCES.find((s) => s.rel === gate);
       assert.ok(src, `${word}: gate file ${gate} exists`);
       const words = [...src.text.matchAll(CAN_CALL)].map((m) => m[1]);
-      const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1, '([a-z_.]+)', \$2, \$3\)/g)].map((m) => m[1]);
+      const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1,\s*'([a-z_.]+)',\s*\$2,\s*\$3\)/g)].map((m) => m[1]);
       words.push(...sqlWords.filter((checked) => SQL_CHECKED[gate]?.includes(checked)));
       if (word === "exercises.add" || word === "exercises.remove") {
         const guard = SOURCES.find(source => source.rel === "exerciseWriteAccess.js").text;
         assert.match(guard, /permission_word_honoured\(\$1\)/);
         assert.match(guard, /user_has_permission\(\$2,\$1,\$3,\$4\)/);
         words.push(...[...src.text.matchAll(/lockExerciseWriter\(client, req, workspace, "(exercises\.(?:add|remove))"/g)].map(match => match[1]));
+      }
+      if (gate === "programEditAccess.js" && ["programs.assign", "programs.publish"].includes(word)) {
+        const check = src.text.match(/export async function assertProgramAssignmentHeld\([\s\S]*?\n\}/)?.[0];
+        assert.ok(check);
+        assert.match(check, /public\.permission_word_honoured\(required\.word\)/);
+        assert.match(check, /public\.user_has_permission\(\$1,required\.word,\$2,\$3\)/);
+        words.push(...[...check.matchAll(/words\.push\("(programs\.(?:assign|publish))"\)/g)].map(match => match[1]));
       }
       assert.ok(words.includes(word), `${word}: ${gate} checks the word`);
     }
@@ -152,6 +160,7 @@ const REVIEWED = Object.freeze({
   "positionService.js": 11,
   "routes/auth.js": 1,
   "exerciseWriteAccess.js": 8, // Exercise bridge rechecks existing workspace and narrows Builder's target scope.
+  "programEditAccess.js": 5, // active scoped writer and exact persisted plan owner, no workspace offers
   "programRpeSettingsAccess.js": 4, // revalidates an existing native workspace for an RPE write
   "routes/builder.js": 10, // existing visibility plus scoped direct and indirect RPE effects
   "routes/calendar.js": 1,
