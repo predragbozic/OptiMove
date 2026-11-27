@@ -90,8 +90,8 @@ after(async () => {
   else process.env.GPEXE_IMPORT_APPLY_ENABLED = ORIGINAL_SWITCH;
 });
 
-async function call(base, path, { method = "GET", body, cookie } = {}) {
-  const res = await fetch(`${apiBase}${base}${path}`, {
+async function call(base, path, { method = "GET", body, cookie, server = apiBase } = {}) {
+  const res = await fetch(`${server}${base}${path}`, {
     method,
     headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -1446,11 +1446,11 @@ test("M-3b: the exact previous server's native club and team estimate receipts r
     const s = await importSession(team, bundleOf({ sessionId: 9894, ids: [101, 102, 104] }));
     const route = `/api/training-activity/${s.activityId}/estimates`;
     for (const [actor, athleteId] of [[team.coach, team.athleteIds[DAN]], [team.cadmin, team.athleteIds[EVA]]]) {
-      const priorProposal = await call(priorUrl, `${route}/proposal?athleteId=${athleteId}`, { cookie: actor.cookie });
+      const priorProposal = await call("", `${route}/proposal?athleteId=${athleteId}`, { server: priorUrl, cookie: actor.cookie });
       assert.equal(priorProposal.status, 200, priorProposal.text);
       assert.equal((await proposal(team, s, athleteId, { cookie: actor.cookie })).status, 200);
       const input = { requestKey: key(), athleteId, method: "team_average" };
-      const priorWrite = await call(priorUrl, route, { method: "POST", cookie: actor.cookie, body: input });
+      const priorWrite = await call("", route, { server: priorUrl, method: "POST", cookie: actor.cookie, body: input });
       assert.equal(priorWrite.status, 201, priorWrite.text);
       const rows = await estimateRows(team.teamId);
       const replay = await save(team, s, input, { cookie: actor.cookie });
