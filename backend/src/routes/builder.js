@@ -1070,7 +1070,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         const copies = source.plan_type === "weekly"
           ? await copyWeeklyPlanTree(client, source.id, planId, targetWeekStart, { targetIsNew: true })
           : await copyProgramTree(client, source.id, planId);
-        if (recordRpeOpening) await assertBuilderRpeCopyProvenance(client, source.id, copies);
+        if (recordRpeOpening && !planOwner) await assertBuilderRpeCopyProvenance(client, source.id, copies);
         if (planOwner) {
           await insertPlanOwnershipSnapshot(client, planId, planOwner);
           if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId, sourcePlanId: source.id, origin: "copy", copies });
@@ -1335,6 +1335,10 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
       });
     }
 
+    const lockedSources = recordRpeOpening ? new Set((await client.query(
+      `select s.id from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
+       where d.plan_id=$1 order by s.id for share of s`, [source.id],
+    )).rows.map(row => row.id)) : null;
     // Write.
     if (recordRpeOpening && entries.some(entry => entry.kind === "new")) await assertBuilderRpeCopyProvenance(client, source.id);
     const created = [];
@@ -1366,8 +1370,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         const targetDays = (await client.query("select id, date::text as date from plans.plan_days where plan_id = $1", [row.id])).rows;
         entry.targetDays = new Map(targetDays.map((d) => [d.date.slice(0, 10), d.id]));
         const copies = await writeTemplateDays(client, entry, new Map());
-        if (recordRpeOpening) await assertBuilderRpeCopyProvenance(client, null, copies);
-        if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: row.id, sourcePlanId: source.id, origin: "copy", copies });
+        if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: row.id, sourcePlanId: source.id, origin: "copy", copies, lockedSources });
         newPlanIds.push(row.id);
         created.push({ athleteId: entry.athleteId, weekStart: entry.weekStart, planId: row.id });
         notify.push(row);
@@ -1396,7 +1399,7 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         await client.query("delete from plans.plan_sessions where id = $1", [session.id]);
       }
       const copies = await writeTemplateDays(client, entry, keptOrder);
-      if (recordRpeOpening) await recordBuilderRpeCopyIfTracked(client, { planId: entry.planId, sourcePlanId: source.id, copies });
+      if (recordRpeOpening) await recordBuilderRpeCopyIfTracked(client, { planId: entry.planId, sourcePlanId: source.id, copies, lockedSources });
       writtenDayIds.push(...touchedIds);
       const row = (await client.query(
         "update plans.plans set updated_at = clock_timestamp() where id = $1 returning id, athlete_id, name, plan_type, week_start::text as week_start, status",
