@@ -2748,46 +2748,44 @@ test("M-3c: metric materialization refuses an owner change committed while it wa
 
 test("M-3c: materialization checks View again after waiting for the club ceiling", async () => {
   const {clubId,coachCookie} = await makeClubCoach("m3c-view-race");
+  const {adminId} = await makePlatformAdmin("m3c-view-race-platform");
   const {athleteId} = await makeAthleteInClub(clubId);
+  assert.equal((await api("/api/auth/me",{cookie:coachCookie})).status,200);
   const input = {requestKey:uid(),athleteId,localDate:"2026-09-08",timezone:"UTC"};
   const blocker = new pg.Client({connectionString:db.url});
-  const word = "load.view.team";
-  const roles = ["00000000-0000-4000-8000-000000000842","00000000-0000-4000-8000-000000000843"];
+  const roles = ["00000000-0000-4000-8000-000000000843","00000000-0000-4000-8000-000000000842"];
   let pending;
-  let removed = false;
   await blocker.connect();
   try {
     await blocker.query("begin");
-    await blocker.query("select public.lock_club_ceiling($1::uuid[],'exclusive')", [[clubId]]);
+    await blocker.query("select public.lock_club_ceiling($1::uuid[],'exclusive')",[[clubId]]);
     pending = api("/api/training-activity/materialize",{method:"POST",cookie:coachCookie,body:input});
     pending.catch(() => {});
     assert.equal(await waitsForActivityWriter(blocker),true,"request passed HTTP entry and now waits on the club ceiling");
-    await blocker.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
-    await blocker.query("set constraints all immediate");
-    await blocker.query("delete from public.permission_role_items where role_id=any($1::uuid[]) and permission_word=$2",[roles,word]);
-    await blocker.query("alter table public.permission_role_items enable trigger permission_role_items_guard");
+    await blocker.query("select set_config('optimove.permission_actor',$1||':'||pg_current_xact_id()::text,true)",[adminId]);
+    for (const role of roles) {
+      const {rows:[{id:versionId}]} = await blocker.query(
+        `insert into public.permission_club_role_versions (club_id,system_role_id,based_on_revision,answered_revision,created_by_user_id)
+         select $1,id,revision,revision,$3 from public.permission_roles where id=$2 returning id`,[clubId,role,adminId],
+      );
+      await blocker.query(
+        `insert into public.permission_club_role_version_items (version_id,permission_word)
+         select $1,permission_word from public.permission_role_items where role_id=$2 and permission_word<>'load.view.team'`,[versionId,role],
+      );
+      await blocker.query(
+        `insert into public.permission_club_role_version_changes (version_id,revision_after,kind,performed_by_user_id,basis,reason,items_added)
+         values ($1,1,'create',$2,'platform_admin','Live View revocation rehearsal',
+           array(select permission_word from public.permission_club_role_version_items where version_id=$1))`,[versionId,adminId],
+      );
+    }
     await blocker.query("commit");
-    removed = true;
     assert.deepEqual(await pending,{status:403,body:{error:"Forbidden"}});
     const stored = await query("select request_key from training.activity_write_requests where request_key=$1",[input.requestKey]);
     assert.deepEqual(stored.rows,[]);
   } finally {
     await blocker.query("rollback").catch(() => {});
-    await Promise.allSettled([pending]);
-    if (removed) {
-      await blocker.query("begin");
-      try {
-        await blocker.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
-        await blocker.query("set constraints all immediate");
-        await blocker.query("insert into public.permission_role_items (role_id,permission_word) select unnest($1::uuid[]),$2",[roles,word]);
-        await blocker.query("alter table public.permission_role_items enable trigger permission_role_items_guard");
-        await blocker.query("commit");
-      } catch (error) {
-        await blocker.query("rollback");
-        throw error;
-      }
-    }
     await blocker.end();
+    await Promise.allSettled([pending]);
   }
 });
 
@@ -2971,4 +2969,47 @@ test("M-3c: a moved natural-key source cannot disclose the earlier owner's recei
   assert.deepEqual(await request(assignmentId,oldKey),missing,"replay cannot disclose an earlier workspace");
   assert.doesNotMatch(JSON.stringify(missing.body),new RegExp(old.body.activityId));
   assert.deepEqual((await receipts()).rows,before);
+});
+
+test("M-3c: natural-key writes serialize UUID casing and recheck a schedule owner after waiting", async () => {
+  const own = await makeClubCoach("m3c-natural-race-own");
+  const foreign = await makeClubCoach("m3c-natural-race-other");
+  const {athleteId} = await makeAthleteInClub(own.clubId);
+  const {assignmentId,occurrenceId} = await makeExternalAssignmentForAthlete(athleteId,own.coachId,{
+    owner:{ownerScope:"club",ownerClubId:own.clubId},
+  });
+  const send = (id,requestKey) => api("/api/training-activity/materialize",{
+    method:"POST",cookie:own.coachCookie,body:{externalAssignmentId:id,requestKey},
+  });
+  const blocker = new pg.Client({connectionString:db.url});
+  const requests = [];
+  const key = uid();
+  await blocker.connect();
+  try {
+    await blocker.query("begin");
+    await blocker.query("select pg_advisory_xact_lock(hashtextextended($1, 0))",[`activity-link:${athleteId}:${assignmentId}`]);
+    const mixedCase = send(assignmentId.toUpperCase(),key);
+    requests.push(mixedCase);
+    assert.equal(await waitsForActivityWriter(blocker),true,"uppercase input must wait on the same seed-0 key");
+    await blocker.query("commit");
+    const saved = await mixedCase;
+    assert.equal(saved.status,201,JSON.stringify(saved.body));
+
+    await blocker.query("begin");
+    await blocker.query("update training_load.external_schedules set owner_club_id=$1 where id=(select schedule_id from training_load.external_schedule_occurrences where id=$2)",
+      [foreign.clubId,occurrenceId]);
+    const staleReplay = send(assignmentId.toUpperCase(),key);
+    requests.push(staleReplay);
+    assert.equal(await waitsForActivityWriter(blocker),true,"the earlier scope must wait for the source owner write");
+    await blocker.query("commit");
+    const missing = await send(crypto.randomUUID(),uid());
+    assert.equal(missing.status,404);
+    assert.deepEqual(await staleReplay,missing);
+    assert.deepEqual((await query("select result_activity_id,result_participant_id from training.activity_write_requests where request_key=$1",[key])).rows,
+      [{result_activity_id:saved.body.activityId,result_participant_id:saved.body.participantId}]);
+  } finally {
+    await blocker.query("rollback").catch(() => {});
+    await blocker.end();
+    await Promise.allSettled(requests);
+  }
 });
