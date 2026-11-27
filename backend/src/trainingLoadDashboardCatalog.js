@@ -349,14 +349,10 @@ export async function deleteDashboard(req, dataWorkspace, dashboardId, { expecte
 // operation is one transaction: either every widget/series lands, or
 // none do.
 //
-// Merge-readiness corrective round — the transaction now opens FIRST and
-// takes an explicit `FOR SHARE` lock on the template row as its OWN first
-// statement, before reading anything else: the template's existence,
-// visibility, is_template, and status are all checked against THAT
-// locked, transaction-consistent snapshot, never a separate pre-BEGIN
-// pooled read that a concurrent template-flip/archive could invalidate
-// out from under it (finding #5). An archived template cannot be cloned
-// (finding #1). default_filter is copied along with name/description/
+// The transaction locks the source template before reading its hierarchy.
+// Scoped callers acquire their ceiling and actor locks first, then repeat
+// visibility, template and archive checks on the protected source row.
+// default_filter is copied along with name/description/
 // widgets/series (previously silently dropped). A pinned source
 // connection (source_policy='source_connection') that is not active and
 // visible in the TARGET workspace aborts the WHOLE clone atomically with
@@ -364,9 +360,8 @@ export async function deleteDashboard(req, dataWorkspace, dashboardId, { expecte
 // or a substituted connection (finding #6).
 // ------------------------------------------------------------
 function checkCloneTemplate(req, workspace, template) {
-  if (!template) throw httpError(404, "Template not found.");
+  if (!template || !canViewDashboardRow(req, template, workspace)) throw httpError(404, "Template not found.");
   if (!template.is_template) throw httpError(400, "That dashboard is not a template.");
-  if (!canViewDashboardRow(req, template, workspace)) throw httpError(404, "Template not found.");
   if (template.status === "archived") throw httpError(409, "That template is archived and cannot be cloned.", "dashboardArchived");
 }
 

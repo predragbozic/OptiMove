@@ -235,23 +235,21 @@ function dataWorkspaceQueryArgs(dataWorkspace) {
   };
 }
 
-// The ROUTE-LEVEL half of the archived-dashboard gate (finding #1 of the
-// merge-readiness round) — an early, nice-to-have reject for every
-// layout/widget/series write route below, all of which share this
-// helper. This is explicitly NOT the sole guard: the AUTHORITATIVE check
-// is training_load.assert_dashboard_writable(), called by every
-// sanctioned function immediately after it locks the dashboard row (see
-// v17) — that DB-level check is what closes the real race (a concurrent
-// archive landing between this read and the eventual write), this
-// route-level check only saves a wasted round trip for the common,
-// non-racing case.
+// The early owner check preserves the dashboard identity response. The
+// transaction checks Manage before exposing the protected row’s archive state.
 async function requireManageableDashboard(req, res, dataWorkspace, dashboardId) {
   const r = await query(`select * from training_load.dashboards where id = $1`, [dashboardId]);
   const row = r.rows[0];
   if (!row) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
   if (!canManageDashboardRow(req, row)) { res.status(404).json({ error: "notFound", message: "Dashboard not found." }); return null; }
-  if (row.status === "archived") { res.status(409).json({ error: "dashboardArchived" }); return null; }
   return row;
+}
+
+async function writeDashboardContent(req, res, dataWorkspace, dashboardRow, operation, status = 200) {
+  const result = await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, (runQuery, current) =>
+    current.status === "archived" ? null : operation(runQuery, current));
+  if (result === null) return res.status(409).json({ error: "dashboardArchived" });
+  return res.status(status).json(result);
 }
 
 async function widgetTypeIsActive(widgetType) {
@@ -479,8 +477,8 @@ router.put("/:dashboardId/layout", async (req, res, next) => {
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, runQuery =>
-      replaceLayout(req.params.dashboardId, { expectedRevision: b.expectedRevision, layout: b.layout }, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, runQuery =>
+      replaceLayout(req.params.dashboardId, { expectedRevision: b.expectedRevision, layout: b.layout }, runQuery));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -507,8 +505,8 @@ router.patch("/:dashboardId/widgets/:widgetId/layout", async (req, res, next) =>
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, runQuery =>
-      updateWidgetLayout(req.params.dashboardId, req.params.widgetId, b, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, runQuery =>
+      updateWidgetLayout(req.params.dashboardId, req.params.widgetId, b, runQuery));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -549,8 +547,8 @@ router.post("/:dashboardId/widgets", async (req, res, next) => {
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.status(201).json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, runQuery =>
-      createWidget(req.params.dashboardId, { ...b, title: b.title.trim() }, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, runQuery =>
+      createWidget(req.params.dashboardId, { ...b, title: b.title.trim() }, runQuery), 201);
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -590,8 +588,8 @@ router.patch("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, runQuery =>
-      updateWidgetContent(req.params.dashboardId, req.params.widgetId, b.title !== undefined ? { ...b, title: b.title.trim() } : b, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, runQuery =>
+      updateWidgetContent(req.params.dashboardId, req.params.widgetId, b.title !== undefined ? { ...b, title: b.title.trim() } : b, runQuery));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -608,8 +606,8 @@ router.delete("/:dashboardId/widgets/:widgetId", async (req, res, next) => {
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, runQuery =>
-      deleteWidget(req.params.dashboardId, req.params.widgetId, { expectedWidgetRevision: b.expectedWidgetRevision }, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, runQuery =>
+      deleteWidget(req.params.dashboardId, req.params.widgetId, { expectedWidgetRevision: b.expectedWidgetRevision }, runQuery));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -665,8 +663,8 @@ router.post("/:dashboardId/widgets/:widgetId/series", async (req, res, next) => 
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.status(201).json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, (runQuery, current) =>
-      addSeries(req.params.dashboardId, req.params.widgetId, b, req.user.id, current, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, (runQuery, current) =>
+      addSeries(req.params.dashboardId, req.params.widgetId, b, req.user.id, current, runQuery), 201);
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -726,8 +724,8 @@ router.patch("/:dashboardId/widgets/:widgetId/series/:seriesId", async (req, res
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, (runQuery, current) =>
-      updateSeries(req.params.dashboardId, req.params.widgetId, req.params.seriesId, b, current, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, (runQuery, current) =>
+      updateSeries(req.params.dashboardId, req.params.widgetId, req.params.seriesId, b, current, runQuery));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -744,8 +742,8 @@ router.delete("/:dashboardId/widgets/:widgetId/series/:seriesId", async (req, re
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, runQuery =>
-      deleteSeries(req.params.dashboardId, req.params.widgetId, req.params.seriesId, { expectedWidgetRevision: b.expectedWidgetRevision }, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, runQuery =>
+      deleteSeries(req.params.dashboardId, req.params.widgetId, req.params.seriesId, { expectedWidgetRevision: b.expectedWidgetRevision }, runQuery));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -772,8 +770,8 @@ router.put("/:dashboardId/widgets/:widgetId/series/reorder", async (req, res, ne
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, runQuery =>
-      reorderSeries(req.params.dashboardId, req.params.widgetId, { expectedWidgetRevision: b.expectedWidgetRevision, order: b.order }, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, runQuery =>
+      reorderSeries(req.params.dashboardId, req.params.widgetId, { expectedWidgetRevision: b.expectedWidgetRevision, order: b.order }, runQuery));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
@@ -791,8 +789,8 @@ router.post("/:dashboardId/widgets/:widgetId/series/:seriesId/resolve", async (r
     if (!dataWorkspace) return;
     const dashboardRow = await requireManageableDashboard(req, res, dataWorkspace, req.params.dashboardId);
     if (!dashboardRow) return;
-    res.json(await withLegacyDashboardWrite(req, dataWorkspace, dashboardRow, (runQuery, current) =>
-      resolveSeriesBinding(req.params.dashboardId, req.params.widgetId, req.params.seriesId, { expectedWidgetRevision: b.expectedWidgetRevision, metricDefinitionId: b.metricDefinitionId }, current, runQuery)));
+    await writeDashboardContent(req, res, dataWorkspace, dashboardRow, (runQuery, current) =>
+      resolveSeriesBinding(req.params.dashboardId, req.params.widgetId, req.params.seriesId, { expectedWidgetRevision: b.expectedWidgetRevision, metricDefinitionId: b.metricDefinitionId }, current, runQuery));
   } catch (error) {
     respondToServiceError(res, next, error);
   }
