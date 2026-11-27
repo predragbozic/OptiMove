@@ -6,7 +6,7 @@ The bridge requires the approved v101 migration and stages Estimates Manage for 
 
 1. Confirm the migration slot, the exact v101 record and the deployed predecessor SHA.
 2. Run `training-load-m3b-v102-preflight.sql` read-only. Require its four results to be true.
-3. On a dedicated loopback PostgreSQL 17 cluster, run `backend/scripts/training-load-m3b-v102-rehearsal.ps1` or `backend/scripts/training-load-m3b-v102-rehearsal.sh` with Node 20 or newer. Set `OPTIMOVE_M3B_PREVIOUS_SERVER` to the clean checkout of the deployed predecessor and `OPTIMOVE_M3B_PREVIOUS_SHA` to its full SHA. PowerShell accepts `PGPASSWORD` or a hidden password prompt. Verify the exact prior-server case executed.
+3. On a dedicated loopback PostgreSQL 17 cluster, run `backend/scripts/training-load-m3b-v102-rehearsal.ps1` or `backend/scripts/training-load-m3b-v102-rehearsal.sh` with Node 20 or newer. Set `OPTIMOVE_M3B_PREVIOUS_SERVER` to the clean checkout of the deployed predecessor and `OPTIMOVE_M3B_PREVIOUS_SHA` to its full SHA. PowerShell accepts `PGPASSWORD` or a hidden password prompt. Verify that the exact prior-server case executed. It exercises Roles writes on both builds, then saves estimates on the predecessor and replays them on the bridge. The bridge suite also verifies that a successful native save records first use and makes rollback refuse, while proposal, denial, a rolled-back write and replay leave the marker unchanged.
 
 ## Apply and postcheck
 

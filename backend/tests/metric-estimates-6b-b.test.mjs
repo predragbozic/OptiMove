@@ -269,6 +269,54 @@ async function historyWorld() {
 }
 const [ANA, BEA, CIL, DAN, EVA] = [0, 1, 2, 3, 4];
 
+const estimateWriteMarker = async () => (await admin.query(
+  "select first_checked_write_at from training_load.metric_estimate_m3b_use where singleton",
+)).rows[0].first_checked_write_at;
+
+test("M-3b: only a committed native estimate writes the use marker and blocks rollback", async () => {
+  const team = await setupTeam();
+  const foreign = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9897, ids: [101, 102, 104] }));
+  const input = { athleteId: team.athleteIds[DAN], method: "team_average", requestKey: key() };
+  const before = await estimateRows(team.teamId);
+  assert.equal(await estimateWriteMarker(), null);
+  assert.equal((await proposal(team, s, input.athleteId)).status, 200);
+  assert.equal((await save(team, s, input, { cookie: foreign.coach.cookie })).status, 404);
+  assert.equal(await estimateWriteMarker(), null);
+
+  let rejectedBeforeCommit = false;
+  estimates.setEstimateTestHooks({ beforeCommit: async () => {
+    rejectedBeforeCommit = true;
+    throw new Error("Abort after recording estimate use");
+  } });
+  try {
+    assert.equal((await save(team, s, input)).status, 500);
+  } finally {
+    estimates.setEstimateTestHooks({});
+  }
+  assert.equal(rejectedBeforeCommit, true);
+  assert.equal(await estimateWriteMarker(), null);
+  assert.deepEqual(await estimateRows(team.teamId), before);
+
+  const saved = await save(team, s, input);
+  assert.equal(saved.status, 201, saved.text);
+  const firstUse = await estimateWriteMarker();
+  assert.ok(firstUse instanceof Date, "committed native save must record first bridge use");
+  const rows = await estimateRows(team.teamId);
+  const replay = await save(team, s, input);
+  assert.equal(replay.status, 200, replay.text);
+  assert.deepEqual(replay.body, saved.body);
+  assert.deepEqual(await estimateWriteMarker(), firstUse);
+  assert.deepEqual(await estimateRows(team.teamId), rows);
+
+  try {
+    await assert.rejects(admin.query(fs.readFileSync(RUNBOOK("training-load-m3b-v102-rollback.sql"), "utf8")),
+      /v102 rollback refused: the bridge writer was used/);
+  } finally {
+    await admin.query("rollback");
+  }
+});
+
 test("1. the flag off: both routes are the identical 404 for everyone, nothing is read or written", async () => {
   const { team, s } = await historyWorld();
   const before = await writes(team.teamId);
@@ -1428,6 +1476,83 @@ test("M-3b: a revoked estimate writer cannot recover a receipt from an uncertain
   assert.deepEqual(await estimateRows(team.teamId), rows, "the retry did not add a second estimate");
 });
 
+async function assertStagedEstimateRoleOperations(server) {
+  const s = await setupTeam();
+  const { padmin: actor } = s;
+  const request = (route, options) => call("", route, { ...options, server });
+  const q = async (sql, values) => (await admin.query(sql, values)).rows;
+  const id = ROLE_IDS.team_coach;
+  const word = "load.estimates.manage";
+  const change = (route, body) => request(`/api/organization/roles${route}`, {
+    method: "POST", cookie: actor.cookie, body: { requestKey: key(), reason: "Staged estimate rehearsal", ...body },
+  });
+  const defaultRole = async () => (await q(
+    `select r.revision,array(select i.permission_word from public.permission_role_items i
+        where i.role_id=r.id order by 1) as items from public.permission_roles r where r.id=$1`, [id],
+  ))[0];
+  const storedWord = async () => (await q(
+    "select public.user_has_permission($1,$2,'team',$3) as allowed", [s.coach.id, word, s.teamId],
+  ))[0].allowed;
+  const original = await defaultRole();
+  const catalog = await request(`/api/organization/roles/catalog?clubId=${s.clubId}`, { cookie: s.cadmin.cookie });
+  assert.equal(catalog.status, 200, catalog.text);
+  const entry = catalog.body.permissions.find(permission => permission.word === word);
+  assert.deepEqual([entry?.storable, entry?.honoured, entry?.checked], [false, false, false]);
+  for (const native of [s.coach, s.cadmin]) {
+    const me = await request("/api/auth/me", { method: "GET", cookie: native.cookie });
+    assert.equal(me.status, 200, me.text);
+    assert.ok(me.body.user.permissions.includes("load.view.team"), me.text);
+    assert.ok(!me.body.user.permissions.includes(word), me.text);
+  }
+  const platformMe = await request("/api/auth/me", { method: "GET", cookie: actor.cookie });
+  assert.ok(platformMe.body.user.permissions.includes(word), platformMe.text);
+  assert.equal(await storedWord(), true);
+  const refusal = await change(`/${id}/change`, {
+    expectedRevision: original.revision, items: original.items.filter((item) => item !== word),
+  });
+  assert.equal(refusal.status, 409, refusal.text);
+  assert.deepEqual(await defaultRole(), original);
+
+  const version = `/${id}/clubs/${s.clubId}/version`;
+  const custom = `/users/${s.coach.id}/clubs/${s.clubId}/custom`;
+  const createVersion = await change(version, { expectedRevision: null, remove: ["athletes.remove"] });
+  assert.equal(createVersion.status, 200, createVersion.text);
+  const editVersion = await change(version, { expectedRevision: 1, remove: [word] });
+  assert.equal(editVersion.status, 409, editVersion.text);
+
+  const editDefault = await change(`/${id}/change`, {
+    expectedRevision: original.revision, items: original.items, description: `Rehearsal ${s.clubId}`,
+  });
+  assert.equal(editDefault.status, 200, editDefault.text);
+  const { revision: systemRevision } = await defaultRole();
+  const accept = await change(version + "/answer", { systemRevision, choice: "accept_default" });
+  assert.equal(accept.status, 200, accept.text);
+  assert.equal(await storedWord(), true);
+
+  const createCustom = await change(custom, { roleId: id, scopeType: "team", scopeId: s.teamId,
+    expectedRevision: null, remove: ["athletes.remove"] });
+  assert.equal(createCustom.status, 200, createCustom.text);
+  const editCustom = await change(custom, { roleId: id, scopeType: "team", scopeId: s.teamId,
+    expectedRevision: 1, remove: [word] });
+  assert.equal(editCustom.status, 409, editCustom.text);
+  const [active] = await q("select id from public.permission_custom_roles where user_id=$1 and ended_at is null", [s.coach.id]);
+  const bulk = await change(`/${id}/clubs/${s.clubId}/custom-word-removal`, { word, customIds: [active.id] });
+  assert.equal(bulk.status, 409, bulk.text);
+  assert.equal(await storedWord(), true);
+  const end = await change(`/users/${s.coach.id}/custom/${active.id}/end`, {});
+  assert.equal(end.status, 200, end.text);
+  assert.equal(await storedWord(), true);
+
+  const copy = await change(`/${id}/copy`, { clubId: s.clubId, name: "Rehearsal club role" });
+  assert.equal(copy.status, 200, copy.text);
+  assert.ok(!copy.body.role.items.includes(word), copy.text);
+  assert.deepEqual((await defaultRole()).items, original.items);
+}
+
+test("M-3b: Roles writes through the bridge preserve the staged estimates permission", async () => {
+  await assertStagedEstimateRoleOperations(apiBase);
+});
+
 const previousEstimateServer = process.env.OPTIMOVE_M3B_PREVIOUS_SERVER;
 test("M-3b: the exact previous server's native club and team estimate receipts replay through the bridge", { skip: !previousEstimateServer }, async () => {
   const sha = execFileSync("git", ["-C", previousEstimateServer, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -1442,6 +1567,9 @@ test("M-3b: the exact previous server's native club and team estimate receipts r
     assert.equal((await oldPool.query("select current_database() as db")).rows[0].db, db.name);
     await new Promise(resolve => oldServer.listen(0, "127.0.0.1", resolve));
     const priorUrl = `http://127.0.0.1:${oldServer.address().port}`;
+    await assertStagedEstimateRoleOperations(priorUrl);
+    await assertStagedEstimateRoleOperations(apiBase);
+    const beforeMarker = await estimateWriteMarker();
     const team = await setupTeam();
     const s = await importSession(team, bundleOf({ sessionId: 9894, ids: [101, 102, 104] }));
     const route = `/api/training-activity/${s.activityId}/estimates`;
@@ -1456,6 +1584,7 @@ test("M-3b: the exact previous server's native club and team estimate receipts r
       const replay = await save(team, s, input, { cookie: actor.cookie });
       assert.equal(replay.status, 200, replay.text);
       assert.deepEqual(replay.body, priorWrite.body);
+      assert.deepEqual(await estimateWriteMarker(), beforeMarker);
       assert.deepEqual(await estimateRows(team.teamId), rows);
     }
   } finally {
