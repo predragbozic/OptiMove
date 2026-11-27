@@ -25,7 +25,8 @@ function canonical(value) {
 async function readLockedSnapshot(client, draftId, targetId) {
   const ids = [...new Set([draftId, targetId])];
   const { rows } = await client.query(
-    `select p.id, to_jsonb(p)::text as plan,
+    `select p.id, p.track_training_load_default = true as tracking_default,
+            p.request_rpe_default = true as rpe_default, to_jsonb(p)::text as plan,
             coalesce(jsonb_agg(jsonb_build_array(to_jsonb(d),to_jsonb(s)) order by d.id,s.id)
               filter(where d.id is not null),'[]')::text as schedule,
             count(s.id) as sessions,
@@ -89,7 +90,11 @@ export async function confirmBuilderRpeRecovery(client, req, context, { check, a
       token: expiry + "." + sign(expiry).toString("base64url"),
       expiresAt: new Date(Number(expiry)).toISOString(),
       scope: "this",
-      summary: { plans: 1, sessions: Number(reviewed.sessions), trackingEnabledSessions: Number(reviewed.tracking), rpeEnabledSessions: Number(reviewed.rpe) },
+      summary: {
+        plans: 1, sessions: Number(reviewed.sessions),
+        trackTrainingLoadDefault: reviewed.tracking_default === true, requestRpeDefault: reviewed.rpe_default === true,
+        trackingEnabledSessions: Number(reviewed.tracking), rpeEnabledSessions: Number(reviewed.rpe),
+      },
     },
   });
 }

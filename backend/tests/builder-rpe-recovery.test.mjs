@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { test } from "node:test";
-import { withBuilderRpeGuardFixture } from "./support/builder-rpe-guard-fixture.mjs";
+import { builderRpeFixtureApi, createBuilderRpeFixtureDraft, withBuilderRpeGuardFixture } from "./support/builder-rpe-guard-fixture.mjs";
 import { execFileSync } from "node:child_process";
 import { createSession } from "../src/auth.js";
 import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
-import { builderRpeFixtureApi } from "./support/builder-rpe-guard-fixture.mjs";
 
 test("an explicit recovery review preserves and then publishes a legacy draft in its own scope", async () => {
-  await withBuilderRpeGuardFixture(async ({ db, cases, cookies, owner, team, snapshot, stopPrevious }) => {
+  await withBuilderRpeGuardFixture(async ({ db, cases, cookies, owner, team, snapshot, oldApi, athleteCode, stopPrevious }) => {
+    const defaultsOnly = await createBuilderRpeFixtureDraft(oldApi, athleteCode, "2027-06-28");
+    const defaults = await oldApi("/api/builder/plans/" + defaultsOnly.id + "/training-load-settings", {
+      method: "PATCH", body: { trackTrainingLoadDefault: true, requestRpeDefault: true },
+    });
+    assert.equal(defaults.status, 200, JSON.stringify(defaults.body));
     await stopPrevious();
+    await db.applyThrough("202612091000");
     const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     let server;
     const submit = (id, body, cookie = cookies.owner) =>
@@ -30,8 +35,14 @@ test("an explicit recovery review preserves and then publishes a legacy draft in
       const { token, expiresAt, scope, summary } = proposal.body.review;
       assert.equal(scope, "this");
       assert.ok(Date.parse(expiresAt) > Date.now());
-      assert.deepEqual(summary, { plans: 1, sessions: 1, trackingEnabledSessions: 1, rpeEnabledSessions: 1 });
+      assert.deepEqual(summary, { plans: 1, sessions: 1, trackTrainingLoadDefault: true, requestRpeDefault: true, trackingEnabledSessions: 1, rpeEnabledSessions: 1 });
       assert.deepEqual(await snapshot(ids), before);
+      const defaultsReview = await submit(defaultsOnly.id, { batchScope: "this" });
+      assert.equal(defaultsReview.status, 409, defaultsReview.text);
+      assert.deepEqual(defaultsReview.body.review.summary, {
+        plans: 1, sessions: 1, trackTrainingLoadDefault: true, requestRpeDefault: true,
+        trackingEnabledSessions: 0, rpeEnabledSessions: 0,
+      });
 
       const request = { batchScope: "this", rpeReviewToken: token };
       const otherSession = "optimove_session=" + await createSession(owner, db.client);
