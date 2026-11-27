@@ -206,3 +206,38 @@ for (const width of [360, 375, 390]) {
     }
   });
 }
+
+test("Programs Edit can be changed in Settings while Assign and Publish stay locked", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "club_admin", WIDTHS.phone);
+  try {
+    await openRoles(page);
+    await page.locator(`[data-club-role="${coachRoleId}"]`).getByRole("button", { name: "Open" }).click();
+    const editor = page.locator(`[data-club-roles-editor="${coachRoleId}"]`);
+    const programs = editor.locator('[data-role-words-group="programs"]');
+    await programs.waitFor();
+    const edit = programs.locator('[data-role-word="programs.edit"]');
+    assert.ok(await edit.isEnabled());
+    assert.ok(await edit.isChecked());
+    assert.ok(await programs.locator('[data-role-word="programs.assign"]').isDisabled());
+    assert.ok(await programs.locator('[data-role-word="programs.publish"]').isDisabled());
+    const save = page.locator("[data-club-roles-save]");
+    const apply = async reason => {
+      await save.locator("textarea").fill(reason);
+      await save.getByRole("button", { name: /Save for Example Club/ }).click();
+      await page.getByText("Saved for this club: Team coach.").waitFor();
+    };
+    const items = async () => JSON.parse((await request(context, world, `${R}/clubs/${world.ids.clubA}/roles`)).text)
+      .systemRoles.find(role => role.roleId === coachRoleId).effectiveItems;
+    await edit.uncheck();
+    await apply("Review draft permission");
+    assert.ok(!(await items()).includes("programs.edit"));
+    await edit.check();
+    await apply("Restore draft permission");
+    const restored = await items();
+    assert.ok(restored.includes("programs.edit"));
+    assert.ok(!restored.includes("programs.assign") && !restored.includes("programs.publish"));
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});
