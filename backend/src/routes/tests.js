@@ -10,6 +10,7 @@ import {
   viewScopeReadsSchedule,
 } from "../testsAccess.js";
 import { canView, viewEntryGate } from "../moduleView.js";
+import { lockTestsScheduleCreateAccess } from "../testsScheduleWriteAccess.js";
 import { ensureCurrentOccurrence, assignmentIsOpen, loadAthleteTodayTestAssignments } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -837,8 +838,6 @@ router.post("/schedules", async (req, res, next) => {
     if (!timezone || !startDate || !opensTime || !closesTime) {
       return res.status(400).json({ error: "Timezone, start date, opens time and closes time are required." });
     }
-    const resolved = await resolveValidTargets(req, body.targets);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
     const resolvedRules = resolveNotificationRules(body.notificationRules);
     if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
@@ -849,6 +848,16 @@ router.post("/schedules", async (req, res, next) => {
     const skipRefusal = await skipDaysOffRefusal(client, { skipDaysOff: body.skipDaysOff, scheduleKind, owner });
     if (skipRefusal) return res.status(400).json(skipRefusal);
     await client.query("begin");
+    const writeRequest = await lockTestsScheduleCreateAccess(client, req, owner);
+    if (!writeRequest) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client));
+    if (!resolved.ok) {
+      await client.query("rollback");
+      return res.status(resolved.status).json({ error: resolved.error });
+    }
     const schedule = await insertScheduleRow(client, {
       scheduleKind, timezone, startDate, endDate, opensTime, dueTime, closesTime, userId: req.user.id, owner, skipDaysOff: body.skipDaysOff === true,
     });
@@ -919,8 +928,6 @@ router.post("/schedules/bulk", async (req, res, next) => {
     // exact same resolveValidTargets used by POST/PATCH /schedules, so a
     // bulk request is never held to a looser standard. Nothing is written
     // until every date and every target has passed.
-    const resolved = await resolveValidTargets(req, body.targets);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
     const resolvedRules = resolveNotificationRules(body.notificationRules);
     if (!resolvedRules.ok) return res.status(resolvedRules.status).json({ error: resolvedRules.error });
 
@@ -929,6 +936,16 @@ router.post("/schedules/bulk", async (req, res, next) => {
     // closes the module, writes included).
     if (!canManageSchedule(req, ownerRowOf(owner))) return res.status(403).json({ error: "Forbidden" });
     await client.query("begin");
+    const writeRequest = await lockTestsScheduleCreateAccess(client, req, owner);
+    if (!writeRequest) {
+      await client.query("rollback");
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client));
+    if (!resolved.ok) {
+      await client.query("rollback");
+      return res.status(resolved.status).json({ error: resolved.error });
+    }
     const created = [];
     for (const date of dates) {
       const schedule = await insertScheduleRow(client, {
@@ -959,9 +976,9 @@ function ownerRowOf(owner) {
   return { owner_scope: owner.ownerScope, owner_user_id: owner.ownerUserId, owner_club_id: owner.ownerClubId, owner_team_id: owner.ownerTeamId };
 }
 
-async function validateTarget(req, target) {
+async function validateTarget(req, target, queryRunner) {
   if (!target || !target.id) return false;
-  if (target.kind === "athlete") return canAccessAthlete(query, req, target.id);
+  if (target.kind === "athlete") return canAccessAthlete(queryRunner, req, target.id);
   if (target.kind === "team") return canManageTeamById(req.authz, target.id);
   if (target.kind === "club") return canManageClub(req.authz, target.id);
   return false;
@@ -994,11 +1011,11 @@ function dedupeTargets(rawTargets) {
 // client's own filtering. Returns {ok:false, status, error} on the first
 // problem found (empty list or any one unauthorized target - the whole
 // request is rejected, never a partial target set).
-async function resolveValidTargets(req, rawTargets) {
+async function resolveValidTargets(req, rawTargets, queryRunner = query) {
   const targets = dedupeTargets(rawTargets);
   if (!targets.length) return { ok: false, status: 400, error: "Choose at least one athlete, team or club." };
   for (const target of targets) {
-    const allowed = await validateTarget(req, target);
+    const allowed = await validateTarget(req, target, queryRunner);
     if (!allowed) return { ok: false, status: 403, error: "One of the chosen targets is outside your access." };
   }
   return { ok: true, targets };

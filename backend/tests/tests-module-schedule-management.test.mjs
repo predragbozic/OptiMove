@@ -20,6 +20,46 @@ import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 
+
+// Tests-only seed for the future bridge. The marker exists only in this fixture
+// and the word remains unavailable through the production Settings API.
+async function stageScheduleManageForTest(client) {
+  const { rows: [previous] } = await client.query(
+    "select prosrc from pg_proc where oid='public.permission_word_honoured(text)'::regprocedure",
+  );
+  await client.query("begin");
+  try {
+    await client.query(`
+      create or replace function public.permission_word_honoured(p_word text)
+      returns boolean language sql immutable set search_path=pg_catalog,public as $fixture$
+      ${previous.prosrc.replace("select p_word in (", "select p_word in ('tests.schedule.manage', ")}
+      $fixture$
+    `);
+    await client.query(`
+      update public.permission_roles set revision=revision+1,updated_at=now()
+      where basic_key in ('club_admin','team_coach')
+    `);
+    await client.query(`
+      insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_added)
+      select id,revision,'migration','test-tests-schedule-manage',array['tests.schedule.manage']
+      from public.permission_roles where basic_key in ('club_admin','team_coach')
+    `);
+    await client.query(`
+      insert into public.permission_role_items(role_id,permission_word)
+      select id,'tests.schedule.manage' from public.permission_roles where basic_key in ('club_admin','team_coach')
+    `);
+    await client.query(
+      "insert into public.schema_migrations(migration_name,checksum,runner_version) values ('test-tests-schedule-manage',$1,'fixture')",
+      ["0".repeat(64)],
+    );
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
+
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = path.resolve(__dirname, "../../migrations_v2/202608220900_tests_v42_schema.sql");
 const SEED_PATH = path.resolve(__dirname, "../../migrations_v2/202608221000_tests_v42_seed_wellness_fms.sql");
@@ -219,6 +259,7 @@ before(async () => {
   // Roles V-2: the server's role read (v84, v92). A coach's Tests routes reach canAccessAthlete, which asks
   // athletes.view through can() and fails closed (503 permissions_unavailable) without it.
   await applyRoleReadMigrations(db.url);
+  await stageScheduleManageForTest(adminClient);
 
   process.env.DATABASE_URL = db.url;
   const dbModule = await import("../src/db.js");
@@ -238,9 +279,9 @@ before(async () => {
 
 after(async () => {
   process.env.DATABASE_URL = ORIGINAL_DATABASE_URL;
-  await new Promise((resolve) => server.close(resolve));
-  await pool.end();
-  await adminClient.end();
+  if (server?.listening) await new Promise((resolve) => server.close(resolve));
+  await pool?.end();
+  await adminClient?.end();
   await fsp.rm(migrationsDir, { recursive: true, force: true });
   await dropTempDb(db);
 });
@@ -1349,4 +1390,32 @@ test("O2. a one_time schedule without activity converts cleanly to daily via the
   // fresh one under the now-daily schedule.
   const afterConvert = await api("/api/tests/athlete/today", { cookie: athletes[0].cookie });
   assert.equal(afterConvert.body.assignments.length, 1, "a fresh occurrence/assignment must be generated under the new daily schedule");
+});
+
+// A failed Manage gate leaves both single and bulk creation untouched while
+// the existing View-only schedule listing stays available.
+test("Manage: native schedule creation and bulk creation require the staged word", async () => {
+  const { coachCookie, athletes } = await makeClubWithAthletes("manage-create", 1);
+  const input = baseCreateBody([{ kind: "athlete", id: athletes[0].athleteId }]);
+  const options = { method: "POST", cookie: coachCookie };
+  const scheduleRows = async () => (await query(
+    "select id from tests.test_schedules order by id",
+  )).rows;
+  const previous = (await query(
+    "select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as ddl",
+  )).rows[0].ddl;
+  const beforeDenied = await scheduleRows();
+  try {
+    await query(previous.replace("'tests.schedule.manage', ", ""));
+    const single = await api("/api/tests/schedules", { ...options, body: input });
+    const bulk = await api("/api/tests/schedules/bulk", { ...options, body: { ...input, dates: [input.startDate] } });
+    assert.deepEqual([single.status, single.body], [403, { error: "Forbidden" }]);
+    assert.deepEqual([bulk.status, bulk.body], [403, { error: "Forbidden" }]);
+    assert.deepEqual(await scheduleRows(), beforeDenied);
+    assert.equal((await api("/api/tests/schedules", { cookie: coachCookie })).status, 200);
+  } finally {
+    await query(previous);
+  }
+  assert.equal((await api("/api/tests/schedules", { ...options, body: input })).status, 201);
+  assert.equal((await api("/api/tests/schedules/bulk", { ...options, body: { ...input, dates: [input.startDate] } })).status, 201);
 });
