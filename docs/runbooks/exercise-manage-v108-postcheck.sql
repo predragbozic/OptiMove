@@ -1,6 +1,6 @@
 -- Read-only.
 select (select count(*) from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql'
-         and checksum='30661e1d94f83e36fd87cb87fabfc5d25a1dbe00ba35d376abbfb346c5e8ade3')=1 as v108_exact,
+         and checksum='e277b4107b72c3c423692ca1f687cc0ea10e3dab83f7b1b3af2321e71c68e3c2')=1 as v108_exact,
        (select md5(prosrc) from pg_proc where oid=to_regprocedure('public.permission_word_honoured(text)'))='2a01ec9e027967a44892fc0f2fb6202d' as permission_body_exact,
        public.permission_word_honoured('exercises.add') and public.permission_word_honoured('exercises.remove')
          and not public.permission_word_honoured('exercises.media.upload') as exact_exercise_stage,

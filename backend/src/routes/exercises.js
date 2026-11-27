@@ -632,7 +632,7 @@ async function upsertExercise(req, res, exerciseId, copying = false) {
       finalId = inserted.rows[0].id;
     }
 
-    await bindExerciseMedia(client,req,finalId,body,{creating:!exerciseId,previous:previousMedia});
+    await bindExerciseMedia(client,{...req,authz:actor.authz,user:actor.user},finalId,body,{creating:!exerciseId,previous:previousMedia});
 
     const domainIds = await Promise.all(splitNames(body.purposes).map((value) => getOrCreateLookup("domains", value, dataOwnerId, {}, runQuery, editingSystem)));
     const categoryIds = await Promise.all(splitNames(body.qualities).map((value) => getOrCreateLookup("categories", value, dataOwnerId, {}, runQuery, editingSystem)));

@@ -38,11 +38,11 @@ create table library.exercise_manage_v108_use (
 alter table library.exercise_manage_v108_use enable row level security;
 revoke all on library.exercise_manage_v108_use from public;
 create function library.keep_exercise_manage_v108_use() returns trigger
-language plpgsql set search_path=pg_catalog,library as $
+language plpgsql set search_path=pg_catalog,library as $exercise_use_guard$
 begin
   raise exception 'Exercise bridge first-use evidence is immutable';
 end
-$;
+$exercise_use_guard$;
 revoke all on function library.keep_exercise_manage_v108_use() from public;
 create trigger exercise_manage_v108_keep_use
 before update or delete or truncate on library.exercise_manage_v108_use

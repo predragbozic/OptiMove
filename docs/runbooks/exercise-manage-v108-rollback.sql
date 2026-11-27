@@ -14,7 +14,7 @@ lock table library.exercise_manage_v108_use, public.permission_roles, public.per
 do $$
 declare v_applied timestamptz;
 begin
-  select applied_at into v_applied from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and checksum='30661e1d94f83e36fd87cb87fabfc5d25a1dbe00ba35d376abbfb346c5e8ade3';
+  select applied_at into v_applied from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and checksum='e277b4107b72c3c423692ca1f687cc0ea10e3dab83f7b1b3af2321e71c68e3c2';
   if v_applied is null or exists (select 1 from public.schema_migrations where migration_name<>'migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and migration_name ~ '^migrations_v2/[0-9]{12}_' and (applied_at>=v_applied or migration_name>'migrations_v2/202612101000_exercises_v108_manage_bridge.sql')) then
     raise exception 'v108 rollback refused: v108 is missing, its checksum changed, or a later migration is recorded';
   end if;
@@ -170,5 +170,5 @@ do $$ begin
 end $$;
 drop table library.exercise_manage_v108_use, library.exercise_manage_v108_seed;
 drop function library.keep_exercise_manage_v108_use();
-delete from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and checksum='30661e1d94f83e36fd87cb87fabfc5d25a1dbe00ba35d376abbfb346c5e8ade3';
+delete from public.schema_migrations where migration_name='migrations_v2/202612101000_exercises_v108_manage_bridge.sql' and checksum='e277b4107b72c3c423692ca1f687cc0ea10e3dab83f7b1b3af2321e71c68e3c2';
 commit;

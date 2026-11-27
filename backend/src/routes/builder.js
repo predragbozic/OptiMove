@@ -2703,7 +2703,7 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
       [req.user.id, name, nullableText(req.body?.instruction), nullableText(req.body?.imageUrl), nullableText(req.body?.videoUrl)],
     );
     const exercise = created.rows[0];
-    await bindExerciseMedia(client,req,exercise.id,req.body||{},{creating:true});
+    await bindExerciseMedia(client, { ...req, authz: actor.authz, user: actor.user }, exercise.id, req.body || {}, { creating: true });
     const order = await nextOrder("plans.plan_items", "plan_session_id", node.plan_session_id, "item_order",runQuery);
     const ancestry = await getNodeAncestryMeta(node,runQuery);
     const insertedItem=await runQuery(

@@ -32,7 +32,7 @@ before(async () => {
     create table public.users (id uuid primary key, is_active boolean default true, display_name text, full_name text, email text);
     create table public.user_global_roles (id uuid primary key default gen_random_uuid(), user_id uuid, role text, is_active boolean);
     create table public.auth_sessions(user_id uuid, token_hash text, expires_at timestamptz);
-    create function public.lock_permission_actor(uuid,text,uuid) returns void language sql as $ select $;
+    create function public.lock_permission_actor(uuid,text,uuid) returns void language plpgsql as $$ begin return; end $$;
     create table public.athletes (
       id uuid primary key, user_id uuid, athlete_id text, source_external_id text,
       display_name text, full_name text, first_name text, last_name text,

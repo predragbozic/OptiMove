@@ -83,6 +83,15 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
     const rollback = await read("rollback");
     const { rows: [preflight] } = await client.query(await read("preflight"));
     assert.ok(Object.values(preflight).every(check => check === true), JSON.stringify(preflight));
+    await client.query("begin");
+    try {
+      await client.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
+      await client.query("delete from public.permission_role_items where role_id=$1 and permission_word='exercises.use'", [ROLE_IDS.team_coach]);
+      const { rows: [ineligible] } = await client.query(await read("preflight"));
+      assert.equal(ineligible.exact_native_seed_roles, false);
+    } finally {
+      await client.query("rollback");
+    }
     await fixture.applyThrough(migration);
     const installed = await catalogue();
     assert.notDeepEqual(installed, beforeCatalogue);
@@ -93,6 +102,18 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
       { layer: "custom", id: customId, words: bridgeWords },
       { layer: "version", id: versionId, words: bridgeWords },
     ]);
+    await client.query("begin");
+    try {
+      const extra = await client.query(`insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,items_added)
+        select id,revision+100,'migration','migrations_v2/202612101000_exercises_v108_manage_bridge.sql',array['exercises.add']
+        from public.permission_roles r where not exists(
+          select 1 from library.exercise_manage_v108_seed s where s.layer='role' and s.id=r.id
+        ) order by r.id limit 1`);
+      assert.equal(extra.rowCount, 1);
+      await assert.rejects(client.query(rollback), /staged audit entry changed/);
+    } finally {
+      await client.query("rollback");
+    }
     await client.query(rollback);
     assert.deepEqual(await catalogue(), beforeCatalogue);
     assert.deepEqual(await roleData(client), beforeRoles);
