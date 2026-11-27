@@ -145,6 +145,7 @@ const REVIEWED = Object.freeze({
   // coach path asks athletes.view at (its own resolved club / team workspace).
   "positionService.js": 11,
   "routes/auth.js": 1,
+  "exerciseWriteAccess.js": 8, // Exercise bridge rechecks existing workspace and narrows Builder's target scope.
   "programRpeSettingsAccess.js": 4, // revalidates an existing native workspace for an RPE write
   "routes/builder.js": 10, // existing visibility plus scoped direct and indirect RPE effects
   "routes/calendar.js": 1,
