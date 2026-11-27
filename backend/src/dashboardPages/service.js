@@ -93,11 +93,25 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const target=await lockManagedPageTarget(q,req,dashboardId);
    await q('select id from training_load.dashboard_pages where dashboard_id=$1 order by id for update',[dashboardId]);
    const hash=createHash('sha256').update(canonicalKey({dashboardId:dashboardId.toLowerCase(),pageId:pageId?.toLowerCase()??null,operation,body})).digest('hex');
-   const replay=await recordedPageRequest(q,target,req.user.id,body.requestId,hash,operation,now);if(replay)return replay;freshRequest(body,now);
-   if(pageId)await requirePage(q,dashboardId,pageId);
+   const copying=operation==='copyPage';
+   // The immutable receipt records the sanctioned create. Its hash binds the copy
+   // operation and source snapshot, so it cannot be replayed as a regular create.
+   const recordedOperation=copying?'create':operation;
+   const replay=await recordedPageRequest(q,target,req.user.id,body.requestId,hash,recordedOperation,now);if(replay)return replay;freshRequest(body,now);
+   const source=pageId ? await requirePage(q,dashboardId,pageId) : null;
+   if(copying){
+    const widgets=(await q('select id,revision from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by id for update',[dashboardId,pageId])).rows;
+    if(source.revision!==body.input.sourceRevision ||
+      canonicalKey(Object.fromEntries(widgets.map(widget=>[widget.id,widget.revision])))!==canonicalKey(body.input.widgetRevisions)){
+     throw pageError('staleRevision',409);
+    }
+   }
 
    const receipt=(await q('select training_load.mutate_dashboard_page($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) receipt',
-    [dashboardId,req.user.id,target.workspace,body.requestId,hash,body.expectedPagesRevision,operation,pageId,body.input,body.requestIssuedAt])).rows[0].receipt;
+    [dashboardId,req.user.id,target.workspace,body.requestId,hash,body.expectedPagesRevision,recordedOperation,copying?null:pageId,copying?{name:body.input.name}:body.input,body.requestIssuedAt])).rows[0].receipt;
+   if(copying){
+    await q('select training_load.copy_dashboard_page_contents($1,$2,$3,$4,$5)',[dashboardId,pageId,receipt.pageId,req.user.id,body.requestId]);
+   }
    await markDashboardManageWrite(q,target.req,target.manageScopes);
    return {receipt};
   });
