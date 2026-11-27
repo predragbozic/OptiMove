@@ -163,6 +163,7 @@ test("native Exercise content and lifecycle writes have independent staged permi
 
     const publicResult = await targetWrite(remotePublic, "Public writable exception");
     assert.equal(publicResult.status, 201, publicResult.text);
+    await sql.query("update public.user_team_roles set is_active=false where user_id=$1 and team_id=$2", [coach, remoteTeam]);
     const allowed = await custom("Builder Exercise Add");
     assert.equal(allowed.status, 201, allowed.text);
     assert.deepEqual(await customEffects("Builder Exercise Add"), { exercises: 1, items: 1 });
