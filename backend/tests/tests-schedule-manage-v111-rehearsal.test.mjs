@@ -237,6 +237,20 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
     const firstUsed = await marker();
     assert.ok(firstUsed);
 
+    const waitOnLink = async (pattern, possibleBlockers) => {
+      const stopAt = Date.now() + 3500;
+      while (Date.now() < stopAt) {
+        const { rows: [queued] } = await client.query(
+          `select pid from pg_stat_activity
+           where datname=current_database() and wait_event_type='Lock' and query like $1
+             and pg_blocking_pids(pid) && $2::int[]`,
+          [pattern, possibleBlockers],
+        );
+        if (queued) return queued.pid;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      assert.fail("The old and new link writes did not reach the planned row-lock interleaving.");
+    };
     const blocker = new pg.Client({ connectionString: fixture.url });
     await blocker.connect();
     let oldRevoke, bridgeRotate;
@@ -244,20 +258,6 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
       await blocker.query("begin");
       const blockPid = (await blocker.query("select pg_backend_pid() as pid")).rows[0].pid;
       await blocker.query("select id from tests.test_access_links where id=$1 for update", [link.body.link.id]);
-      const waitOnLink = async (pattern, possibleBlockers) => {
-        const stopAt = Date.now() + 3500;
-        while (Date.now() < stopAt) {
-          const { rows: [queued] } = await client.query(
-            `select pid from pg_stat_activity
-             where datname=current_database() and wait_event_type='Lock' and query like $1
-               and pg_blocking_pids(pid) && $2::int[]`,
-            [pattern, possibleBlockers],
-          );
-          if (queued) return queued.pid;
-          await new Promise(resolve => setTimeout(resolve, 25));
-        }
-        assert.fail("The old and new link writes did not reach the planned row-lock interleaving.");
-      };
       oldRevoke = write(previous, "/api/tests/links/" + link.body.link.id + "/revoke", "POST", {});
       const previousPid = await waitOnLink("update tests.test_access_links set status = 'revoked'%where id = $1%", [blockPid]);
       bridgeRotate = write(current, oldPath + "/link", "POST", {});
@@ -284,6 +284,48 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
       "select status from tests.test_access_links where schedule_id=$1 order by id", [old.body.schedule.id],
     )).rows;
     assert.deepEqual(linkStatuses, [{ status: "revoked" }, { status: "revoked" }]);
+    assert.deepEqual(await marker(), firstUsed);
+
+    const next = await write(previous, oldPath + "/link", "POST", {});
+    assert.equal(next.status, 201, JSON.stringify(next.body));
+    await client.query(`
+      create function tests.wait_v111_old_link_insert() returns trigger language plpgsql as $wait$
+      begin
+        perform pg_advisory_xact_lock(77111098);
+        return new;
+      end
+      $wait$;
+      create trigger tests_v111_hold_old_insert before insert on tests.test_access_links
+      for each row execute function tests.wait_v111_old_link_insert()
+    `);
+    const insertBlocker = new pg.Client({ connectionString: fixture.url });
+    await insertBlocker.connect();
+    let oldRotate, bridgeRevoke;
+    try {
+      await insertBlocker.query("begin");
+      const insertPid = (await insertBlocker.query("select pg_backend_pid() as pid")).rows[0].pid;
+      await insertBlocker.query("select pg_advisory_xact_lock(77111098)");
+      oldRotate = write(previous, oldPath + "/link", "POST", {});
+      const oldInsertPid = await waitOnLink("insert into tests.test_access_links%", [insertPid]);
+      bridgeRevoke = write(current, "/api/tests/links/" + next.body.link.id + "/revoke", "POST", {});
+      await waitOnLink("select id from tests.test_access_links where id=$1 and schedule_id=$2 for update%", [oldInsertPid]);
+      // The bridge has its no-key schedule lock and waits on the link. The
+      // old server still needs the schedule's FK key-share lock for its INSERT.
+      await insertBlocker.query("commit");
+    } finally {
+      await insertBlocker.query("rollback").catch(() => {});
+      await insertBlocker.end();
+      await Promise.allSettled([oldRotate, bridgeRevoke]);
+      await client.query("drop trigger tests_v111_hold_old_insert on tests.test_access_links; drop function tests.wait_v111_old_link_insert()");
+    }
+    const olderLink = await oldRotate;
+    assert.equal(olderLink.status, 201, JSON.stringify(olderLink.body));
+    const oldRetired = await bridgeRevoke;
+    assert.equal(oldRetired.status, 200, JSON.stringify(oldRetired.body));
+    const remaining = (await client.query(
+      "select id from tests.test_access_links where schedule_id=$1 and status='active'", [old.body.schedule.id],
+    )).rows;
+    assert.deepEqual(remaining, [{ id: olderLink.body.link.id }]);
     assert.deepEqual(await marker(), firstUsed);
     await assert.rejects(client.query("update tests.schedule_manage_bridge_use set first_checked_write_at=clock_timestamp()"), /immutable/);
     await assert.rejects(client.query(rollback), /refuses checked Schedule Manage writer use/);
