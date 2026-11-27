@@ -14,6 +14,7 @@ import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSe
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsOffered, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
+import { lockProgramEditActor, recordCombinedProgramEditUse, recordProgramEditUse, refuseProgramEdit } from "../programEditAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
 import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "../workspace.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
@@ -410,9 +411,11 @@ router.patch("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
-    const name = text(req.body?.name) || (plan.plan_type === "weekly" ? `Weekly plan ${plan.week_start}` : plan.name);
-    const coverImageUrl = req.body?.coverImageUrl === undefined ? plan.cover_image_url : nullableText(req.body.coverImageUrl);
-    await query("update plans.plans set name = $2, cover_image_url = $3, updated_at = now() where id = $1", [plan.id, name, coverImageUrl]);
+    await withProgramPlanEdit(req, plan.id, async (client, current) => {
+      const name = text(req.body?.name) || (current.plan_type === "weekly" ? `Weekly plan ${current.week_start}` : current.name);
+      const coverImageUrl = req.body?.coverImageUrl === undefined ? current.cover_image_url : nullableText(req.body.coverImageUrl);
+      await client.query("update plans.plans set name = $2, cover_image_url = $3, updated_at = now() where id = $1", [plan.id, name, coverImageUrl]);
+    });
     return await respondWithDraft(req, res, req.user, plan);
   } catch (error) { next(error); }
 }));
@@ -1668,7 +1671,9 @@ router.delete("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
     if (!plan) return;
     client = await pool.connect();
     await client.query("begin");
-    const lockedRow = (await client.query("select id, status, plan_type from plans.plans where id = $1 for update", [plan.id])).rows[0];
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const writer = await lockProgramEditActor(client, req);
+    const lockedRow = await lockProgramEditTarget(client, writer, plan.id, { deleting: true });
     // Task 5 (docs/ai/builder-batch-edit-plan.md 12.6a): a published plan (of
     // any kind) whose session has results or a live event link made for it is
     // not deleted (rights first: requirePlan's 404 comes before this 409). A
@@ -1682,6 +1687,7 @@ router.delete("/plans/:planId", withBatchReuseGuard(async (req, res, next) => {
     }
     await deleteBuilderPlanContent(client, plan.id);
     await client.query("delete from plans.plans where id = $1", [plan.id]);
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     res.json({ deleted: true, planId: plan.id });
   } catch (error) {
@@ -1706,6 +1712,45 @@ router.post("/plans/:planId/blocks", withBatchReuseGuard(async (req, res, next) 
   } catch (error) { next(error); }
 }));
 
+async function lockProgramEditTarget(client, writer, planId, { deleting = false } = {}) {
+  if (deleting) {
+    const locked = await client.query("select id from plans.plans where id=$1 for update", [planId]);
+    if (!locked.rowCount) throw refuseProgramEdit(404, "Draft program not found");
+  } else {
+    await lockCopyTargetPlan(client, planId);
+  }
+  const current = await getEditablePlan(writer.actor, planId, client.query.bind(client));
+  if (!current) throw refuseProgramEdit(404, "Draft program not found");
+  return current;
+}
+
+async function withProgramPlanEdit(req, planId, write) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await lockExerciseReuse(client, req.exerciseReuseGuard);
+    const writer = await lockProgramEditActor(client, req);
+    const current = await lockProgramEditTarget(client, writer, planId);
+    const result = await write(client, current, writer.actor);
+    await recordProgramEditUse(client, result !== false && writer.checked);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function withProgramChildEdit(req, child, readChild, write) {
+  return withProgramPlanEdit(req, child.plan.id, async (client, current, actor) => {
+    const refreshed = await readChild(actor, child.id, client.query.bind(client));
+    if (!refreshed || refreshed.plan.id !== current.id) throw refuseProgramEdit(404, "Program content not found");
+    return write(client, refreshed);
+  });
+}
+
 // Weekly program templates (docs/ai/weekly-program-template-plan.md): the
 // template changes by whole weeks. One transaction each: the exercise-reuse
 // lock, then the plan row FOR NO KEY UPDATE (the copy routes' order), the
@@ -1719,7 +1764,8 @@ async function changeWeeklyTemplate(req, res, next, change) {
     await client.query("begin");
     await lockExerciseReuse(client, req.exerciseReuseGuard);
     const recordRpeCopy = await beginBuilderRpeProvenance(client);
-    await lockCopyTargetPlan(client, plan.id);
+    const writer = await lockProgramEditActor(client, req);
+    await lockProgramEditTarget(client, writer, plan.id);
     const facts = await weeklyTemplateFacts(client.query.bind(client), plan.id);
     const outcome = facts
       ? await change(client, plan, facts, recordRpeCopy)
@@ -1730,6 +1776,7 @@ async function changeWeeklyTemplate(req, res, next, change) {
       client = null;
       return res.status(outcome.status).json(outcome.body);
     }
+    await recordProgramEditUse(client, writer.checked);
     await client.query("commit");
     client.release();
     client = null;
@@ -2223,10 +2270,10 @@ router.patch("/blocks/:blockId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const block = await getEditableBlock(req, req.params.blockId);
     if (!block) return res.status(404).json({ error: "Program block not found" });
-    await query(
+    await withProgramChildEdit(req, block, getEditableBlock, (client, current) => client.query(
       "update plans.plan_days set block_name = $2, day_note = $3, updated_at = now() where id = $1",
-      [block.id, nullableText(req.body?.name), nullableText(req.body?.note)],
-    );
+      [current.id, nullableText(req.body?.name), nullableText(req.body?.note)],
+    ));
     return await respondWithDraft(req, res, req.user, block.plan);
   } catch (error) { next(error); }
 }));
@@ -2725,6 +2772,7 @@ router.post("/nodes/:nodeId/custom-exercise", withBatchReuseGuard(async (req, re
     );
     await snapshotExerciseMedia(runQuery,exercise.id,insertedItem.rows[0].id);
     await recordExerciseWriterUse(client, actor.workspace);
+    await recordCombinedProgramEditUse(client, actor.workspace);
     await runQuery('commit');client.release();client=null;
     return await respondWithDraft(req, res, req.user, node.plan, { status: 201 });
   } catch (error) { if(client)await client.query('rollback').catch(()=>{});next(error); } finally {client?.release();}
@@ -2775,12 +2823,12 @@ router.patch("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
     // in English is never written back over the stored text.
     const descriptionSent = Object.hasOwn(req.body || {}, "description");
     const dose = doseFields(req.body);
-    const updated = await query(
+    const updated = await withProgramChildEdit(req, item, getEditableItem, (client, current) => client.query(
       `update plans.plan_items set sets = $2, reps = $3, load = $4,
          description = case when $6::boolean then $5 else description end, updated_at = now() where id = $1
        returning id, exercise_id, title, sets, reps, load, description`,
-      [item.id, dose.sets, dose.reps, dose.load, nullableText(req.body?.description), descriptionSent],
-    );
+      [current.id, dose.sets, dose.reps, dose.load, nullableText(req.body?.description), descriptionSent],
+    ));
     if (req.body?.responseMode === "item" && !wantsBatchSync(req, item.plan)) {
       const row = updated.rows[0];
       if (!row) return res.status(404).json({ error: "Program item not found" });
@@ -2817,7 +2865,8 @@ router.delete("/items/:itemId", withBatchReuseGuard(async (req, res, next) => {
   try {
     const item = await getEditableItem(req, req.params.itemId);
     if (!item) return res.status(404).json({ error: "Program item not found" });
-    await query("delete from plans.plan_items where id = $1", [item.id]);
+    await withProgramChildEdit(req, item, getEditableItem, (client, current) =>
+      client.query("delete from plans.plan_items where id = $1", [current.id]));
     return await respondWithDraft(req, res, req.user, item.plan);
   } catch (error) { next(error); }
 }));
@@ -4563,10 +4612,10 @@ function strictBoolean(value) {
   return value === true || value === false ? value : undefined;
 }
 
-async function getEditableBlock(req, blockId) {
-  const result = await query("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
+async function getEditableBlock(req, blockId, runQuery = query) {
+  const result = await runQuery("select pd.id, pd.plan_id from plans.plan_days pd where pd.id = $1", [blockId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(req, row.plan_id); return plan ? { id: row.id, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id, runQuery); return plan ? { id: row.id, plan } : null;
 }
 
 async function getEditableSession(req, sessionId) {
@@ -4599,10 +4648,10 @@ async function getNodeAncestryMeta(node, runQuery = query) {
   return chain;
 }
 
-async function getEditableItem(req, itemId) {
-  const result = await query("select pi.id, pi.plan_node_id, pi.item_order, pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pi.id = $1", [itemId]);
+async function getEditableItem(req, itemId, runQuery = query) {
+  const result = await runQuery("select pi.id, pi.plan_node_id, pi.item_order, pd.plan_id from plans.plan_items pi join plans.plan_sessions ps on ps.id = pi.plan_session_id join plans.plan_days pd on pd.id = ps.plan_day_id where pi.id = $1", [itemId]);
   const row = result.rows[0]; if (!row) return null;
-  const plan = await getEditablePlan(req, row.plan_id); return plan ? { id: row.id, plan_node_id: row.plan_node_id, item_order: row.item_order, plan } : null;
+  const plan = await getEditablePlan(req, row.plan_id, runQuery); return plan ? { id: row.id, plan_node_id: row.plan_node_id, item_order: row.item_order, plan } : null;
 }
 
 async function findAthlete(externalId) {
