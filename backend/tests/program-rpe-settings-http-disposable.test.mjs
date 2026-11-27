@@ -537,6 +537,32 @@ test("v106 uses exact inserted IDs for whole-plan duplicates and dated assignmen
       assert.notEqual(row.logical_session_id, row.source_logical_session_id);
     }
   }
+  const replaceWeek = async (startDate) => {
+    const body = { athleteIds: [athlete.athlete_id], startDate, assignmentRequestId: randomUUID() };
+    const conflict = await http.api(coach.cookie, assignmentPath, { method: "POST", body });
+    assert.equal(conflict.status, 409, conflict.text);
+    const replaced = await http.api(coach.cookie, assignmentPath, {
+      method: "POST", body: { ...body, choice: "replace", choiceToken: conflict.body.choiceToken },
+    });
+    assert.equal(replaced.status, 201, replaced.text);
+    return replaced.body.replaced[0].planId;
+  };
+  const target = assigned.body.created[0].planId;
+  const lineageBefore = (await db.query(
+    "select session_id from training_load.builder_rpe_session_baselines where plan_id=$1 order by session_id", [target],
+  )).rows;
+  assert.equal(await replaceWeek("2027-05-03"), target);
+  const currentLineage = (await db.query(
+    `select b.session_id,b.source_session_id
+     from training_load.builder_rpe_session_baselines b join plans.plan_sessions s on s.id=b.session_id
+     where b.plan_id=$1 order by b.source_session_id`, [target],
+  )).rows;
+  assert.deepEqual(currentLineage.map(row => row.source_session_id).sort(), [...sessionIds].sort());
+  assert.ok(currentLineage.every(row => !lineageBefore.some(old => old.session_id === row.session_id)));
+
+  const legacy = await fixturePlan(athleteId, "active", "2027-05-10");
+  assert.equal(await replaceWeek("2027-05-10"), legacy.id);
+  assert.equal((await db.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [legacy.id])).rowCount, 0);
 });
 
 test("v106 single first Submit refuses an explicit edit after the grant is removed", async () => {
@@ -572,4 +598,126 @@ test("v106 single first Submit refuses an explicit edit after the grant is remov
   const accepted = await submit();
   assert.equal(accepted.status, 200, accepted.text);
   assert.equal((await db.query("select status from plans.plans where id=$1", [id])).rows[0].status, "active");
+});
+test("the first Submit platform exception requires a current workspace, holding and session", async () => {
+  const f = fixtures(db);
+  const userId = await f.user("RPE platform");
+  await f.grantPlatform(userId);
+  await f.grantClub(userId, A);
+  await db.query("insert into public.user_workspace_preferences(user_id,workspace_type) values($1,'platform')", [userId]);
+  const { lockProgramRpeActor } = await import("../src/programRpeSettingsAccess.js");
+  const req = { user: { id: userId }, sessionToken: (await http.cookieFor(userId)).split("=")[1] };
+  const actor = await http.pool.connect();
+  const switcher = await http.pool.connect();
+  const scope = { type: "platform" };
+  let pending;
+  try {
+    await actor.query("begin");
+    assert.equal((await lockProgramRpeActor(actor, req, scope)).user.id, userId);
+    await actor.query("rollback");
+    await switcher.query("begin");
+    await switcher.query("update public.user_workspace_preferences set workspace_type='club',scope_id=$2 where user_id=$1", [userId, A]);
+    await actor.query("begin");
+    pending = lockProgramRpeActor(actor, req, scope);
+    await waitForRpeBlock(actor.processID);
+    await switcher.query("commit");
+    assert.equal(await pending, null);
+    await actor.query("rollback");
+
+    await db.query("update public.user_workspace_preferences set workspace_type='platform',scope_id=null where user_id=$1", [userId]);
+    await db.query("delete from public.auth_sessions where user_id=$1", [userId]);
+    await actor.query("begin");
+    assert.equal(await lockProgramRpeActor(actor, req, scope), null);
+    await actor.query("rollback");
+
+    req.sessionToken = (await http.cookieFor(userId)).split("=")[1];
+    await db.query("update public.user_global_roles set is_active=false where user_id=$1 and role='platform_admin'", [userId]);
+    await actor.query("begin");
+    assert.equal(await lockProgramRpeActor(actor, req, scope), null);
+  } finally {
+    await Promise.allSettled([actor.query("rollback"), switcher.query("rollback")]);
+    if (pending) await Promise.allSettled([pending]);
+    actor.release();
+    switcher.release();
+  }
+});
+
+test("a weekly batch edit requires a proven sibling for a recorded RPE change, even in the same slot", async () => {
+  const origin = await fixturePlan(athleteId, "active", "2027-06-07");
+  const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);
+  const duplicate = async (weekStart) => {
+    const response = await http.api(coach.cookie, "/api/builder/plans/" + origin.id + "/duplicate", {
+      method: "POST", body: { athleteIds: [athlete.athlete_id], weekStart },
+    });
+    assert.equal(response.status, 201, response.text);
+    return response.body.plan.id;
+  };
+  const primary = await duplicate("2027-06-14");
+  const sibling = await duplicate("2027-06-21");
+  await db.query("update plans.plans set status='active',builder_batch_id=$1 where id=any($2::uuid[])", [randomUUID(), [primary,sibling]]);
+  const onlySession = async (id) => (await db.query(
+    "select ps.id,ps.logical_session_id from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id where pd.plan_id=$1", [id],
+  )).rows[0];
+  const draft = await openEditDraft(primary);
+  const draftRow = await onlySession(draft);
+  const changed = await http.api(coach.cookie, draftSession(draftRow.id), { method: "PATCH", body: { rpeEnabled: false } });
+  assert.equal(changed.status, 200, changed.text);
+  const siblingRow = await onlySession(sibling);
+  await db.query("update plans.plan_sessions set logical_session_id=$2 where id=$1", [siblingRow.id, randomUUID()]);
+  const submit = () => http.api(coach.cookie, "/api/builder/plans/" + draft + "/submit", { method: "POST", body: { batchScope: "all" } });
+  const refused = await submit();
+  assert.equal(refused.status, 409, refused.text);
+  assert.equal(refused.body.code, "rpe_sibling_unmatched");
+  assert.equal((await flags((await onlySession(primary)).id)).rpe_enabled, true);
+  assert.equal((await flags(siblingRow.id)).rpe_enabled, true);
+  assert.equal((await flags(draftRow.id)).rpe_enabled, false);
+  await db.query("update plans.plan_sessions set logical_session_id=$2 where id=$1", [siblingRow.id, siblingRow.logical_session_id]);
+  const saved = await submit();
+  assert.equal(saved.status, 200, saved.text);
+  assert.equal((await flags((await onlySession(primary)).id)).rpe_enabled, false);
+  assert.equal((await flags(siblingRow.id)).rpe_enabled, false);
+});
+test("first weekly batch Submit checks the current grant before activating any proven destination", async () => {
+  const origin = await fixturePlan(athleteId, "active", "2027-07-05");
+  const { rows: [athlete] } = await db.query("select athlete_id from public.athletes where id=$1", [athleteId]);
+  const duplicate = async (weekStart) => {
+    const response = await http.api(coach.cookie, "/api/builder/plans/" + origin.id + "/duplicate", {
+      method: "POST", body: { athleteIds: [athlete.athlete_id], weekStart },
+    });
+    assert.equal(response.status, 201, response.text);
+    return response.body.plan.id;
+  };
+  const primary = await duplicate("2027-07-12");
+  const sibling = await duplicate("2027-07-19");
+  await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [randomUUID(), [primary,sibling]]);
+  const onlySession = async (id) => (await db.query(
+    "select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id where pd.plan_id=$1", [id],
+  )).rows[0].id;
+  const primarySession = await onlySession(primary);
+  const node = await http.api(coach.cookie, draftSession(primarySession) + "/nodes", {
+    method: "POST", body: { nodeType: "section", name: "Warm-up" },
+  });
+  assert.equal(node.status, 201, node.text);
+  const changed = await http.api(coach.cookie, draftSession(primarySession), { method: "PATCH", body: { rpeEnabled: false } });
+  assert.equal(changed.status, 200, changed.text);
+  const submit = () => http.api(coach.cookie, "/api/builder/plans/" + primary + "/submit", { method: "POST", body: { syncBatch: true } });
+  const statuses = async () => (await db.query("select status from plans.plans where id=any($1::uuid[])", [[primary,sibling]])).rows.map(row => row.status);
+  await changeProgramRpeGrant(db, "club_admin", false);
+  try {
+    const denied = await submit();
+    assert.equal(denied.status, 404, denied.text);
+    assert.deepEqual(await statuses(), ["draft","draft"]);
+    assert.equal((await flags(await onlySession(sibling))).rpe_enabled, true);
+  } finally {
+    await changeProgramRpeGrant(db, "club_admin", true);
+  }
+  const accepted = await submit();
+  assert.equal(accepted.status, 200, accepted.text);
+  assert.deepEqual(await statuses(), ["active","active"]);
+  const copied = await onlySession(sibling);
+  assert.equal((await flags(copied)).rpe_enabled, false);
+  const lineage = (await db.query(
+    "select source_plan_id,source_session_id from training_load.builder_rpe_session_baselines where plan_id=$1 and session_id=$2", [sibling,copied],
+  )).rows[0];
+  assert.deepEqual(lineage, { source_plan_id: primary, source_session_id: primarySession });
 });

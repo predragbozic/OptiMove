@@ -3,7 +3,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
-import { beginBuilderRpeProvenance, inspectBuilderRpeSubmitEffects, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening } from "../builderRpeProvenance.js";
+import { beginBuilderRpeProvenance, hasBuilderRpeSiblingLineage, inspectBuilderRpeSubmitEffects, listBuilderRpeExplicitSessions, listBuilderRpeSiblingLineage, recordBuilderRpeCopyIfTracked, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect, recordBuilderRpeSessionOpening } from "../builderRpeProvenance.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -742,6 +742,9 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
         // Task 5: nothing written; the draft stays for the coach to change.
         return res.status(409).json({ error: "Some sessions can't be removed or moved.", code: "edit_sessions_locked", sessions: updated.sessionsLocked });
       }
+      if (updated?.unprovenRpeSibling) {
+        return res.status(409).json({ error: "Some sessions could not be matched for Training Load settings. Save only this athlete.", code: "rpe_sibling_unmatched" });
+      }
       if (updated?.sourceChanged) {
         return res.status(409).json({ error: "This plan was saved by someone else after you opened it.", code: "source_changed" });
       }
@@ -838,6 +841,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
       client.release();
     }
     if (error?.code === "program_rpe_scope") return res.status(404).json({ error: "Draft program not found" });
+    if (error?.code === "rpe_sibling_unmatched") return res.status(409).json({ error: error.message, code: error.code });
     next(error);
   }
 }));
@@ -939,7 +943,8 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
     // above, rather than a second, independent resolveActiveWorkspace
     // read - a workspace switch landing between the two could otherwise
     // validate targets against workspace A but stamp ownership from
-    // workspace B. The provenance bridge also snapshots ordinary program copies when their authoring scope is known.
+    // workspace B. The provenance bridge also snapshots ordinary program
+    // copies when their authoring scope is known.
     let planOwner = source.plan_type === "weekly" ? weeklyPlanOwnerScope.ownerContext : null;
     client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
@@ -953,7 +958,7 @@ router.post("/plans/:planId/duplicate", withBatchReuseGuard(async (req, res, nex
         if (target?.id) currentTargets.push(await isAthleteInWorkspaceScope(expected, target.id, client.query.bind(client)));
       }
       if (actor && currentTargets.every(Boolean)) planOwner = expected.ownerContext;
-      else if (weeklyPlanOwnerScope) throw Object.assign(new Error("Your workspace changed. Open the plan again."), { status: 409 });
+      else if (expected.type) throw Object.assign(new Error("Your workspace changed. Open the plan again."), { status: 409 });
     }
 
     // Source must remain stable until the copied grant upsert finishes.
@@ -1379,7 +1384,8 @@ router.post("/plans/:planId/assign-weekly", withBatchReuseGuard(async (req, res,
         await client.query("delete from plans.plan_nodes where plan_session_id = $1", [session.id]);
         await client.query("delete from plans.plan_sessions where id = $1", [session.id]);
       }
-      await writeTemplateDays(client, entry, keptOrder);
+      const copies = await writeTemplateDays(client, entry, keptOrder);
+      if (recordRpeOpening) await recordBuilderRpeCopyIfTracked(client, { planId: entry.planId, sourcePlanId: source.id, copies });
       writtenDayIds.push(...touchedIds);
       const row = (await client.query(
         "update plans.plans set updated_at = clock_timestamp() where id = $1 returning id, athlete_id, name, plan_type, week_start::text as week_start, status",
@@ -3015,11 +3021,12 @@ async function lockBatchPlansForUpdate(client, sourcePlanId, user, { members = "
 // /sync-batch route, its own transaction) and syncAndActivateBatchWithClient
 // (Submit, the caller's already-open transaction) - the ONE place this
 // copy logic is ever written, never duplicated between them.
-async function syncBatchContentWithClient(client, sourceRow, siblingRows, guard = null) {
+async function syncBatchContentWithClient(client, sourceRow, siblingRows, guard = null, recordRpeCopy = false) {
   await lockExerciseReuse(client, guard);
   for (const sibling of siblingRows) {
     if (sourceRow.plan_type === "weekly") {
-      await copyWeeklyPlanTree(client, sourceRow.id, sibling.id, sibling.week_start || sourceRow.week_start);
+      const copies = await copyWeeklyPlanTree(client, sourceRow.id, sibling.id, sibling.week_start || sourceRow.week_start);
+      if (recordRpeCopy) await recordBuilderRpeCopyIfTracked(client, { planId: sibling.id, sourcePlanId: sourceRow.id, copies });
     } else {
       await deleteBuilderPlanContent(client, sibling.id);
       await copyProgramTree(client, sourceRow.id, sibling.id);
@@ -3105,10 +3112,45 @@ async function syncBatchFromPlan(sourcePlan, req, guard = null) {
 // return this directly, exactly like the existing single-plan
 // removeEmptyDraftOnSubmit path already does) or `{ activatedPlans }`
 // (ready for notifyPlanAssignments, in this SAME transaction).
+async function checkFirstWeeklyBatchEffects(client, rpe, source, siblings) {
+  const sessions = await listBuilderRpeExplicitSessions(client, source.id);
+  const { sessions: liveSessions } = await lockRpeEditSessions(client, [source.id,...siblings.map(row => row.id)], null);
+  const sessionsById = new Map(liveSessions.map(row => [row.id,row]));
+  const affected = [];
+  if (source.status === "draft" && await hasBuilderRpeExplicitEffect(client, source.id)) affected.push(source.id);
+  for (const sibling of siblings) {
+    const siblingExplicit = await listBuilderRpeExplicitSessions(client, sibling.id);
+    if (siblingExplicit.size || await hasBuilderRpeExplicitEffect(client, sibling.id)) affected.push(sibling.id);
+    if (!sessions.size && !siblingExplicit.size) continue;
+    const lineage = await listBuilderRpeSiblingLineage(client, source.id, sibling.id, [...sessions], [...siblingExplicit]);
+    const unmatched = (ids, side) => [...ids].some(id => lineage.filter(pair => pair[side] === id).length !== 1);
+    if (unmatched(sessions, "source_id") || unmatched(siblingExplicit, "target_id")) {
+      throw Object.assign(new Error("Some sessions could not be matched for Training Load settings. Save only this athlete."), {
+        status: 409, code: "rpe_sibling_unmatched",
+      });
+    }
+    if (lineage.some(({ source_id, target_id }) => changesRpeFields(sessionsById.get(source_id), sessionsById.get(target_id), programRpeSessionFields))) affected.push(sibling.id);
+  }
+  await assertProgramRpeTargets(client, rpe.actor, rpe.scope, [...new Set(affected)].sort());
+}
+
 async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = null) {
-  const rpe = await prepareWeeklyRpeSync(client, sourcePlan, req, guard);
+  let rpe;
+  let checkProvenance = false;
+  if (sourcePlan.plan_type === "weekly") {
+    const timeout = (await client.query("select current_setting('lock_timeout') as timeout")).rows[0].timeout;
+    await lockExerciseReuse(client, guard);
+    checkProvenance = await beginBuilderRpeProvenance(client);
+    if (checkProvenance) {
+      const scope = await resolveExternalScheduleWorkspaceScope(req);
+      rpe = { scope, actor: await lockProgramRpeActor(client, req, scope) };
+    }
+    await client.query("select set_config('lock_timeout',$1,true)", [timeout]);
+  }
+  if (!checkProvenance) rpe = await prepareWeeklyRpeSync(client, sourcePlan, req, guard);
   const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, req.user);
   if (!sourceRow) return { activatedPlans: [] };
+  if (checkProvenance) await checkFirstWeeklyBatchEffects(client, rpe, sourceRow, siblingRows);
   if (!sourceRow.builder_batch_id) {
     // Not actually part of a batch (or no longer owned/active) - the
     // caller falls back to its own plain single-plan activation using
@@ -3116,7 +3158,7 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
     return { sourceRow, activatedPlans: null };
   }
   await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows);
-  await syncBatchContentWithClient(client, sourceRow, siblingRows, guard);
+  await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, checkProvenance);
 
   const emptinessTargets = sourceRow.status === "draft" ? [sourceRow, ...siblingRows] : siblingRows;
   const deletedIds = [];
@@ -3268,7 +3310,7 @@ function batchMemberChangesRpe({ ops }) {
 
 async function lockRpeEditSessions(client, liveIds, draftId) {
   const sessions = (await client.query(
-    `select ps.logical_session_id, ps.training_load_enabled, ps.rpe_enabled, pd.plan_id
+    `select ps.id, ps.logical_session_id, ps.training_load_enabled, ps.rpe_enabled, pd.plan_id
      from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id
      where pd.plan_id=any($1::uuid[]) order by pd.plan_id,ps.id for update of ps`, [liveIds],
   )).rows;
@@ -3282,9 +3324,10 @@ async function lockRpeEditSessions(client, liveIds, draftId) {
 }
 
 async function assertProgramRpeTargets(client, actor, scope, ids) {
-  if (!ids.length || scope.type === "platform") return;
+  if (!ids.length) return;
   const refuse = () => Object.assign(new Error("Draft program not found"), { status: 404, code: "program_rpe_scope" });
   if (!await programRpeSettingsRightsStillHold(client, actor, scope)) throw refuse();
+  if (scope.type === "platform") return;
   const { rows } = await client.query(
     "select * from training_load.plan_workspace_ownership where plan_id=any($1::uuid[]) order by plan_id for share", [ids],
   );
@@ -3298,20 +3341,15 @@ async function checkFirstRpeSubmit(client, req, planId) {
   await lockExerciseReuse(client, req.exerciseReuseGuard);
   if (!await beginBuilderRpeProvenance(client)) return;
   const scope = await resolveExternalScheduleWorkspaceScope(req);
-  if (scope.type === "platform") return;
   const actor = await lockProgramRpeActor(client, req, scope);
   const locked = await client.query("select id from plans.plans where id=$1 and status='draft' for update", [planId]);
   if (!locked.rowCount) return;
-  const { rows: [effects] } = await client.query(
-    `select exists(select 1 from training_load.builder_rpe_plan_effects where plan_id=$1)
-       or exists(
-         select 1 from training_load.builder_rpe_session_effects e
-         join plans.plan_sessions s on s.id=e.session_id
-         join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=e.plan_id
-         where e.plan_id=$1
-       ) as changed`, [planId],
-  );
-  if (effects.changed) await assertProgramRpeTargets(client, actor, scope, [planId]);
+  if (await hasBuilderRpeExplicitEffect(client, planId)) await assertProgramRpeTargets(client, actor, scope, [planId]);
+}
+
+async function hasBuilderRpeExplicitEffect(client, planId) {
+  const { rowCount } = await client.query("select 1 from training_load.builder_rpe_plan_effects where plan_id=$1", [planId]);
+  return rowCount > 0 || (await listBuilderRpeExplicitSessions(client, planId)).size > 0;
 }
 
 async function checkEditedRpeEffects(client, rpe, source, draft, sessions, batch) {
@@ -3423,6 +3461,30 @@ async function applyEditDraft(req, draftPlan, timing) {
       }
     }
     if (freshDraft.plan_type === "weekly") {
+      if (hasProvenance) {
+        const effects = await inspectBuilderRpeSubmitEffects(client, source.id, freshDraft.id);
+        const draftSessions = await listBuilderRpeExplicitSessions(client, freshDraft.id);
+        const affected = [];
+        let unprovenRpeSibling = false;
+        for (const member of batch?.apply ?? []) {
+          for (const update of member.ops.update) {
+            if (!draftSessions.has(update.draftSessionId)) continue;
+            const proven = await hasBuilderRpeSiblingLineage(client,
+              { planId: source.id, sessionId: update.liveSourceId },
+              { planId: member.planId, sessionId: update.sessionId });
+            if (!proven) unprovenRpeSibling = true;
+          }
+          if (member.ops.add.some(add => draftSessions.has(add.fromSessionId))) affected.push(member.planId);
+        }
+        if (effects.sourceChanged || unprovenRpeSibling) {
+          await client.query("rollback");
+          client.release();
+          client = null;
+          return { sourceChanged: effects.sourceChanged, unprovenRpeSibling };
+        }
+        if (effects.changed) affected.push(source.id);
+        if (rpe) await assertProgramRpeTargets(client, rpe.actor, scope, affected.sort());
+      }
       await checkEditedRpeEffects(client, rpe, source, freshDraft, rpeSessions, batch);
     } else if (hasProvenance) {
       const effects = await inspectBuilderRpeSubmitEffects(client, source.id, freshDraft.id);

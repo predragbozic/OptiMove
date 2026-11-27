@@ -12,13 +12,23 @@ baselines. It leaves older drafts unclassified and existing feedback IDs intact.
 It also tracks direct new plans and sessions, standalone session copy and the three
 explicit bulk settings actions. A nonweekly edit Submit rechecks the current
 permission and exact owner for a recorded effect. Whole-plan duplicates and
-dated assignments into new weeks record exact copied session IDs. Single
-first Submit rechecks authority for recorded explicit effects. Assignments
-that replace existing weeks, templates saved from multiple weeks, day and
-block paste, exact sibling correspondence and the full weekly batch Submit
-policy still require a follow-up.
-Keep Roles exposure closed. Releasing these changes as a complete rollout
-requires the remaining writer inventory and exact overlap evidence.
+dated assignments record exact copied session IDs for new plans and replacements
+of tracked weeks. The first Submit rechecks authority for recorded explicit
+effects, including the draft members of a weekly batch. A recorded session
+effect on a weekly sibling requires a unique shared or direct origin; a slot
+match alone is insufficient. Older plans and drafts without stored evidence
+remain on the staged compatibility path. Saving templates from multiple weeks,
+day and block paste, recording every subsequent weekly lineage transition,
+and standalone or post-commit batch sync still require a follow-up.
+Keep Roles exposure closed. The schema-only migration neither honours
+`programs.rpe_settings` nor assigns it to a native role. The HTTP fixture
+does both only inside a disposable database. Native runtime checks require
+both conditions, so the full checkpoint as written would deny existing
+native RPE actions against the unstaged production registry. A standalone
+schema rollout must bring only schema-compatible runtime; integrate the
+audited permission staging into the focused application bridge once the
+remaining writers and exact predecessor overlap are covered. Role visibility
+still belongs to its subsequent exposure change.
 
 Run the read-only preflight and postcheck on the exact branches. The migration
 takes a deployment advisory lock and creates only new relations. Writers acquire

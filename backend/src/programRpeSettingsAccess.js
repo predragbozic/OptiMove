@@ -16,16 +16,16 @@ export async function lockProgramRpeActor(client, req, scope) {
   const scopeId = nativeProgramRpeScope(scope);
   const privateScope = scope.type === "private_coach";
   const userId = req.user.id;
-  if (scope.type === "platform") return req;
-  if (!scopeId && (!privateScope || String(scope.userId) !== String(userId))) return null;
+  const platformScope = scope.type === "platform";
+  if (!scopeId && !platformScope && (!privateScope || String(scope.userId) !== String(userId))) return null;
 
   let user;
-  if (privateScope) {
+  if (privateScope || platformScope) {
     user = (await client.query("select * from public.users where id=$1 and is_active for share", [userId])).rows[0];
     if (!user || !req.sessionToken) return null;
     const holding = await client.query(
-      "select id from public.user_global_roles where user_id=$1 and role='independent_coach' and is_active order by id for share",
-      [userId],
+      "select id from public.user_global_roles where user_id=$1 and role=$2 and is_active order by id for share",
+      [userId, platformScope ? "platform_admin" : "independent_coach"],
     );
     if (!holding.rowCount) return null;
   } else {
@@ -44,7 +44,7 @@ export async function lockProgramRpeActor(client, req, scope) {
   if (!user) return null;
 
   const preference = await client.query("select user_id from public.user_workspace_preferences where user_id=$1 for share", [userId]);
-  if (privateScope && !preference.rowCount) return null;
+  if ((privateScope || platformScope) && !preference.rowCount) return null;
   // Authorization loads several independent reads together. Serialize them
   // on this transaction client so they share its locks and connection.
   let tail = Promise.resolve();

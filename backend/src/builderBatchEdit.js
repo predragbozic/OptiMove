@@ -252,7 +252,10 @@ export function planSiblingChange(before, after, sibling, facts = { results: new
     if (fieldDiff.length) {
       const merge = threeWay(b, a, s, SESSION_FIELDS);
       if (merge.diverged) { reasons.add("changed_separately"); continue; }
-      if (Object.keys(merge.set).length) ops.update.push({ sessionId: s.id, set: merge.set });
+      if (Object.keys(merge.set).length) {
+        const carriesRpe = Object.hasOwn(merge.set, "training_load_enabled") || Object.hasOwn(merge.set, "rpe_enabled");
+        ops.update.push({ sessionId: s.id, set: merge.set, ...(carriesRpe ? { liveSourceId: b.id, draftSessionId: a.id } : {}) });
+      }
     }
     if (moved) {
       // A move carries the athlete's session only while it is still as before

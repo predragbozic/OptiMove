@@ -27,22 +27,32 @@ export async function recordBuilderRpeOpening(client, { planId, sourcePlanId = n
   );
   if (rowCount !== 1) throw new Error("Builder RPE opening plan was not recorded.");
 
-  if (copies.size) {
-    const { rowCount: sessions } = await client.query(
-      `insert into training_load.builder_rpe_session_baselines
-         (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe)
-       select $1,dst.id,dst.logical_session_id,$2,src.id,$5,dst.training_load_enabled,dst.rpe_enabled
-       from unnest($3::uuid[],$4::uuid[]) pair(source_id,target_id)
-       join plans.plan_sessions src on src.id=pair.source_id
-       join plans.plan_days sd on sd.id=src.plan_day_id and sd.plan_id=$2
-       join plans.plan_sessions dst on dst.id=pair.target_id
-       join plans.plan_days dd on dd.id=dst.plan_day_id and dd.plan_id=$1
-       where (dst.training_load_enabled,dst.rpe_enabled) = (src.training_load_enabled,src.rpe_enabled)`,
-      [planId, sourcePlanId, [...copies.keys()], [...copies.values()], origin === "edit"],
-    );
-    if (sessions !== copies.size) throw new Error("Builder RPE session copy does not match its source.");
-  }
+  await recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, copies, retained: origin === "edit" });
   await client.query("insert into training_load.builder_rpe_provenance_use default values on conflict do nothing");
+}
+
+async function recordBuilderRpeCopiedSessions(client, { planId, sourcePlanId, copies, retained = false }) {
+  if (!copies.size) return;
+  const { rowCount: sessions } = await client.query(
+    `insert into training_load.builder_rpe_session_baselines
+       (plan_id,session_id,logical_session_id,source_plan_id,source_session_id,retained_from_opening,opening_tracking,opening_rpe)
+     select $1,dst.id,dst.logical_session_id,$2,src.id,$5,dst.training_load_enabled,dst.rpe_enabled
+     from unnest($3::uuid[],$4::uuid[]) pair(source_id,target_id)
+     join plans.plan_sessions src on src.id=pair.source_id
+     join plans.plan_days sd on sd.id=src.plan_day_id and sd.plan_id=$2
+     join plans.plan_sessions dst on dst.id=pair.target_id
+     join plans.plan_days dd on dd.id=dst.plan_day_id and dd.plan_id=$1
+     join training_load.builder_rpe_plan_baselines opening on opening.plan_id=dd.plan_id
+     where (dst.training_load_enabled,dst.rpe_enabled) = (src.training_load_enabled,src.rpe_enabled)`,
+    [planId, sourcePlanId, [...copies.keys()], [...copies.values()], retained],
+  );
+  if (sessions !== copies.size) throw new Error("Builder RPE session copy does not match its source.");
+}
+
+export async function recordBuilderRpeCopyIfTracked(client, copy) {
+  if (!copy.copies.size) return;
+  const opening = await client.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [copy.planId]);
+  if (opening.rowCount) await recordBuilderRpeCopiedSessions(client, copy);
 }
 
 // Existing drafts without exact baselines stay unclassified while exposure is closed.
@@ -142,4 +152,42 @@ export async function inspectBuilderRpeSubmitEffects(client, sourcePlanId, draft
     (row.changed_tracking && row.draft_tracking !== row.source_tracking) ||
     (row.changed_rpe && row.draft_rpe !== row.source_rpe));
   return { changed };
+}
+
+export async function listBuilderRpeExplicitSessions(client, planId) {
+  const { rows } = await client.query(
+    `select e.session_id
+     from training_load.builder_rpe_session_effects e
+     join plans.plan_sessions s on s.id=e.session_id
+     join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=e.plan_id
+     where e.plan_id=$1`, [planId],
+  );
+  return new Set(rows.map(row => row.session_id));
+}
+
+export async function listBuilderRpeSiblingLineage(client, sourcePlanId, targetPlanId, sourceIds, targetIds) {
+  const { rows } = await client.query(
+    `with current_sessions as (
+       select d.plan_id,s.id,b.source_plan_id,b.source_session_id
+       from plans.plan_sessions s
+       join plans.plan_days d on d.id=s.plan_day_id
+       left join training_load.builder_rpe_session_baselines b
+         on b.plan_id=d.plan_id and b.logical_session_id=s.logical_session_id
+       where d.plan_id in ($1,$2)
+     )
+     select distinct a.id as source_id,b.id as target_id
+     from current_sessions a cross join current_sessions b
+     where a.plan_id=$1 and b.plan_id=$2 and (a.id=any($3::uuid[]) or b.id=any($4::uuid[]))
+       and (
+         (b.source_plan_id=a.plan_id and b.source_session_id=a.id)
+         or (a.source_plan_id=b.plan_id and a.source_session_id=b.id)
+         or (a.source_plan_id=b.source_plan_id and a.source_session_id=b.source_session_id)
+       )`, [sourcePlanId,targetPlanId,sourceIds,targetIds],
+  );
+  return rows;
+}
+
+export async function hasBuilderRpeSiblingLineage(client, source, target) {
+  const matches = await listBuilderRpeSiblingLineage(client, source.planId, target.planId, [source.sessionId], []);
+  return matches.length === 1 && matches[0].target_id === target.sessionId;
 }
