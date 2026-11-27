@@ -1,5 +1,6 @@
 import { isPlatformAdministrator, loadAuthorizationContext } from "./authz.js";
 import { clubOfScope, lockClubCeiling } from "./clubCeilingLock.js";
+import { can, clubScope, teamScope } from "./permissions.js";
 import { canManageSchedule } from "./testsAccess.js";
 import { resolveActiveWorkspaceReadOnly } from "./workspace.js";
 
@@ -113,4 +114,33 @@ export async function markTestsScheduleWrite(client, actor, ownerScope) {
   if (!recorded.rowCount && !(await client.query(
     "select 1 from tests.schedule_manage_bridge_use where singleton and first_checked_write_at is not null",
   )).rowCount) throw new Error("Tests Schedule Manage first-use record is missing.");
+}
+
+const targetUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A native writer may hold roles in several clubs. The target must match
+// the schedule's actual owner, independently of the actor's other holdings.
+export async function targetMatchesTestsScheduleOwner(query, req, owner, target) {
+  if (!tracksTestsScheduleWrite(req, owner.owner_scope)) return true;
+  if (typeof target.id !== "string" || !targetUuid.test(target.id)) return false;
+  const teamOwned = owner.owner_scope === "team";
+  const scopeId = teamOwned ? owner.owner_team_id : owner.owner_club_id;
+  if (target.kind === "club") return !teamOwned && target.id.toLowerCase() === scopeId;
+  if (target.kind === "team") {
+    if (teamOwned) return target.id.toLowerCase() === scopeId;
+    const team = await query("select id from public.teams where id=$1 and club_id=$2 and coalesce(is_active,true) for share",
+      [target.id, scopeId]);
+    return team.rowCount > 0;
+  }
+  if (target.kind !== "athlete") return false;
+  const scope = teamOwned ? teamScope(scopeId) : clubScope(scopeId);
+  if (!can(req.authz, "athletes.view", scope)) return false;
+  const membership = await query(
+    `select m.id from public.athlete_memberships m
+     where m.athlete_id=$1 and m.status='active' and m.membership_type=$2
+       and (case when $2='team' then m.team_id else m.club_id end)=$3
+     limit 1 for share`,
+    [target.id, owner.owner_scope, scopeId],
+  );
+  return membership.rowCount > 0;
 }

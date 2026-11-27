@@ -1613,3 +1613,84 @@ test("Platform and personal Tests writers keep their existing access without mar
   const { rows: [marker] } = await query("select first_checked_write_at from tests.schedule_manage_bridge_use where singleton");
   assert.equal(marker.first_checked_write_at, null);
 });
+
+test("Manage: target checks use the schedule owner across two native workspaces", async () => {
+  const home = await makeClubWithAthletes("manage-target-home", 1);
+  const away = await makeClubWithAthletes("manage-target-away", 1);
+  const awayTeam = await makeTeam(away.clubId, "Away target team");
+  await grantClubAdmin(home.coachId, away.clubId);
+  const cookie = home.coachCookie;
+  const pick = async scopeId => {
+    const result = await api("/api/auth/workspace", { method: "PUT", cookie, body: { type: "club", scopeId } });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  };
+  const post = (path, body) => api(path, { method: "POST", cookie, body });
+  const targetsOf = athlete => [{ kind: "athlete", id: athlete.athleteId }];
+  const homeInput = baseCreateBody(targetsOf(home.athletes[0]));
+  const awayInput = baseCreateBody(targetsOf(away.athletes[0]));
+  const path = "/api/tests/schedules";
+  await pick(away.clubId);
+  const awaySchedule = await post(path, awayInput);
+  assert.equal(awaySchedule.status, 201, JSON.stringify(awaySchedule.body));
+  const awayPath = path + "/" + awaySchedule.body.schedule.id;
+  await pick(home.clubId);
+  const created = await post(path, homeInput);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const ownPath = path + "/" + created.body.schedule.id;
+  const patch = (schedule, targets) => api(schedule, { method: "PATCH", cookie, body: { ...homeInput, targets } });
+  const snapshot = async () => (await query(
+    `select (select jsonb_agg(s order by s.id) from tests.test_schedules s) as schedules,
+            (select jsonb_agg(t order by t.id) from tests.test_schedule_targets t) as targets`,
+  )).rows[0];
+  const earlier = await snapshot();
+  const outside = { status: 403, body: { error: "One of the chosen targets is outside your access." } };
+  const missing = [{ kind: "athlete", id: crypto.randomUUID() }];
+  for (const foreign of [awayInput.targets, [{ kind: "team", id: awayTeam }], [{ kind: "club", id: away.clubId }], missing]) {
+    const targets = [...homeInput.targets, ...foreign];
+    for (const result of [
+      await post(path, { ...homeInput, targets }),
+      await post(path + "/bulk", { ...homeInput, targets, dates: [homeInput.startDate] }),
+      await patch(ownPath, targets),
+    ]) assert.deepEqual(result, outside);
+  }
+  assert.deepEqual(await snapshot(), earlier);
+  assert.deepEqual(await patch(awayPath, homeInput.targets), outside);
+  assert.equal((await patch(awayPath, awayInput.targets)).status, 200, "the off-active destination owner remains authorized");
+  await query(
+    "insert into tests.test_schedule_targets (schedule_id,target_kind,target_athlete_id) values ($1,'athlete',$2)",
+    [created.body.schedule.id, away.athletes[0].athleteId],
+  );
+  await query(`create table public.app_notifications (
+    id uuid primary key default gen_random_uuid(), recipient_user_id uuid not null, actor_user_id uuid,
+    type varchar(80) not null, title text not null, body text, entity_type varchar(80), entity_id uuid, href text,
+    metadata jsonb not null default '{}'::jsonb, read_at timestamptz, created_at timestamptz not null default now(),
+    dedupe_key varchar(300)
+  )`);
+  await query("create unique index app_notifications_dedupe_key_idx on public.app_notifications(dedupe_key) where dedupe_key is not null");
+  await getTodayAssignmentId(away.athletes[0].cookie);
+  const historicalAssignment = (await query(
+    `select a.id from tests.test_assignments a join tests.test_schedule_occurrences o on o.id=a.occurrence_id
+     where o.schedule_id=$1 and a.athlete_id=$2`,
+    [created.body.schedule.id, away.athletes[0].athleteId],
+  )).rows[0];
+  assert.ok(historicalAssignment, "the old foreign target has a materialized assignment");
+  const sent = await post(ownPath + "/remind", { assignmentIds: [historicalAssignment.id] });
+  const missingReminder = await post(ownPath + "/remind", { assignmentIds: [crypto.randomUUID()] });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.equal(sent.body.results[0].outcome, missingReminder.body.results[0].outcome);
+  assert.deepEqual(Object.keys(sent.body.results[0]).sort(), ["assignmentId", "outcome"]);
+  assert.equal((await query(
+    "select id from public.app_notifications where entity_id=$1 and type='test_manual_reminder'",
+    [historicalAssignment.id],
+  )).rowCount, 0);
+
+  const status = value => api(ownPath, { method: "PATCH", cookie, body: { status: value } });
+  assert.equal((await status("paused")).status, 200, "pause remains available for a historical target");
+  const paused = await snapshot();
+  assert.deepEqual(await status("active"), outside);
+  assert.deepEqual(await api(ownPath, { method: "PATCH", cookie, body: { startDate: homeInput.startDate } }), outside);
+  assert.deepEqual(await snapshot(), paused);
+  assert.equal((await patch(ownPath, homeInput.targets)).status, 200, "an explicit in-scope target fixes the legacy schedule");
+  assert.equal((await status("active")).status, 200);
+
+});

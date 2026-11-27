@@ -30,6 +30,22 @@ and background processing leave the timestamp unchanged. Record database
 changes, rather than HTTP statuses, to distinguish a no-op from a write.
 No generic receipt or new retry guarantees are proposed.
 
+## Destination and targets
+
+New native schedules use the locked active workspace as their owner. Edits use
+the locked schedule owner, including when the actor has valid rights at that
+destination and another workspace is active. Club schedules can target that
+club, its active teams or its current athletes. Team schedules can target only
+that team or its current athletes. The existing target entitlement still
+applies. Private and platform target handling remains on its existing path.
+
+Pause, delete and other non-target operations preserve historical targets.
+Resume and full edits validate the resulting target set even if the request
+omits it. An explicit in-scope replacement can correct a historical schedule.
+A manual reminder for an assignment beyond the native owner returns the same
+outcome as a missing assignment and sends no notification. Calendar's parent
+command retains its separate authority and does not use these Tests gates.
+
 ## Seed, preflight and rollback
 
 Stage the existing role word in the database before exposing it through

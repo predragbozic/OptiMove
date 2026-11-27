@@ -11,6 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { addDays, calendarRoleMatrix, newKey, startCalendarApp, uid } from "./support/calendar-fixture.mjs";
+import { stageScheduleManageForTest } from "./support/tests-schedule-manage-fixture.mjs";
 import { utcDateOf, waitOutUtcMidnight } from "./support/utc-day-guard.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -33,6 +34,13 @@ let questionHooks;
 before(async () => {
   env = await startCalendarApp({ label: "k2b2q", scheduleBridge: true });
   ({ q, api, fx } = env);
+  const stage = new pg.Client({ connectionString: env.db.url });
+  await stage.connect();
+  try {
+    await stageScheduleManageForTest(stage);
+  } finally {
+    await stage.end();
+  }
   // The fixture's legacy scaffold has no in-app notifications table: the
   // real one's shape (legacy schema + 202608280900's dedupe index).
   await q(`create table if not exists public.app_notifications (
@@ -200,7 +208,17 @@ test("3. a Training event asks its type's RPE: the external schedule (one-time, 
 });
 
 test("4. the schedules equal their module's own create route with the same input (9.1.7)", async () => {
-  const created = await createTeamEvent({ title: "Same rows", questions: [{ kind: "rpe", window: ALL_DAY }, { kind: "wellness", window: ALL_DAY }] });
+  const [word] = await q("select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as ddl");
+  const [markerBefore] = await q("select first_checked_write_at from tests.schedule_manage_bridge_use");
+  let created;
+  try {
+    await q(word.ddl.replace("'tests.schedule.manage', ", ""));
+    created = await createTeamEvent({ title: "Same rows", questions: [{ kind: "rpe", window: ALL_DAY }, { kind: "wellness", window: ALL_DAY }] });
+    const [markerAfter] = await q("select first_checked_write_at from tests.schedule_manage_bridge_use");
+    assert.deepEqual(markerAfter, markerBefore);
+  } finally {
+    await q(word.ddl);
+  }
   assert.equal(created.status, 201, created.text);
   const qs = await liveQuestions(created.body.event.id);
   const rpe = qs.find((x) => x.kind === "rpe");

@@ -10,7 +10,7 @@ import {
   viewScopeReadsSchedule,
 } from "../testsAccess.js";
 import { canView, viewEntryGate } from "../moduleView.js";
-import { lockTestsScheduleCreateAccess, lockTestsScheduleMutation, lockTestsScheduleReminder, markTestsScheduleWrite, tracksTestsScheduleWrite } from "../testsScheduleWriteAccess.js";
+import { lockTestsScheduleCreateAccess, lockTestsScheduleMutation, lockTestsScheduleReminder, markTestsScheduleWrite, targetMatchesTestsScheduleOwner, tracksTestsScheduleWrite } from "../testsScheduleWriteAccess.js";
 import { ensureCurrentOccurrence, assignmentIsOpen, loadAthleteTodayTestAssignments } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -853,7 +853,7 @@ router.post("/schedules", async (req, res, next) => {
       await client.query("rollback");
       return res.status(403).json({ error: "Forbidden" });
     }
-    const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client));
+    const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client), ownerRowOf(owner));
     if (!resolved.ok) {
       await client.query("rollback");
       return res.status(resolved.status).json({ error: resolved.error });
@@ -942,7 +942,7 @@ router.post("/schedules/bulk", async (req, res, next) => {
       await client.query("rollback");
       return res.status(403).json({ error: "Forbidden" });
     }
-    const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client));
+    const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client), ownerRowOf(owner));
     if (!resolved.ok) {
       await client.query("rollback");
       return res.status(resolved.status).json({ error: resolved.error });
@@ -1013,16 +1013,26 @@ function dedupeTargets(rawTargets) {
 // client's own filtering. Returns {ok:false, status, error} on the first
 // problem found (empty list or any one unauthorized target - the whole
 // request is rejected, never a partial target set).
-async function resolveValidTargets(req, rawTargets, queryRunner = query) {
+async function resolveValidTargets(req, rawTargets, queryRunner, owner) {
   const targets = dedupeTargets(rawTargets);
   if (!targets.length) return { ok: false, status: 400, error: "Choose at least one athlete, team or club." };
   for (const target of targets) {
-    const allowed = await validateTarget(req, target, queryRunner);
+    const allowed = await targetMatchesTestsScheduleOwner(queryRunner, req, owner, target)
+      && await validateTarget(req, target, queryRunner);
     if (!allowed) return { ok: false, status: 403, error: "One of the chosen targets is outside your access." };
   }
   return { ok: true, targets };
 }
 
+async function resolveStoredNativeTargets(queryRunner, req, schedule) {
+  if (!tracksTestsScheduleWrite(req, schedule.owner_scope)) return { ok: true };
+  const { rows } = await queryRunner(
+    `select target_kind as kind, coalesce(target_athlete_id,target_team_id,target_club_id) as id
+     from tests.test_schedule_targets where schedule_id=$1 order by target_kind,id`,
+    [schedule.id],
+  );
+  return resolveValidTargets(req, rows, queryRunner, schedule);
+}
 
 function formatScheduleRow(row) {
   return {
@@ -1484,6 +1494,13 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
           await client.query("rollback");
           return res.status(400).json({ error: "Invalid status - use DELETE to cancel a schedule." });
         }
+        if (status === "active" && schedule.status !== "active") {
+          const effective = await resolveStoredNativeTargets(client.query.bind(client), writeRequest, schedule);
+          if (!effective.ok) {
+            await client.query("rollback");
+            return res.status(effective.status).json({ error: effective.error });
+          }
+        }
         await client.query(`update tests.test_schedules set status = $2, updated_at = now() where id = $1`, [schedule.id, status]);
       }
       // A coach adjusting only notification settings (no status, no full
@@ -1620,15 +1637,15 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
       }
     }
 
-    let resolvedTargets = null;
-    if (body.targets !== undefined) {
-      const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client));
-      if (!resolved.ok) {
-        await client.query("rollback");
-        return res.status(resolved.status).json({ error: resolved.error });
-      }
-      resolvedTargets = resolved.targets;
+    const queryRunner = client.query.bind(client);
+    const effectiveTargets = body.targets === undefined
+      ? await resolveStoredNativeTargets(queryRunner, writeRequest, schedule)
+      : await resolveValidTargets(writeRequest, body.targets, queryRunner, schedule);
+    if (!effectiveTargets.ok) {
+      await client.query("rollback");
+      return res.status(effectiveTargets.status).json({ error: effectiveTargets.error });
     }
+    const resolvedTargets = body.targets === undefined ? null : effectiveTargets.targets;
 
     await client.query(
       `update tests.test_schedules set
@@ -2216,7 +2233,9 @@ router.post("/schedules/:scheduleId/remind", async (req, res, next) => {
     results = [];
     for (const assignmentId of assignmentIds) {
       const row = rowsById.get(assignmentId);
-      if (!row) {
+      if (!row || !await targetMatchesTestsScheduleOwner(client.query.bind(client), writeRequest, schedule, {
+        kind: "athlete", id: row.athlete_id,
+      })) {
         results.push({ assignmentId, outcome: "skippedNotFound" });
         continue;
       }
