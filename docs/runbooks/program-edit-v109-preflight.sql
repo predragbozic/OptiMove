@@ -11,4 +11,5 @@ select exists (select 1 from public.schema_migrations where migration_name='migr
          and not public.permission_word_honoured('programs.assign')
          and not public.permission_word_honoured('programs.publish') as words_unstaged,
        to_regclass('plans.program_manage_v109_use') is null
-         and to_regclass('plans.program_manage_v109_seed') is null as bridge_tables_absent;
+         and to_regclass('plans.program_manage_v109_seed') is null
+         and to_regclass('plans.program_edit_v109_assignment_evidence') is null as bridge_tables_absent;

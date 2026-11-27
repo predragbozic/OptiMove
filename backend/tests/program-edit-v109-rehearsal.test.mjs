@@ -183,6 +183,51 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
       assert.equal(me.status, 200, me.text);
       assert.equal(me.body.user.permissions.includes("programs.edit"), false);
     }
+    const { rows: [athlete] } = await client.query(`insert into public.athletes
+      (athlete_id,source_external_id,first_name,last_name,full_name,is_active)
+      values('v109-rehearsal','v109-rehearsal','Old','Athlete','Old Athlete',true) returning id,athlete_id`);
+    await client.query(`insert into public.athlete_memberships(athlete_id,membership_type,club_id,team_id,status)
+      values($1,'team',$2,$3,'active')`, [athlete.id,club,team]);
+    const template = await post(previous, versionCookie, "/api/builder/plans", {
+      planType: "program", templateKind: "weekly", weeks: 1, name: "Old weekly program",
+    });
+    assert.equal(template.status, 201, template.text);
+    const dayId = template.body.blocks[0].id;
+    const session = await post(previous, versionCookie, `/api/builder/blocks/${dayId}/sessions`, { name: "Old weekly session", bta: "T" });
+    assert.equal(session.status, 201, session.text);
+    const oldPath = `/api/builder/plans/${template.body.plan.id}/assign-weekly`;
+    const oldRequest = { assignmentRequestId: key(), startDate: "2027-04-05", athleteIds: [athlete.athlete_id] };
+    const oldAssignment = await post(previous, versionCookie, oldPath, oldRequest);
+    assert.equal(oldAssignment.status, 201, oldAssignment.text);
+    assert.deepEqual(Object.keys(oldAssignment.body).sort(), ["created", "kept", "replaced", "skipped"]);
+    const proofTable = "plans.program_edit_v109_assignment_evidence";
+    const evidence = () => client.query("select * from " + proofTable).then(result => result.rows);
+    assert.deepEqual(await evidence(), []);
+    const insertEvidence = (scopeType, scopeId, edited = [], removed = []) => client.query(
+      `insert into plans.program_edit_v109_assignment_evidence
+        (request_id,edited_plan_ids,removed_plan_ids,scope_type,scope_id) values($1,$2,$3,$4,$5)`,
+      [oldRequest.assignmentRequestId,edited,removed,scopeType,scopeId],
+    );
+    await assert.rejects(insertEvidence("team", null), { code: "23514" });
+    await assert.rejects(insertEvidence("private_coach", team), { code: "23514" });
+    const planId = oldAssignment.body.created[0].planId;
+    await assert.rejects(insertEvidence("team", team, [planId], [planId]), { code: "23514" });
+
+    // The old binary has no dependency on the extra relation and still
+    // returns the original result exactly if a bridge-owned row exists.
+    const legacyReplay = await post(previous, versionCookie, oldPath, oldRequest);
+    assert.equal(legacyReplay.status, oldAssignment.status);
+    assert.deepEqual(legacyReplay.body, oldAssignment.body);
+    await insertEvidence("team", team);
+    assert.deepEqual(await post(previous, versionCookie, oldPath, oldRequest), legacyReplay);
+    for (const action of ["delete from", "truncate", "update"]) {
+      const command = action + " " + proofTable + (action === "update" ? " set scope_type='club'" : "");
+      await assert.rejects(client.query(command), /assignment evidence is immutable/);
+    }
+    await assert.rejects(client.query(rollback), /refuses recorded Programs Edit assignment evidence/);
+    await client.query("rollback");
+    await client.query("delete from public.builder_assignment_requests where id=$1", [oldRequest.assignmentRequestId]);
+    assert.deepEqual(await evidence(), [], "Removing the old receipt cascades only its dependent evidence");
     await client.query("insert into plans.program_manage_v109_use (singleton) values (true)");
     for (const action of ["delete from", "truncate", "update"]) {
       const command = action + " plans.program_manage_v109_use" + (action === "update" ? " set first_used_at=now()" : "");

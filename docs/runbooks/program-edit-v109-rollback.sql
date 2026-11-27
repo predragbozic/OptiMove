@@ -8,15 +8,26 @@ do $$ begin
 end $$;
 select pg_advisory_xact_lock(hashtextextended('program-edit-v109',0));
 select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive');
-lock table plans.program_manage_v109_use, public.permission_roles, public.permission_role_items, public.permission_role_changes,
+lock table plans.program_manage_v109_use, plans.program_edit_v109_assignment_evidence, public.permission_roles, public.permission_role_items, public.permission_role_changes,
   public.permission_club_role_versions, public.permission_club_role_version_items, public.permission_club_role_version_changes,
   public.permission_custom_roles, public.permission_custom_role_items, public.permission_custom_role_changes in share row exclusive mode;
 do $$
 declare v_applied timestamptz;
 begin
-  select applied_at into v_applied from public.schema_migrations where migration_name='migrations_v2/202612111000_programs_v109_edit_bridge.sql' and checksum='232de3919373123f6e79dd89550f0d4ec65a164d10158ec02b0cbab7243ebce3';
+  select applied_at into v_applied from public.schema_migrations where migration_name='migrations_v2/202612111000_programs_v109_edit_bridge.sql' and checksum='d18d03b6bdfaae33fe6481e4b9a44187ebcf763741b994f1ad473fd2a654d764';
   if v_applied is null or exists (select 1 from public.schema_migrations where migration_name<>'migrations_v2/202612111000_programs_v109_edit_bridge.sql' and migration_name ~ '^migrations_v2/[0-9]{12}_' and (applied_at>=v_applied or migration_name>'migrations_v2/202612111000_programs_v109_edit_bridge.sql')) then
     raise exception 'v109 rollback refused: v109 is missing, its checksum changed, or a later migration is recorded';
+  end if;
+  if exists (select 1 from plans.program_edit_v109_assignment_evidence) then
+    raise exception 'v109 rollback refuses recorded Programs Edit assignment evidence';
+  end if;
+  if ((select count(*) from pg_trigger
+        where tgrelid='plans.program_edit_v109_assignment_evidence'::regclass and tgenabled='O'
+          and (tgname,tgtype) in (('program_edit_v109_assignment_evidence_keep_row',27),('program_edit_v109_assignment_evidence_keep_truncate',34))
+          and tgfoid=to_regprocedure('plans.keep_program_edit_v109_assignment_evidence()'))=2
+       and (select md5(prosrc) from pg_proc
+         where oid=to_regprocedure('plans.keep_program_edit_v109_assignment_evidence()'))='cdb813e4f1ce78028eb63f6adfdf4ee1') is distinct from true then
+    raise exception 'v109 rollback refused: assignment evidence guard changed';
   end if;
   if exists (select 1 from plans.program_manage_v109_use) then
     raise exception 'v109 rollback refuses checked Programs Edit writer use';
@@ -168,7 +179,7 @@ do $$ begin
     raise exception 'v109 rollback refused: original body restoration differs';
   end if;
 end $$;
-drop table plans.program_manage_v109_use, plans.program_manage_v109_seed;
-drop function plans.keep_program_manage_v109_use();
-delete from public.schema_migrations where migration_name='migrations_v2/202612111000_programs_v109_edit_bridge.sql' and checksum='232de3919373123f6e79dd89550f0d4ec65a164d10158ec02b0cbab7243ebce3';
+drop table plans.program_manage_v109_use, plans.program_manage_v109_seed, plans.program_edit_v109_assignment_evidence;
+drop function plans.keep_program_manage_v109_use(), plans.keep_program_edit_v109_assignment_evidence();
+delete from public.schema_migrations where migration_name='migrations_v2/202612111000_programs_v109_edit_bridge.sql' and checksum='d18d03b6bdfaae33fe6481e4b9a44187ebcf763741b994f1ad473fd2a654d764';
 commit;

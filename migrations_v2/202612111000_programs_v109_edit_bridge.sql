@@ -113,13 +113,48 @@ from plans.program_manage_v109_seed where layer='custom';
 insert into public.permission_custom_role_items (custom_role_id,permission_word)
 select id,unnest(words) from plans.program_manage_v109_seed where layer='custom';
 
+-- Separate proof preserves the legacy receipt payload returned during rollout.
+create table plans.program_edit_v109_assignment_evidence (
+  request_id uuid primary key references public.builder_assignment_requests(id) on delete cascade,
+  edited_plan_ids uuid[] not null,
+  removed_plan_ids uuid[] not null,
+  scope_type text not null check (scope_type in ('club','team','private_coach','platform')),
+  scope_id uuid,
+  check ((scope_type in ('club','team')) = (scope_id is not null)),
+  check (coalesce(array_ndims(edited_plan_ids),1)=1 and coalesce(array_ndims(removed_plan_ids),1)=1),
+  check (array_position(edited_plan_ids,null) is null and array_position(removed_plan_ids,null) is null),
+  check (not (edited_plan_ids && removed_plan_ids))
+);
+alter table plans.program_edit_v109_assignment_evidence enable row level security;
+revoke all on plans.program_edit_v109_assignment_evidence from public;
+create function plans.keep_program_edit_v109_assignment_evidence() returns trigger
+language plpgsql set search_path=pg_catalog,plans as $assignment_evidence_guard$
+begin
+  if tg_op = 'DELETE' then
+    -- The receipt's existing cascade removes orphaned evidence. A direct
+    -- delete cannot take evidence away from any surviving receipt.
+    if not exists (select 1 from public.builder_assignment_requests where id=old.request_id) then
+      return old;
+    end if;
+  end if;
+  raise exception 'Program Edit assignment evidence is immutable';
+end
+$assignment_evidence_guard$;
+revoke all on function plans.keep_program_edit_v109_assignment_evidence() from public;
+create trigger program_edit_v109_assignment_evidence_keep_row
+before update or delete on plans.program_edit_v109_assignment_evidence
+for each row execute function plans.keep_program_edit_v109_assignment_evidence();
+create trigger program_edit_v109_assignment_evidence_keep_truncate
+before truncate on plans.program_edit_v109_assignment_evidence
+for each statement execute function plans.keep_program_edit_v109_assignment_evidence();
+
 do $$
 declare api_role text;
 begin
   foreach api_role in array array['anon','authenticated','service_role'] loop
     if exists(select 1 from pg_roles where rolname=api_role) then
-      execute format('revoke all on plans.program_manage_v109_use, plans.program_manage_v109_seed from %I',api_role);
-      execute format('revoke all on function plans.keep_program_manage_v109_use() from %I',api_role);
+      execute format('revoke all on plans.program_manage_v109_use, plans.program_manage_v109_seed, plans.program_edit_v109_assignment_evidence from %I',api_role);
+      execute format('revoke all on function plans.keep_program_manage_v109_use(), plans.keep_program_edit_v109_assignment_evidence() from %I',api_role);
     end if;
   end loop;
 end $$;
