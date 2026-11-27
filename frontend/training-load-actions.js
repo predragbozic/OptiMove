@@ -8,6 +8,7 @@ import { closeImportsOverlays } from "./gpexe-period-data.js";
 import { applyRpeChangeAnswer, rpeChangeFormFields, rpeChangeIsUnchanged, rpeChangeRequestBody } from "./rpe-answer-change.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
+import { previewAnalysisMetricPanel } from './training-load-analysis-data.js';
 import {
   clearGpexeIdentities, closeGpexeCandidate, importsUnloadShouldWarn, loadGpexeImports, reloadGpexeCandidates } from "./gpexe-import-data.js";
 import { estimateTargetsOf, reviewHasWorkInFlight } from "./gpexe-estimate-link.js";
@@ -1402,6 +1403,31 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  if (type === "training-load-analysis-panel-chart") {
+    const a = state.trainingLoad.analysis;
+    const panel = a.metricPanel;
+    const widget = a.widgets.find(row => row.id === panel?.widgetId);
+    if (!widget || panel.saving || analysisWidgetActionsBlocked()) return true;
+    const kind = action.dataset.chartKind;
+    if (kind === "radar") {
+      if (!a.referencesAvailable || !["line_chart", "bar_chart"].includes(widget.widget_type)) return true;
+      await referenceAction('openBinding', widget.id);
+      if (!a.referenceEditorOpen) return true;
+      a.metricPanel = null;
+      await referenceAction('bindingField', { key: 'mode', value: 'radar' });
+    } else {
+      if (!a.chartShapes || !["area", "horizontal_bar", "combined", "heatmap", "scatter", "stacked", "boxplot"].includes(kind)) return true;
+      openAnalysisWidgetEditor(widget);
+      const draft = a.editor.draft;
+      setEditorWidgetType(draft, kind === "area" ? "line_chart" : "bar_chart");
+      draft.galleryKind = kind;
+      draft.galleryKeys = draft.series.map(row => row.key);
+      a.metricPanel = null;
+      void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
+    }
+    renderTrainingLoad();
+    return true;
+  }
   if (type === "training-load-analysis-panel-title") {
     const panel = state.trainingLoad.analysis.metricPanel;
     if (!panel || panel.saving) return true;
@@ -1419,6 +1445,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (field === "scope" && panel.metric?.kind === "builtin" && BUILT_IN_FIXED_SCOPE[panel.metric.key]) return true;
     panel[field] = action.value || panel[field];
     renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-panel-preview") {
+    await previewAnalysisMetricPanel(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-analysis-panel-save") {

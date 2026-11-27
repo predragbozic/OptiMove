@@ -1,3 +1,4 @@
+import {metricPanelPreviewBody} from './training-load-analysis-data.js';
 import {chartPickerIllustration,renderGalleryPicker} from './training-load-gallery-picker.js';
 import {dashboardDisclosureOpen} from './training-load-dashboard-disclosures.js';
 import {GALLERY_CHOICES} from './training-load-gallery-editor.js';
@@ -525,13 +526,13 @@ function renderChartHtml(model) {
   `;
 }
 
-function renderWidgetBodyHtml(widget, results) {
+function renderWidgetBodyHtml(widget, results, previewPeriod = null) {
   if(widget.presentation_config?.schemaVersion===1&&widget.presentation_config.referenceConfig) return `<div data-reference-island="chart" data-widget-id="${escapeAttr(widget.id)}"></div>`;
   const analysis = state.trainingLoad.analysis;
   const querySkipped = analysis.queryResult === null && (analysis.dashboard?.is_template || analysis.dashboard?.status === "archived");
   const catalog = state.trainingLoad.analysis.metricPicker.definitions ?? [];
   const displayWidget = { ...widget, series: widget.series.map(series => { const definition = catalog.find(d => d.id === series.metric_definition_id); return { ...series, ...(definition ? { calculation: definition.calculation } : {}) }; }) };
-  const model = buildDashboardWidgetDisplayModel(displayWidget, results, { loading: analysis.queryLoading, querySkipped, error: analysis.queryError, period: analysis.period });
+  const model = buildDashboardWidgetDisplayModel(displayWidget, results, { loading: !previewPeriod && analysis.queryLoading, querySkipped: !previewPeriod && querySkipped, error: previewPeriod ? null : analysis.queryError, period: previewPeriod ?? analysis.period });
   model.interactionGeneration=analysisChartInteractionGeneration();
   if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
@@ -702,21 +703,14 @@ function renderPanelMetricListHtml(panel) {
 }
 
 function renderPanelPreviewHtml(panel) {
-  const type = WIDGET_TYPES.find((t) => t.key === panel.widgetType) || WIDGET_TYPES[0];
-  const summary = panel.metric
-    ? [`${AGGREGATION_LABELS[panel.aggregation] || panel.aggregation} ${panel.metric.label}`, panel.metric.unit ? panel.metric.unit : "", (GROUP_BY_LABELS[panel.groupBy] || panel.groupBy).toLowerCase()].filter(Boolean).join(" · ")
-    : "Choose a metric to see the configuration";
-  let body;
-  if (panel.widgetType === "kpi") body = `<div class="tl-analysis-kpi"><span class="tl-analysis-kpi-value tl-preview-placeholder">--</span><span class="tl-analysis-kpi-label">${escapeHtml(summary)}</span></div>`;
-  else if (panel.widgetType === "table") body = `<div class="tl-preview-rows" aria-hidden="true"><span></span><span></span><span></span></div><p class="tl-analysis-kpi-label">${escapeHtml(summary)}</p>`;
-  else body = `<div class="tl-preview-bars ${panel.widgetType === "line_chart" ? "is-line" : ""}" aria-hidden="true"><span style="--h:40%"></span><span style="--h:70%"></span><span style="--h:55%"></span><span style="--h:85%"></span><span style="--h:60%"></span></div><p class="tl-analysis-kpi-label">${escapeHtml(summary)}</p>`;
-  return `
-    <article class="panel tl-analysis-widget tl-metric-panel-preview" aria-label="Widget preview">
-      <header class="tl-analysis-widget-head"><div><p class="eyebrow">${escapeHtml(type.label)}</p><h3>${escapeHtml(panel.title.trim() || "Untitled metric")}</h3></div></header>
-      ${body}
-      <p class="muted tl-metric-panel-preview-note">Preview shows the configuration. Values appear on the dashboard after saving.</p>
-    </article>
-  `;
+  const available = state.trainingLoad.analysis.pagesAvailable && state.trainingLoad.analysis.selectedPageId;
+  const preview = panel.metric && panel.preview?.body === metricPanelPreviewBody(panel) ? panel.preview : null;
+  return `<div class="tl-metric-panel-preview" aria-label="Widget preview" aria-busy="${Boolean(panel.previewLoading)}">
+    <button type="button" class="plain-button compact-button" data-action="training-load-analysis-panel-preview" ${available && metricPanelCanSave(panel) && !panel.previewLoading ? "" : "disabled"}>Load preview</button>
+    ${panel.previewLoading ? '<p role="status">Loading preview…</p>' : ""}
+    ${panel.previewError ? `<p role="alert">${escapeHtml(panel.previewError)}</p>` : ""}
+    ${preview ? renderWidgetBodyHtml(preview.widget, preview.result, preview.resolvedPeriod) : !available ? '<p class="muted">Live preview is available on dashboard pages.</p>' : ""}
+  </div>`;
 }
 
 function renderMetricPanelHtml() {
@@ -742,8 +736,14 @@ function renderMetricPanelHtml() {
           </section>
           <section class="tl-metric-panel-step">
             <h4><span class="tl-metric-panel-step-no">2</span>View</h4>
-            <div class="tl-analysis-widget-type-grid tl-metric-panel-types">
+            <div class="tl-analysis-widget-type-grid tl-metric-panel-types" aria-label="Widget display">
               ${WIDGET_TYPES.map((type) => `<button type="button" class="plain-button tl-analysis-type-button ${panel.widgetType === type.key ? "is-selected" : ""}" aria-pressed="${panel.widgetType === type.key ? "true" : "false"}" data-action="training-load-analysis-panel-type" data-widget-type="${type.key}">${chartPickerIllustration(type.key)}<strong>${escapeHtml(type.label)}</strong><small>${escapeHtml(type.hint)}</small></button>`).join("")}
+              ${[...GALLERY_CHOICES.filter(([key]) => key !== "standard"), ["radar", "Radar"]].map(([key, label]) => {
+                const supported = editing && (key === "radar"
+                  ? state.trainingLoad.analysis.referencesAvailable && ["line_chart", "bar_chart"].includes(panel.widgetType)
+                  : state.trainingLoad.analysis.chartShapes);
+                return `<button type="button" class="plain-button tl-analysis-type-button" data-action="training-load-analysis-panel-chart" data-chart-kind="${escapeAttr(key)}" ${supported ? "" : "disabled"}>${chartPickerIllustration(key)}<strong>${escapeHtml(label)}</strong><small>${supported ? "Configure chart" : editing ? "Unavailable for this widget" : "Available after creating a widget"}</small></button>`;
+              }).join("")}
             </div>
             ${editing ? `<div class="tl-metric-panel-advanced"><span class="muted">More chart types, axes, sources and series</span> <button type="button" class="plain-button compact-button" data-action="training-load-analysis-open-advanced" data-widget-id="${escapeAttr(panel.widgetId)}">Advanced settings</button></div>` : ""}
           </section>

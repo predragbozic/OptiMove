@@ -55,6 +55,17 @@ test('ratio created through the admin API pools exact inputs, includes zero and 
   const r=result.data.current[0]; assert.equal(r.numerator,200);assert.equal(r.denominator,50);assert.equal(r.value,4);
   assert.deepEqual(result.coverage,{includedOccasions:3,leftOutOccasions:0});assert.equal(result.calculation.kind,'ratio');
 });
+test('club dashboard reads GPEXE session distance from its active team', async () => {
+  const distance = { metricDefinitionId: world.gpexe_total_distance.variableId, analyticalAggregation: 'sum',
+    aggregationRolePolicy: 'standalone_and_source_rollup' };
+  const team = await query('sum', 'athlete', distance);
+  const club = await query('sum', 'athlete', distance, { dataWorkspaceType: 'club', dataWorkspaceScopeId: org.clubId });
+  assert.equal(club.status, 'ok', JSON.stringify(club));
+  assert.equal(club.data.current.length, 3);
+  assert.deepEqual(club.data.current, team.data.current);
+  const foreignClub = await query('sum', 'athlete', distance, { dataWorkspaceType: 'club', dataWorkspaceScopeId: crypto.randomUUID() });
+  assert.deepEqual(foreignClub.data.current, []);
+});
 test('all grouping modes and allowed aggregations run; highest/latest stay stored, none is per occasion', async()=>{
   for(const group of ['day','week','session','athlete','cohort']){const r=await query('ratio',group);assert.equal(r.status,'ok',JSON.stringify(r));assert.ok(r.data.current.length);}
   const highest=await query('max');assert.equal(highest.data.current[0].value,10);assert.equal(highest.data.current[0].numerator,null);

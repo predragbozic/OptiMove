@@ -16705,6 +16705,15 @@ optimove-dashboard-chart {
   font-size: 12px;
 }
 
+@media (max-width: 720px) {
+  .tl-metric-panel-types {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tl-metric-panel-types .tl-analysis-type-button {
+    white-space: normal;
+  }
+}
+
 .tl-analysis-type-button.is-selected {
   border-color: var(--tl-accent);
   background: var(--tl-accent-soft);

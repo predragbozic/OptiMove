@@ -94,17 +94,27 @@ for(const role of ['club_admin','team_coach'])test(role+': saved gallery is read
  }finally{await context.close()}
 });
 
-test('1280px: the regular Edit metric panel shows illustrated choices in a two-column layout',async()=>{
- const {context,page,pageErrors}=await openAs(browser,world,'club_admin',1280);
+for (const width of [1280,390]) test(`${width}px: Edit metric shows every illustrated display and loads preview`,async()=>{
+ const {context,page,pageErrors}=await openAs(browser,world,'club_admin',width);
  try{
   await openDashboard(page,byRole.get('club_admin').dashboard.id);
   await page.getByRole('button',{name:'Widget actions: horizontal_bar',exact:true}).click();
   await action(page,'analysis-edit-widget').click();
   const editor=page.getByRole('dialog',{name:'Edit metric'});
   await editor.waitFor();
-  assert.equal(await editor.locator('.tl-metric-panel-types button svg').count(),4);
+  assert.equal(await editor.locator('.tl-metric-panel-types button svg').count(),12);
+  assert.equal(await editor.getByRole('button',{name:/^Radar/}).isVisible(),true);
   assert.equal(await editor.getByRole('button',{name:'Advanced settings',exact:true}).isVisible(),true);
-  assert.equal(await editor.locator('.tl-metric-panel-body').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),2);
+  assert.equal(await editor.locator('.tl-metric-panel-body').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width===1280?2:1);
+  const [preview]=await Promise.all([
+   page.waitForResponse(response=>response.url().endsWith('/query')&&response.request().postDataJSON()?.metricPreview),
+   editor.getByRole('button',{name:'Load preview',exact:true}).click(),
+  ]);
+  assert.equal(preview.status(),200,await preview.text());
+  assert.ok((await preview.json()).result.series[0].data.current.some(row=>typeof row.value==='number'));
+  await editor.locator('[aria-label="Widget preview"][aria-busy="false"]').waitFor();
+  assert.equal(await editor.locator('[aria-label="Widget preview"] [role="alert"]').count(),0);
+  assert.equal(await editor.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
   assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });

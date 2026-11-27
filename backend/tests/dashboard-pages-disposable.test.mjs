@@ -64,6 +64,23 @@ test('Page data query applies the separate active data-workspace gate',async()=>
  }finally{await q.query("update public.user_workspace_preferences set workspace_type='platform',scope_id=null where user_id=$1",[actor.id]);await q.query("delete from public.user_club_roles where user_id=$1 and club_id=$2",[actor.id,world.ids.clubA])}
 });
 
+test('Edit metric preview queries the draft without storing a widget',async()=>{
+ const path=`/api/training-load/dashboards/${dashboard.id}/pages/${home}/query`;
+ const body={dateFrom:'2026-11-01',dateTo:'2026-11-07',metricPreview:{
+  widgetType:'table',groupBy:'athlete',title:'Session count preview',builtInSeriesKey:'session_count',
+  dataScopeLevel:'day',analyticalAggregation:'sum',
+ }};
+ const preview=await api(path,body,'POST');
+ assert.equal(preview.status,200,preview.text);
+ const {widget,result}=JSON.parse(preview.text);
+ assert.equal(widget.title,body.metricPreview.title);
+ assert.equal(result.widgetId,widget.id);
+ assert.equal(result.series[0].status,'ok');
+ assert.equal((await q.query('select count(*)::int n from training_load.dashboard_widgets where id=$1',[widget.id])).rows[0].n,0);
+ const missing=await api(path,{...body,metricPreview:{...body.metricPreview,widgetId:crypto.randomUUID()}},'POST');
+ assert.equal(missing.status,404,missing.text);
+});
+
 test('request status returns the stored receipt for the live actor and never invents success',async()=>{
  const path=`/api/training-load/dashboards/${dashboard.id}/pages`;
  const read=JSON.parse((await api(path)).text);

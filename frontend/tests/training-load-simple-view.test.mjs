@@ -140,7 +140,7 @@ test("preview is lossless for every current and comparison row, including proble
   assert.match(html, /Some measurements disagree/);
   assert.match(html, /Incomplete coverage/);
   assert.match(html, /&lt;svg onload=&quot;bad&quot;&gt;/);
-  assert.doesNotMatch(html, /<svg|<canvas/);
+  assert.doesNotMatch(html.slice(html.indexOf('aria-label="Result preview"')), /<svg|<canvas/);
   assert.match(html, /<caption>Series 1 \/ Current period<\/caption>/);
   assert.match(html, /Complete preview result and problem details/);
 });

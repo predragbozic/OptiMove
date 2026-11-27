@@ -107,15 +107,44 @@ async function fetchBuiltinSeriesCatalog(queryRunner) {
 // LATERAL-joined with every canonical fact training.canonical_activity_
 // results() would produce per activity. This is the single fetch that
 // replaces the design proof's own per-activity loop.
-async function fetchCanonicalFactsForActivities(activityIds, queryRunner) {
-  if (!activityIds.length) return { factRows: [], activityDT: {} };
+async function fetchCanonicalFactsForActivities(activityIds, queryRunner, clubDistance = null) {
+  if (!activityIds.length && !clubDistance) return { factRows: [], activityDT: {} };
+  const clubActivityPredicate = clubDistance ? `or (
+       a.owner_scope = 'team' and a.lifecycle_state <> 'superseded'
+       and a.occurred_local_date between $3 and $4
+       and ($5::uuid is null or a.id = $5)
+       and exists (select 1 from public.teams t where t.id=a.owner_team_id and t.club_id=$2 and coalesce(t.is_active,true))
+     )` : "";
+  const clubDistancePredicate = clubDistance ? `or (
+       ($6::uuid[] is null or r.athlete_id = any($6))
+       and r.fact_kind = 'metric_value'
+       and r.detail->>'segmentId' is null
+       and r.detail->>'isDerived' = 'false'
+       and exists (
+         select 1 from training_load.metric_values v
+         join training_load.metric_value_source_provenance p on p.metric_value_id=v.id
+         join training_load.source_metric_mapping_activations act on act.id=p.activation_id
+         join training_load.source_metric_definition_versions sv on sv.id=p.source_metric_version_id
+         join training_load.source_metric_definitions sd on sd.id=sv.source_metric_definition_id
+         where act.team_id=a.owner_team_id
+           and v.occasion_id=(r.detail->>'occasionId')::uuid
+           and v.metric_definition_id=(r.detail->>'metricDefinitionId')::uuid
+           and v.metric_definition_id=any($7::uuid[])
+           and sd.source_system='gpexe' and sd.api_family='rest_v1'
+           and sd.source_metric_key='athlete_session.total_distance'
+       )
+     )` : "";
   const r = await queryRunner(
-    `select a.id as activity_id, a.occurred_local_date::text as local_date, a.started_at,
+    `with eligible as materialized (
+       select a.id, a.occurred_local_date, a.started_at, a.owner_team_id from training.activities a
+       where a.id = any($1::uuid[]) ${clubActivityPredicate}
+     )
+     select a.id as activity_id, a.occurred_local_date::text as local_date, a.started_at,
             r.canonical_activity_id, r.canonical_participant_id, r.athlete_id, r.fact_kind, r.detail
-     from training.activities a
+     from eligible a
      cross join lateral training.canonical_activity_results(a.id) r
-     where a.id = any($1::uuid[])`,
-    [activityIds],
+     where a.id = any($1::uuid[]) ${clubDistancePredicate}`,
+    clubDistance ? [activityIds, ...clubDistance] : [activityIds],
   );
   const activityDT = {};
   for (const row of r.rows) {
@@ -255,7 +284,7 @@ async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, data
 // what makes the batch endpoint genuinely set-based: N widgets against
 // the SAME range never cost more DB round trips than 1 widget would.
 // ------------------------------------------------------------
-async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId, definitionIds = [] }, dayScopeMetricIds, builtinCatalog, queryRunner) {
+async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId, definitionIds = [], includeClubDistance }, dayScopeMetricIds, builtinCatalog, queryRunner) {
   const workspaceArgs = { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds };
   let authorizedActivityIds = await fetchAuthorizedActivityIds(workspaceArgs, queryRunner);
 
@@ -274,7 +303,11 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     authorizedActivityIds = authorizedActivityIds.includes(activityId) ? [activityId] : [];
   }
 
-  const { factRows, activityDT } = await fetchCanonicalFactsForActivities(authorizedActivityIds, queryRunner);
+  // Team GPS distance is available to the parent club. Keep the other team
+  // activity facts and participant data outside the club dashboard query.
+  const clubDistance = includeClubDistance && dataWorkspaceType === "club" && definitionIds.length && !componentId
+    ? [dataWorkspaceScopeId, dateFrom, dateTo, activityId ?? null, athleteIds?.length ? athleteIds : null, definitionIds] : null;
+  const { factRows, activityDT } = await fetchCanonicalFactsForActivities(authorizedActivityIds, queryRunner, clubDistance);
 
   // Build the segment -> canonical component map from the SAME fact rows
   // already fetched (no second round trip) — component_metric_segment_
@@ -727,7 +760,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
     if (!rangeCache.has(cacheKey)) {
       const dayScopeMetricIds = [...(dayScopeMetricIdsByFilterKey.get(fk) || [])];
       rangeCache.set(cacheKey, buildRangeContext(
-        { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom: rDateFrom, dateTo: rDateTo, activityId, componentId, definitionIds: [...new Set(specs.filter(s => s.metricDefinitionId).map(s => s.metricDefinitionId))] },
+        { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom: rDateFrom, dateTo: rDateTo, activityId, componentId, definitionIds: [...new Set(specs.filter(s => s.metricDefinitionId).map(s => s.metricDefinitionId))], includeClubDistance: !referenceMeasurementsOnly },
         dayScopeMetricIds,
         builtinCatalog,
         queryRunner,

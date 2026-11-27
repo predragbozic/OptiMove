@@ -8,7 +8,7 @@ import { queryDashboardForViewer } from '../trainingLoadDashboardQuery.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { resolvePeriod } from '../dashboardSimple/compiler.js';
 import { validateContract } from '../dashboardSimple/schema.js';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {loadAuthorizationContext} from '../authz.js';
 import {pickFallbackWorkspace,resolveActiveWorkspaceReadOnly} from '../workspace.js';
 import {viewReadScope} from '../moduleView.js';
@@ -20,6 +20,42 @@ import {pageDatabaseEnabled} from './config.js';
 import {dashboardManageOffered,dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor,markDashboardManageWrite} from '../dashboardManageAccess.js';
 
 export const pageError=(code='notFound',status=404)=>Object.assign(new Error(code),{code,httpStatus:status,status});
+
+async function buildMetricPreviewWidget(q, dashboard, widgets, draft) {
+ const fields=['widgetId','widgetType','groupBy','title','metricDefinitionId','builtInSeriesKey','dataScopeLevel','analyticalAggregation'];
+ if(!draft||typeof draft!=='object'||Array.isArray(draft)||Object.keys(draft).some(key=>!fields.includes(key))
+   ||!['kpi','table','line_chart','bar_chart'].includes(draft.widgetType)
+   ||!['day','week','athlete','session','component','cohort'].includes(draft.groupBy)
+   ||!['day','session','component'].includes(draft.dataScopeLevel)
+   ||!['sum','avg','max','last','none','ratio'].includes(draft.analyticalAggregation)
+   ||typeof draft.title!=='string'||!draft.title.trim()||draft.title.length>200
+   ||(draft.metricDefinitionId!==undefined)===(draft.builtInSeriesKey!==undefined)
+   ||draft.metricDefinitionId!==undefined&&!isUuid(draft.metricDefinitionId)
+   ||draft.builtInSeriesKey!==undefined&&typeof draft.builtInSeriesKey!=='string'
+   ||draft.widgetId!==undefined&&!isUuid(draft.widgetId))throw pageError('invalidRequest',400);
+ const widget=draft.widgetId?widgets.find(w=>w.id===draft.widgetId):null;
+ if(draft.widgetId&&(!widget||widget.series.length!==1))throw pageError();
+ const id=widget?.id??randomUUID();
+ const old=widget?.series[0];
+ const sameMetric=old&&(draft.metricDefinitionId?old.metric_definition_id===draft.metricDefinitionId:old.built_in_series_key===draft.builtInSeriesKey);
+ let role='standalone_and_source_rollup';
+ if(draft.metricDefinitionId){
+  const {visible,def}=await isMetricVisibleToDashboard(dashboard,draft.metricDefinitionId,q);
+  if(!visible||!def||def.state!=='active'&&!sameMetric)throw pageError();
+  role=def.calculation_kind==='ratio'?'all_including_derived':role;
+  assertDashboardAggregation(def.calculation_kind==='ratio'?{kind:'ratio'}:null,draft.analyticalAggregation,sameMetric?old.aggregation_role_policy:role);
+ }else{
+  const builtin=(await q('select fixed_data_scope_level from training_load.dashboard_builtin_series where key=$1 and is_active',[draft.builtInSeriesKey])).rows[0];
+  if(!builtin||builtin.fixed_data_scope_level&&builtin.fixed_data_scope_level!==draft.dataScopeLevel)throw pageError('invalidRequest',400);
+ }
+ const shape=sameMetric&&widget.widget_type===draft.widgetType?widget.presentation_config?.chartShape:null;
+ return {...widget,id,widget_type:draft.widgetType,group_by:draft.groupBy,title:draft.title,
+  display_config:widget?.display_config??{schemaVersion:1},presentation_config:shape?{schemaVersion:1,chartShape:shape}:null,
+  series:[{...(sameMetric?old:{}),id:old?.id??randomUUID(),widget_id:id,series_order:1,resolution_status:'resolved',
+   metric_definition_id:draft.metricDefinitionId??null,built_in_series_key:draft.builtInSeriesKey??null,
+   data_scope_level:draft.dataScopeLevel,analytical_aggregation:draft.analyticalAggregation,
+   aggregation_role_policy:sameMetric?old.aggregation_role_policy:role}]};
+}
 const requestWindow=7*24*60*60*1000;
 function validIssuedAt(value){return typeof value==='string'&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString()===value;}
 function freshRequest(body,now){const age=now()-Date.parse(body.requestIssuedAt);if(age>requestWindow)throw pageError('requestExpired',409);if(age< -1000)throw pageError('invalidRequest',400);}
@@ -144,6 +180,20 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
    let selected=dashboardWidgetsForViewer(target.req,widgets).filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
+   if(body.metricPreview!==undefined){
+    if(!canManageDashboardRow(target.req,target.dashboard)||!dashboardManageOffered(target.req,target.workspace,target.dashboard))throw pageError();
+    if(body.widgetIds!==undefined||body.referencePreview!==undefined)throw pageError('invalidRequest',400);
+    const widget=await buildMetricPreviewWidget(q,target.dashboard,selected,body.metricPreview);
+    const [result]=await queryDashboardForViewer(target.workspace,[widget],period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
+    const [galleryWidget]=await hydrateGalleryWidgets(q,[widget]);
+    const {id,widget_type,group_by,title,display_config,presentation_config,series:previewSeries}=widget;
+    const previewWidget={id,widget_type,group_by,title,display_config,presentation_config,series:previewSeries.map(s=>({
+     id:s.id,series_order:s.series_order,display_label:s.display_label,color:s.color,axis:s.axis,
+     metric_definition_id:s.metric_definition_id,built_in_series_key:s.built_in_series_key,
+     data_scope_level:s.data_scope_level,analytical_aggregation:s.analytical_aggregation,resolution_status:s.resolution_status,
+    }))};
+    return {widget:previewWidget,result:attachGalleryResult(galleryWidget,result),resolvedPeriod:period};
+   }
    const referenceRequest={...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)};
    if(body.referencePreview!==undefined){
     if(!validReferencePreview(body.referencePreview))throw pageError('invalidRequest',400);
