@@ -292,7 +292,7 @@ function recoveryRequired() {
 async function readBuilderRpeState(client, planId) {
   const planResult = await client.query(
       `select p.track_training_load_default as tracking, p.request_rpe_default as rpe,
-              b.source_plan_id,
+              b.source_plan_id,p.created_at::text as copied_at,
               b.plan_id is not null as known,
               e.changed_tracking, e.changed_rpe,
               coalesce(e.effective_tracking,b.opening_tracking) as expected_tracking,
@@ -304,7 +304,7 @@ async function readBuilderRpeState(client, planId) {
     );
   const sessionResult = await client.query(
       `select s.id,s.logical_session_id,s.training_load_enabled as tracking,s.rpe_enabled as rpe,
-              b.source_plan_id,b.source_session_id,
+              b.source_plan_id,b.source_session_id,s.created_at::text as copied_at,
               b.session_id is not null as known,
               e.changed_tracking, e.changed_rpe,
               coalesce(e.effective_tracking,b.opening_tracking) as expected_tracking,
