@@ -170,7 +170,7 @@ test("3. Users: a custom Team coach for one coach, then back to the role", async
     await end.locator("textarea").fill("Season over");
     await end.getByRole("button", { name: "Back to Team coach" }).click();
     await page.getByText("Coach Example is back to Team coach.").waitFor();
-    assert.equal(await holding.getByText("Team coach (custom)").count(), 0);
+    await holding.getByText("Team coach (custom)").waitFor({ state: "detached" });
     const read = JSON.parse((await request(context, world, `${R}/users/${coach.id}/clubs/${world.ids.clubA}`)).text);
     assert.ok(read.holdings.every((h) => !h.custom?.live), "the server ended it");
     assert.deepEqual(pageErrors, []);
