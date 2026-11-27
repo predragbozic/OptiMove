@@ -4,6 +4,7 @@
 // Disposable database (the calendar fixture's migrations plus v87); the imports are real approvals through the routes;
 // invented people only.
 import { after, before, test } from "node:test";
+import { applyEstimateBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -36,10 +37,11 @@ let createSession;
 let appPool;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "pos87est", migrations: [...calendarMigrations(), V87] });
+  db = await createGpexeDisposableDb({ roleRead: true, baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "pos87est", migrations: [...calendarMigrations(), V87] });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyEstimateBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.ESTIMATES_ENABLED = "true";

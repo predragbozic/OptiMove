@@ -3,6 +3,7 @@
 // fresh candidate it leaves imports them again; the estimates neither propose nor write a calculated variable.
 // HMLD = power zone distance 25-60 + 60-75 + 75+. Disposable optimove_tests_gpexe_* databases only; a fake GPEXE source.
 import { after, before, test } from "node:test";
+import { applyEstimateBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import http from "node:http";
@@ -39,6 +40,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyEstimateBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.ESTIMATES_ENABLED = "true";

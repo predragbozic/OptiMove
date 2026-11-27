@@ -126,6 +126,7 @@ const REVIEWED = Object.freeze({
   "inviteContext.js": 6,
   "joinLinkContext.js": 5,
   "mediaStorage.js": 2,
+  "metricEstimateAccess.js": 1, // M-3b classifies only the request-bound native workspace before locking.
   // V-0 (docs/ai/roles-v-steps-plan.md 3): canView maps a workspace to the scope can() is asked at (platform, private,
   // the old club / team rows, the view types) and viewReadScope to a view workspace's data context; never an offer, and
   // the entry gate lets a view workspace reach only a module's listed reads.

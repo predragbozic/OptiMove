@@ -1,4 +1,5 @@
-import { applyRosterBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
+import { asActor, ROLE_IDS } from "./support/permission-roles-world.mjs";
+import { applyEstimateBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // 6b-B (phase 5b): the estimate proposal and save routes, migration v64 (the request key, the estimate participant's time zone),
 // the import writer's re-snapshot and the preview's list of replaced estimates. Disposable databases; the imports are the real
 // approvals through the routes.
@@ -7,6 +8,9 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
 import pg from "pg";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, createGpexePilotOrg, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { makeBundle as makeFixtureBundle, standardAthletes, TZ } from "./_gpexe-fixtures.mjs";
@@ -46,7 +50,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
-  await applyRosterBridgeForCuratedFixture(db.url);
+  await applyEstimateBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.ESTIMATES_ENABLED = "true";
@@ -989,10 +993,10 @@ test("17. 6b-C1: each estimated value carries its label (method, basis, author, 
   for (const v of rowOf(ana).values) assert.ok(!("estimate" in v), "a measured value has no estimate field");
   assert.deepEqual(Object.keys(rowOf(ana).values[0]).sort(), ["entryMethod", "label", "metricKey", "shortLabel", "unit", "value", "valueText"], "a measured value keeps exactly its fields");
   // ST-4: manualValues is offered unless MANUAL_VALUES_ENABLED is "false" (on by default).
-  assert.deepEqual(roster.body.viewer, { basis: "team_coach", estimates: true, manualValues: true }, "the action is offered while the flag is on");
+  assert.deepEqual(roster.body.viewer, { basis: "team_coach", canDecideRoster: true, estimates: true, manualValues: true }, "the action is offered while the flag is on");
   process.env.ESTIMATES_ENABLED = "false";
   try {
-    assert.deepEqual((await tapi(`/${s.activityId}/roster`, { cookie: team.coach.cookie })).body.viewer, { basis: "team_coach", manualValues: true }, "flag off: the viewer is as before");
+    assert.deepEqual((await tapi(`/${s.activityId}/roster`, { cookie: team.coach.cookie })).body.viewer, { basis: "team_coach", canDecideRoster: true, manualValues: true }, "flag off: the viewer is as before");
   } finally {
     process.env.ESTIMATES_ENABLED = "true";
   }
@@ -1314,4 +1318,183 @@ test("18b. 6b-D: the series routes take 'estimate' - a new series and a change o
   assert.equal(changed.status, 200, changed.text);
   const stored = (await admin.query(`select source_policy, source_connection_id from training_load.dashboard_widget_series where widget_id = $1 order by series_order`, [widget.body.widgetId])).rows;
   assert.deepEqual(stored, [{ source_policy: "estimate", source_connection_id: null }, { source_policy: "estimate", source_connection_id: null }]);
+});
+
+async function omitEstimateWord(team, roleId, word) {
+  await asActor(db.url, team.padmin.id, async (tx) => {
+    await tx.query("select public.lock_club_ceiling($1::uuid[],'exclusive')", [[team.clubId]]);
+    const { rows: [version] } = await tx.query(
+      `insert into public.permission_club_role_versions
+         (club_id,system_role_id,based_on_revision,answered_revision,created_by_user_id)
+       select $1,id,revision,revision,$3 from public.permission_roles where id=$2 returning id`,
+      [team.clubId, roleId, team.padmin.id],
+    );
+    await tx.query(
+      `insert into public.permission_club_role_version_items
+       select $1,permission_word from public.permission_role_items where role_id=$2 and permission_word<>$3`,
+      [version.id, roleId, word],
+    );
+    await tx.query(
+      `insert into public.permission_club_role_version_changes
+         (version_id,revision_after,kind,performed_by_user_id,basis,reason,items_added)
+       values ($1,1,'create',$2,'platform_admin','Estimate bridge access test',
+         array(select permission_word from public.permission_club_role_version_items where version_id=$1))`,
+      [version.id, team.padmin.id],
+    );
+  });
+}
+
+test("M-3b: a denied estimate proposal cannot distinguish sessions with and without rosters", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9891, ids: [101, 102, 104] }));
+  const { rows: [clubActivity] } = await admin.query(
+    `insert into training.activities (name,occurred_local_date, timezone_snapshot, owner_scope,owner_club_id,origin)
+     values ('Club session without a team',$1,$2,'club',$3,'manual') returning id`,
+    [D1, TZ, team.clubId],
+  );
+  const noTeam = { activityId: clubActivity.id };
+  const athleteId = team.athleteIds[DAN];
+  const input = { athleteId, method: "team_average", requestKey: key() };
+  const options = { cookie: team.cadmin.cookie };
+  const before = await writes(team.teamId);
+  const allowed = await proposal(team, noTeam, athleteId, options);
+  assert.deepEqual([allowed.status, allowed.body.error], [409, "roster_not_applicable"], allowed.text);
+  await omitEstimateWord(team, ROLE_IDS.team_coach, "load.estimates.manage");
+  await omitEstimateWord(team, ROLE_IDS.club_admin, "load.estimates.manage");
+  const missing = await proposal(team, { activityId: key() }, athleteId, options);
+  for (const result of [
+    await proposal(team, s, athleteId, options),
+    await proposal(team, noTeam, athleteId, options),
+    await save(team, s, input, options),
+    await save(team, noTeam, input, options),
+  ]) {
+    assert.deepEqual([result.status, result.text], [404, missing.text], result.text);
+  }
+  assert.deepEqual(await writes(team.teamId), before);
+});
+
+test("M-3b: an estimate save rechecks View after the request passes the View entry gate", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9892, ids: [101, 102, 104] }));
+  const input = { athleteId: team.athleteIds[DAN], method: "team_average", requestKey: key() };
+  const before = await writes(team.teamId);
+  const sql = [];
+  estimates.setEstimateTestHooks({
+    beforeRightsLock: async ({ client }) => {
+      await omitEstimateWord(team, ROLE_IDS.team_coach, "load.view.team");
+      const query = client.query.bind(client);
+      client.query = (statement, ...params) => {
+        sql.push(typeof statement === "string" ? statement : statement.text);
+        if (statement === "rollback" || statement === "commit") client.query = query;
+        return query(statement, ...params);
+      };
+    },
+  });
+  let result;
+  try {
+    result = await save(team, s, input);
+  } finally {
+    estimates.setEstimateTestHooks({});
+  }
+  assert.deepEqual([result.status, result.body.error], [404, "notFound"], result.text);
+  const ordered = ["select public.lock_club_ceiling", "select training.lock_activity_decider", "select public.lock_permission_actor"];
+  assert.deepEqual(sql.filter(text => ordered.some(prefix => text.startsWith(prefix)))
+    .map(text => ordered.findIndex(prefix => text.startsWith(prefix))), [0, 1, 2]);
+  assert.deepEqual(await writes(team.teamId), before);
+});
+
+test("M-3b: a revoked estimate writer cannot recover a receipt from an uncertain COMMIT or a retry", async () => {
+  const team = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9893, ids: [101, 102, 104] }));
+  const input = { athleteId: team.athleteIds[DAN], method: "team_average", requestKey: key() };
+  estimates.setEstimateTestHooks({
+    commit: async (client) => {
+      await client.query("commit");
+      await omitEstimateWord(team, ROLE_IDS.team_coach, "load.estimates.manage");
+      throw new Error("Estimate answer lost after revocation");
+    },
+  });
+  let result;
+  try {
+    result = await save(team, s, input);
+  } finally {
+    estimates.setEstimateTestHooks({});
+  }
+  assert.deepEqual([result.status, result.body.error], [503, "outcome_unknown"], result.text);
+  const rows = await estimateRows(team.teamId);
+  assert.ok(rows.some(row => row.request_key === input.requestKey), "the earlier commit saved the estimate");
+  const retry = await save(team, s, input);
+  assert.deepEqual([retry.status, retry.body], [404, { error: "notFound" }], retry.text);
+  assert.deepEqual(await estimateRows(team.teamId), rows, "the retry did not add a second estimate");
+});
+
+const previousEstimateServer = process.env.OPTIMOVE_M3B_PREVIOUS_SERVER;
+test("M-3b: the exact previous server's native club and team estimate receipts replay through the bridge", { skip: !previousEstimateServer }, async () => {
+  const sha = execFileSync("git", ["-C", previousEstimateServer, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  assert.match(sha, /^[a-f0-9]{40}$/);
+  assert.equal(sha, process.env.OPTIMOVE_M3B_PREVIOUS_SHA);
+  assert.equal(execFileSync("git", ["-C", previousEstimateServer, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim(), "");
+  const oldSrc = path.resolve(previousEstimateServer, "backend/src");
+  const { app: oldApp } = await import(pathToFileURL(path.join(oldSrc, "server.js")));
+  const { pool: oldPool } = await import(pathToFileURL(path.join(oldSrc, "db.js")));
+  const oldServer = http.createServer(oldApp);
+  try {
+    assert.equal((await oldPool.query("select current_database() as db")).rows[0].db, db.name);
+    await new Promise(resolve => oldServer.listen(0, "127.0.0.1", resolve));
+    const priorUrl = `http://127.0.0.1:${oldServer.address().port}`;
+    const team = await setupTeam();
+    const s = await importSession(team, bundleOf({ sessionId: 9894, ids: [101, 102, 104] }));
+    const route = `/api/training-activity/${s.activityId}/estimates`;
+    for (const [actor, athleteId] of [[team.coach, team.athleteIds[DAN]], [team.cadmin, team.athleteIds[EVA]]]) {
+      const priorProposal = await call(priorUrl, `${route}/proposal?athleteId=${athleteId}`, { cookie: actor.cookie });
+      assert.equal(priorProposal.status, 200, priorProposal.text);
+      assert.equal((await proposal(team, s, athleteId, { cookie: actor.cookie })).status, 200);
+      const input = { requestKey: key(), athleteId, method: "team_average" };
+      const priorWrite = await call(priorUrl, route, { method: "POST", cookie: actor.cookie, body: input });
+      assert.equal(priorWrite.status, 201, priorWrite.text);
+      const rows = await estimateRows(team.teamId);
+      const replay = await save(team, s, input, { cookie: actor.cookie });
+      assert.equal(replay.status, 200, replay.text);
+      assert.deepEqual(replay.body, priorWrite.body);
+      assert.deepEqual(await estimateRows(team.teamId), rows);
+    }
+  } finally {
+    oldServer.closeAllConnections();
+    if (oldServer.listening) await new Promise(resolve => oldServer.close(resolve));
+    await oldPool.end();
+  }
+});
+
+test("M-3b: a foreign canonical owner found after locking is the same 404 as a missing session", async () => {
+  const team = await setupTeam();
+  const other = await setupTeam();
+  const s = await importSession(team, bundleOf({ sessionId: 9895, ids: [101, 102, 104] }));
+  const moved = await importSession(other, bundleOf({ sessionId: 9896, ids: [101, 102, 104] }));
+  const input = { athleteId: team.athleteIds[DAN], method: "team_average", requestKey: key() };
+  const missing = await save(team, { activityId: key() }, input);
+  const before = await writes(team.teamId);
+  estimates.setEstimateTestHooks({
+    beforeTeamLock: async () => {
+      await admin.query("begin");
+      try {
+        await admin.query("select set_config('training.allow_supersede_write','on',true)");
+        await admin.query(
+          `update training.activities set lifecycle_state='superseded',superseded_by_activity_id=$2 where id=$1`,
+          [s.activityId, moved.activityId],
+        );
+        await admin.query("commit");
+      } catch (error) {
+        await admin.query("rollback");
+        throw error;
+      }
+    },
+  });
+  let result;
+  try {
+    result = await save(team, s, input);
+  } finally {
+    estimates.setEstimateTestHooks({});
+  }
+  assert.deepEqual([result.status, result.text], [404, missing.text], result.text);
+  assert.deepEqual(await writes(team.teamId), before);
 });

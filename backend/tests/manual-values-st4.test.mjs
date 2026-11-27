@@ -1,4 +1,4 @@
-import { applyRosterBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
+import { applyEstimateBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // ST-4 (docs/ai/session-type-plan.md section 7, 13 Q3): manual values on the roster - an entry for an athlete without a
 // device record, a correction of a measured value, the restore of the measured values - migration v88's provenance table
 // and guards, the roster's states, and the undo that removes manual values only after a confirmation that lists them.
@@ -43,7 +43,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
-  await applyRosterBridgeForCuratedFixture(db.url);
+  await applyEstimateBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   delete process.env.MANUAL_VALUES_ENABLED;
