@@ -14,20 +14,26 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     assert.equal(legacySubmission.status, 200, JSON.stringify(legacySubmission.body));
     const legacyEdit = await oldApi(`/api/builder/plans/${legacyActive.id}/edit`, { method: "POST" });
     assert.equal(legacyEdit.status, 200, JSON.stringify(legacyEdit.body));
-    const unprovenTemplate = await oldApi("/api/builder/plans", {
-      method: "POST", body: { planType: "program", templateKind: "weekly", weeks: 1, name: "Old enabled template" },
-    });
-    assert.equal(unprovenTemplate.status, 201, JSON.stringify(unprovenTemplate.body));
-    const templateId = unprovenTemplate.body.plan.id;
-    const added = await oldApi(`/api/builder/blocks/${unprovenTemplate.body.blocks[0].id}/sessions`, {
-      method: "POST", body: { name: "Old enabled session", bta: "T" },
-    });
-    assert.equal(added.status, 201, JSON.stringify(added.body));
-    const templateSession = added.body.blocks[0].sessions[0].id;
-    const enabled = await oldApi(`/api/builder/sessions/${templateSession}`, {
-      method: "PATCH", body: { trackingEnabled: true, rpeEnabled: true },
-    });
-    assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
+    const oldTemplate = async (weekly) => {
+      const plan = await oldApi("/api/builder/plans", {
+        method: "POST", body: { planType: "program", name: "Old enabled template", ...(weekly ? { templateKind: "weekly", weeks: 1 } : {}) },
+      });
+      assert.equal(plan.status, 201, JSON.stringify(plan.body));
+      const id = plan.body.plan.id;
+      const blocks = weekly ? plan : await oldApi(`/api/builder/plans/${id}/blocks`, { method: "POST", body: {} });
+      assert.equal(blocks.status, 201, JSON.stringify(blocks.body));
+      const added = await oldApi(`/api/builder/blocks/${blocks.body.blocks[0].id}/sessions`, {
+        method: "POST", body: { name: "Old enabled session", bta: "T" },
+      });
+      assert.equal(added.status, 201, JSON.stringify(added.body));
+      const enabled = await oldApi(`/api/builder/sessions/${added.body.blocks[0].sessions[0].id}`, {
+        method: "PATCH", body: { trackingEnabled: true, rpeEnabled: true },
+      });
+      assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
+      return id;
+    };
+    const weeklyTemplateId = await oldTemplate(true);
+    const specificTemplateId = await oldTemplate(false);
     await stopPrevious();
     const bridge = await previousDashboardServer(db.url, {}, process.env.OPTIMOVE_BUILDER_RPE_BRIDGE_SHA
       ?? "66220c1224abdbdc0eaa1a23fa8d53591064a98a");
@@ -54,7 +60,7 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     try {
       const api = (path, options) => builderRpeFixtureApi(server, cookies.owner, path, options);
       const submit = id => api(`/api/builder/plans/${id}/submit`, { method: "POST" });
-      const ids = [...Object.values(cases).map(item => item.id), descendant, descendantOfLaterPublished, templateId];
+      const ids = [...Object.values(cases).map(item => item.id), descendant, descendantOfLaterPublished, weeklyTemplateId, specificTemplateId];
       const before = await snapshot(ids);
       for (const item of [cases.before, cases.editDraft, { id: descendant }, { id: descendantOfLaterPublished }]) {
         const result = await submit(item.id);
@@ -72,8 +78,8 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
         [`/api/builder/days/${sourceDay}/copy-into/${samePlanDay}`, {}],
         [`/api/builder/blocks/${sourceDay}/copy-into/${targetDay}`, {}],
         ["/api/builder/weekly-templates", { name: "Unconfirmed copy", planIds: [cases.before.id] }],
-        [`/api/builder/plans/${templateId}/duplicate`, { intent: "assign", athleteIds: [athleteCode], assignmentRequestId: requestKeys[0] }],
-        [`/api/builder/plans/${templateId}/assign-weekly`, { athleteIds: [athleteCode], startDate: "2027-05-31", assignmentRequestId: requestKeys[1] }],
+        [`/api/builder/plans/${specificTemplateId}/duplicate`, { intent: "assign", athleteIds: [athleteCode], assignmentRequestId: requestKeys[0] }],
+        [`/api/builder/plans/${weeklyTemplateId}/assign-weekly`, { athleteIds: [athleteCode], startDate: "2027-05-31", assignmentRequestId: requestKeys[1] }],
       ];
       const planCount = () => db.client.query("select count(*)::integer as n from plans.plans").then(({ rows }) => rows[0].n);
       const priorCount = await planCount();

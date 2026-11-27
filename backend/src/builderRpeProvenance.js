@@ -339,7 +339,7 @@ async function assertBuilderRpeInheritedRoots(client, roots) {
          where l.session_id is null and b.plan_id=l.plan_id
            and (not l.tracking or b.opening_tracking) and (not l.rpe or b.opening_rpe)
          union all
-         select b.source_plan_id, b.source_session_id,s.created_at
+         select coalesce(b.source_plan_id,b.plan_id), b.source_session_id,s.created_at
          from training_load.builder_rpe_session_baselines b
          join plans.plan_sessions s on s.id=b.session_id and s.logical_session_id=b.logical_session_id
          join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=b.plan_id
@@ -391,6 +391,13 @@ export async function assertBuilderRpeActivationProvenance(client, planId) {
   if ([state.plan, ...state.sessions].some(row => hasRpe(row) &&
       !matchesRecordedRpe(row))) {
     throw recoveryRequired();
+  }
+  for (const session of state.sessions.filter(row => !row.source_plan_id)) {
+    const inherited = inheritedRoot(session);
+    if (hasRpe(inherited) && (!matchesRecordedRpe(state.plan) ||
+        (inherited.tracking && !state.plan.tracking) || (inherited.rpe && !state.plan.rpe))) {
+      throw recoveryRequired();
+    }
   }
   const inherited = [state.plan, ...state.sessions].filter(row => row.source_plan_id).map(inheritedRoot).filter(hasRpe);
   await assertBuilderRpeInheritedRoots(client, inherited);
