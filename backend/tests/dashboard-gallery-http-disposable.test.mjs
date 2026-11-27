@@ -5,7 +5,7 @@ let world,q,actor,dashboard,home,definitions;const saved=[];
 const period={dateFrom:'2026-11-01',dateTo:'2026-11-07',timeZone:'UTC'};
 async function api(path,body,method='POST',account=actor){const r=await fetch(world.baseUrl+path,{method,headers:{Cookie:`optimove_session=${account.sessionToken}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const text=await r.text();return{status:r.status,text,body:JSON.parse(text)}}
 before(async()=>{
- world=await startDashboardShellFixture({envOverrides:{DASHBOARD_PAGES_ENABLED:'true',DASHBOARD_SIMPLE_MODE:'enabled',DASHBOARD_SIMPLE_BUDGET_VERIFIED:'true',DASHBOARD_SIMPLE_SESSION_AFFINITY_VERIFIED:'true',DASHBOARD_SIMPLE_PREVIEW_MAX_ACTIVE:'1',DASHBOARD_SIMPLE_KEY_ID:'gallery-http-test',DASHBOARD_SIMPLE_KEY_BASE64:crypto.randomBytes(32).toString('base64')}});
+ world=await startDashboardShellFixture({envOverrides:{DASHBOARD_PAGES_ENABLED:'true',DASHBOARD_REFERENCES_ENABLED:'true',DASHBOARD_SIMPLE_MODE:'enabled',DASHBOARD_SIMPLE_BUDGET_VERIFIED:'true',DASHBOARD_SIMPLE_SESSION_AFFINITY_VERIFIED:'true',DASHBOARD_SIMPLE_PREVIEW_MAX_ACTIVE:'1',DASHBOARD_SIMPLE_KEY_ID:'gallery-http-test',DASHBOARD_SIMPLE_KEY_BASE64:crypto.randomBytes(32).toString('base64')}});
  q=new pg.Client({connectionString:world.databaseUrl});await q.connect();actor=world.accounts[0];
  dashboard=(await api('/api/training-load/dashboards',{name:'Gallery HTTP'})).body.dashboard;assert.ok(dashboard);
  home=(await q.query('select id from training_load.dashboard_pages where dashboard_id=$1',[dashboard.id])).rows[0].id;
@@ -59,4 +59,71 @@ test('clone remaps every gallery series reference to the new widget identities',
  const cloned=await api(`/api/training-load/dashboards/${dashboard.id}/clone`,{name:'Gallery clone'});assert.equal(cloned.status,201,cloned.text);
  const widgets=(await q.query('select * from training_load.dashboard_widgets where dashboard_id=$1',[cloned.body.dashboard.id])).rows;assert.ok(widgets.length>=4);
  for(const w of widgets){const ids=(await q.query('select id from training_load.dashboard_widget_series where widget_id=$1',[w.id])).rows.map(s=>s.id);assert.deepEqual(w.presentation_config.chartShape.seriesIds,ids);}
+});
+
+test('Page gallery previews and atomically creates every shape with matching values and replay',async()=>{
+ await q.query('update training_load.dashboard_pages_activation set enabled=true');
+ definitions??=await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,athleteIds:world.ids.athleteIds});
+ const club=world.accounts.find(a=>a.role==='club_admin');
+ const created=await api('/api/training-load/dashboards',{name:'New shape gallery'},'POST',club);
+ assert.equal(created.status,201,created.text);
+ const d=created.body.dashboard;
+ const {id:pageId}=(await q.query('select id from training_load.dashboard_pages where dashboard_id=$1',[d.id])).rows[0];
+ const url=`/api/training-load/dashboards/${d.id}/pages/${pageId}`;
+ for(const kind of ['area','horizontal_bar','heatmap','boxplot','combined','scatter','stacked']){
+  const multi=['combined','scatter','stacked'].includes(kind);
+  const measure=['heatmap','boxplot'].includes(kind);
+  const galleryDraft={kind,title:`New ${kind}`,groupBy:'day',series:definitions.slice(0,multi?2:1).map((def,i)=>({
+   metricDefinitionId:def.id,dataScopeLevel:'session',analyticalAggregation:measure?'none':'sum',
+   ...(kind==='combined'?{mark:i?'line':'bar',axis:i?'secondary':'primary'}:{}),
+  })),...(kind==='stacked'?{additive:true}:{})};
+  const preview=await api(url+'/query',{...period,galleryDraft},'POST',club);
+  assert.equal(preview.status,200,preview.text);
+  assert.equal(preview.body.result.gallery.status,'ready',preview.text);
+  const count=async()=>(await q.query('select count(*)::int n from training_load.dashboard_widgets where page_id=$1 and title=$2',[pageId,galleryDraft.title])).rows[0].n;
+  assert.equal(await count(),0);
+  const state=await api(url,null,'GET',club);
+  const body={requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),draft:galleryDraft,
+   expectedDashboardRevision:state.body.dashboard.revision,expectedPageRevision:state.body.page.revision};
+  const save=await api(url+'/gallery',body,'POST',club);
+  assert.equal(save.status,200,save.text);
+  assert.equal(await count(),1);
+  const replay=await api(url+'/gallery',body,'POST',club);
+  assert.deepEqual(replay.body,save.body);
+  assert.equal(await count(),1);
+  const saved=await api(url+'/query',{...period,widgetIds:[save.body.widgetId]},'POST',club);
+  assert.equal(saved.status,200,saved.text);
+  assert.deepEqual(saved.body.widgets[0].gallery.groups,preview.body.result.gallery.groups);
+ }
+});
+
+test('new Radar uses measured team reference and binds the newly saved series IDs',async()=>{
+ await q.query('update training_load.dashboard_pages_activation set enabled=true');
+ const club=world.accounts.find(a=>a.role==='club_admin');
+ const measured=await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,athleteIds:world.ids.athleteIds,
+  entryMethod:'api_import',labels:['Radar distance A','Radar distance B','Radar distance C']});
+ const created=await api('/api/training-load/dashboards',{name:'New Radar gallery'},'POST',club);
+ assert.equal(created.status,201,created.text);
+ const d=created.body.dashboard;
+ const page=(await q.query('select * from training_load.dashboard_pages where dashboard_id=$1',[d.id])).rows[0];
+ const url=`/api/training-load/dashboards/${d.id}/pages/${page.id}`;
+ const draft={kind:'radar',title:'Radar profile',groupBy:'cohort',teamId:world.ids.teamA,series:measured.map(def=>({
+  metricDefinitionId:def.id,dataScopeLevel:'session',analyticalAggregation:'sum',
+ }))};
+ const preview=await api(url+'/query',{...period,galleryDraft:draft},'POST',club);
+ assert.equal(preview.status,200,preview.text);
+ assert.equal(preview.body.result.references.axes.length,3);
+ assert.equal(preview.body.result.references.status,'ready',preview.text);
+ const body={requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),draft,
+  expectedDashboardRevision:d.revision,expectedPageRevision:page.revision};
+ const denied=await api(url+'/gallery',body,'POST',world.accounts.find(a=>a.role==='athlete'));
+ assert.equal(denied.status,404,denied.text);
+ const saved=await api(url+'/gallery',body,'POST',club);
+ assert.equal(saved.status,200,saved.text);
+ const stored=(await q.query('select presentation_config from training_load.dashboard_widgets where id=$1',[saved.body.widgetId])).rows[0];
+ const ids=(await q.query('select id from training_load.dashboard_widget_series where widget_id=$1 order by series_order',[saved.body.widgetId])).rows.map(row=>row.id);
+ assert.deepEqual(stored.presentation_config.referenceConfig.axes.map(axis=>axis.seriesId),ids);
+ const queried=await api(url+'/query',{...period,widgetIds:[saved.body.widgetId]},'POST',club);
+ assert.equal(queried.status,200,queried.text);
+ assert.deepEqual(queried.body.widgets[0].references.axes.map(axis=>axis.points),preview.body.result.references.axes.map(axis=>axis.points));
 });

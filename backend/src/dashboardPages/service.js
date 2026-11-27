@@ -17,6 +17,8 @@ import {canViewDashboardRow,canManageDashboardRow,dashboardWidgetsForViewer,dash
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
+import {buildGalleryDraft,bindGallerySeries} from './galleryDraft.js';
+import {adminWriteKit} from '../sourceMetricMappingService.js';
 import {dashboardManageOffered,dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor,markDashboardManageWrite} from '../dashboardManageAccess.js';
 
 export const pageError=(code='notFound',status=404)=>Object.assign(new Error(code),{code,httpStatus:status,status});
@@ -177,6 +179,18 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const filter=Object.fromEntries(['athleteIds','activityId','componentId'].filter(k=>Object.hasOwn(body,k)).map(k=>[k,body[k]]));
    if(!validateContract('runtimeFilter',filter).valid)throw pageError('invalidRequest',400);
    let shellFilter;try{shellFilter=normalizeShellFilter(body.shellFilter)}catch{throw pageError('invalidRequest',400)}
+   if(body.galleryDraft!==undefined){
+    if(!canManageDashboardRow(target.req,target.dashboard)||!dashboardManageOffered(target.req,target.workspace,target.dashboard))throw pageError();
+    if(['widgetIds','referencePreview','metricPreview'].some(key=>Object.hasOwn(body,key)))throw pageError('invalidRequest',400);
+    const widget=await buildGalleryDraft(q,target,body.galleryDraft);
+    const namedAthletes=dashboardNamedAthletesAllowed(target.req,target.workspace);
+    const options={defaultFilter:page.default_filter,requestFilter:filter,shellFilter};
+    const results=await queryDashboardForViewer(target.workspace,[widget],period,{...options,queryRunner:q},{namedAthletes});
+    const clubId=widget.presentation_config.referenceConfig?.clubId;
+    const [result]=await attachReferenceResults({query:q,widgets:[widget],results,workspace:target.workspace,period,...options,referenceClubId:clubId,enabled:Boolean(clubId)&&namedAthletes});
+    const previewWidget={...widget,series:widget.series.map(({galleryCalculation,...entry})=>entry)};
+    return {widget:previewWidget,result:attachGalleryResult(widget,result),resolvedPeriod:period};
+   }
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
    let selected=dashboardWidgetsForViewer(target.req,widgets).filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
@@ -237,6 +251,58 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    return {receipt};
   });
  }
+ async function createGallery({req,dashboardId,pageId,body}){
+  if(!body||Object.keys(body).some(k=>!['expectedPageRevision','expectedDashboardRevision','requestId','requestIssuedAt','draft'].includes(k))
+     ||!isUuid(body.requestId)||!validIssuedAt(body.requestIssuedAt)
+     ||!Number.isSafeInteger(body.expectedPageRevision)||!Number.isSafeInteger(body.expectedDashboardRevision))throw pageError('invalidRequest',400);
+  return transaction(async q=>{
+   await q('select pg_advisory_xact_lock(hashtextextended($1,0))',[`dashboard-page:${req.user.id.toLowerCase()}:${body.requestId.toLowerCase()}`]);
+   if(body.draft?.kind==='radar')await q('select pg_advisory_xact_lock(hashtextextended($1,0))',[`dashboard-reference:${req.user.id.toLowerCase()}:${body.requestId.toLowerCase()}`]);
+   const target=await lockManagedPageTarget(q,req,dashboardId);
+   const operation='createGallery';
+   const hash=createHash('sha256').update(canonicalKey({dashboardId,pageId,operation,body})).digest('hex');
+   const replay=await recordedPageRequest(q,target,req.user.id,body.requestId,hash,operation,now);
+   if(replay)return replay.receipt;
+   freshRequest(body,now);
+   await q('select id from training_load.dashboard_pages where dashboard_id=$1 order by id for update',[dashboardId]);
+   const page=await requirePage(q,dashboardId,pageId);
+   if(page.revision!==body.expectedPageRevision||target.dashboard.revision!==body.expectedDashboardRevision)throw pageError('staleRevision',409);
+   const draft=await buildGalleryDraft(q,target,body.draft);
+   const reference=draft.presentation_config.referenceConfig;
+   let referenceContext;
+   if(reference){
+    referenceContext=await resolveReferenceContext({...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)});
+    if(!dashboardNamedAthletesAllowed(target.req,target.workspace)||!await adminWriteKit.rightsStillHold({query:q},referenceContext))throw pageError();
+   }
+   const layout=(await q('select coalesce(max(y+height),0) as y, coalesce(max(greatest(widget_order,mobile_order)),0)+1 as position from training_load.dashboard_widgets where page_id=$1',[pageId])).rows[0];
+   const write=async (operation,id,payload,revision=null)=>(await q('select training_load.write_dashboard_page_widget($1,$2,$3,$4,$5,$6,$7,$8) result',[dashboardId,pageId,revision,operation,id,null,req.user.id,payload])).rows[0].result;
+   const {widgetId}=await write('create',null,{widgetType:draft.widget_type,title:draft.title,groupBy:draft.group_by,widgetOrder:layout.position,mobileOrder:layout.position,x:0,y:layout.y,width:6,height:5},page.revision);
+   const ids=new Map();
+   let revision=1;
+   for(const entry of draft.series){
+    const added=await write('addSeries',widgetId,{expectedWidgetRevision:revision,seriesOrder:entry.series_order,
+     ...(entry.built_in_series_key?{builtInSeriesKey:entry.built_in_series_key}:{metricDefinitionId:entry.metric_definition_id}),
+     axis:entry.axis,dataScopeLevel:entry.data_scope_level,analyticalAggregation:entry.analytical_aggregation,aggregationRolePolicy:entry.aggregation_role_policy});
+    revision=added.widgetRevision;
+    ids.set(entry.id,added.seriesId);
+   }
+   const presentation=bindGallerySeries(draft.presentation_config,ids);
+   if(reference){
+    const referenceHash=adminWriteKit.hashOf({dashboardId,pageId,widgetId,draft:body.draft});
+    await q('select training_load.save_dashboard_reference_binding($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
+     [req.user.id,reference.clubId,referenceContext.teamId??null,body.requestId,referenceHash,dashboardId,widgetId,revision,draft.group_by,presentation.referenceConfig]);
+   }else{
+    await write('content',widgetId,{expectedWidgetRevision:revision,presentation:{mode:'replace',value:presentation}});
+   }
+   await markDashboardManageWrite(q,target.req,target.manageScopes);
+   const receipt={widgetId};
+   await q(`insert into training_load.dashboard_page_requests
+      (initiator_user_id,request_id,dashboard_id,workspace,operation,payload_hash,receipt,request_issued_at,retain_until)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$8::timestamptz+interval '168 hours 10 minutes')`,
+    [req.user.id,body.requestId,dashboardId,target.workspace,operation,hash,receipt,body.requestIssuedAt]);
+   return receipt;
+  });
+ }
  async function writeWidget({req,dashboardId,pageId,widgetId=null,seriesId=null,operation,body}){
   return transaction(async q=>{
    const target=await lockManagedPageTarget(q,req,dashboardId);
@@ -273,5 +339,5 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    return result;
   });
  }
- return {read,detail,queryPage,mutate,status,copy,writeWidget};
+ return {read,detail,queryPage,mutate,status,copy,createGallery,writeWidget};
 }

@@ -1,5 +1,5 @@
 import { canManageExternalSchedules } from "./permission-nav.js";
-import { loadReferenceSection, referencesMayBeLeft, referenceAction } from "./dashboard-references.js";
+import { loadReferenceSection, referenceState, referencesMayBeLeft, referenceAction } from "./dashboard-references.js";
 import {formatDate as formatDashboardReportDate} from './utils.js';
 import {printDashboardPage} from './training-load-dashboard-print.js';
 import {handleDashboardPageAction} from './training-load-pages-data.js';
@@ -1357,10 +1357,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   // -------------------- Dashboards UX H1: guided "Add metric" panel --------------------
-  if (type === "training-load-analysis-add-widget") {
+  if (type === "training-load-analysis-add-widget" || type === "training-load-analysis-add-gallery-widget") {
     if (!state.trainingLoad.analysis.dashboard) return true;
     if (analysisWidgetActionsBlocked()) return true;
-    if (state.trainingLoad.analysis.simplePreview && await openSimpleEditor(null, renderTrainingLoad)) return true;
+    if (type.endsWith("add-widget") && state.trainingLoad.analysis.simplePreview && await openSimpleEditor(null, renderTrainingLoad)) return true;
     openAnalysisMetricPanel(null);
     // The catalog load flips metricPicker.loading synchronously, so this
     // first render already shows "Loading metrics..." under the built-ins;
@@ -1400,6 +1400,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const panel = state.trainingLoad.analysis.metricPanel;
     if (!panel || panel.saving) return true;
     panel.widgetType = action.dataset.widgetType || panel.widgetType;
+    panel.galleryDraft=null;
     renderTrainingLoad();
     return true;
   }
@@ -1407,8 +1408,25 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const a = state.trainingLoad.analysis;
     const panel = a.metricPanel;
     const widget = a.widgets.find(row => row.id === panel?.widgetId);
-    if (!widget || panel.saving || analysisWidgetActionsBlocked()) return true;
+    if (!panel || panel.saving || analysisWidgetActionsBlocked()) return true;
     const kind = action.dataset.chartKind;
+    if (!panel.widgetId && a.pagesAvailable) {
+      if (!["area","horizontal_bar","combined","heatmap","scatter","stacked","boxplot","radar"].includes(kind)) return true;
+      const distribution=["heatmap","boxplot"].includes(kind);
+      const count=kind==="radar"?3:["combined","scatter","stacked"].includes(kind)?2:1;
+      const first=(a.metricPicker.definitions??[]).find(def=>def.id===panel.metric?.id&&["numeric","number"].includes(def.valueType));
+      panel.galleryDraft={kind,series:Array.from({length:count},(_,index)=>({
+        metricDefinitionId:index===0?first?.id??"":"",
+        dataScopeLevel:index===0&&first?panel.scope:"session",
+        analyticalAggregation:distribution?"none":"sum",
+        ...(kind==="combined"?{mark:index===0?"bar":"line",axis:index===0?"primary":"secondary"}:{}),
+      })),...(kind==="radar"?{teamId:""}:{}),...(kind==="stacked"?{additive:false}:{})};
+      panel.groupBy=kind==="radar"?"cohort":"day";
+      renderTrainingLoad();
+      if(kind==="radar"&&!referenceState().initialized) void loadReferenceSection(renderTrainingLoad);
+      return true;
+    }
+    if (!widget) return true;
     if (kind === "radar") {
       if (!a.referencesAvailable || !["line_chart", "bar_chart"].includes(widget.widget_type)) return true;
       await referenceAction('openBinding', widget.id);
@@ -1424,6 +1442,36 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
       draft.galleryKeys = draft.series.map(row => row.key);
       a.metricPanel = null;
       void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if(type==="training-load-analysis-panel-gallery-field"){
+    const a=state.trainingLoad.analysis,panel=a.metricPanel,draft=panel?.galleryDraft;
+    if(!draft||panel.saving)return true;
+    const {field,index}=action.dataset;
+    const entry=draft.series[Number(index)];
+    if(field==="teamId")draft.teamId=action.value;
+    else if(field==="additive")draft.additive=action.checked;
+    else if(entry&&["metricDefinitionId","dataScopeLevel","analyticalAggregation","mark","axis"].includes(field)){
+      if(field==="metricDefinitionId"){
+        const builtin=BUILT_IN_SERIES.find(def=>def.key===action.value);
+        const definition=builtin??a.metricPicker.definitions.find(def=>def.id===action.value);
+        delete entry.metricDefinitionId;
+        delete entry.builtInSeriesKey;
+        if(builtin){
+          entry.builtInSeriesKey=builtin.key;
+          entry.dataScopeLevel=BUILT_IN_FIXED_SCOPE[builtin.key]??entry.dataScopeLevel;
+        }else if(definition){
+          entry.metricDefinitionId=definition.id;
+          if(definition.scopeCapabilities?.length&&!definition.scopeCapabilities.includes(entry.dataScopeLevel))entry.dataScopeLevel=definition.scopeCapabilities[0];
+        }
+        if(index==="0"&&!panel.titleTouched&&definition)panel.title=definition.label;
+        const allowed=definition?.allowedAggregations??[];
+        if(!["heatmap","boxplot"].includes(draft.kind)&&allowed.length&&!allowed.includes(entry.analyticalAggregation)){
+          entry.analyticalAggregation=allowed.find(value=>value!=="none")??"sum";
+        }
+      }else entry[field]=action.value;
     }
     renderTrainingLoad();
     return true;

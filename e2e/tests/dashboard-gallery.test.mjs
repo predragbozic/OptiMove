@@ -127,6 +127,36 @@ test('an existing gallery can become a table without a hidden gallery setting bl
  }finally{await context.close()}
 });
 
+for(const width of [1280,390]) test(`${width}px: add Area from View and preview before atomic save`,async()=>{
+ const {context,page,pageErrors}=await openAs(browser,world,'club_admin',width);
+ try{
+  await openDashboard(page,byRole.get('club_admin').dashboard.id);
+  await page.getByRole('button',{name:'Add widget',exact:true}).click();
+  const editor=page.getByRole('dialog',{name:'Add metric'});
+  assert.equal(await editor.locator('.tl-metric-panel-types button:enabled svg').count(),12);
+  await editor.getByRole('button',{name:'Area',exact:true}).click();
+  const metric=editor.getByLabel('Measurement 1');
+  await metric.selectOption({label:'Distance part A'});
+  await editor.getByLabel('Title').fill(`Area preview ${width}`);
+  await editor.getByLabel('Title').press('Tab');
+  const [preview]=await Promise.all([
+   page.waitForResponse(r=>r.url().endsWith('/query')&&r.request().postDataJSON()?.galleryDraft),
+   editor.getByRole('button',{name:'Load preview',exact:true}).click(),
+  ]);
+  assert.equal(preview.status(),200,await preview.text());
+  assert.ok((await preview.json()).result.series[0].data.current.some(row=>typeof row.value==='number'));
+  await editor.locator('[aria-label="Widget preview"] optimove-dashboard-chart svg').waitFor();
+  assert.equal(await page.locator('.tl-analysis-grid').getByRole('heading',{name:`Area preview ${width}`}).count(),0);
+  const [saved]=await Promise.all([
+   page.waitForResponse(r=>r.url().endsWith('/gallery')&&r.request().method()==='POST'),
+   editor.getByRole('button',{name:'Save metric',exact:true}).click(),
+  ]);
+  assert.equal(saved.status(),200,await saved.text());
+  await page.locator('.tl-analysis-grid').getByRole('heading',{name:`Area preview ${width}`}).waitFor();
+  assert.deepEqual(pageErrors,[]);
+ }finally{await context.close()}
+});
+
 test('PDF never executes or fetches active content from a live SVG snapshot',async()=>{
  const {context,page}=await openAs(browser,world,'platform_admin',1280),unsafeRequests=[];
  context.on('request',request=>{if(request.url().includes('svg-test.invalid'))unsafeRequests.push(request.url())});

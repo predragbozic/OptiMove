@@ -616,7 +616,17 @@ export function setMetricPanelMetric(panel, metric) {
 }
 
 export function metricPanelCanSave(panel = state.trainingLoad.analysis.metricPanel) {
+  if (panel?.galleryDraft) return Boolean(!panel.saving && !panel.previewLoading && panel.preview?.body === metricPanelPreviewBody(panel));
   return Boolean(panel && panel.metric && panel.title.trim() && !panel.saving);
+}
+
+export function metricPanelCanPreview(panel) {
+  if (!panel?.galleryDraft) return metricPanelCanSave(panel);
+  const {kind,series,teamId,additive}=panel.galleryDraft;
+  const metrics=series.map(row=>row.metricDefinitionId??row.builtInSeriesKey);
+  return Boolean(panel.title.trim() && !panel.saving && metrics.every(Boolean)
+    && new Set(metrics).size===series.length
+    && (kind!=="radar"||teamId) && (kind!=="stacked"||additive));
 }
 
 export function metricPanelPreviewBody(panel) {
@@ -625,19 +635,20 @@ export function metricPanelPreviewBody(panel) {
   return JSON.stringify({
     dateFrom: chartDay ?? period.dateFrom, dateTo: chartDay ?? period.dateTo,
     ...analysisRuntimeFilterPayload(),
+    ...(panel.galleryDraft ? {galleryDraft:{...panel.galleryDraft,title:panel.title.trim(),groupBy:panel.groupBy}} : {
     metricPreview: {
       ...(panel.widgetId ? { widgetId: panel.widgetId } : {}),
       ...seriesBodyForMetric(panel.metric),
       title: panel.title.trim(), widgetType: panel.widgetType, groupBy: panel.groupBy,
       dataScopeLevel: panel.scope, analyticalAggregation: panel.aggregation,
-    },
+    }}),
   });
 }
 
 export async function previewAnalysisMetricPanel(onPainted) {
   const a = state.trainingLoad.analysis;
   const panel = a.metricPanel;
-  if (!a.pagesAvailable || !a.selectedPageId || !metricPanelCanSave(panel) || panel.previewLoading) return;
+  if (!a.pagesAvailable || !a.selectedPageId || !metricPanelCanPreview(panel) || panel.previewLoading) return;
   ensureAnalysisPeriod();
   const body = metricPanelPreviewBody(panel);
   panel.previewLoading = true;
@@ -735,6 +746,32 @@ export async function saveAnalysisMetricPanel(onPainted) {
   const a = state.trainingLoad.analysis;
   const panel = a.metricPanel;
   if (!panel || !a.dashboard || !metricPanelCanSave(panel)) return false;
+  if (panel.galleryDraft) {
+    if(panel.galleryRequest?.previewBody!==panel.preview.body){
+      panel.galleryRequest={previewBody:panel.preview.body,body:{
+        requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),
+        expectedPageRevision:a.page.revision,expectedDashboardRevision:a.dashboard.revision,
+        draft:JSON.parse(panel.preview.body).galleryDraft,
+      }};
+    }
+    panel.saving=true;
+    panel.error="";
+    onPainted?.();
+    try {
+      await api(`${analysisPageWriteBase()}/gallery`,{method:"POST",body:JSON.stringify(panel.galleryRequest.body)});
+    } catch (error) {
+      panel.error=error.status===409?"The dashboard changed. Reopen the page and preview again.":"This chart could not be saved. Check its settings and try again.";
+      return false;
+    } finally {
+      panel.saving=false;
+      onPainted?.();
+    }
+    a.metricPanel=null;
+    await loadDashboardDetail(a.dashboard.id,onPainted,{force:true});
+    await queryAnalysisDashboard(onPainted,{force:true});
+    a.notice="Widget saved.";
+    return true;
+  }
   const base = analysisPageWriteBase();
   const post = (url, body) => api(url, { method: "POST", body: JSON.stringify(body) });
   const patch = (url, body) => api(url, { method: "PATCH", body: JSON.stringify(body) });
