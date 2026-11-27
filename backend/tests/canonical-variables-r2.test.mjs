@@ -7,6 +7,7 @@
 // OPTIMOVE): one migrated through v37 that rehearses v38's apply / rollback /
 // re-apply, one migrated through v38 for the behaviour. Contract:
 // docs/ai/gpexe-metric-variable-mapping-discovery.md, decision C99 and section J3b.
+import { stageDashboardManageForFixture } from "./support/dashboard-manage-grants.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -1122,6 +1123,7 @@ test("15. v38 reads back the same after pg_dump and pg_restore (what gpexe-backu
 });
 
 test("16. an archive changes no history: a dashboard series bound to a variable before its archive keeps reading the variable's values", async () => {
+  await stageDashboardManageForFixture(k);
   const v = await created(W.caA.cookie, { levels: ["session"] });
   const athleteUser = await user("athlete-dash");
   const athleteId = (await one(k, `insert into public.athletes (user_id, full_name, display_name, device_timezone) values ($1,'Athlete D','Athlete D','UTC') returning id`, [athleteUser])).id;

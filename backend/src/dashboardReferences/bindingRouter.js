@@ -6,6 +6,8 @@ import { adminWriteKit } from '../sourceMetricMappingService.js';
 import { resolveReferenceContext } from './access.js';
 import { referenceUuid, validReferenceConfig } from './contract.js';
 import { canManageDashboardRow,dataWorkspaceForActiveWorkspace,dataWorkspaceMatches } from '../trainingLoadDashboardAccess.js';
+import { resolveActiveWorkspaceReadOnly } from '../workspace.js';
+import { dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor,loadDashboardWriteActor,markDashboardManageWrite } from '../dashboardManageAccess.js';
 const { boundedRead, rightsStillHold, hashOf } = adminWriteKit;
 const missing=res=>res.status(404).json({error:'notFound'});
 const deny=()=>Object.assign(new Error('notFound'),{code:'42501'});
@@ -17,17 +19,36 @@ export function createReferenceBindingRouter(){
   const b=req.body,ctx=req.referenceContext;
   if(write&&(!b||Object.keys(b).some(key=>!['requestId','expectedWidgetRevision','groupBy','referenceConfig'].includes(key))||!referenceUuid(b.requestId)||!Number.isSafeInteger(b.expectedWidgetRevision)||b.expectedWidgetRevision<1||!['athlete','cohort'].includes(b.groupBy)||!Object.hasOwn(b,'referenceConfig')||b.referenceConfig!==null&&!validReferenceConfig(b.referenceConfig)))return res.status(400).json({error:'invalidRequest'});
   const result=await boundedRead(async client=>{
-   const d=(await client.query('select * from training_load.dashboards where id=$1',[req.params.dashboardId])).rows[0];
+   const query=client.query.bind(client);
+   if(write)await query('select pg_advisory_xact_lock(hashtextextended($1,0))',
+    ['dashboard-reference:'+ctx.userId.toLowerCase()+':'+b.requestId.toLowerCase()]);
+   let d=(await query('select * from training_load.dashboards where id=$1',[req.params.dashboardId])).rows[0];
    const workspace=dataWorkspaceForActiveWorkspace(ctx.workspace,req);
    if(!d||!canManageDashboardRow(req,d)||!dataWorkspaceMatches(workspace,d))throw deny();
+   let actor,scopes;
+   if(write){
+    const owner=dashboardOwnerWriteScope(d);
+    scopes=await lockDashboardManageCeilings(query,[dashboardWorkspaceWriteScope(workspace),owner]);
+    await lockDashboardActor(query,req);
+    actor=await loadDashboardWriteActor(query,req);
+    if(!actor)throw deny();
+    const {workspace:active}=await resolveActiveWorkspaceReadOnly(actor.user.id,actor.authz,query);
+    if(active?.type!==ctx.workspace.type||String(active?.scopeId)!==String(ctx.workspace.scopeId))throw deny();
+    if(!await dashboardManageRightsStillHold(query,actor,scopes)||!await rightsStillHold(client,ctx))throw deny();
+    d=(await query('select * from training_load.dashboards where id=$1 for update',[req.params.dashboardId])).rows[0];
+    if(!d||!canManageDashboardRow(actor,d)||!dataWorkspaceMatches(dataWorkspaceForActiveWorkspace(active,actor),d)
+      ||JSON.stringify(dashboardOwnerWriteScope(d))!==JSON.stringify(owner))throw deny();
+   }
    const widget=(await client.query('select * from training_load.dashboard_widgets where id=$1 and dashboard_id=$2',[req.params.widgetId,d.id])).rows[0];if(!widget)throw deny();
    const page=(await client.query('select is_home from training_load.dashboard_pages where id=$1 and dashboard_id=$2',[widget.page_id,d.id])).rows[0];
    if(!page||!page.is_home&&(req.app?.locals?.dashboardPagesEnabled!==true||!await pageDatabaseEnabled(client.query.bind(client))))throw deny();
    if(!write){const series=(await client.query('select s.id,s.metric_definition_id,s.analytical_aggregation,s.data_scope_level,s.resolution_status,d.label,v.unit from training_load.dashboard_widget_series s left join training_load.metric_definitions d on d.id=s.metric_definition_id left join training_load.metric_definition_versions v on v.id=d.current_version_id where s.widget_id=$1 order by s.series_order,s.id',[widget.id])).rows;return{widget:{id:widget.id,title:widget.title,widgetType:widget.widget_type,displayConfig:widget.display_config,revision:widget.revision,groupBy:widget.group_by,referenceConfig:widget.presentation_config?.referenceConfig??null},series};}
    if(b.referenceConfig)await assertReferenceSource(client.query.bind(client),b.referenceConfig,ctx.owner.clubId,ctx.workspace,widget.presentation_config?.referenceConfig);
-   if(!await rightsStillHold(client,ctx))throw deny();
    const hash=hashOf({contract:'dashboard-reference-binding/v1',dashboardId:d.id,widgetId:widget.id,body:b});
-   return(await client.query('select training_load.save_dashboard_reference_binding($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) receipt',[ctx.userId,ctx.owner.clubId,ctx.teamId??null,b.requestId,hash,d.id,widget.id,b.expectedWidgetRevision,b.groupBy,b.referenceConfig])).rows[0].receipt;
+   const prior=await query('select 1 from training_load.dashboard_reference_requests where actor_id=$1 and request_id=$2',[ctx.userId,b.requestId]);
+   const receipt=(await query('select training_load.save_dashboard_reference_binding($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) receipt',[ctx.userId,ctx.owner.clubId,ctx.teamId??null,b.requestId,hash,d.id,widget.id,b.expectedWidgetRevision,b.groupBy,b.referenceConfig])).rows[0].receipt;
+   if(!prior.rowCount)await markDashboardManageWrite(query,actor,scopes);
+   return receipt;
   },{locks:write});
   if(!write){
    for(const series of result.series){

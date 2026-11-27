@@ -150,3 +150,6 @@ migrations_v2/202612051000_training_load_v103_activity_identity_manage_bridge.sq
 docs/runbooks/training-load-m3c-v103*.sql text eol=lf
 backend/scripts/training-load-m3c-v103-rehearsal.sh text eol=lf
 backend/scripts/training-load-m3c-v103-rehearsal.ps1 text eol=lf
+
+migrations_v2/202612071000_training_load_v105_dashboards_manage_bridge.sql text eol=lf
+docs/runbooks/dashboards-manage-v105-*.sql text eol=lf

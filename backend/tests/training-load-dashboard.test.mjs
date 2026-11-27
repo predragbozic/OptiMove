@@ -9,6 +9,7 @@
 // (schema.sql / test-harness.mjs / DASHBOARD_MODEL_REPORT.md /
 // DASHBOARD_UX_SPEC.md) — every invariant asserted below is a real
 // production behavior, not a re-run of that disposable-DB PoC.
+import { stageDashboardManageForFixture } from "./support/dashboard-manage-grants.mjs";
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
@@ -252,6 +253,7 @@ before(async () => {
   migrationsDir = await writeMigrationsDir("primary", await readMigrationFiles(MIGRATIONS));
   await runner.runMigrations({ databaseUrl: db.url, migrationsRoot: migrationsDir });
   await applyRoleReadMigrations(db.url);
+  await stageDashboardManageForFixture(adminClient);
   // v53's club hides table, empty (the template resolver reads it): see the helper.
   await createClubHidesStandIn(adminClient);
 
@@ -4750,7 +4752,30 @@ test("S2c S02 real series and presentation trigger failures roll back the entire
   assert.deepEqual(await s2bDatabaseState(), before);
   assert.deepEqual(await s2cLedger(fixture, prepared.body.requestId), []);
   assert.equal((await s2aState(fixture.dashboard.id)).widgets.length, 0);
-  s2cReceipt(await harness.save(fixture, prepared.body), "created");
+  const markerTable = "training_load.dashboards_manage_v105_use";
+  const clearMarker = () => query(`update ${markerTable} set first_checked_write_at=null`);
+  const readMarker = async () => (await query(`select first_checked_write_at from ${markerTable}`)).rows[0].first_checked_write_at;
+  await clearMarker();
+  await query(`create function training_load.test_simple_marker_error() returns trigger language plpgsql as
+    $marker$ begin raise exception 'test marker write error'; end $marker$;
+    create trigger test_simple_marker_error before update on ${markerTable}
+    for each row execute function training_load.test_simple_marker_error()`);
+  try {
+    const failed = await harness.save(fixture, prepared.body);
+    assert.equal(failed.body.error, "saveFailed");
+    assert.equal(await readMarker(), null);
+    assert.deepEqual(await s2cLedger(fixture, prepared.body.requestId), []);
+    assert.equal((await s2aState(fixture.dashboard.id)).widgets.length, 0);
+  } finally {
+    await query(`drop trigger test_simple_marker_error on ${markerTable}; drop function training_load.test_simple_marker_error()`);
+  }
+  const saved = s2cReceipt(await harness.save(fixture, prepared.body), "created");
+  assert.ok(await readMarker() instanceof Date);
+  await clearMarker();
+  const replay = await harness.save(fixture, prepared.body);
+  assert.equal(replay.body.verification, "replayed");
+  assert.deepEqual(s2cReceipt(replay, "created"), saved);
+  assert.equal(await readMarker(), null);
 });
 
 test("S2c S03 same and truly concurrent request IDs yield one durable result without extra rows or revisions", async testContext => {
@@ -4880,7 +4905,18 @@ test("S2c S08 unrelated dashboard layout changes after preview do not block a cr
   assert.ok(!(saved.x < before.x + before.width && before.x < saved.x + saved.width && saved.y < before.y + before.height && before.y < saved.y + saved.height));
 });
 
-test("S2c S09 a real COMMIT followed by a lost acknowledgement returns a receipt verified on a new read-only client", async testContext => {
+function assertS2cProtectedReceiptLookup(observations, read) {
+  assert.equal(read.read_only, "off", "row locks need a lock-capable transaction");
+  const statements = observations.filter(item => item.checkout === read.checkout).map(item => item.sql);
+  const beforeRead = statements.slice(0, statements.indexOf(read.sql));
+  const authorization = beforeRead.findIndex(sql => /user_has_permission.+dashboards\.manage/i.test(sql));
+  const lock = beforeRead.findIndex(sql => /from training_load\.dashboards.+for share/i.test(sql));
+  assert.ok(authorization >= 0 && lock > authorization);
+  assert.ok(statements.every(sql => /^\s*(?:begin|set local|select|rollback)\b/i.test(sql)));
+  assert.equal(statements.at(-1), "rollback");
+}
+
+test("S2c S09 a real COMMIT followed by a lost acknowledgement returns a receipt verified on a new lock-capable client", async testContext => {
   const fixture = await s2aFixture("s2c-commit-lost");
   const harness = await s2cHttpHarness(testContext, { commitFault: "after" });
   const prepared = await harness.preview(fixture);
@@ -4891,7 +4927,7 @@ test("S2c S09 a real COMMIT followed by a lost acknowledgement returns a receipt
   const recovery = harness.observations.find(item => item.checkout > commit.checkout && /dashboard_simple_requests/i.test(item.sql));
   assert.ok(recovery, JSON.stringify(harness.observations));
   assert.notEqual(recovery.backendPid, commit.backendPid);
-  assert.equal(recovery.read_only, "on");
+  assertS2cProtectedReceiptLookup(harness.observations, recovery);
   assert.equal(recovery.database_name, db.name);
   assert.ok(harness.lifecycle.some(event => event.kind === "release" && event.checkout === commit.checkout && event.destroy));
   assert.deepEqual((await s2cLedger(fixture, prepared.body.requestId))[0].receipt, receipt);
@@ -4964,7 +5000,9 @@ test("S2c S10/S11 status needs only current authentication and request ID; notRe
   const missing = await statusHarness.request(fixture.dashboard.id, "requests/status", { cookie: currentCookie, body: { requestId: unknownId } });
   assert.deepEqual(missing, { status: 200, body: { status: "notRecorded", requestId: unknownId, retrySameRequest: true } });
   assert.ok(!/rolled.?back|not.?saved/i.test(JSON.stringify(missing.body)));
-  assert.ok(statusHarness.observations.filter(item => /dashboard_simple_requests/i.test(item.sql)).every(item => item.read_only === "on"));
+  const receiptReads = statusHarness.observations.filter(item => /dashboard_simple_requests/i.test(item.sql));
+  assert.equal(receiptReads.length, 2);
+  for (const read of receiptReads) assertS2cProtectedReceiptLookup(statusHarness.observations, read);
   assert.deepEqual(await s2bDatabaseState(), before);
 });
 

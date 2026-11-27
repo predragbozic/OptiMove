@@ -1,3 +1,4 @@
+import { stageDashboardManageForFixture } from "./support/dashboard-manage-grants.mjs";
 import { asActor, ROLE_IDS } from "./support/permission-roles-world.mjs";
 import { applyEstimateBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // 6b-B (phase 5b): the estimate proposal and save routes, migration v64 (the request key, the estimate participant's time zone),
@@ -1349,6 +1350,7 @@ test("18. 6b-D: the dashboards leave an estimate out under every policy - all so
 });
 
 test("18b. 6b-D: the series routes take 'estimate' - a new series and a change of an existing one store it, with no connection", async () => {
+  await stageDashboardManageForFixture(admin);
   const team = await setupTeam();
   const distance = String((await admin.query(`select id from training_load.metric_definitions where owner_scope = 'system' and label like 'GPEXE total distance %'`)).rows[0].id);
   const dapi = (path, opts) => call("/api/training-load/dashboards", path, { cookie: team.coach.cookie, ...opts });

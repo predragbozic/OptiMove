@@ -1,28 +1,34 @@
 import { pageSchemaInstalled } from '../dashboardPages/config.js';
 import { applySimplePage } from '../dashboardPages/simple.js';
-import { createHash } from 'node:crypto';
 import { isUuid } from './schema.js';
 import { canonicalKey, compileSimpleDraft } from './compiler.js';
 import { createSimpleCapabilityReader } from './capabilities.js';
 import { authorizePreviewTarget, loadPreviewExisting, loadPreviewContext } from './previewContext.js';
 import { buildSimplePreviewBinding } from './previewBinding.js';
 import { canManageDashboardRow, dataWorkspaceMatches } from '../trainingLoadDashboardAccess.js';
+import { dashboardWorkspaceWriteScope, dashboardOwnerWriteScope, lockDashboardManageCeilings, dashboardManageRightsStillHold, lockDashboardActor, shouldMarkDashboardManageWrite } from '../dashboardManageAccess.js';
 import { withPreviewTransaction, previewError } from './previewTransaction.js';
 import { runSimpleSaveTransaction } from './saveTransaction.js';
 import { validateSimpleSaveRequest, simpleSavePayloadHash, SIMPLE_REQUEST_WINDOW_MS } from './saveRequest.js';
 
-async function lockActor(queryRunner, req) {
-  const userId = req.user.id;
-  await queryRunner('select id from public.users where id=$1 for share', [userId]);
-  if (req.sessionToken) await queryRunner('select user_id from public.auth_sessions where user_id=$1 and token_hash=$2 for share', [userId, createHash('sha256').update(String(req.sessionToken)).digest('base64url')]);
-  for (const table of ['user_global_roles', 'user_club_roles', 'user_team_roles', 'user_workspace_preferences']) {
-    await queryRunner(`select user_id from public.${table} where user_id=$1 for share`, [userId]);
-  }
-}
 
 async function authorizeSaveTarget(queryRunner, req, dashboardId) {
   try { return await authorizePreviewTarget(queryRunner, req, dashboardId, { requireWritable: false }); }
   catch (error) { if (error?.code === 'workspaceSelectionRequired') throw previewError('notFound', 404); throw error; }
+}
+
+async function lockManagedSaveTarget(queryRunner, req, dashboardId, { receipt = false } = {}) {
+  const initial = await authorizeSaveTarget(queryRunner, req, dashboardId);
+  const scopes = await lockDashboardManageCeilings(queryRunner, [dashboardWorkspaceWriteScope(initial.workspace), dashboardOwnerWriteScope(initial.dashboard)]);
+  await lockDashboardActor(queryRunner, req);
+  const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
+  if (canonicalKey(initial.workspace) !== canonicalKey(target.workspace) ||
+      !await dashboardManageRightsStillHold(queryRunner, target.req, scopes)) throw previewError('notFound', 404);
+  const lock = receipt ? 'for share' : 'for update';
+  const dashboard = (await queryRunner('select * from training_load.dashboards where id=$1 ' + lock, [dashboardId])).rows[0];
+  if (!dashboard || !canManageDashboardRow(target.req, dashboard) || !dataWorkspaceMatches(target.workspace, dashboard) ||
+      canonicalKey(dashboardOwnerWriteScope(dashboard)) !== canonicalKey(dashboardOwnerWriteScope(initial.dashboard))) throw previewError('notFound', 404);
+  return { ...target, dashboard, manageScopes: scopes };
 }
 
 async function lockCatalog(queryRunner, envelope, existing) {
@@ -60,14 +66,14 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
     if (!isUuid(widgetId) || !(await queryRunner('select id from training_load.dashboard_widgets where id=$1 and dashboard_id=$2', [widgetId, target.dashboard.id])).rows.length) throw previewError('notFound', 404);
     return row.receipt;
   }
-  const readOnly = (operation, budget = 5000) => {
+  const readReceipt = (operation, budget = 5000) => {
     const checkout = Math.min(1000, Math.max(1, Math.floor(budget / 4)));
-    return withPreviewTransaction({ pool, checkoutTimeoutMs: checkout, transactionTimeoutMs: Math.max(1, budget - checkout - 500), statementTimeoutMs: Math.min(3000, Math.max(1, budget - checkout - 500)) }, operation);
+    return withPreviewTransaction({ pool, locks: true, checkoutTimeoutMs: checkout, transactionTimeoutMs: Math.max(1, budget - checkout - 500), statementTimeoutMs: Math.min(3000, Math.max(1, budget - checkout - 500)) }, operation);
   };
   async function status({ req, dashboardId, body }) {
     if (!isUuid(req?.user?.id) || !isUuid(dashboardId)) throw previewError('notFound', 404);
-    return readOnly(async queryRunner => {
-      const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
+    return readReceipt(async queryRunner => {
+      const target = await lockManagedSaveTarget(queryRunner, req, dashboardId, { receipt: true });
       if (!body || Object.keys(body).length !== 1 || !isUuid(body.requestId)) throw previewError('invalidRequest', 400);
       const receipt = await recorded(queryRunner, target, body.requestId);
       return receipt ? { status: 'recorded', requestId: body.requestId, receipt } : { status: 'notRecorded', requestId: body.requestId, retrySameRequest: true };
@@ -77,19 +83,16 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
     if (!isUuid(req?.user?.id) || !isUuid(dashboardId)) throw previewError('notFound', 404);
     if (!isUuid(body?.requestId)) throw previewError('invalidRequest', 400);
     let payloadHash;
-    const verify = () => readOnly(async queryRunner => {
-      const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
+    const verify = () => readReceipt(async queryRunner => {
+      const target = await lockManagedSaveTarget(queryRunner, req, dashboardId, { receipt: true });
       return recorded(queryRunner, target, body.requestId, payloadHash);
     }, transactionOptions.recoveryTimeoutMs ?? 5000);
     try {
-      return await runSimpleSaveTransaction({ ...transactionOptions, pool, requestId: body.requestId, verify, write: async queryRunner => {
+      return await runSimpleSaveTransaction({ ...transactionOptions, pool, requestId: body.requestId, verify, write: async (queryRunner, writeDashboardManageMarker) => {
         await queryRunner('select pg_advisory_xact_lock(hashtextextended($1,0))', [`dashboard-simple:${req.user.id.toLowerCase()}:${body.requestId.toLowerCase()}`]);
-        await lockActor(queryRunner, req);
-        await authorizeSaveTarget(queryRunner, req, dashboardId);
-        await queryRunner('select id from training_load.dashboards where id=$1 for update', [dashboardId]);
+        const target = await lockManagedSaveTarget(queryRunner, req, dashboardId);
         // Pages are locked before the first widget lock, without changing Home hashes/tokens.
         if (await pageSchemaInstalled(queryRunner)) await queryRunner('select id from training_load.dashboard_pages where dashboard_id=$1 order by id for update', [dashboardId]);
-        const target = await authorizeSaveTarget(queryRunner, req, dashboardId);
         const editTarget = body.input?.editTarget;
         for (const candidate of [...new Set([widgetId, editTarget?.widgetId].filter(value => value != null))]) {
           if (!isUuid(candidate)) throw previewError('notFound', 404);
@@ -131,6 +134,7 @@ export function createSimpleSaveService({ pool, tokenService, now = () => Date.n
           ? await queryRunner('select training_load.save_simple_page_widget($1::uuid,$2::integer,$3::uuid,$4::uuid,$5::text,$6::timestamptz,$7::uuid,$8::uuid,$9::integer,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb) as receipt', [target.page.id, target.page.defaults_revision, ...args, body.input.draft.periodIntent.savePageDefaults ? JSON.stringify(body.input.draft.periodIntent.periodConfig) : null])
           : await queryRunner('select training_load.save_simple_widget($1::uuid,$2::uuid,$3::text,$4::timestamptz,$5::uuid,$6::uuid,$7::integer,$8::jsonb,$9::jsonb,$10::jsonb) as receipt', args);
         if (!result.rows[0]?.receipt) throw previewError('saveFailed');
+        if (shouldMarkDashboardManageWrite(target.req, target.manageScopes)) await writeDashboardManageMarker();
         return { receipt: result.rows[0].receipt, replayed: false };
       } });
     } catch (error) { throw stableSaveError(error); }
