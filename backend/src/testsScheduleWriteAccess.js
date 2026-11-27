@@ -6,7 +6,6 @@ import { resolveActiveWorkspaceReadOnly } from "./workspace.js";
 async function lockScheduleDestination(client, req, scopeType, scopeId) {
   if (!scopeId || (scopeType !== "club" && scopeType !== "team")) return null;
   const clubId = await clubOfScope(client, scopeType, scopeId);
-  await client.query("set local lock_timeout = '5s'");
   await lockClubCeiling(client, [clubId], "shared");
   const actorId = req.user.id;
   await client.query("select public.lock_permission_actor($1,$2,$3)", [actorId, scopeType, scopeId]);
@@ -41,6 +40,7 @@ export async function lockTestsScheduleCreateAccess(client, req, owner) {
   if (isPlatformAdministrator(req.authz) || scopeType === "user") return req;
 
   const scopeId = scopeType === "club" ? owner.ownerClubId : owner.ownerTeamId;
+  await client.query("set local lock_timeout = '5s'");
   const actorId = await lockScheduleDestination(client, req, scopeType, scopeId);
   if (!actorId) return null;
 
@@ -68,6 +68,8 @@ async function lockExistingSchedule(client, req, scheduleId, mode) {
   if (!hint) return { status: 404 };
   if (!canManageSchedule(req, hint)) return { status: 403 };
 
+  // This also bounds the domain locks taken by platform and personal writers.
+  await client.query("set local lock_timeout = '5s'");
   let writeRequest = req;
   if (hint.owner_scope !== "user" && !isPlatformAdministrator(req.authz)) {
     const scopeId = hint.owner_scope === "club" ? hint.owner_club_id : hint.owner_team_id;

@@ -74,6 +74,15 @@ the schedule → occurrence → assignment order against submission and
 reminders. Denials do not mint or disclose a token, change rows, enqueue a
 notification or emit realtime.
 
+In the mixed-version rehearsal, hold a schedule or link while both builds
+try to rotate and revoke it. Check the previous writer's schedule foreign
+key wait against the bridge's schedule row lock, and verify a single active
+link and no deadlock. For platform and private owners, hold a schedule or
+link past the bridge's five-second transaction-local lock wait and confirm
+the request rolls back. Exercise normal retry after the blocker releases.
+Check that missing and unauthorized requests still use their route's
+existing response without waiting on a foreign row.
+
 Native View schedule detail still includes an issued token. The V-4
 view workspace still omits it and refuses staff writes. Narrowing native
 token reads is a separate undecided product change. Link denials keep
