@@ -1694,3 +1694,24 @@ test("Manage: target checks use the schedule owner across two native workspaces"
   assert.equal((await status("active")).status, 200);
 
 });
+
+test("Manage: a native team can target its own team and athletes, without widening to its club", async () => {
+  const club = await makeClubWithAthletes("manage-team-boundary", 2);
+  const team = await makeTeam(club.clubId, "Schedule owner team");
+  const otherTeam = await makeTeam(club.clubId, "Sibling team");
+  await grantTeamCoach(club.coachId, team);
+  await grantTeamCoach(club.coachId, otherTeam);
+  await addMembership(club.athletes[0].athleteId, { teamId: team });
+  await addMembership(club.athletes[1].athleteId, { teamId: otherTeam });
+  const cookie = club.coachCookie;
+  const workspace = await api("/api/auth/workspace", { method: "PUT", cookie, body: { type: "team", scopeId: team } });
+  assert.equal(workspace.status, 200, JSON.stringify(workspace.body));
+  const create = targets => api("/api/tests/schedules", { method: "POST", cookie, body: baseCreateBody(targets) });
+  const actual = await create([{ kind: "team", id: team }, { kind: "athlete", id: club.athletes[0].athleteId }]);
+  assert.equal(actual.status, 201, JSON.stringify(actual.body));
+  assert.equal(actual.body.schedule.ownerScope, "team");
+  for (const target of [{ kind: "club", id: club.clubId }, { kind: "team", id: otherTeam }, { kind: "athlete", id: club.athletes[1].athleteId }]) {
+    const denied = await create([target]);
+    assert.deepEqual(denied, { status: 403, body: { error: "One of the chosen targets is outside your access." } });
+  }
+});
