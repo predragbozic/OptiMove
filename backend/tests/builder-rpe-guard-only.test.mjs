@@ -56,11 +56,12 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
       }
       const sourceDay = before.sessions.find(row => row.id === cases.before.sessionId).plan_day_id;
       const targetDay = before.days.find(row => row.plan_id === cases.off.id).id;
+      const samePlanDay = before.days.find(row => row.plan_id === cases.before.id && row.id !== sourceDay).id;
       const requestKeys = [randomUUID(), randomUUID()];
       const copies = [
         [`/api/builder/plans/${cases.before.id}/duplicate`, { athleteIds: [athleteCode], weekStart: "2027-05-24" }],
         [`/api/builder/sessions/${cases.before.sessionId}/copy-into/${targetDay}`, {}],
-        [`/api/builder/days/${sourceDay}/copy-into/${targetDay}`, {}],
+        [`/api/builder/days/${sourceDay}/copy-into/${samePlanDay}`, {}],
         [`/api/builder/blocks/${sourceDay}/copy-into/${targetDay}`, {}],
         ["/api/builder/weekly-templates", { name: "Unconfirmed copy", planIds: [cases.before.id] }],
         [`/api/builder/plans/${templateId}/duplicate`, { intent: "assign", athleteIds: [athleteCode], assignmentRequestId: requestKeys[0] }],

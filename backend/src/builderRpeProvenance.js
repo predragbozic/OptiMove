@@ -324,22 +324,22 @@ async function assertBuilderRpeInheritedRoots(client, roots) {
   // An old bridge could copy enabled flags without proving the pending source.
   // A later edit to that source is not evidence of what the old copy inherited.
   const { rows } = await client.query(
-    `with recursive lineage(root, plan_id, session_id, tracking, rpe, visited) as (
-       select ord, plan_id, session_id, tracking, rpe, array[]::text[]
-       from unnest($1::uuid[],$2::uuid[],$3::boolean[],$4::boolean[]) with ordinality
-         as seed(plan_id,session_id,tracking,rpe,ord)
+    `with recursive lineage(root, plan_id, session_id, tracking, rpe, cutoff, visited) as (
+       select ord, plan_id, session_id, tracking, rpe, cutoff, array[]::text[]
+       from unnest($1::uuid[],$2::uuid[],$3::boolean[],$4::boolean[],$5::timestamptz[]) with ordinality
+         as seed(plan_id,session_id,tracking,rpe,cutoff,ord)
        union all
        select l.root, origin.source_plan_id, origin.source_session_id, l.tracking, l.rpe,
-              l.visited || concat(l.plan_id,'/',l.session_id)
+              least(l.cutoff,origin.copied_at), l.visited || concat(l.plan_id,'/',l.session_id)
        from lineage l
-       join plans.plans p on p.id=l.plan_id and p.status<>'active'
+       join plans.plans p on p.id=l.plan_id
        join lateral (
-         select b.source_plan_id, null::uuid as source_session_id
+         select b.source_plan_id, null::uuid as source_session_id,p.created_at as copied_at
          from training_load.builder_rpe_plan_baselines b
          where l.session_id is null and b.plan_id=l.plan_id
            and (not l.tracking or b.opening_tracking) and (not l.rpe or b.opening_rpe)
          union all
-         select b.source_plan_id, b.source_session_id
+         select b.source_plan_id, b.source_session_id,s.created_at
          from training_load.builder_rpe_session_baselines b
          join plans.plan_sessions s on s.id=b.session_id and s.logical_session_id=b.logical_session_id
          join plans.plan_days d on d.id=s.plan_day_id and d.plan_id=b.plan_id
@@ -350,7 +350,7 @@ async function assertBuilderRpeInheritedRoots(client, roots) {
      )
      select distinct l.root from lineage l
      left join plans.plans p on p.id=l.plan_id
-     where l.plan_id is null or (p.status='active' and (
+     where l.plan_id is null or (p.status='active' and (l.cutoff is null or p.updated_at<=l.cutoff) and (
        (l.session_id is null and (not l.tracking or p.track_training_load_default) and (not l.rpe or p.request_rpe_default)) or exists (
          select 1 from plans.plan_sessions s join plans.plan_days d on d.id=s.plan_day_id
          where s.id=l.session_id and d.plan_id=p.id
@@ -358,7 +358,7 @@ async function assertBuilderRpeInheritedRoots(client, roots) {
        )
      ))`, [
       roots.map(root => root.planId), roots.map(root => root.sessionId ?? null),
-      roots.map(root => !!root.tracking), roots.map(root => !!root.rpe),
+      roots.map(root => !!root.tracking), roots.map(root => !!root.rpe), roots.map(root => root.cutoff ?? null),
     ],
   );
   if (rows.length !== roots.length) throw recoveryRequired();
@@ -368,6 +368,7 @@ function inheritedRoot(row) {
   return {
     planId: row.source_plan_id,
     sessionId: row.source_session_id,
+    cutoff: row.copied_at,
     tracking: row.tracking && !row.changed_tracking,
     rpe: row.rpe && !row.changed_rpe,
   };
