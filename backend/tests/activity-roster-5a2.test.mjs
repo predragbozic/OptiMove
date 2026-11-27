@@ -2319,19 +2319,61 @@ async function assertStagedRoleOperations(call) {
   assert.deepEqual((await defaultRole()).items, original.items);
 }
 
-test("M-3a exposure: a native team coach can lose roster controls without losing the roster read", async () => {
-  const s = await plainSession("Exposure roster controls", 1);
-  const read = () => api(`/api/training-activity/${s.activityId}/roster`, { method: "GET", cookie: s.coach.cookie });
-  const before = await read();
+test("M-3a exposure: Settings can remove and restore a team's roster write permission", async () => {
+  const s = await plainSession("Exposure roster controls", 2);
+  const admin = await clubAdminOf(s.clubId, "Exposure Settings administrator");
+  const word = "load.roster.decide";
+  const path = `/api/organization/roles/${ROLE_IDS.team_coach}/clubs/${s.clubId}/version`;
+  const editRole = (expectedRevision, change) => api(path, {
+    method: "POST", cookie: admin.cookie,
+    body: { requestKey: key(), reason: "Adjust roster editing rights", expectedRevision, ...change },
+  });
+  const permissions = async () => {
+    const me = await api("/api/auth/me", { cookie: s.coach.cookie });
+    assert.equal(me.status, 200, me.text);
+    return me.body.user.permissions;
+  };
+  const catalog = await api(`/api/organization/roles/catalog?clubId=${s.clubId}`, { cookie: admin.cookie });
+  assert.equal(catalog.status, 200, catalog.text);
+  assert.equal(catalog.body.permissions.find((entry) => entry.word === word)?.honoured, true);
+  assert.ok(catalog.body.delegable.includes(word));
+
+  const before = await roster(s.activityId, s.coach.cookie);
   assert.equal(before.status, 200, before.text);
   assert.equal(before.body.viewer.canDecideRoster, true);
-  await omitRosterPermission(s.clubId, "load.roster.decide");
-  const after = await read();
+  const originalWords = await permissions();
+  assert.ok(originalWords.includes(word));
+  const [first, second] = s.athletes;
+  const savedBody = pnv();
+  const saved = await put(s.activityId, first, s.coach.cookie, savedBody);
+  assert.equal(saved.status, 200, saved.text);
+  const originalRoster = await roster(s.activityId, s.coach.cookie);
+
+  const removed = await editRole(null, { remove: [word] });
+  assert.equal(removed.status, 200, removed.text);
+  assert.ok(!removed.body.role.effectiveItems.includes(word));
+  const after = await roster(s.activityId, s.coach.cookie);
   assert.equal(after.status, 200, after.text);
   assert.equal(after.body.viewer.basis, before.body.viewer.basis);
   assert.equal(after.body.viewer.canDecideRoster, false);
   assert.equal(after.body.canComplete, false);
-  assert.deepEqual(after.body.athletes, before.body.athletes);
+  assert.deepEqual(after.body.athletes, originalRoster.body.athletes);
+  assert.deepEqual((await permissions()).sort(), originalWords.filter((item) => item !== word).sort());
+  const rowsBeforeDenial = await rowCounts();
+  const newBody = pnv();
+  const denied = await put(s.activityId, second, s.coach.cookie, newBody);
+  assert.deepEqual([denied.status, denied.body.error], [403, "not_a_team_coach"]);
+  const deniedReplay = await put(s.activityId, first, s.coach.cookie, savedBody);
+  assert.deepEqual([deniedReplay.status, deniedReplay.body.error], [403, "not_a_team_coach"]);
+  assert.deepEqual(await rowCounts(), rowsBeforeDenial);
+
+  const restored = await editRole(removed.body.role.version.revision, { add: [word] });
+  assert.equal(restored.status, 200, restored.text);
+  assert.ok(restored.body.role.effectiveItems.includes(word));
+  assert.deepEqual((await permissions()).sort(), originalWords.sort());
+  assert.equal((await roster(s.activityId, s.coach.cookie)).body.viewer.canDecideRoster, true);
+  const retried = await put(s.activityId, second, s.coach.cookie, newBody);
+  assert.equal(retried.status, 200, retried.text);
 });
 
 const previousServerRoot = process.env.OPTIMOVE_M3A_PREVIOUS_SERVER;
