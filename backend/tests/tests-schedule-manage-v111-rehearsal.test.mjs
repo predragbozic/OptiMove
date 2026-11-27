@@ -191,9 +191,59 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
       assert.equal(allowed.status, 200, JSON.stringify(allowed.body));
     }
     assert.equal(await marker(), null);
-    await client.query("update tests.schedule_manage_bridge_use set first_checked_write_at=clock_timestamp()");
+    const coachCookie = await current.cookieFor(coach);
+    const f = fixtures(client);
+    const otherClub = await f.club("Tests Schedule Manage second club");
+    const otherTeam = await f.team(otherClub);
+    await f.grantTeam(coach, otherTeam);
+    const write = async (server, path, method, body) => {
+      if (server === current) {
+        const { status, body: responseBody } = await current.api(coachCookie, path, { method, body });
+        return { status, body: responseBody };
+      }
+      const response = await fetch(server.baseUrl + path, {
+        method,
+        headers: { Cookie: coachCookie, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    const oldWorkspace = await write(previous, "/api/auth/workspace", "PUT", { type: "team", scopeId: team });
+    assert.equal(oldWorkspace.status, 200, JSON.stringify(oldWorkspace.body));
+    const path = "/api/tests/schedules";
+    const input = {
+      testVersionId: "7a386bd1-d25e-4651-9012-e76d9dc32559", scheduleKind: "one_time",
+      timezone: "UTC", startDate: "2027-10-04", opensTime: "00:00", closesTime: "23:59",
+      targets: [{ kind: "team", id: team }],
+    };
+    const old = await write(previous, path, "POST", input);
+    assert.equal(old.status, 201, JSON.stringify(old.body));
+    assert.equal(old.body.schedule.ownerScope, "team");
+    const oldPath = path + "/" + old.body.schedule.id;
+    const link = await write(previous, oldPath + "/link", "POST", {});
+    assert.equal(link.status, 201, JSON.stringify(link.body));
+    assert.equal(await marker(), null, "old server writes are compatible and do not stamp v111");
+
+    const currentWorkspace = await write(current, "/api/auth/workspace", "PUT", { type: "team", scopeId: otherTeam });
+    assert.equal(currentWorkspace.status, 200, JSON.stringify(currentWorkspace.body));
+    const wrongOwnerTarget = await write(current, oldPath, "PATCH", { ...input, targets: [{ kind: "team", id: otherTeam }] });
+    assert.deepEqual(wrongOwnerTarget, { status: 403, body: { error: "One of the chosen targets is outside your access." } });
+    assert.equal(await marker(), null);
+    const pause = await write(current, oldPath, "PATCH", { status: "paused" });
+    assert.equal(pause.status, 200, JSON.stringify(pause.body));
+    assert.equal(pause.body.status, "paused");
     const firstUsed = await marker();
     assert.ok(firstUsed);
+    const rotated = await write(current, oldPath + "/link", "POST", {});
+    assert.equal(rotated.status, 201, JSON.stringify(rotated.body));
+    assert.notEqual(rotated.body.link.id, link.body.link.id);
+    const revoked = await write(previous, "/api/tests/links/" + rotated.body.link.id + "/revoke", "POST", {});
+    assert.equal(revoked.status, 200, JSON.stringify(revoked.body));
+    const linkStatuses = (await client.query(
+      "select status from tests.test_access_links where schedule_id=$1 order by id", [old.body.schedule.id],
+    )).rows;
+    assert.deepEqual(linkStatuses, [{ status: "revoked" }, { status: "revoked" }]);
+    assert.deepEqual(await marker(), firstUsed);
     await assert.rejects(client.query("update tests.schedule_manage_bridge_use set first_checked_write_at=clock_timestamp()"), /immutable/);
     await assert.rejects(client.query(rollback), /refuses checked Schedule Manage writer use/);
     await client.query("rollback");
