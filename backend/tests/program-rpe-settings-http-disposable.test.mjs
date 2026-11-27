@@ -470,10 +470,14 @@ test("opening an existing program copies only its stored workspace owner", async
     );
     return openEditDraft(source.id);
   };
-  await selectWorkspace(db, "club", B);
+  const selectOwnerWorkspace = async id => {
+    const selected = await http.api(coach.cookie, "/api/auth/workspace", { method: "PUT", body: { type: "club", scopeId: id } });
+    assert.equal(selected.status, 200, selected.text);
+  };
+  await selectOwnerWorkspace(B);
   let resolved;
   try { resolved = await openProgram("Programme with a stored owner", B); }
-  finally { await selectWorkspace(db, "club", A); }
+  finally { await selectOwnerWorkspace(A); }
   const unresolved = await openProgram("Programme without a stored owner", null);
   const { rows } = await db.query(
     "select plan_id,owner_scope,owner_club_id from training_load.plan_workspace_ownership where plan_id=any($1::uuid[])",
