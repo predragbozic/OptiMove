@@ -128,7 +128,7 @@ test("Exercises Add and Remove maintain old Settings and writes, and rollback on
 
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, previousBuild);
-    const stagedBuild = process.env.OPTIMOVE_EXERCISE_EXPOSURE_PREVIOUS ?? "bcd57cf2dec70457bbd8b3da3a3bd150929c8ea1";
+    const stagedBuild = process.env.OPTIMOVE_EXERCISE_EXPOSURE_PREVIOUS ?? "10a3aaa18a3a0db80c7aae6ff8bc167b09eaf22b";
     stagedServer = await previousDashboardServer(fixture.url, {}, stagedBuild);
     const platformCookie = await current.cookieFor(platform);
     const customCookie = await current.cookieFor(coach);
