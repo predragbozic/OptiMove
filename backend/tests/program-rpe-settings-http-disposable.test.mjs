@@ -1,5 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import * as fsp from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
 import { fixtures, key, startServer } from "./support/permission-roles-world.mjs";
@@ -345,4 +346,50 @@ test("opening an existing program copies only its stored workspace owner", async
     [[resolved, unresolved]],
   );
   assert.deepEqual(rows, [{ plan_id: resolved, owner_scope: "club", owner_club_id: B }]);
+});
+
+
+test("v106 records a real opening, exact session lineage and effective settings changes", async () => {
+  const livePlan = await fixturePlan(athleteId, "active", "2027-03-15");
+  await db.query("update plans.plans set track_training_load_default=true,request_rpe_default=true where id=$1", [livePlan.id]);
+  const source = await flags(livePlan.sessionId);
+  const draftId = await openEditDraft(livePlan.id);
+  const { rows: [opening] } = await db.query("select * from training_load.builder_rpe_plan_baselines where plan_id=$1", [draftId]);
+  assert.equal(opening.source_plan_id, livePlan.id);
+  assert.equal(opening.owner_club_id, A);
+  assert.equal(opening.opening_rpe, true);
+  assert.equal(opening.opening_tracking, true);
+  const { rows: [lineage] } = await db.query("select * from training_load.builder_rpe_session_baselines where plan_id=$1", [draftId]);
+  assert.equal(lineage.source_plan_id, livePlan.id);
+  assert.equal(lineage.source_session_id, livePlan.sessionId);
+  assert.notEqual(lineage.session_id, livePlan.sessionId);
+  assert.equal(lineage.logical_session_id, source.logical_session_id);
+  const stateOfEffects = async () => ({
+    plan: (await db.query("select changed_tracking,changed_rpe,effective_tracking,effective_rpe from training_load.builder_rpe_plan_effects where plan_id=$1", [draftId])).rows,
+    sessions: (await db.query("select changed_tracking,changed_rpe,effective_tracking,effective_rpe from training_load.builder_rpe_session_effects where plan_id=$1", [draftId])).rows,
+  });
+  assert.deepEqual(await stateOfEffects(), { plan: [], sessions: [] });
+  const patch = async (path, body) => {
+    const result = await http.api(coach.cookie, path, { method: "PATCH", body });
+    assert.equal(result.status, 200, result.text);
+  };
+  await patch(settings(draftId), { requestRpeDefault: false });
+  await patch(draftSession(lineage.session_id), { trackingEnabled: false });
+  assert.deepEqual(await stateOfEffects(), {
+    plan: [{ changed_tracking: false, changed_rpe: true, effective_tracking: true, effective_rpe: false }],
+    sessions: [{ changed_tracking: true, changed_rpe: true, effective_tracking: false, effective_rpe: false }],
+  });
+  await patch(settings(draftId), { requestRpeDefault: true });
+  await patch(draftSession(lineage.session_id), { trackingEnabled: true, rpeEnabled: true });
+  assert.deepEqual(await stateOfEffects(), { plan: [], sessions: [] });
+  assert.deepEqual(await flags(livePlan.sessionId), source);
+  await db.query("delete from plans.plans where id=$1", [draftId]);
+  assert.equal((await db.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [draftId])).rowCount, 0);
+  const rollback = await fsp.readFile(new URL("../../docs/runbooks/builder-rpe-v106-rollback.sql", import.meta.url), "utf8");
+  try {
+    await assert.rejects(db.query(rollback), /v106 rollback refuses recorded Builder provenance/);
+  } finally {
+    await db.query("rollback");
+  }
+  assert.equal((await db.query("select 1 from training_load.builder_rpe_provenance_use")).rowCount, 1);
 });

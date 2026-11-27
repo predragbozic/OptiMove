@@ -3,6 +3,7 @@ import { Router } from "express";
 import { randomUUID } from "crypto";
 import { pool, query } from "../db.js";
 import { createBuilderTiming } from "../builderTiming.js";
+import { beginBuilderRpeProvenance, recordBuilderRpeOpening, recordBuilderRpePlanEffect, recordBuilderRpeSessionEffect } from "../builderRpeProvenance.js";
 import { copyBuilderSessionContents, deleteBuilderPlanContent, copyBuilderDaySessions, updateBuilderWeeklyDays } from "../builderTreeBatch.js";
 import { athleteAccessPredicate, canAccessAllAthletes, canAccessPlan, programViewScopes } from "../access.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -431,6 +432,7 @@ router.patch("/plans/:planId/training-load-settings", withBatchReuseGuard(async 
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    const trackRpeEffect = await beginBuilderRpeProvenance(client);
     const plan = await lockBuilderRpeDraft(client, req, res, scope, accessPlan, "Draft program not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
@@ -441,6 +443,7 @@ router.patch("/plans/:planId/training-load-settings", withBatchReuseGuard(async 
       "update plans.plans set track_training_load_default = $2, request_rpe_default = $3, updated_at = now() where id = $1",
       [plan.id, trackTrainingLoadDefault, requestRpeDefault],
     );
+    if (trackRpeEffect) await recordBuilderRpePlanEffect(client, plan, { trackingEnabled: trackTrainingLoadDefault, rpeEnabled: requestRpeDefault });
     await client.query("commit");
     client.release();
     client = null;
@@ -1456,6 +1459,7 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
 
     client = await timing.measure("pool", () => pool.connect());
     await client.query("begin");
+    const recordRpeOpening = await beginBuilderRpeProvenance(client);
     // docs/ai/builder-batch-edit-plan.md 10.2.3: the live plan's row FOR SHARE
     // before it is copied, so a Save of its batch that holds it FOR UPDATE
     // finishes first and the copy sees what that Save wrote. One row, the only
@@ -1502,14 +1506,13 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
     // copyDaySessions' own comment on why that distinction matters for
     // training_load.session_feedback's stable identity.
     await timing.measure("copy", async () => {
-      if (plan.plan_type === "weekly") {
-        await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true, targetIsNew: true });
-      } else {
-        await copyProgramTree(client, plan.id, created.rows[0].id);
-      }
-      // An edit draft inherits the stored owner of its actual source plan.
+      const draftId = created.rows[0].id;
+      const copies = plan.plan_type === "weekly"
+        ? await copyWeeklyPlanTree(client, plan.id, draftId, plan.week_start, { preserveLogicalId: true, targetIsNew: true })
+        : await copyProgramTree(client, plan.id, draftId);
       // An older source without an owner snapshot keeps that gap explicit.
-      await copyPlanOwnershipSnapshot(client, plan.id, created.rows[0].id);
+      await copyPlanOwnershipSnapshot(client, plan.id, draftId);
+      if (recordRpeOpening) await recordBuilderRpeOpening(client, { planId: draftId, sourcePlanId: plan.id, copies });
     });
     await client.query("commit");
     client.release();
@@ -2227,6 +2230,7 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
     const scope = await resolveExternalScheduleWorkspaceScope(req);
     client = await pool.connect();
     await client.query("begin");
+    const trackRpeEffect = await beginBuilderRpeProvenance(client);
     const plan = await lockBuilderRpeDraft(client, req, res, scope, session.plan, "Program session not found");
     if (!plan) { await client.query("rollback"); client.release(); return; }
 
@@ -2272,6 +2276,7 @@ router.patch("/sessions/:sessionId", withBatchReuseGuard(async (req, res, next) 
       "update plans.plan_sessions set session_time = $2, name = $3, am_pm = $4, bta = $5, rpe_enabled = $6, training_load_enabled = $7, updated_at = now() where id = $1",
       [freshSession.id, sessionTime, name, amPm, bta, rpeEnabled, trackingEnabled],
     );
+    if (trackRpeEffect) await recordBuilderRpeSessionEffect(client, plan.id, freshSession, { trackingEnabled, rpeEnabled });
     await client.query("commit");
     client.release();
     client = null;
@@ -3369,7 +3374,7 @@ async function applyEditDraft(req, draftPlan, timing) {
 // was ever touched). Content is also batched across all sessions.
 export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
   const days = await client.query("select * from plans.plan_days where plan_id = $1 order by block_order nulls last, block_index", [sourcePlanId]);
-  if (!days.rowCount) return;
+  if (!days.rowCount) return new Map();
 
   const dayValues = [];
   const dayParams = [];
@@ -3391,7 +3396,8 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
     "select * from plans.plan_sessions where plan_day_id = any($1::uuid[]) order by plan_day_id, session_order",
     [days.rows.map((day) => day.id)],
   );
-  if (!sessions.rowCount) return;
+  if (!sessions.rowCount) return new Map();
+  const copies = new Map();
   const sessionValues = [];
   const sessionParams = [];
   let sessionColumn = 0;
@@ -3400,18 +3406,19 @@ export async function copyProgramTree(client, sourcePlanId, targetPlanId) {
     // always copied unconditionally (session_time was missing here - a
     // genuine bug, silently dropping every session's specific time on a
     // program-to-program copy).
-    const row = [sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_time, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
+    const targetId = randomUUID();
+    copies.set(session.id, targetId);
+    const row = [targetId, sourceDayIdToTargetDayId.get(session.plan_day_id), session.am_pm, session.bta, session.session_time, session.session_order, session.name, session.rpe_enabled, session.training_load_enabled];
     sessionValues.push(`(${row.map(() => `$${++sessionColumn}`).join(", ")})`);
     sessionParams.push(...row);
   });
-  const createdSessions = await client.query(
-    `insert into plans.plan_sessions (plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
-     values ${sessionValues.join(", ")} returning id`,
+  await client.query(
+    `insert into plans.plan_sessions (id, plan_day_id, am_pm, bta, session_time, session_order, name, rpe_enabled, training_load_enabled)
+     values ${sessionValues.join(", ")}`,
     sessionParams,
   );
-  await copyBuilderSessionContents(client, new Map(sessions.rows.map((session, index) =>
-    [session.id, createdSessions.rows[index].id],
-  )), copyLegacySession);
+  await copyBuilderSessionContents(client, copies, copyLegacySession);
+  return copies;
 }
 
 export async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, targetWeekStart, { preserveLogicalId = false, targetIsNew = false } = {}) {
@@ -3470,6 +3477,7 @@ export async function copyWeeklyPlanTree(client, sourcePlanId, targetPlanId, tar
   const contentCopies = await copyBuilderDaySessions(client,
     new Map([...sourcesByTargetDay].map(([targetId, sourceId]) => [sourceId, targetId])), { preserveLogicalId });
   await copyBuilderSessionContents(client, contentCopies, copyLegacySession);
+  return contentCopies;
 }
 
 // A weekly plan's day_order is meant to be the 1-indexed weekday within its

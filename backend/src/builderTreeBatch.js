@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { completeCopiedExerciseImages } from "./exerciseSnapshotMedia.js";
 
 const NODE_COLUMNS = "plan_session_id, parent_id, node_type, name, color, icon_url, short_note, note, node_order";
@@ -100,9 +101,10 @@ export async function copyBuilderDaySessions(client, dayMap, { preserveLogicalId
   );
   const fields = ["am_pm", "bta", "session_time", "session_order", "name", "rpe_enabled", "training_load_enabled"];
   if (preserveLogicalId) fields.push("logical_session_id");
-  const created = await insertRows(client, "plan_sessions", `plan_day_id, ${fields.join(", ")}`,
-    sessions.rows.map((session) => [dayMap.get(session.plan_day_id), ...fields.map((field) => session[field])]), true);
-  return new Map(sessions.rows.map((session, index) => [session.id, created[index].id]));
+  const copies = new Map(sessions.rows.map(session => [session.id, randomUUID()]));
+  await insertRows(client, "plan_sessions", `id, plan_day_id, ${fields.join(", ")}`,
+    sessions.rows.map(session => [copies.get(session.id), dayMap.get(session.plan_day_id), ...fields.map(field => session[field])]));
+  return copies;
 }
 
 export async function updateBuilderWeeklyDays(client, days, weekStart) {
