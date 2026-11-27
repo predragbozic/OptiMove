@@ -228,6 +228,23 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
     await client.query("rollback");
     await client.query("delete from public.builder_assignment_requests where id=$1", [oldRequest.assignmentRequestId]);
     assert.deepEqual(await evidence(), [], "Removing the old receipt cascades only its dependent evidence");
+
+    const duplicatePath = `/api/builder/plans/${legacy.body.plan.id}/duplicate`;
+    const duplicateRequest = { assignmentRequestId: key(), intent: "assign", athleteIds: [athlete.athlete_id] };
+    const oldDuplicate = await post(previous, versionCookie, duplicatePath, duplicateRequest);
+    assert.equal(oldDuplicate.status, 201, oldDuplicate.text);
+    assert.equal(oldDuplicate.body.assignments.length, 1);
+    assert.deepEqual(await evidence(), []);
+    const oldDuplicateReplay = await post(previous, versionCookie, duplicatePath, duplicateRequest);
+    assert.equal(oldDuplicateReplay.status, 201, oldDuplicateReplay.text);
+    await client.query(`insert into plans.program_edit_v109_assignment_evidence
+      (request_id,edited_plan_ids,removed_plan_ids,scope_type,scope_id) values($1,'{}','{}','team',$2)`,
+    [duplicateRequest.assignmentRequestId, team]);
+    assert.deepEqual(await post(previous, versionCookie, duplicatePath, duplicateRequest), oldDuplicateReplay);
+    await assert.rejects(client.query(rollback), /refuses recorded Programs Edit assignment evidence/);
+    await client.query("rollback");
+    await client.query("delete from public.builder_assignment_requests where id=$1", [duplicateRequest.assignmentRequestId]);
+    assert.deepEqual(await evidence(), []);
     await client.query("insert into plans.program_manage_v109_use (singleton) values (true)");
     for (const action of ["delete from", "truncate", "update"]) {
       const command = action + " plans.program_manage_v109_use" + (action === "update" ? " set first_used_at=now()" : "");
