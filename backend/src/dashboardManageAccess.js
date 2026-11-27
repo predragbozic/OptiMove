@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { isPlatformAdministrator, loadAuthorizationContext } from "./authz.js";
-import { clubOfScope, lockClubCeiling } from "./clubCeilingLock.js";
+import { lockClubCeiling } from "./clubCeilingLock.js";
 
 function nativeScope(type, id) {
   return (type === "club" || type === "team") && id ? { type, id: String(id).toLowerCase() } : null;
@@ -25,9 +25,13 @@ export async function lockDashboardManageCeilings(query, scopes) {
   const client = { query };
   const clubs = [];
   for (const scope of ordered) {
-    const clubId = await clubOfScope(client, scope.type, scope.id);
-    if (!clubId) return null;
-    clubs.push(clubId);
+    if (scope.type === "club") {
+      clubs.push(scope.id);
+      continue;
+    }
+    const { rows: [team] } = await query("select club_id from public.teams where id = $1", [scope.id]);
+    if (!team) return null;
+    if (team.club_id) clubs.push(team.club_id);
   }
   await lockClubCeiling(client, clubs, "shared");
   return ordered;

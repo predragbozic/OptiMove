@@ -4,7 +4,11 @@
 `dashboards.manage` in PostgreSQL. Native club and team writes continue to
 require dashboard View, the club licence and their existing owner/workspace
 rules. The bridge keeps public Roles projection closed. It neither changes
-permissions on P3 reference tables nor touches dashboard preferences.
+permissions on P3 reference tables nor touches dashboard preferences. A
+standalone team keeps its own team scope and has no club ceiling to lock.
+The existing Legacy owner path for an actor editing their own user-owned
+club-bound dashboard in a private workspace still applies; native workspace
+writes use the Manage guard.
 
 ## Preflight and deployment
 

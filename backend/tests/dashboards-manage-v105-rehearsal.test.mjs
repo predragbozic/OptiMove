@@ -237,13 +237,24 @@ test("old page-copy receipts replay without v105 use; denied writes leave no mar
     const club = await fx.club();
     const owner = await fx.user("Dashboard club admin");
     await fx.grantClub(owner, club);
+    await fx.grantIndependent(owner);
+    const standalone = (await admin.query("insert into public.teams(name) values('Standalone dashboard team') returning id")).rows[0].id;
+    const coach = await fx.user("Standalone dashboard coach");
+    await fx.grantTeam(coach, standalone);
+    await selectWorkspace(admin, coach, "team", standalone);
+    const platform = await fx.user("Dashboard support admin");
+    await fx.grantPlatform(platform);
+    await selectWorkspace(admin, platform, "platform", null);
     await selectWorkspace(admin, owner, "club", club);
     await admin.query("update training_load.dashboard_pages_activation set enabled=true where singleton");
     process.env.P1_PREVIOUS_BUILD_SHA = process.env.OPTIMOVE_DASHBOARDS_PREVIOUS_SHA;
     process.env.DASHBOARD_PAGES_ENABLED = "true";
     process.env.DATABASE_URL = db.url;
     const { createSession } = await import("../src/auth.js");
-    const cookie = `optimove_session=${await createSession(owner, admin)}`;
+    const cookieFor = async (user) => `optimove_session=${await createSession(user, admin)}`;
+    const cookie = await cookieFor(owner);
+    const teamCookie = await cookieFor(coach);
+    const platformCookie = await cookieFor(platform);
     old = await previousDashboardServer(db.url, { DASHBOARD_PAGES_ENABLED: "true" });
     assert.equal(old.commit, process.env.OPTIMOVE_DASHBOARDS_PREVIOUS_SHA);
     console.log("Exact previous Dashboard Manage build:", old.commit);
@@ -251,6 +262,15 @@ test("old page-copy receipts replay without v105 use; denied writes leave no mar
     const creation = await oldApi(cookie, apiPath, { method: "POST", body: { name: "Worked before the bridge", ownerScope: "club", ownerClubId: club } });
     assert.equal(creation.status, 201, creation.text);
     const dashboard = creation.body.dashboard;
+    const personal = await oldApi(cookie, apiPath, { method: "POST", body: { name: "Club-bound personal dashboard" } });
+    assert.equal(personal.status, 201, personal.text);
+    assert.equal(personal.body.dashboard.owner_scope, "user");
+    assert.equal(personal.body.dashboard.data_workspace_scope_id, club);
+    const teamRequest = { name: "Standalone predecessor", ownerScope: "team", ownerTeamId: standalone };
+    const oldTeam = await oldApi(teamCookie, apiPath, { method: "POST", body: teamRequest });
+    assert.equal(oldTeam.status, 201, oldTeam.text);
+    const system = await oldApi(platformCookie, apiPath, { method: "POST", body: { name: "Standalone source template", ownerScope: "system", isTemplate: true } });
+    assert.equal(system.status, 201, system.text);
     const { id: home } = (await admin.query(
       "select id from training_load.dashboard_pages where dashboard_id=$1 and is_home", [dashboard.id],
     )).rows[0];
@@ -266,6 +286,26 @@ test("old page-copy receipts replay without v105 use; denied writes leave no mar
     const replay = await bridge.api(cookie, copyPath, { method: "POST", body: oldRequest });
     assert.deepEqual(replay, oldCopy);
     assert.equal(await firstUse(admin), null, "pre-bridge replay did not set the first-use marker");
+
+    await selectWorkspace(admin, owner, "private_coach", null);
+    try {
+      const personalPath = `${apiPath}/${personal.body.dashboard.id}`;
+      const oldPatch = await oldApi(cookie, personalPath, { method: "PATCH", body: { name: "Personal predecessor", expectedRevision: personal.body.dashboard.revision } });
+      assert.equal(oldPatch.status, 200, oldPatch.text);
+      const newPatch = await bridge.api(cookie, personalPath, { method: "PATCH", body: { name: "Personal bridge", expectedRevision: oldPatch.body.dashboard.revision } });
+      assert.equal(newPatch.status, oldPatch.status, newPatch.text);
+      assert.equal(newPatch.body.dashboard.name, "Personal bridge");
+      assert.equal(await firstUse(admin), null);
+    } finally {
+      await selectWorkspace(admin, owner, "club", club);
+    }
+
+    const clonePath = `${apiPath}/${system.body.dashboard.id}/clone`;
+    const clone = await bridge.api(platformCookie, clonePath, { method: "POST", body: { name: "Valid standalone clone", ownerScope: "team", ownerTeamId: standalone } });
+    assert.equal(clone.status, 201, clone.text);
+    const missingTeam = await bridge.api(platformCookie, clonePath, { method: "POST", body: { name: "Missing standalone clone", ownerScope: "team", ownerTeamId: randomUUID() } });
+    assert.equal(missingTeam.status, 404, missingTeam.text);
+    assert.equal(await firstUse(admin), null, "a platform override does not count as a checked native write");
 
     const bad = await bridge.api(cookie, copyPath, {
       method: "POST", body: { ...oldRequest, requestId: randomUUID() },
@@ -292,6 +332,9 @@ test("old page-copy receipts replay without v105 use; denied writes leave no mar
     assert.ok(marked instanceof Date, "a sanctioned native Page copy must set the marker");
     assert.deepEqual(await bridge.api(cookie, copyPath, { method: "POST", body: fresh }), native);
     assert.deepEqual(await firstUse(admin), marked);
+    const newTeam = await bridge.api(teamCookie, apiPath, { method: "POST", body: { ...teamRequest, name: "Standalone bridge" } });
+    assert.equal(newTeam.status, oldTeam.status, newTeam.text);
+    assert.equal(newTeam.body.dashboard.owner_team_id, standalone);
     await assert.rejects(admin.query(read("rollback")), /bridge writer was used/);
     await admin.query("rollback");
   } finally {

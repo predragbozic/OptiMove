@@ -58,6 +58,23 @@ if (needsModuleMocksRelaunch()) {
     assert.match(rights[1].sql, /user_has_permission\(\$1,'dashboards\.manage'/);
   });
 
+  test("a standalone team keeps actor and permission checks without an invented club ceiling", async () => {
+    const statements = [];
+    const run = async (sql, params) => {
+      statements.push({ sql, params });
+      if (sql.startsWith("select club_id")) return { rows: [{ club_id: null }] };
+      if (sql.includes(" as allowed")) return { rows: [{ allowed: true }] };
+      return { rows: [] };
+    };
+    const team = { type: "team", id: teamId };
+    const scopes = await lockDashboardManageCeilings(run, [team]);
+    assert.deepEqual(scopes, [team]);
+    await lockDashboardActor(run, actor);
+    assert.equal(await dashboardManageRightsStillHold(run, actor, scopes), true);
+    assert.equal(statements.some(({sql}) => sql.includes("lock_club_ceiling")), false);
+    assert.ok(statements.some(({sql,params}) => sql.includes("lock_permission_actor") && params[2] === teamId));
+  });
+
   test("a nonexistent team, native refusal, and unchecked role hint supply no dashboard write right", async () => {
     const missing = await lockDashboardManageCeilings(async () => ({ rows: [] }), [{ type: "team", id: teamId }]);
     assert.equal(missing, null);
