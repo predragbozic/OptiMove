@@ -17,7 +17,7 @@
 import crypto from "crypto";
 import { pool, query } from "./db.js";
 import { isAthleteInWorkspaceScope } from "./trainingActivityAccess.js";
-import { lockActivityWriter, recordCheckedActivityWrite } from "./trainingActivityWriteAccess.js";
+import { isNativeActivityWriter, lockActivityWriter, recordCheckedActivityWrite } from "./trainingActivityWriteAccess.js";
 
 function uuid() {
   return crypto.randomUUID();
@@ -213,7 +213,7 @@ async function findActivityCandidates(client, { ownerScope, ownerIds, athleteId,
 //              (which always carries its own timezone/local_scheduled_date
 //              — no fallback needed), joined up to its occurrence and
 //              schedule for ownership.
-async function resolveAuthoritativeSource(client, { planLogicalSessionId, externalAssignmentId }) {
+async function resolveAuthoritativeSource(client, scope, { planLogicalSessionId, externalAssignmentId }) {
   if (planLogicalSessionId && externalAssignmentId) {
     throw httpError(400, "planLogicalSessionId and externalAssignmentId cannot both be provided.");
   }
@@ -234,8 +234,10 @@ async function resolveAuthoritativeSource(client, { planLogicalSessionId, extern
          and p.plan_type = 'weekly' and p.status = 'active'`,
       [planLogicalSessionId],
     );
-    if (!r.rowCount) throw httpError(404, "No real, live, published Weekly plan session was found for that logical session.");
     const row = r.rows[0];
+    if (!row || (isNativeActivityWriter(scope) && !canManageOwnerRow(scope, row))) {
+      throw httpError(404, "No real, live, published Weekly plan session was found for that logical session.");
+    }
     if (!row.timezone || !String(row.timezone).trim()) throw httpError(409, "The athlete's timezone is not resolvable — refusing to guess.");
     if (!row.owner_scope) throw httpError(409, "That plan has no resolved workspace ownership.");
     return {
@@ -253,8 +255,10 @@ async function resolveAuthoritativeSource(client, { planLogicalSessionId, extern
        where ea.id = $1`,
       [externalAssignmentId],
     );
-    if (!r.rowCount) throw httpError(404, "External assignment not found.");
     const row = r.rows[0];
+    if (!row || (isNativeActivityWriter(scope) && !canManageOwnerRow(scope, row))) {
+      throw httpError(404, "External assignment not found.");
+    }
     if (!row.timezone || !String(row.timezone).trim()) throw httpError(409, "The assignment's timezone is not resolvable — refusing to guess.");
     if (!row.owner_scope) throw httpError(409, "That external schedule has no resolved workspace ownership.");
     return {
@@ -307,7 +311,7 @@ export async function materializeActivityParticipant(scope, {
     // for an identity it does not control); name/activityTypeKey remain
     // pure presentation — they affect matching/display only, never which
     // athlete/date/timezone/owner this resolves to.
-    const authoritative = await resolveAuthoritativeSource(client, { planLogicalSessionId, externalAssignmentId });
+    const authoritative = await resolveAuthoritativeSource(client, scope, { planLogicalSessionId, externalAssignmentId });
     let effectiveAthleteId = athleteId, effectiveLocalDate = localDate, effectiveTimezone = timezone;
     let effectiveStartInstant = startInstant, effectiveEndInstant = endInstant, effectiveDurationMinutes = durationMinutes;
     let ownerScope, ownerIds;
@@ -396,6 +400,7 @@ export async function materializeActivityParticipant(scope, {
 
     if (exactKeyMatch) {
       await client.query(`update training.activity_write_requests set result_activity_id=$1, result_participant_id=$2 where requester_key=$3 and request_key=$4`, [exactKeyMatch.activity_id, exactKeyMatch.participant_id, requesterKey, requestKey]);
+      await recordCheckedActivityWrite(client, scope);
       await client.query("commit");
       return { activityId: exactKeyMatch.activity_id, participantId: exactKeyMatch.participant_id, reused: false, matchStatus: "reused_by_key" };
     }
@@ -513,6 +518,13 @@ async function runActivityWrite(scope, operation) {
   }
 }
 
+async function assertLinkedActivityOwner(client, scope, owner, sql, id, unavailable) {
+  if (!scope.staffActorId) return;
+  const { rows: [linked] } = await client.query(sql, [id]);
+  if (linked && (!canManageOwnerRow(scope, linked) || !sameActivityOwner(owner, linked))) {
+    throw httpError(404, unavailable);
+  }
+}
 export async function materializeGroupFromExternalOccurrence(scope, { occurrenceId, activityTypeKey, name, performedBy }) {
   assertPresentationNameValid(name);
   return runActivityWrite(scope, async client => {
@@ -529,6 +541,12 @@ export async function materializeGroupFromExternalOccurrence(scope, { occurrence
       throw httpError(404, "External occurrence not found.");
     }
     await client.query("select pg_advisory_xact_lock(hashtextextended($1, 2))", [`activity-group-occurrence:${occurrenceId.toLowerCase()}`]);
+    await assertLinkedActivityOwner(client, scope, locked,
+      `select a.owner_scope,a.owner_user_id,a.owner_club_id,a.owner_team_id
+       from training.activity_external_occurrence_links l
+       left join training.activities a on a.id=training.resolve_canonical_activity_id(l.activity_id)
+       where l.external_occurrence_id=$1 and l.link_status='confirmed'`,
+      occurrenceId, "External occurrence not found.");
     const result = await client.query("select training.materialize_activity_group_from_external_occurrence($1,$2,$3,$4) as id",
       [occurrenceId, activityTypeKey || null, name || null, performedBy]);
     return result.rows[0].id;
@@ -545,6 +563,12 @@ export async function materializeGroupFromMetricEvent(scope, { eventId, activity
     const { rows: [locked] } = await client.query(sql + " for share", [eventId]);
     if (!locked || !canManageOwnerRow(scope, locked) || !sameActivityOwner(owner, locked)) throw httpError(404, "Metric event not found.");
     await client.query("select pg_advisory_xact_lock(hashtextextended($1, 3))", [`activity-group-event:${eventId.toLowerCase()}`]);
+    await assertLinkedActivityOwner(client, scope, locked,
+      `select a.owner_scope,a.owner_user_id,a.owner_club_id,a.owner_team_id
+       from training.activity_metric_event_links l
+       left join training.activities a on a.id=training.resolve_canonical_activity_id(l.activity_id)
+       where l.metric_event_id=$1 and l.link_status='confirmed'`,
+      eventId, "Metric event not found.");
     const result = await client.query("select training.materialize_activity_group_from_metric_event($1,$2,$3,$4) as id",
       [eventId, activityTypeKey || null, name || null, performedBy]);
     return result.rows[0].id;
@@ -634,12 +658,14 @@ export async function acceptMatchSuggestion(scope, { suggestionId, performedBy, 
     if (!sug) throw httpError(404, "Suggestion not found.");
     if (!canManageOwnerRow(scope, sug)) throw httpError(404, "Suggestion not found.");
     const sourceParticipantId = sug.source_participant_id;
+    const checkOwners = async () => {
+      const source = await requireParticipantOwner(client, scope, sourceParticipantId, "Suggestion not found.");
+      const candidate = await requireParticipantOwner(client, scope, sug.candidate_participant_id, "Suggestion not found.");
+      if (!sameActivityOwner(source, candidate)) throw httpError(404, "Suggestion not found.");
+    };
+    await checkOwners();
     await lockActivityParticipants(client, [sourceParticipantId, sug.candidate_participant_id]);
-    const source = await participantOwner(client, sourceParticipantId);
-    const candidate = await participantOwner(client, sug.candidate_participant_id);
-    if (!source || !candidate || !canManageOwnerRow(scope, source) || !canManageOwnerRow(scope, candidate) || !sameActivityOwner(source, candidate)) {
-      throw httpError(404, "Suggestion not found.");
-    }
+    await checkOwners();
     if (sug.status !== "open") throw httpError(409, "Suggestion already resolved.");
     const mergeRes = await client.query(`select training.merge_activity_participants($1,$2,$3,$4) as id`, [sourceParticipantId, sug.candidate_participant_id, performedBy, reason || "accepted ambiguous match suggestion"]);
     await client.query(`update training.activity_match_suggestions set status='accepted', resolved_by_user_id=$1, resolved_at=now() where id=$2`, [performedBy, suggestionId]);
@@ -759,6 +785,20 @@ async function participantOwner(client, id) {
   return owner;
 }
 
+async function requireParticipantOwner(client, scope, id, unavailable) {
+  const owner = await participantOwner(client, id);
+  if (!owner || !canManageOwnerRow(scope, owner)) throw httpError(404, unavailable);
+  return owner;
+}
+
+async function requireTargetActivityOwner(client, scope, id) {
+  const { rows: [owner] } = await client.query(
+    "select owner_scope, owner_user_id, owner_club_id, owner_team_id from training.activities where id=$1", [id],
+  );
+  if (!owner || !canManageOwnerRow(scope, owner)) throw httpError(404, "Target activity not found.");
+  return owner;
+}
+
 function sameActivityOwner(left, right) {
   return left.owner_scope === right.owner_scope && left.owner_user_id === right.owner_user_id
     && left.owner_club_id === right.owner_club_id && left.owner_team_id === right.owner_team_id;
@@ -768,14 +808,14 @@ export async function reparentActivityParticipant(scope, { participantId, toActi
   const strategy = componentStrategy || "none";
   assertValidComponentMapping(strategy, componentMapping);
   return runActivityWrite(scope, async client => {
+    const checkOwners = async () => {
+      const source = await requireParticipantOwner(client, scope, participantId, "Participant not found.");
+      const target = await requireTargetActivityOwner(client, scope, toActivityId);
+      if (!sameActivityOwner(source, target)) throw httpError(400, "Cannot reparent a participant across different owner scopes.");
+    };
+    await checkOwners();
     await lockActivityParticipants(client, [participantId]);
-    const source = await participantOwner(client, participantId);
-    if (!source || !canManageOwnerRow(scope, source)) throw httpError(404, "Participant not found.");
-    const { rows: [target] } = await client.query(
-      "select owner_scope, owner_user_id, owner_club_id, owner_team_id from training.activities where id=$1", [toActivityId],
-    );
-    if (!target || !canManageOwnerRow(scope, target)) throw httpError(404, "Target activity not found.");
-    if (!sameActivityOwner(source, target)) throw httpError(400, "Cannot reparent a participant across different owner scopes.");
+    await checkOwners();
     await client.query("select training.reparent_activity_participant($1,$2,$3,$4,$5,$6)",
       [participantId, toActivityId, performedBy, reason || null, strategy, componentMapping ? JSON.stringify(componentMapping) : null]);
     return { ok: true };
@@ -784,12 +824,14 @@ export async function reparentActivityParticipant(scope, { participantId, toActi
 
 export async function mergeActivityParticipants(scope, { sourceParticipantId, targetParticipantId, performedBy, reason }) {
   return runActivityWrite(scope, async client => {
+    const checkOwners = async () => {
+      const source = await requireParticipantOwner(client, scope, sourceParticipantId, "Participant not found.");
+      const target = await requireParticipantOwner(client, scope, targetParticipantId, "Target participant not found.");
+      if (!sameActivityOwner(source, target)) throw httpError(400, "Cannot merge participants across different owner scopes.");
+    };
+    await checkOwners();
     await lockActivityParticipants(client, [sourceParticipantId, targetParticipantId]);
-    const source = await participantOwner(client, sourceParticipantId);
-    if (!source || !canManageOwnerRow(scope, source)) throw httpError(404, "Participant not found.");
-    const target = await participantOwner(client, targetParticipantId);
-    if (!target || !canManageOwnerRow(scope, target)) throw httpError(404, "Target participant not found.");
-    if (!sameActivityOwner(source, target)) throw httpError(400, "Cannot merge participants across different owner scopes.");
+    await checkOwners();
     const result = await client.query("select training.merge_activity_participants($1,$2,$3,$4) as id",
       [sourceParticipantId, targetParticipantId, performedBy, reason || null]);
     return { canonicalParticipantId: result.rows[0].id };

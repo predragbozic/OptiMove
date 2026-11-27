@@ -2368,6 +2368,69 @@ test("M-3c: the native Manage check covers all seven staff routes and denies a p
 });
 
 
+async function assertStagedActivityRoleOperations(call) {
+  const { clubId, coachCookie } = await makeClubCoach("m3c-staged-club");
+  const {adminCookie} = await makePlatformAdmin("m3c-staged-platform");
+  const {rows:[{id: teamId}]} = await query("insert into public.teams (club_id,name) values ($1,'Staged team') returning id",[clubId]);
+  const teamCoach = await makeUser();
+  await query("insert into public.user_team_roles (user_id,team_id,role) values ($1,$2,'team_coach')",[teamCoach,teamId]);
+  await setActiveWorkspace(teamCoach,"team",teamId);
+  const teamCookie = await loginCookie(teamCoach);
+  const word = "load.activities.manage";
+  const template = "00000000-0000-4000-8000-000000000843";
+  const change = (route,body) => call(`/api/organization/roles${route}`, {
+    method:"POST",cookie:adminCookie,body:{requestKey:crypto.randomUUID(),reason:"Activity bridge parity rehearsal",...body},
+  });
+  const readDefault = async () => {
+    const {rows:[value]} = await query(
+      `select r.revision,array(select i.permission_word from public.permission_role_items i where i.role_id=r.id order by 1) as items
+       from public.permission_roles r where r.id=$1`,[template],
+    );
+    return value;
+  };
+  const assertSeed = async () => {
+    const {rows:[value]} = await query("select public.user_has_permission($1,$2,'team',$3) as enabled",[teamCoach,word,teamId]);
+    assert.equal(value.enabled,true);
+  };
+  for (const cookie of [coachCookie,teamCookie]) {
+    const me = await call("/api/auth/me",{cookie});
+    assert.equal(me.status,200,JSON.stringify(me.body));
+    assert.ok(me.body.user.permissions.includes("load.view.team"));
+    assert.ok(!me.body.user.permissions.includes(word));
+  }
+  const initial = await readDefault();
+  assert.ok(initial.items.includes(word));
+  const refused = await change(`/${template}/change`, {expectedRevision:initial.revision,items:initial.items.filter(item => item !== word)});
+  assert.equal(refused.status,409,JSON.stringify(refused.body));
+  assert.deepEqual(await readDefault(),initial);
+  const version = `/${template}/clubs/${clubId}/version`;
+  const custom = `/users/${teamCoach}/clubs/${clubId}/custom`;
+  const made = await change(version,{expectedRevision:null,remove:["athletes.remove"]});
+  assert.equal(made.status,200,JSON.stringify(made.body));
+  const remove = await change(version,{expectedRevision:1,remove:[word]});
+  assert.equal(remove.status,409,JSON.stringify(remove.body));
+  const full = await change(`/${template}/change`,{expectedRevision:initial.revision,items:initial.items,description:`Rehearsal ${clubId}`});
+  assert.equal(full.status,200,JSON.stringify(full.body));
+  const {revision:systemRevision} = await readDefault();
+  const accepted = await change(version+"/answer",{systemRevision,choice:"accept_default"});
+  assert.equal(accepted.status,200,JSON.stringify(accepted.body));
+  await assertSeed();
+  const customMade = await change(custom,{roleId:template,scopeType:"team",scopeId:teamId,expectedRevision:null,remove:["athletes.remove"]});
+  assert.equal(customMade.status,200,JSON.stringify(customMade.body));
+  const customRemove = await change(custom,{roleId:template,scopeType:"team",scopeId:teamId,expectedRevision:1,remove:[word]});
+  assert.equal(customRemove.status,409,JSON.stringify(customRemove.body));
+  const {rows:[active]} = await query("select id from public.permission_custom_roles where user_id=$1 and ended_at is null",[teamCoach]);
+  const bulk = await change(`/${template}/clubs/${clubId}/custom-word-removal`,{word,customIds:[active.id]});
+  assert.equal(bulk.status,409,JSON.stringify(bulk.body));
+  const ended = await change(`/users/${teamCoach}/custom/${active.id}/end`,{});
+  assert.equal(ended.status,200,JSON.stringify(ended.body));
+  const copy = await change(`/${template}/copy`,{clubId,name:"Rehearsal role copy"});
+  assert.equal(copy.status,200,JSON.stringify(copy.body));
+  assert.ok(!copy.body.role.items.includes(word));
+  assert.deepEqual((await readDefault()).items,initial.items);
+  await assertSeed();
+}
+
 const previousActivityServer = process.env.OPTIMOVE_M3C_PREVIOUS_SERVER;
 test("M-3c: the exact pre-bridge materialization receipt replays in the bridge", { skip: !previousActivityServer }, async () => {
   const actual = execFileSync("git", ["-C", previousActivityServer, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -2394,6 +2457,35 @@ test("M-3c: the exact pre-bridge materialization receipt replays in the bridge",
     assert.deepEqual(replay, {status:201, body:{activityId:result.activityId, participantId:result.participantId, reused:true, matchStatus:"replay"}});
     const {rows:[receipt]} = await query("select count(*)::int as n from training.activity_write_requests where request_key=$1", [input.requestKey]);
     assert.equal(receipt.n, 1);
+    await assertStagedActivityRoleOperations(api);
+    const priorUrl = `http://127.0.0.1:${oldServer.address().port}`;
+    const priorCall = async (pathname,{method="GET",cookie,body}={}) => {
+      const response = await fetch(priorUrl+pathname,{
+        method,headers:{"Content-Type":"application/json",Cookie:cookie},body:body === undefined ? undefined : JSON.stringify(body),
+      });
+      return {status:response.status,body:await response.json()};
+    };
+    await assertStagedActivityRoleOperations(priorCall);
+    // Existing source validation remains observable to an authorized caller in
+    // both builds. The native foreign/missing case is intentionally hardened.
+    const { logicalSessionId } = await makePlanSessionForAthlete(athleteId,{
+      date:"2026-09-10",owner:{ownerScope:"club",ownerClubId:clubId},
+    });
+    const { assignmentId } = await makeExternalAssignmentForAthlete(athleteId,(await makePlatformAdmin("old-assignment-owner")).adminId,{
+      date:"2026-09-11",owner:{ownerScope:"club",ownerClubId:clubId},
+    });
+    for (const [field, id] of [["planLogicalSessionId",logicalSessionId],["externalAssignmentId",assignmentId]]) {
+      const malformed = {requestKey:uid(),[field]:id,localDate:"2026-09-12"};
+      const oldMismatch = await priorCall(route,{method:"POST",cookie:coachCookie,body:malformed});
+      assert.equal(oldMismatch.status,400,field);
+      assert.deepEqual(await api(route,{method:"POST",cookie:coachCookie,body:malformed}),oldMismatch,field);
+      const valid = {requestKey:uid(),[field]:id};
+      const oldWrite = await priorCall(route,{method:"POST",cookie:coachCookie,body:valid});
+      assert.equal(oldWrite.status,201,JSON.stringify(oldWrite.body));
+      assert.deepEqual(await api(route,{method:"POST",cookie:coachCookie,body:valid}),{
+        status:201,body:{activityId:oldWrite.body.activityId,participantId:oldWrite.body.participantId,reused:true,matchStatus:"replay"},
+      });
+    }
   } finally {
     oldServer.closeAllConnections();
     if (oldServer.listening) await new Promise(resolve => oldServer.close(resolve));
@@ -2492,7 +2584,8 @@ test("M-3c: accept records the lock order and checks candidate ownership after w
     "public.user_has_permission", "hashtextextended($1, 5)", "for update of ms", "hashtextextended($1, 4)",
     "from training.activity_participants ap", "rollback",
   ];
-  const indexes = order.map(pattern => statements.findIndex(({sql}) => sql.includes(pattern)));
+  const indexes = [];
+  for (const pattern of order) indexes.push(statements.findIndex(({sql}, index) => index > (indexes.at(-1) ?? -1) && sql.includes(pattern)));
   assert.ok(indexes.every((index, i) => index >= 0 && (i === 0 || index > indexes[i - 1])), JSON.stringify(indexes));
   assert.deepEqual(statements.filter(({sql}) => sql.includes("hashtextextended($1, 4)")).map(({params}) => params[0]),
     [fixture.participantAId, candidate].sort().map(id => `activity-participant:${id}`));
@@ -2536,4 +2629,240 @@ test("M-3c: a direct team coach writes team-owned activity only in the exact act
   }
   await setActiveWorkspace(direct,"team",team.id);
   assert.deepEqual(await request(source.body.participantId),{status:200,body:{ok:true}});
+});
+
+async function waitsForActivityWriter(blocker) {
+  const { rows: [{ pid }] } = await blocker.query("select pg_backend_pid() as pid");
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const result = await blocker.query(
+      "select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid))",
+      [pid],
+    );
+    if (result.rowCount) return true;
+    await new Promise(resolve => setTimeout(resolve, 15));
+  }
+  return false;
+}
+
+test("M-3c: metric materialization refuses an owner change committed while it waits for the source row", async () => {
+  const own = await makeClubCoach("m3c-event-owner");
+  const foreign = await makeClubCoach("m3c-event-foreign");
+  const { athleteId } = await makeAthleteInClub(own.clubId);
+  const eventId = await makeMetricEvent({ ownerClubId: own.clubId, date:"2026-09-08", eventTimezoneSnapshot:"UTC" });
+  await addMetricParticipant({eventId, athleteId});
+  const request = id => api(`/api/training-activity/materialize/metric-event/${id}`, {method:"POST",cookie:own.coachCookie,body:{}});
+  const missing = await request(crypto.randomUUID());
+  assert.equal(missing.status,404);
+  const blocker = new pg.Client({connectionString:db.url});
+  let pending;
+  await blocker.connect();
+  try {
+    await blocker.query("begin");
+    await blocker.query("update training_load.metric_events set owner_club_id=$1 where id=$2", [foreign.clubId,eventId]);
+    pending = request(eventId);
+    pending.catch(() => {});
+    assert.equal(await waitsForActivityWriter(blocker),true,"request must wait for the owner change on its source row");
+    await blocker.query("commit");
+    assert.deepEqual(await pending, missing);
+    const linked = await query("select activity_id from training.activity_metric_event_links where metric_event_id=$1", [eventId]);
+    assert.deepEqual(linked.rows,[]);
+  } finally {
+    await blocker.query("rollback").catch(() => {});
+    await blocker.end();
+    await Promise.allSettled([pending]);
+  }
+});
+
+test("M-3c: materialization checks View again after waiting for the club ceiling", async () => {
+  const {clubId,coachCookie} = await makeClubCoach("m3c-view-race");
+  const {athleteId} = await makeAthleteInClub(clubId);
+  const input = {requestKey:uid(),athleteId,localDate:"2026-09-08",timezone:"UTC"};
+  const blocker = new pg.Client({connectionString:db.url});
+  const word = "load.view.team";
+  const roles = ["00000000-0000-4000-8000-000000000842","00000000-0000-4000-8000-000000000843"];
+  let pending;
+  let removed = false;
+  await blocker.connect();
+  try {
+    await blocker.query("begin");
+    await blocker.query("select public.lock_club_ceiling($1::uuid[],'exclusive')", [[clubId]]);
+    pending = api("/api/training-activity/materialize",{method:"POST",cookie:coachCookie,body:input});
+    pending.catch(() => {});
+    assert.equal(await waitsForActivityWriter(blocker),true,"request passed HTTP entry and now waits on the club ceiling");
+    await blocker.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
+    await blocker.query("set constraints all immediate");
+    await blocker.query("delete from public.permission_role_items where role_id=any($1::uuid[]) and permission_word=$2",[roles,word]);
+    await blocker.query("alter table public.permission_role_items enable trigger permission_role_items_guard");
+    await blocker.query("commit");
+    removed = true;
+    assert.deepEqual(await pending,{status:403,body:{error:"Forbidden"}});
+    const stored = await query("select request_key from training.activity_write_requests where request_key=$1",[input.requestKey]);
+    assert.deepEqual(stored.rows,[]);
+  } finally {
+    await blocker.query("rollback").catch(() => {});
+    await Promise.allSettled([pending]);
+    if (removed) {
+      await blocker.query("begin");
+      try {
+        await blocker.query("alter table public.permission_role_items disable trigger permission_role_items_guard");
+        await blocker.query("set constraints all immediate");
+        await blocker.query("insert into public.permission_role_items (role_id,permission_word) select unnest($1::uuid[]),$2",[roles,word]);
+        await blocker.query("alter table public.permission_role_items enable trigger permission_role_items_guard");
+        await blocker.query("commit");
+      } catch (error) {
+        await blocker.query("rollback");
+        throw error;
+      }
+    }
+    await blocker.end();
+  }
+});
+
+test("M-3c: a new receipt for an automatic natural-key activity marks use; a replay does not", async () => {
+  const {clubId,coachId,coachCookie} = await makeClubCoach("m3c-natural-marker");
+  const {athleteId} = await makeAthleteInClub(clubId);
+  const {assignmentId,occurrenceId} = await makeExternalAssignmentForAthlete(athleteId,coachId,{
+    owner:{ownerScope:"club",ownerClubId:clubId},
+  });
+  const markerSql = "select first_checked_write_at from training_load.activity_identity_m3c_use where singleton";
+  const marker = async () => (await query(markerSql)).rows[0].first_checked_write_at;
+  const initial = await marker();
+  const clearMarker = () => query("update training_load.activity_identity_m3c_use set first_checked_write_at=null where singleton");
+  try {
+    await clearMarker();
+    // This is the sanctioned SQL writer called by automatic external RPE.
+    const {rows:[{id:activityId}]} = await query(
+      "select training.materialize_activity_group_from_external_occurrence($1,null,null,$2) as id",[occurrenceId,coachId],
+    );
+    assert.equal(await marker(),null);
+    const requestKey = uid();
+    const write = () => api("/api/training-activity/materialize", {
+      method:"POST",cookie:coachCookie,body:{requestKey,externalAssignmentId:assignmentId},
+    });
+    const created = await write();
+    assert.equal(created.status,201,JSON.stringify(created.body));
+    assert.equal(created.body.matchStatus,"reused_by_key");
+    assert.equal(created.body.activityId,activityId);
+    const receipt = await query("select result_activity_id,result_participant_id from training.activity_write_requests where request_key=$1 and requested_by_user_id=$2",
+      [requestKey,coachId]);
+    assert.deepEqual(receipt.rows,[{result_activity_id:activityId,result_participant_id:created.body.participantId}]);
+    const afterWrite = await marker();
+    assert.ok(afterWrite,"new native receipt must set the rollback boundary");
+    const rollback = await fsp.readFile(new URL("../../docs/runbooks/training-load-m3c-v103-rollback.sql",import.meta.url),"utf8");
+    try {
+      await assert.rejects(adminClient.query(rollback),/the bridge writer was used/);
+    } finally {
+      await adminClient.query("rollback");
+    }
+    await clearMarker();
+    const replay = await write();
+    assert.equal(replay.status,201,JSON.stringify(replay.body));
+    assert.equal(replay.body.matchStatus,"replay");
+    assert.equal(await marker(),null,"existing receipt replay writes no rollout marker");
+  } finally {
+    await query("update training_load.activity_identity_m3c_use set first_checked_write_at=$1 where singleton",[initial]);
+  }
+});
+
+test("M-3c: native planned and external sources hide foreign identity before value validation", async () => {
+  const own = await makeClubCoach("m3c-source-own");
+  const another = await makeClubCoach("m3c-source-other");
+  const {athleteId} = await makeAthleteInClub(own.clubId);
+  const otherAthlete = await makeAthleteInClub(another.clubId);
+  const options = clubId => ({date:"2026-09-08",owner:{ownerScope:"club",ownerClubId:clubId}});
+  const ownedPlan = await makePlanSessionForAthlete(athleteId,options(own.clubId));
+  const foreignPlan = await makePlanSessionForAthlete(otherAthlete.athleteId,options(another.clubId));
+  const ownedExternal = await makeExternalAssignmentForAthlete(athleteId,own.coachId,options(own.clubId));
+  const foreignExternal = await makeExternalAssignmentForAthlete(otherAthlete.athleteId,another.coachId,options(another.clubId));
+  for (const [field, foreign, owned] of [
+    ["planLogicalSessionId",foreignPlan.logicalSessionId,ownedPlan.logicalSessionId],
+    ["externalAssignmentId",foreignExternal.assignmentId,ownedExternal.assignmentId],
+  ]) {
+    const send = id => api("/api/training-activity/materialize",{
+      method:"POST",cookie:own.coachCookie,
+      body:{requestKey:uid(),[field]:id,athleteId,localDate:"2026-09-09"},
+    });
+    const missing = await send(crypto.randomUUID());
+    assert.equal(missing.status,404,field);
+    assert.deepEqual(await send(foreign),missing,field);
+    const malformedOwned = await send(owned);
+    assert.equal(malformedOwned.status,400,field);
+    assert.match(malformedOwned.body.error,/localDate does not match/);
+  }
+});
+
+test("M-3c: moving a group source does not expose its previously linked foreign activity", async () => {
+  const original = await makeClubCoach("m3c-linked-original");
+  const nextOwner = await makeClubCoach("m3c-linked-next");
+  const {athleteId} = await makeAthleteInClub(original.clubId);
+  const eventId = await makeMetricEvent({ownerClubId:original.clubId,date:"2026-09-08",eventTimezoneSnapshot:"UTC"});
+  await addMetricParticipant({eventId,athleteId});
+  const {occurrenceId} = await makeExternalAssignmentForAthlete(athleteId,original.coachId,{
+    owner:{ownerScope:"club",ownerClubId:original.clubId},
+  });
+  const request = (kind,id,cookie) => api(`/api/training-activity/materialize/${kind}/${id}`,{method:"POST",cookie,body:{}});
+  for (const [kind, id, moveSql] of [
+    ["metric-event",eventId,"update training_load.metric_events set owner_club_id=$1 where id=$2"],
+    ["external-occurrence",occurrenceId,"update training_load.external_schedules set owner_club_id=$1 where id=(select schedule_id from training_load.external_schedule_occurrences where id=$2)"],
+  ]) {
+    const first = await request(kind,id,original.coachCookie);
+    assert.equal(first.status,201,JSON.stringify(first.body));
+    await query(moveSql,[nextOwner.clubId,id]);
+    const missing = await request(kind,crypto.randomUUID(),nextOwner.coachCookie);
+    assert.equal(missing.status,404);
+    assert.deepEqual(await request(kind,id,nextOwner.coachCookie),missing);
+    assert.doesNotMatch(JSON.stringify(missing.body),new RegExp(first.body.activityId));
+    const rows = await query("select owner_club_id from training.activities where id=$1",[first.body.activityId]);
+    assert.deepEqual(rows.rows,[{owner_club_id:original.clubId}]);
+  }
+});
+
+test("M-3c: a foreign candidate or participant is refused without waiting for its held identity lock", {timeout:7000}, async () => {
+  const own = await makeClubCoach("m3c-held-owner");
+  const foreign = await makeClubCoach("m3c-held-foreign");
+  const fixture = await makeSharedActivityWithTwoSuggestionGroups(own.clubId);
+  const foreignFixture = await makeSharedActivityWithTwoSuggestionGroups(foreign.clubId);
+  const candidate = foreignFixture.candidateA1;
+  const {rows:[suggestion]} = await query(
+    `insert into training.activity_match_suggestions
+       (activity_id,source_participant_id,candidate_activity_id,candidate_participant_id,confidence,score_breakdown,policy_version,reason)
+       values ($1,$2,$3,$4,10,'{}',2,'foreign fixture') returning id`,
+    [fixture.sharedActivityId,fixture.participantAId,candidate.activityId,candidate.participantId],
+  );
+  const request = (route,body) => api(`/api/training-activity${route}`,{method:"POST",cookie:own.coachCookie,body});
+  const missingId = crypto.randomUUID();
+  const blocker = new pg.Client({connectionString:db.url});
+  const started = [];
+  await blocker.connect();
+  try {
+    await blocker.query("begin");
+    await blocker.query("select pg_advisory_xact_lock(hashtextextended($1, 4))",[`activity-participant:${candidate.participantId}`]);
+    for (const [foreignRoute, missingRoute, foreignBody, missingBody] of [
+      [`/match-suggestions/${suggestion.id}/accept`,`/match-suggestions/${missingId}/accept`,{},{}],
+      [`/participants/${fixture.participantAId}/merge`,`/participants/${fixture.participantAId}/merge`,
+        {targetParticipantId:candidate.participantId},{targetParticipantId:missingId}],
+      [`/participants/${candidate.participantId}/reparent`,`/participants/${missingId}/reparent`,
+        {toActivityId:fixture.sharedActivityId},{toActivityId:fixture.sharedActivityId}],
+    ]) {
+      const missing = await request(missingRoute,missingBody);
+      const attempt = request(foreignRoute,foreignBody);
+      started.push(attempt);
+      let timeout;
+      try {
+        const answer = await Promise.race([
+          attempt,
+          new Promise((_,reject) => { timeout=setTimeout(() => reject(new Error("Held foreign identity blocked a scoped refusal.")),2000); }),
+        ]);
+        assert.deepEqual(answer,missing);
+        assert.equal(answer.status,404);
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+  } finally {
+    await blocker.query("rollback").catch(() => {});
+    await blocker.end();
+    await Promise.allSettled(started);
+  }
 });

@@ -2,6 +2,10 @@ import { lockClubCeiling } from "./clubCeilingLock.js";
 
 const nativeScopes = new Set(["club", "team"]);
 
+export function isNativeActivityWriter(scope) {
+  return Boolean(scope.staffActorId) && nativeScopes.has(scope.type);
+}
+
 export function activityWriteDenied(message = "Forbidden") {
   return Object.assign(new Error(message), { httpStatus: 403 });
 }
@@ -9,7 +13,7 @@ export function activityWriteDenied(message = "Forbidden") {
 // Only the mounted staff routes bind a staff actor. Shared SQL and other
 // sanctioned callers retain their independent authorization.
 export async function lockActivityWriter(client, scope) {
-  if (!scope.staffActorId || !nativeScopes.has(scope.type)) return;
+  if (!isNativeActivityWriter(scope)) return;
   const scopeId = scope.clubId ?? scope.teamId;
   const team = scope.teamId ? (await client.query("select club_id from public.teams where id=$1", [scope.teamId])).rows[0] : null;
   const clubId = scope.clubId ?? team?.club_id;
@@ -40,7 +44,7 @@ export async function lockActivityWriter(client, scope) {
 }
 
 export async function recordCheckedActivityWrite(client, scope) {
-  if (!scope.staffActorId || !nativeScopes.has(scope.type)) return;
+  if (!isNativeActivityWriter(scope)) return;
   await client.query(
     `update training_load.activity_identity_m3c_use set first_checked_write_at=clock_timestamp()
      where singleton and first_checked_write_at is null`,
