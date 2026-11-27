@@ -95,7 +95,7 @@ export const WORKSPACE_BRANCH = new RegExp([
 // read the dashboard's data workspace (one of the five existing types, anything else refused).
 const REVIEWED = Object.freeze({
   "activityRoster.js": 6, // M-3a reads the active scope for roster write projection.
-  "activityRosterCommands.js": 3, // M-3a checks native View and Roster Decide at the request-bound scope under lock.
+  "activityRosterCommands.js": 2, // M-3a checks native View and Roster Decide at the request-bound scope under lock.
   // V-2: the view branch reads only the athletes gate's scope (req.moduleView, can(athletes.view)), never an offered
   // workspace; a view workspace without the gate's pass stays `and false` (+3).
   "athleteRosterScope.js": 7,
