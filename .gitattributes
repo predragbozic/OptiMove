@@ -171,3 +171,7 @@ docs/runbooks/program-edit-v109-*.sql text eol=lf
 migrations_v2/202612121000_programs_v110_assign_publish_bridge.sql text eol=lf
 docs/runbooks/program-assign-publish-v110-*.sql text eol=lf
 backend/scripts/program-assign-publish-v110-rehearsal.* text eol=lf
+
+migrations_v2/202612131000_tests_v111_schedule_manage_bridge.sql text eol=lf
+docs/runbooks/tests-schedule-manage-v111-*.sql text eol=lf
+backend/scripts/tests-schedule-manage-v111-rehearsal.* text eol=lf
