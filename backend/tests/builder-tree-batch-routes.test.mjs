@@ -26,7 +26,7 @@ if (needsModuleMocksRelaunch()) {
     lockProgramRpeActor: async () => null, lockProgramRpeSettingsActor: async () => null,
     nativeProgramRpeScope: () => null, programRpeSettingsRightsStillHold: async () => false,
   } });
-  mock.module("../src/workspace.js", { namedExports: { resolveActiveWorkspaceReadOnly: async () => ({ workspace: null }) } });
+  mock.module("../src/workspace.js", { namedExports: { pickFallbackWorkspace: () => null, resolveActiveWorkspaceReadOnly: async () => ({ workspace: null, availableWorkspaces: [] }) } });
   const { default: router, copyProgramTree, copyDaySessions, copySessionContent, copyWeeklyPlanTree } = await import("../src/routes/builder.js");
   const edit = router.stack.find((layer) => layer.route?.path === "/plans/:planId/edit").route.stack[0].handle;
 

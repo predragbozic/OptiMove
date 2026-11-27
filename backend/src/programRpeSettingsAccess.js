@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { loadAuthorizationContext } from "./authz.js";
 import { clubOfScope, lockClubCeiling } from "./clubCeilingLock.js";
 import { externalScheduleScopeForWorkspace } from "./trainingLoadAccess.js";
-import { resolveActiveWorkspaceReadOnly } from "./workspace.js";
+import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "./workspace.js";
 
 export function nativeProgramRpeScope(scope) {
   if (scope.type === "club") return scope.clubId;
@@ -43,8 +43,12 @@ export async function lockProgramRpeActor(client, req, scope) {
   user ??= (await client.query("select * from public.users where id=$1 and is_active", [userId])).rows[0];
   if (!user) return null;
 
-  const preference = await client.query("select user_id from public.user_workspace_preferences where user_id=$1 for share", [userId]);
-  if ((privateScope || platformScope) && !preference.rowCount) return null;
+  const allowFallback = scope.allowFallback === true;
+  const { rows: [preference] } = await client.query(
+    `select workspace_type,scope_id from public.user_workspace_preferences where user_id=$1
+     for ${allowFallback ? "no key update" : "share"}`, [userId],
+  );
+  if ((privateScope || platformScope) && !preference && !allowFallback) return null;
   // Authorization loads several independent reads together. Serialize them
   // on this transaction client so they share its locks and connection.
   let tail = Promise.resolve();
@@ -53,15 +57,36 @@ export async function lockProgramRpeActor(client, req, scope) {
     tail = running.catch(() => {});
     return running;
   };
-  const { authz, workspace } = await (async () => {
+  const { authz, workspace, availableWorkspaces } = await (async () => {
     const authz = await loadAuthorizationContext(user, runQuery);
-    const { workspace } = await resolveActiveWorkspaceReadOnly(user.id, authz, runQuery);
-    return { authz, workspace };
+    return { authz, ...await resolveActiveWorkspaceReadOnly(user.id, authz, runQuery) };
   })().finally(() => tail);
   const actor = { user, authz };
-  const fresh = externalScheduleScopeForWorkspace(workspace, actor);
-  if (fresh.type !== scope.type || String(nativeProgramRpeScope(fresh)) !== String(scopeId) || (privateScope && String(fresh.userId) !== String(userId))) return null;
-  return actor;
+  const matchesExpected = (candidate) => {
+    const fresh = externalScheduleScopeForWorkspace(candidate, actor);
+    return fresh.type === scope.type && String(nativeProgramRpeScope(fresh)) === String(scopeId)
+      && (!privateScope || String(fresh.userId) === String(userId));
+  };
+  if (workspace) return matchesExpected(workspace) ? actor : null;
+  if (!allowFallback) return null;
+
+  // Apply the same fallback as normal workspace navigation after locking
+  // the current actor. A simultaneous first preference insert wins unless
+  // it chose this exact workspace. Never overwrite it with an older hint.
+  const fallback = pickFallbackWorkspace(availableWorkspaces);
+  if (!fallback || !matchesExpected(fallback)) return null;
+  const saved = await client.query(
+    `insert into public.user_workspace_preferences as saved_preference(user_id,workspace_type,scope_id)
+     values($1,$2,$3)
+     on conflict(user_id) do update set workspace_type=excluded.workspace_type,scope_id=excluded.scope_id,updated_at=now()
+     where saved_preference.workspace_type is not distinct from $4
+       and saved_preference.scope_id is not distinct from $5::uuid
+     returning user_id`,
+    [userId,fallback.type,fallback.scopeId,preference?.workspace_type ?? null,preference?.scope_id ?? null],
+  );
+  if (saved.rowCount) return actor;
+  const selected = await resolveActiveWorkspaceReadOnly(user.id, authz, runQuery);
+  return matchesExpected(selected.workspace) ? actor : null;
 }
 
 export async function programRpeSettingsRightsStillHold(client, actor, scope, { trainingLoadView = false } = {}) {

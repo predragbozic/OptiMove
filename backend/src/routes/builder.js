@@ -13,12 +13,13 @@ import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exer
 import { canManagePlanTrainingLoadInScope, externalScheduleScopeForWorkspace, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
 import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
-import { resolveActiveWorkspaceReadOnly } from "../workspace.js";
+import { pickFallbackWorkspace, resolveActiveWorkspaceReadOnly } from "../workspace.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
 
 async function resolveBuilderRpeWorkspace(client, req) {
-  const { workspace } = await resolveActiveWorkspaceReadOnly(req.user.id, req.authz, client.query.bind(client));
-  return externalScheduleScopeForWorkspace(workspace, req);
+  const { workspace, availableWorkspaces } = await resolveActiveWorkspaceReadOnly(req.user.id, req.authz, client.query.bind(client));
+  const scope = externalScheduleScopeForWorkspace(workspace ?? pickFallbackWorkspace(availableWorkspaces), req);
+  return workspace ? scope : { ...scope, allowFallback: true };
 }
 
 const router = Router();

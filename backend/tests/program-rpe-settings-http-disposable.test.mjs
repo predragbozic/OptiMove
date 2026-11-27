@@ -490,8 +490,14 @@ test("v106 nonweekly Submit rechecks the grant for a recorded effect under the e
   } finally {
     await setNativeRpeGrant(true);
   }
-  const saved = await submit();
-  assert.equal(saved.status, 200, saved.text);
+  const reserved = [];
+  try {
+    for (let i = 1; i < http.pool.options.max; i++) reserved.push(await http.pool.connect());
+    const saved = await submit();
+    assert.equal(saved.status, 200, saved.text);
+  } finally {
+    for (const client of reserved) client.release();
+  }
   assert.equal((await db.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [draftId])).rowCount, 0);
   const { rows: [published] } = await db.query(
     "select ps.rpe_enabled,ps.training_load_enabled from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id where pd.plan_id=$1",
@@ -849,5 +855,65 @@ test("the exact production predecessor can create a legacy draft during the v106
     assert.equal((await db.query("select 1 from training_load.builder_rpe_plan_baselines where plan_id=$1", [legacyId])).rowCount, 0);
   } finally {
     await previous.stop();
+  }
+});
+test("authoring preserves validated native and platform fallback with missing or stale preferences", async () => {
+  const f = fixtures(db);
+  const native = await f.user("Native fallback");
+  await f.grantClub(native, A);
+  const platform = await f.user("Platform fallback");
+  await f.grantPlatform(platform);
+  await db.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'club',$2)", [platform,B]);
+  for (const [userId, existingName, scope, scopeId, owner] of [
+    [native, "Native program", "club", A, "club"],
+    [platform, "Platform program", "platform", null, "system"],
+  ]) {
+    const cookie = await http.cookieFor(userId);
+    const alias = await http.api(cookie, "/api/builder/plans", {
+      method: "POST", body: { name: existingName, planType: "program" },
+    });
+    assert.equal(alias.status, 201, alias.text);
+    const copy = await http.api(cookie, "/api/builder/plans/" + alias.body.plan.id + "/duplicate", { method: "POST", body: {} });
+    assert.equal(copy.status, 201, copy.text);
+    const ids = [alias.body.plan.id,copy.body.plan.id];
+    const { rows: [preference] } = await db.query("select workspace_type,scope_id from public.user_workspace_preferences where user_id=$1", [userId]);
+    assert.deepEqual(preference, { workspace_type: scope, scope_id: scopeId });
+    const { rows } = await db.query(
+      `select o.owner_scope,o.owner_club_id,opening.owner_scope as baseline_owner
+       from training_load.plan_workspace_ownership o join training_load.builder_rpe_plan_baselines opening using(plan_id)
+       where o.plan_id=any($1::uuid[])`, [ids],
+    );
+    assert.equal(rows.length, 2);
+    for (const row of rows) assert.deepEqual(row, { owner_scope: owner, owner_club_id: scopeId, baseline_owner: owner });
+  }
+});
+
+test("a concurrent first workspace choice wins over a Builder fallback hint", async () => {
+  const f = fixtures(db);
+  const candidate = await f.club("A fallback");
+  const chosen = await f.club("Z explicit choice");
+  const userId = await f.user("Concurrent workspace choice");
+  await f.grantClub(userId, candidate);
+  await f.grantClub(userId, chosen);
+  const req = { user: { id: userId }, sessionToken: (await http.cookieFor(userId)).split("=")[1] };
+  const { lockProgramRpeActor } = await import("../src/programRpeSettingsAccess.js");
+  const actor = await http.pool.connect();
+  const chooser = await http.pool.connect();
+  let pending;
+  try {
+    await chooser.query("begin");
+    await chooser.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'club',$2)", [userId,chosen]);
+    await actor.query("begin");
+    pending = lockProgramRpeActor(actor, req, { type: "club", clubId: candidate, allowFallback: true });
+    await waitForRpeBlock(actor.processID);
+    await chooser.query("commit");
+    assert.equal(await pending, null);
+    await actor.query("rollback");
+    assert.equal((await db.query("select scope_id from public.user_workspace_preferences where user_id=$1", [userId])).rows[0].scope_id, chosen);
+  } finally {
+    await Promise.allSettled([actor.query("rollback"),chooser.query("rollback")]);
+    if (pending) await Promise.allSettled([pending]);
+    actor.release();
+    chooser.release();
   }
 });
