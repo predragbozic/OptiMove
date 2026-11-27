@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fsp from "node:fs/promises";
 import { randomBytes, randomUUID } from "node:crypto";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
-import { fixtures, key, startServer } from "./support/permission-roles-world.mjs";
+import { fixtures, key, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 import { changeProgramRpeGrant } from "./support/program-rpe-grants.mjs";
 import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
 
@@ -136,6 +136,87 @@ async function openEditDraft(targetId) {
 async function flags(sessionId) {
   return (await db.query("select logical_session_id,training_load_enabled,rpe_enabled from plans.plan_sessions where id=$1", [sessionId])).rows[0];
 }
+
+
+test("Settings grants and revokes RPE edits for the same Builder draft and signed-in coach", async () => {
+  const base = "/api/organization/roles";
+  const word = "programs.rpe_settings";
+  const api = async (actor, path, options) => {
+    const result = await http.api(actor.cookie, path, options);
+    assert.equal(result.status, 200, path + ": " + result.text);
+    return result.body;
+  };
+  const f = fixtures(db);
+  const platformId = await f.user("RPE Settings platform admin");
+  await f.grantPlatform(platformId);
+  const admin = { cookie: await http.cookieFor(platformId) };
+  const subject = coach;
+  const draft = await fixturePlan(athleteId, "draft", "2028-01-03");
+  const rolePath = base + "/" + ROLE_IDS.club_admin + "/change";
+  const role = (await db.query("select revision,description,array(select permission_word from public.permission_role_items where role_id=$1 order by 1) as items from public.permission_roles where id=$1", [ROLE_IDS.club_admin])).rows[0];
+  const items = role.items;
+  const draftPath = "/api/builder/plans/" + draft.id;
+  const check = async expected => {
+    const me = await api(subject, "/api/auth/me");
+    assert.equal(me.user.permissions.includes(word), expected);
+    const response = await api(subject, draftPath);
+    assert.equal((response.draft ?? response).plan.canEditRpeSettings, expected);
+  };
+  const catalog = await api(admin, base + "/catalog?clubId=" + A);
+  assert.ok(catalog.permissions.some(entry => entry.word === word && entry.checked && entry.storable));
+  await check(false);
+  const changeRole = (expectedRevision, nextItems, requestKey = key(), description) => api(admin, rolePath, { method: "POST", body: {
+    expectedRevision, requestKey, reason: "Test RPE permission change", items: nextItems, description,
+  } });
+  const granted = (await changeRole(role.revision, [...items, word])).role;
+  assert.ok(granted.items.includes(word));
+  await check(true);
+  const previous = process.env.OPTIMOVE_BUILDER_RPE_EXPOSURE_PREVIOUS;
+  let old;
+  const oldChange = async payload => {
+    const response = await fetch(old.baseUrl + rolePath, {
+      method: "POST", headers: { Cookie: admin.cookie, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  try {
+    if (previous) {
+      old = await previousDashboardServer(project.url, {}, previous);
+      const rejected = await oldChange({
+        expectedRevision: granted.revision, requestKey: key(), reason: "Old Settings cannot remove the staged permission", items,
+      });
+      assert.equal(rejected.status, 409);
+      assert.equal(rejected.body.error, "permission_not_available_yet");
+      const retainedByOld = await oldChange({
+        expectedRevision: granted.revision, requestKey: key(), reason: "Unrelated Settings write", items: [...items, word],
+        description: "Keeping staged RPE settings on the former build",
+      });
+      assert.equal(retainedByOld.status, 200, JSON.stringify(retainedByOld.body));
+      granted.revision = retainedByOld.body.role.revision;
+      await check(true);
+    }
+    await api(subject, settings(draft.id), { method: "PATCH", body: { trackTrainingLoadDefault: true, requestRpeDefault: true } });
+    const retained = (await changeRole(granted.revision, [...items, word], key(), "Updated without changing the RPE word")).role;
+    assert.ok(retained.items.includes(word));
+    const revokeKey = key();
+    const removed = (await changeRole(retained.revision, items, revokeKey, role.description)).role;
+    assert.deepEqual((await changeRole(retained.revision, items, revokeKey, role.description)).role, removed);
+    assert.ok(!removed.items.includes(word));
+    if (old) {
+      const replay = await oldChange({
+        expectedRevision: retained.revision, requestKey: revokeKey, reason: "Test RPE permission change", items, description: role.description,
+      });
+      assert.equal(replay.status, 200, JSON.stringify(replay.body));
+      assert.deepEqual(replay.body.role, removed);
+    }
+    await check(false);
+    assert.equal((await http.api(subject.cookie, settings(draft.id), { method: "PATCH", body: { trackTrainingLoadDefault: false } })).status, 404);
+    assert.deepEqual((await db.query("select track_training_load_default,request_rpe_default from plans.plans where id=$1", [draft.id])).rows[0], {
+      track_training_load_default: true, request_rpe_default: true,
+    });
+  } finally { await old?.stop(); }
+});
 
 test("unchanged retained sessions save without Manage; a real retained flag delta is refused", async () => {
   const before = await flags(live.sessionId);

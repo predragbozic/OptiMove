@@ -145,8 +145,8 @@ const REVIEWED = Object.freeze({
   // coach path asks athletes.view at (its own resolved club / team workspace).
   "positionService.js": 11,
   "routes/auth.js": 1,
-  "programRpeSettingsAccess.js": 3, // revalidates an existing native workspace for an RPE write
-  "routes/builder.js": 9, // existing visibility plus scoped direct and indirect RPE effects
+  "programRpeSettingsAccess.js": 4, // revalidates an existing native workspace for an RPE write
+  "routes/builder.js": 10, // existing visibility plus scoped direct and indirect RPE effects
   "routes/calendar.js": 1,
   "routes/gpexeImport.js": 3,
   "routes/organization.js": 22, // R4-2: the view branch of GET /, its fail-closed filter and the members rule (+3)

@@ -14,9 +14,9 @@ function makeSession(overrides = {}) {
   return { id: "session-1", bta: "T", trackingEnabled: false, rpeEnabled: false, ...overrides };
 }
 
-function makeDraft({ trackTrainingLoadDefault = false, requestRpeDefault = false, sessions = [] } = {}) {
+function makeDraft({ canEditRpeSettings = true, trackTrainingLoadDefault = false, requestRpeDefault = false, sessions = [] } = {}) {
   return {
-    plan: { id: "plan-1", trackTrainingLoadDefault, requestRpeDefault },
+    plan: { id: "plan-1", canEditRpeSettings, trackTrainingLoadDefault, requestRpeDefault },
     blocks: [{ id: "block-1", sessions }],
   };
 }
@@ -134,4 +134,11 @@ test("10. when Include is ON, Request RPE renders enabled and the OFF hint is ab
   const rpeButton = html.match(/<button[^>]*data-action="builder-toggle-plan-rpe-default"[^>]*>/)[0];
   assert.doesNotMatch(rpeButton, /disabled/);
   assert.doesNotMatch(html, /Include sessions in Training Load first/);
+});
+
+test("new-session defaults stay readable when editing is not allowed", () => {
+  const html = renderBuilderTrainingLoadSettings(makeDraft({ canEditRpeSettings: false, trackTrainingLoadDefault: true, requestRpeDefault: true }));
+  assert.match(html, /Tracking on · RPE requested/);
+  assert.match(html, /Ask your administrator/);
+  assert.doesNotMatch(html, /data-action="builder-(bulk|toggle)/);
 });

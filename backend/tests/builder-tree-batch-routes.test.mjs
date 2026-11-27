@@ -24,7 +24,7 @@ if (needsModuleMocksRelaunch()) {
   } });
   mock.module("../src/programRpeSettingsAccess.js", { namedExports: {
     lockProgramRpeActor: async () => null, lockProgramRpeSettingsActor: async () => null,
-    nativeProgramRpeScope: () => null, programRpeSettingsRightsStillHold: async () => false,
+    nativeProgramRpeScope: () => null, programRpeSettingsOffered: () => false, programRpeSettingsRightsStillHold: async () => false,
   } });
   mock.module("../src/workspace.js", { namedExports: { pickFallbackWorkspace: () => null, resolveActiveWorkspaceReadOnly: async () => ({ workspace: null, availableWorkspaces: [] }) } });
   const { default: router, copyProgramTree, copyDaySessions, copySessionContent, copyWeeklyPlanTree } = await import("../src/routes/builder.js");
