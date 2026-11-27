@@ -1504,15 +1504,12 @@ router.post("/plans/:planId/edit", withBatchReuseGuard(async (req, res, next) =>
     await timing.measure("copy", async () => {
       if (plan.plan_type === "weekly") {
         await copyWeeklyPlanTree(client, plan.id, created.rows[0].id, plan.week_start, { preserveLogicalId: true, targetIsNew: true });
-        // The edit-draft represents the EXACT same real plan mid-edit, not
-        // a new one - its own ownership snapshot is copied verbatim from
-        // the source (see this file's own header comment on
-        // training_load.plan_workspace_ownership), never re-resolved from
-        // whatever workspace the editing coach happens to be in right now.
-        await copyPlanOwnershipSnapshot(client, plan.id, created.rows[0].id);
       } else {
         await copyProgramTree(client, plan.id, created.rows[0].id);
       }
+      // An edit draft inherits the stored owner of its actual source plan.
+      // An older source without an owner snapshot keeps that gap explicit.
+      await copyPlanOwnershipSnapshot(client, plan.id, created.rows[0].id);
     });
     await client.query("commit");
     client.release();

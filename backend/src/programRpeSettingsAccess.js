@@ -14,20 +14,37 @@ export function nativeProgramRpeScope(scope) {
 // and workspace are checked on the same client as the plan/session write.
 export async function lockProgramRpeActor(client, req, scope) {
   const scopeId = nativeProgramRpeScope(scope);
-  if (!scopeId) return scope.type === "platform" || scope.type === "private_coach" ? req : null;
-  const clubId = await clubOfScope(client, scope.type, scopeId);
-  if (!clubId) return null;
-  await lockClubCeiling(client, [clubId], "shared");
-  await client.query("select public.lock_permission_actor($1, $2, $3)", [req.user.id, scope.type, scopeId]);
-  const params = [req.user.id];
+  const privateScope = scope.type === "private_coach";
+  const userId = req.user.id;
+  if (scope.type === "platform") return req;
+  if (!scopeId && (!privateScope || String(scope.userId) !== String(userId))) return null;
+
+  let user;
+  if (privateScope) {
+    user = (await client.query("select * from public.users where id=$1 and is_active for share", [userId])).rows[0];
+    if (!user || !req.sessionToken) return null;
+    const holding = await client.query(
+      "select id from public.user_global_roles where user_id=$1 and role='independent_coach' and is_active order by id for share",
+      [userId],
+    );
+    if (!holding.rowCount) return null;
+  } else {
+    const clubId = await clubOfScope(client, scope.type, scopeId);
+    if (!clubId) return null;
+    await lockClubCeiling(client, [clubId], "shared");
+    await client.query("select public.lock_permission_actor($1, $2, $3)", [userId, scope.type, scopeId]);
+  }
+
   if (req.sessionToken) {
-    params.push(createHash("sha256").update(String(req.sessionToken)).digest("base64url"));
-    const result = await client.query("select user_id from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share", params);
+    const hash = createHash("sha256").update(String(req.sessionToken)).digest("base64url");
+    const result = await client.query("select user_id from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share", [userId, hash]);
     if (!result.rowCount) return null;
   }
-  const user = (await client.query("select * from public.users where id=$1 and is_active", [req.user.id])).rows[0];
+  user ??= (await client.query("select * from public.users where id=$1 and is_active", [userId])).rows[0];
   if (!user) return null;
-  await client.query("select user_id from public.user_workspace_preferences where user_id=$1 for share", [user.id]);
+
+  const preference = await client.query("select user_id from public.user_workspace_preferences where user_id=$1 for share", [userId]);
+  if (privateScope && !preference.rowCount) return null;
   // Authorization loads several independent reads together. Serialize them
   // on this transaction client so they share its locks and connection.
   let tail = Promise.resolve();
@@ -43,7 +60,7 @@ export async function lockProgramRpeActor(client, req, scope) {
   })().finally(() => tail);
   const actor = { user, authz };
   const fresh = externalScheduleScopeForWorkspace(workspace, actor);
-  if (fresh.type !== scope.type || String(nativeProgramRpeScope(fresh)) !== String(scopeId)) return null;
+  if (fresh.type !== scope.type || String(nativeProgramRpeScope(fresh)) !== String(scopeId) || (privateScope && String(fresh.userId) !== String(userId))) return null;
   return actor;
 }
 

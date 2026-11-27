@@ -269,3 +269,80 @@ test("private coaching rejects native-owned RPE effects even when the actor crea
     await db.query("update public.user_workspace_preferences set workspace_type='club',scope_id=$1 where user_id=$2", [A, coach.id]);
   }
 });
+
+
+async function waitForRpeBlock(pid) {
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const { rows: [state] } = await db.query("select cardinality(pg_blocking_pids($1)) > 0 as waiting", [pid]);
+    if (state.waiting) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.fail("The workspace switch and RPE actor check did not serialize.");
+}
+
+test("private RPE rechecks a queued switch and holds the preference against a later switch", async () => {
+  const { lockProgramRpeActor } = await import("../src/programRpeSettingsAccess.js");
+  const hasHolding = await db.query("select 1 from public.user_global_roles where user_id=$1 and role='independent_coach' and is_active", [coach.id]);
+  if (!hasHolding.rowCount) await fixtures(db).grantIndependent(coach.id);
+  const actorClient = await http.pool.connect();
+  const workspaceClient = await http.pool.connect();
+  const req = { user: { id: coach.id }, sessionToken: coach.cookie.split("=")[1] };
+  const scope = { type: "private_coach", userId: coach.id };
+  const selectWorkspace = (client, type, id) => client.query(
+    "update public.user_workspace_preferences set workspace_type=$2,scope_id=$3 where user_id=$1",
+    [coach.id, type, id],
+  );
+  const pending = [];
+  try {
+    await selectWorkspace(db, "private_coach", null);
+    await workspaceClient.query("begin");
+    await selectWorkspace(workspaceClient, "club", A);
+    await actorClient.query("begin");
+    const afterSwitch = lockProgramRpeActor(actorClient, req, scope);
+    pending.push(afterSwitch);
+    await waitForRpeBlock(actorClient.processID);
+    await workspaceClient.query("commit");
+    assert.equal(await afterSwitch, null);
+    await actorClient.query("rollback");
+
+    await selectWorkspace(db, "private_coach", null);
+    await actorClient.query("begin");
+    assert.equal((await lockProgramRpeActor(actorClient, req, scope)).user.id, coach.id);
+    await workspaceClient.query("begin");
+    const laterSwitch = selectWorkspace(workspaceClient, "club", A);
+    pending.push(laterSwitch);
+    await waitForRpeBlock(workspaceClient.processID);
+    await actorClient.query("commit");
+    await laterSwitch;
+    await workspaceClient.query("commit");
+  } finally {
+    await Promise.allSettled([actorClient.query("rollback"), workspaceClient.query("rollback")]);
+    await Promise.allSettled(pending);
+    actorClient.release();
+    workspaceClient.release();
+    await selectWorkspace(db, "club", A);
+  }
+});
+
+
+test("opening an existing program copies only its stored workspace owner", async () => {
+  const openProgram = async (name, owner) => {
+    const { rows: [source] } = await db.query(
+      "insert into plans.plans(plan_type,created_by_user_id,name,status,source_type,visibility,is_template) values('program',$1,$2,'active','builder','private',true) returning id",
+      [coach.id, name],
+    );
+    if (owner) await db.query(
+      "insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_club_id) values($1,'club',$2)",
+      [source.id, owner],
+    );
+    return openEditDraft(source.id);
+  };
+  const resolved = await openProgram("Programme with a stored owner", B);
+  const unresolved = await openProgram("Programme without a stored owner", null);
+  const { rows } = await db.query(
+    "select plan_id,owner_scope,owner_club_id from training_load.plan_workspace_ownership where plan_id=any($1::uuid[])",
+    [[resolved, unresolved]],
+  );
+  assert.deepEqual(rows, [{ plan_id: resolved, owner_scope: "club", owner_club_id: B }]);
+});
