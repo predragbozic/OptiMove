@@ -31,6 +31,7 @@ const SQL_CHECKED = Object.freeze({
   "trainingActivityWriteAccess.js": Object.freeze(["load.activities.manage"]),
   "metricEstimateAccess.js": Object.freeze(["load.estimates.manage"]),
   "externalScheduleWriteAccess.js": Object.freeze(["load.schedule.manage"]),
+  "programEditAccess.js": Object.freeze(["programs.edit"]),
 });
 const GLOBAL_ONLY = new Set(["accounts.manage", "platform.admin"]);
 
@@ -42,7 +43,7 @@ test("A1. every listed gate file checks its word through can() or its named tran
       const src = SOURCES.find((s) => s.rel === gate);
       assert.ok(src, `${word}: gate file ${gate} exists`);
       const words = [...src.text.matchAll(CAN_CALL)].map((m) => m[1]);
-      const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1, '([a-z_.]+)', \$2, \$3\)/g)].map((m) => m[1]);
+      const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1,\s*'([a-z_.]+)',\s*\$2,\s*\$3\)/g)].map((m) => m[1]);
       words.push(...sqlWords.filter((checked) => SQL_CHECKED[gate]?.includes(checked)));
       if (word === "exercises.add" || word === "exercises.remove") {
         const guard = SOURCES.find(source => source.rel === "exerciseWriteAccess.js").text;

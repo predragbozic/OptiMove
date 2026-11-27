@@ -66,6 +66,7 @@ function roleData(client) {
 
 
 const previousBuild = "234e2eab4f7aea6376ddcdc26800bc516f6ec6e6";
+const stagedBuild = "aa7e62cbf9dcc4aaab538a83b7f9f16a08526a56";
 const migration = "202612111000";
 const bridgeWords = ["programs.edit"];
 const read = name => readFile(new URL(`../../docs/runbooks/program-edit-v109-${name}.sql`, import.meta.url), "utf8");
@@ -73,7 +74,7 @@ const read = name => readFile(new URL(`../../docs/runbooks/program-edit-v109-${n
 test("Programs Edit stages only existing native View holders, preserves old Settings and writes, and rolls back only before use", async () => {
   const fixture = await createPagesDatabase({ through: "202612101000", label: "program_edit_v109" });
   const { client } = fixture;
-  let current, previous;
+  let current, previous, staged;
   try {
     const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'team',$4),($3,'team',$4)", [platform,coach,versionCoach,team]);
@@ -128,16 +129,18 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
 
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, previousBuild);
+    staged = await previousDashboardServer(fixture.url, {}, stagedBuild);
     const platformCookie = await current.cookieFor(platform);
     const versionCookie = await current.cookieFor(versionCoach);
-    const post = async (server, cookie, path, body) => {
+    const call = async (server, cookie, path, body, method = "POST") => {
       const response = await fetch(server.baseUrl + path, {
-        method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body),
+        method, headers: { cookie, ...(body ? { "content-type": "application/json" } : {}) }, body: JSON.stringify(body),
       });
       const text = await response.text();
       return { status: response.status, body: JSON.parse(text), text };
     };
 
+    const post = call;
     const legacy = await post(previous, versionCookie, "/api/builder/plans", { name: "Old binary program" });
     assert.equal(legacy.status, 201, legacy.text);
     const marker = () => client.query("select 1 from plans.program_manage_v109_use").then(result => result.rowCount);
@@ -149,7 +152,7 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
     const customPath = root + "/users/" + coach + "/clubs/" + club + "/custom";
     for (const send of [
       (path, body) => post(previous, platformCookie, path, body),
-      (path, body) => current.api(platformCookie, path, { method: "POST", body }),
+      (path, body) => post(staged, platformCookie, path, body),
     ]) {
       const { rows: [roles] } = await client.query(`select
         (select revision from public.permission_roles where id=$1) as role_revision,
@@ -172,16 +175,22 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
       });
       assert.equal(allowed.status, 200, allowed.text);
     }
-    const roleCatalog = await current.api(platformCookie, root + "/catalog?clubId=" + club, { method: "GET" });
+    const roleCatalog = await call(staged, platformCookie, root + "/catalog?clubId=" + club, undefined, "GET");
     assert.equal(roleCatalog.status, 200, roleCatalog.text);
     for (const word of ["programs.edit", "programs.assign", "programs.publish"]) {
       assert.equal(roleCatalog.body.permissions.find(entry => entry.word === word)?.checked, false);
     }
     for (const user of [coach, versionCoach]) {
       const cookie = await current.cookieFor(user);
-      const me = await current.api(cookie, "/api/auth/me", { method: "GET" });
+      const me = await call(staged, cookie, "/api/auth/me", undefined, "GET");
       assert.equal(me.status, 200, me.text);
       assert.equal(me.body.user.permissions.includes("programs.edit"), false);
+    }
+    const exposed = await current.api(platformCookie, root + "/catalog?clubId=" + club, { method: "GET" });
+    assert.equal(exposed.status, 200, exposed.text);
+    for (const word of ["programs.edit", "programs.assign", "programs.publish", "programs.rpe_settings"]) {
+      const checked = word === "programs.edit" || word === "programs.rpe_settings";
+      assert.equal(exposed.body.permissions.find(entry => entry.word === word)?.checked, checked, word);
     }
     const { rows: [athlete] } = await client.query(`insert into public.athletes
       (athlete_id,source_external_id,first_name,last_name,full_name,is_active)
@@ -245,7 +254,56 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
     await client.query("rollback");
     await client.query("delete from public.builder_assignment_requests where id=$1", [duplicateRequest.assignmentRequestId]);
     assert.deepEqual(await evidence(), []);
-    await client.query("insert into plans.program_manage_v109_use (singleton) values (true)");
+    const editable = await post(previous, versionCookie, "/api/builder/plans", {
+      name: "Exposure draft", planType: "weekly", weekStart: "2027-04-12", athleteIds: [athlete.athlete_id],
+    });
+    assert.equal(editable.status, 201, editable.text);
+    const target = "/api/builder/plans/" + editable.body.plan.id;
+    const me = async cookie => {
+      const result = await current.api(cookie, "/api/auth/me", { method: "GET" });
+      assert.equal(result.status, 200, result.text);
+      return result.body.user.permissions;
+    };
+    const revisionOf = async (kind, id) => (await client.query(
+      kind === "version" ? "select revision from public.permission_club_role_versions where id=$1"
+        : "select revision from public.permission_custom_roles where id=$1", [id],
+    )).rows[0].revision;
+    const layers = [
+      { path: versionPath, kind: "version", id: versionId, cookie: versionCookie, scope: {} },
+      { path: customPath, kind: "custom", id: customId, cookie: await current.cookieFor(coach),
+        scope: { roleId, scopeType: "team", scopeId: team } },
+    ];
+    for (const layer of layers) {
+      assert.ok((await me(layer.cookie)).includes("programs.edit"));
+      for (const word of ["programs.assign", "programs.publish"]) {
+        const refused = await current.api(platformCookie, layer.path, { method: "POST", body: {
+          requestKey: key(), expectedRevision: await revisionOf(layer.kind, layer.id), reason: "Permission is still staged",
+          ...layer.scope, add: [word],
+        } });
+        assert.equal(refused.status, 409, refused.text);
+        assert.equal(refused.body.error, "permission_not_honoured");
+      }
+      const revise = async change => {
+        const body = { requestKey: key(), expectedRevision: await revisionOf(layer.kind, layer.id),
+          reason: "Program Edit exposure rehearsal", ...layer.scope, [change]: bridgeWords };
+        const response = await current.api(platformCookie, layer.path, { method: "POST", body });
+        assert.equal(response.status, 200, response.text);
+        const replay = await post(staged, platformCookie, layer.path, body);
+        assert.equal(replay.status, 200, replay.text);
+        assert.equal(replay.body.replayed, true);
+      };
+      const rename = name => current.api(layer.cookie, target, { method: "PATCH", body: { name } });
+      await revise("remove");
+      assert.ok(!(await me(layer.cookie)).includes("programs.edit"));
+      const denied = await rename("Revoked edit");
+      assert.equal(denied.status, 403, denied.text);
+      const unchanged = await client.query("select name from plans.plans where id=$1", [editable.body.plan.id]);
+      assert.notEqual(unchanged.rows[0].name, "Revoked edit");
+      await revise("add");
+      assert.ok((await me(layer.cookie)).includes("programs.edit"));
+      const accepted = await rename("Allowed " + layer.kind);
+      assert.equal(accepted.status, 200, accepted.text);
+    }
     for (const action of ["delete from", "truncate", "update"]) {
       const command = action + " plans.program_manage_v109_use" + (action === "update" ? " set first_used_at=now()" : "");
       await assert.rejects(client.query(command), /first-use evidence is immutable/);
@@ -254,7 +312,7 @@ test("Programs Edit stages only existing native View holders, preserves old Sett
     await assert.rejects(client.query(rollback), /checked Programs Edit writer use/);
     await client.query("rollback");
   } finally {
-    try { await previous?.stop(); } finally {
+    try { await Promise.all([previous?.stop(), staged?.stop()]); } finally {
       try { await current?.stop(); } finally { await fixture.drop(); }
     }
   }
