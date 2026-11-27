@@ -3686,6 +3686,7 @@ async function assertProgramPublishTargets(client, writer, targets) {
 
 async function checkFirstRpeSubmit(client, req, planId, { emptyCheck = null } = {}) {
   await lockExerciseReuse(client, req.exerciseReuseGuard);
+  const hasProvenance = await beginBuilderRpeProvenance(client);
   if (!emptyCheck) {
     const writer = await lockProgramEditActor(client, req, { requireEdit: false });
     const { rows: [target] } = await client.query("select id,status from plans.plans where id=$1 for update", [planId]);
@@ -3694,7 +3695,7 @@ async function checkFirstRpeSubmit(client, req, planId, { emptyCheck = null } = 
       await assertProgramAssignmentHeld(client, writer, { publishes: true });
     }
   }
-  if (!await beginBuilderRpeProvenance(client)) {
+  if (!hasProvenance) {
     if (req.body?.rpeReviewToken !== undefined) throw refuseBuilderRpeRecovery();
     return;
   }

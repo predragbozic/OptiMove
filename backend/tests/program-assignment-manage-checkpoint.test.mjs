@@ -309,7 +309,38 @@ test("native assignments keep Assign and Publish separate and check scope before
     assert.equal(await planStatus(ordinary.plan.id), "draft");
     assert.equal(await weeklyNotifications(), initialNotificationCount);
     await stage([publish]);
-    assert.equal((await submit(ordinary.plan.id)).status, 200);
+    const recorded = [];
+    const realQueries = new Map();
+    const observe = (client) => {
+      if (realQueries.has(client)) return;
+      const query = client.query;
+      realQueries.set(client, query);
+      client.query = function (statement, ...args) {
+        recorded.push({ client, sql: String(typeof statement === "string" ? statement : statement?.text).replace(/\s+/g, " "), params: args[0] });
+        return query.call(client, statement, ...args);
+      };
+    };
+    server.pool.on("acquire", observe);
+    try {
+      const published = await submit(ordinary.plan.id);
+      assert.equal(published.status, 200, published.text);
+    } finally {
+      server.pool.off("acquire", observe);
+      for (const [client, query] of realQueries) client.query = query;
+    }
+    const publishStatement = recorded.find(entry => entry.sql.includes("public.user_has_permission")
+      && entry.params?.[3]?.includes("programs.publish"));
+    assert.ok(publishStatement, "the recording contains the native Publish check");
+    const statements = recorded.filter(entry => entry.client === publishStatement.client);
+    const reuse = statements.findIndex(entry => entry.sql.includes("hashtextextended('exercise_collections'"));
+    const provenance = statements.findIndex(entry => entry.params?.[0] === "builder-rpe-provenance-v106");
+    const ceiling = statements.findIndex(entry => entry.sql.includes("select public.lock_club_ceiling("));
+    const targetLock = statements.findIndex(entry => entry.sql.includes("from plans.plans where id=$1 for update"));
+    const publishCheck = statements.indexOf(publishStatement);
+    const activation = statements.findIndex(entry => entry.sql.includes("update plans.plans set status = 'active'"));
+    assert.ok(reuse >= 0 && reuse < provenance && provenance < ceiling && ceiling < targetLock
+      && targetLock < publishCheck && publishCheck < activation,
+    JSON.stringify({ reuse, provenance, ceiling, targetLock, publishCheck, activation }));
     assert.equal(await planStatus(ordinary.plan.id), "active");
     assert.equal(await weeklyNotifications(), initialNotificationCount + 1);
     await stage([]);
