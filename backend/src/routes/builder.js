@@ -3136,6 +3136,7 @@ async function syncBatchFromPlan(sourcePlan, req, guard = null) {
     }
     const evidence = checkProvenance ? await checkBatchRpeEffects(client, rpe, sourceRow, siblingRows, false) : null;
     await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
+    if (checkProvenance) await assertBuilderRpeBatchProvenance(client, sourceRow, siblingRows, false);
     await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, evidence);
     await client.query("commit");
   } catch (error) {
@@ -3194,11 +3195,14 @@ async function checkBatchRpeEffects(client, rpe, source, siblings, activating) {
     if (!activating && lineage.length) sessionLineage.set(sibling.id, lineage);
   }
   await assertProgramRpeTargets(client, rpe.actor, rpe.scope, [...new Set(affected)].sort());
+  return { sessionLineage, planEffects };
+}
+
+async function assertBuilderRpeBatchProvenance(client, source, siblings, activating) {
   if (activating && source.status === "draft") await assertBuilderRpeActivationProvenance(client, source.id);
   for (const sibling of siblings) {
     await assertBuilderRpeReplacementProvenance(client, sibling.id, source.id);
   }
-  return { sessionLineage, planEffects };
 }
 
 async function prepareRpeBatchSync(client, sourcePlan, req, guard) {
@@ -3223,13 +3227,14 @@ async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = n
   const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, req.user);
   if (!sourceRow) return { activatedPlans: [] };
   if (checkProvenance) await checkBatchRpeEffects(client, rpe, sourceRow, siblingRows, true);
+  await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
+  if (checkProvenance) await assertBuilderRpeBatchProvenance(client, sourceRow, siblingRows, true);
   if (!sourceRow.builder_batch_id) {
     // Not actually part of a batch (or no longer owned/active) - the
     // caller falls back to its own plain single-plan activation using
     // this SAME locked source row, never a second independent lock.
     return { sourceRow, activatedPlans: null };
   }
-  await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows, checkProvenance);
   await syncBatchContentWithClient(client, sourceRow, siblingRows, guard, checkProvenance ? {} : null);
 
   const emptinessTargets = sourceRow.status === "draft" ? [sourceRow, ...siblingRows] : siblingRows;
@@ -3539,9 +3544,6 @@ async function applyEditDraft(req, draftPlan, timing) {
         return { sessionsLocked: locks };
       }
     }
-    if (hasProvenance) {
-      await assertBuilderRpeReplacementProvenance(client, source.id, freshDraft.id, { edit: true });
-    }
     if (freshDraft.plan_type === "weekly") {
       if (hasProvenance) {
         const effects = await inspectBuilderRpeSubmitEffects(client, source.id, freshDraft.id);
@@ -3577,6 +3579,9 @@ async function applyEditDraft(req, draftPlan, timing) {
         return { sourceChanged: true };
       }
       if (effects.changed && rpe) await assertProgramRpeTargets(client, rpe.actor, scope, [source.id]);
+    }
+    if (hasProvenance) {
+      await assertBuilderRpeReplacementProvenance(client, source.id, freshDraft.id, { edit: true });
     }
     const retained = await client.query(`select item.exercise_id, count(*)::integer as uses
       from plans.plan_items item join plans.plan_sessions session on session.id = item.plan_session_id
