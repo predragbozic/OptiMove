@@ -3164,10 +3164,6 @@ async function checkBatchRpeEffects(client, rpe, source, siblings, activating) {
   const sessions = await listBuilderRpeExplicitSessions(client, source.id);
   const { sessions: liveSessions } = await lockRpeEditSessions(client, [source.id,...siblings.map(row => row.id)], null);
   const sessionsById = new Map(liveSessions.map(row => [row.id,row]));
-  if (activating && source.status === "draft") await assertBuilderRpeActivationProvenance(client, source.id);
-  for (const sibling of siblings) {
-    await assertBuilderRpeReplacementProvenance(client, sibling.id, source.id);
-  }
   const affected = [];
   const sessionLineage = new Map();
   const planEffects = new Set();
@@ -3198,6 +3194,10 @@ async function checkBatchRpeEffects(client, rpe, source, siblings, activating) {
     if (!activating && lineage.length) sessionLineage.set(sibling.id, lineage);
   }
   await assertProgramRpeTargets(client, rpe.actor, rpe.scope, [...new Set(affected)].sort());
+  if (activating && source.status === "draft") await assertBuilderRpeActivationProvenance(client, source.id);
+  for (const sibling of siblings) {
+    await assertBuilderRpeReplacementProvenance(client, sibling.id, source.id);
+  }
   return { sessionLineage, planEffects };
 }
 

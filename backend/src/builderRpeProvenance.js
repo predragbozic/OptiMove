@@ -324,7 +324,7 @@ export async function assertBuilderRpeActivationProvenance(client, planId) {
 export async function assertBuilderRpeReplacementProvenance(client, targetId, replacementId, { edit = false } = {}) {
   const target = await readBuilderRpeState(client, targetId);
   const replacement = await readBuilderRpeState(client, replacementId);
-  if (!sameRpe(target.plan, replacement.plan) && (!edit || !provesRpeChange(target.plan, replacement.plan))) {
+  if (!sameRpe(target.plan, replacement.plan) && (!provesRpeChange(target.plan, replacement.plan) || (!edit && !matchesRecordedRpe(target.plan)))) {
     throw recoveryRequired();
   }
   const enabled = state => state.sessions.filter(hasRpe);
@@ -344,12 +344,19 @@ export async function assertBuilderRpeReplacementProvenance(client, targetId, re
   }
   const targetById = new Map(target.sessions.map(row => [row.id, row]));
   const replacementById = new Map(replacement.sessions.map(row => [row.id, row]));
-  for (const row of [...enabled(target), ...enabled(replacement)]) {
+  const enabledTargets = enabled(target);
+  const enabledReplacements = enabled(replacement);
+  const added = new Set();
+  for (const row of enabledReplacements) {
+    if (!edit || pairs.some(pair => pair.source_id === row.id)) continue;
+    if (provesRpeChange({ tracking: false, rpe: false }, row)) added.add(row.id);
+  }
+  for (const row of [...enabledTargets, ...enabledReplacements.filter(item => !added.has(item.id))]) {
     const matches = pairs.filter(pair => pair.target_id === row.id || pair.source_id === row.id);
     if (matches.length !== 1) throw recoveryRequired();
     const { target_id, source_id } = matches[0];
     const before = targetById.get(target_id);
     const after = replacementById.get(source_id);
-    if (!sameRpe(before, after) && (!edit || !provesRpeChange(before, after))) throw recoveryRequired();
+    if (!sameRpe(before, after) && (!provesRpeChange(before, after) || (!edit && !matchesRecordedRpe(before)))) throw recoveryRequired();
   }
 }
