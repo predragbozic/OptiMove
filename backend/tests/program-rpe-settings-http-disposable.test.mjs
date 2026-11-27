@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
 import { fixtures, key, startServer } from "./support/permission-roles-world.mjs";
 
-let project, db, http, A, B, coach, viewer, plan, live;
+let project, db, http, A, B, coach, viewer, plan, live, athleteId;
 const word = "programs.rpe_settings";
 
 async function changeClubAdminRpeGrant(add) {
@@ -13,7 +13,7 @@ async function changeClubAdminRpeGrant(add) {
   await db.query("begin");
   try {
     await db.query("select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive')");
-    if (add) {
+    if (add && !(await db.query("select public.permission_word_honoured($1) as ready", [word])).rows[0].ready) {
       const { definition } = (await db.query("select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as definition")).rows[0];
       const staged = definition.replace("'programs.view'", "'programs.view', 'programs.rpe_settings'");
       assert.notEqual(staged, definition);
@@ -35,12 +35,12 @@ async function changeClubAdminRpeGrant(add) {
   }
 }
 
-async function fixturePlan(athleteId, status, weekStart) {
+async function fixturePlan(athleteId, status, weekStart, ownerClub = A) {
   const { id } = (await db.query(
     "insert into plans.plans(plan_type,created_by_user_id,athlete_id,name,status,source_type,visibility,week_start) values ('weekly',$1,$2,'Test plan',$3,'builder','private',$4) returning id",
     [coach.id, athleteId, status, weekStart],
   )).rows[0];
-  await db.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_club_id) values($1,'club',$2)", [id, A]);
+  await db.query("insert into training_load.plan_workspace_ownership(plan_id,owner_scope,owner_club_id) values($1,'club',$2)", [id, ownerClub]);
   const dayId = (await db.query("insert into plans.plan_days(plan_id,date,day_order,block_index) values($1,$2,1,1) returning id", [id, weekStart])).rows[0].id;
   const sessionId = (await db.query("insert into plans.plan_sessions(plan_day_id,name,bta,rpe_enabled,training_load_enabled) values($1,'Test session','T',true,true) returning id", [dayId])).rows[0].id;
   return { id, sessionId };
@@ -60,7 +60,7 @@ before(async () => {
   await f.grantClub(coachId, B);
   const athleteUser = await f.user("Athlete");
   await f.makeAthlete(athleteUser);
-  const athleteId = (await db.query("select id from public.athletes where user_id=$1", [athleteUser])).rows[0].id;
+  athleteId = (await db.query("select id from public.athletes where user_id=$1", [athleteUser])).rows[0].id;
   await db.query("insert into public.athlete_memberships(athlete_id,club_id,membership_type,status) values($1,$2,'club','active'),($1,$3,'club','active')", [athleteId, A, B]);
   await db.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'club',$2),($3,'club',$2)", [coachId, A, viewerId]);
   http = await startServer(project.url);
@@ -145,4 +145,100 @@ test("an exact owner without Manage gets identical missing responses while ordin
   assert.equal(renamed.status, 200, renamed.text);
   const renameSession = await http.api(coach.cookie, draftSession(plan.sessionId), { method: "PATCH", body: { name: "Ordinary session rename" } });
   assert.equal(renameSession.status, 200, renameSession.text);
+});
+
+async function openEditDraft(targetId) {
+  const result = await http.api(coach.cookie, "/api/builder/plans/" + targetId + "/edit", { method: "POST", body: {} });
+  assert.equal(result.status, 200, result.text);
+  return result.body.plan.id;
+}
+
+async function flags(sessionId) {
+  return (await db.query("select logical_session_id,training_load_enabled,rpe_enabled from plans.plan_sessions where id=$1", [sessionId])).rows[0];
+}
+
+test("unchanged retained sessions save without Manage; a real retained flag delta is refused", async () => {
+  const before = await flags(live.sessionId);
+  const unchanged = await openEditDraft(live.id);
+  const first = await http.api(coach.cookie, "/api/builder/plans/" + unchanged + "/submit", { method: "POST", body: {} });
+  assert.equal(first.status, 200, first.text);
+  const stored = (await db.query(
+    "select ps.id from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id where pd.plan_id=$1 and ps.logical_session_id=$2",
+    [live.id, before.logical_session_id],
+  )).rows[0];
+  assert.deepEqual(await flags(stored.id), before);
+  const draft = await openEditDraft(live.id);
+  const pending = await db.query(
+    "update plans.plan_sessions ps set training_load_enabled=true,rpe_enabled=true from plans.plan_days pd where pd.id=ps.plan_day_id and pd.plan_id=$1 and ps.logical_session_id=$2 returning ps.id",
+    [draft, before.logical_session_id],
+  );
+  assert.equal(pending.rowCount, 1, "the draft retained precisely the live logical session");
+  const denied = await http.api(coach.cookie, "/api/builder/plans/" + draft + "/submit", { method: "POST", body: {} });
+  assert.deepEqual([denied.status, denied.body], [404, { error: "Draft program not found" }]);
+  assert.deepEqual(await flags(stored.id), before);
+  assert.equal((await flags(pending.rows[0].id)).rpe_enabled, true, "refusal preserves the open edit draft");
+});
+
+test("ordinary single Submit with inherited flags still publishes without Manage", async () => {
+  const fresh = await fixturePlan(athleteId, "draft", "2026-12-07");
+  const node = await http.api(coach.cookie, draftSession(fresh.sessionId) + "/nodes", { method: "POST", body: { nodeType: "section", name: "Warm-up" } });
+  assert.equal(node.status, 201, node.text);
+  const submitted = await http.api(coach.cookie, "/api/builder/plans/" + fresh.id + "/submit", { method: "POST", body: {} });
+  assert.equal(submitted.status, 200, submitted.text);
+  assert.equal((await db.query("select status from plans.plans where id=$1", [fresh.id])).rows[0].status, "active");
+});
+
+test("exact weekly batch default differences require rights on every target before sync or Submit", async () => {
+  const source = await fixturePlan(athleteId, "draft", "2026-12-14");
+  const eligible = await fixturePlan(athleteId, "draft", "2026-12-21");
+  const foreign = await fixturePlan(athleteId, "draft", "2026-12-28", B);
+  const batch = randomUUID();
+  const ids = [source.id, eligible.id, foreign.id];
+  await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [batch, ids]);
+  const sync = (path, body) => http.api(coach.cookie, "/api/builder/plans/" + source.id + path, { method: "POST", body });
+  const equal = await sync("/sync-batch", {});
+  assert.equal(equal.status, 200, equal.text);
+  await changeClubAdminRpeGrant(true);
+  await db.query("update plans.plans set track_training_load_default=true,request_rpe_default=true where id=$1", [source.id]);
+  const snapshot = async () => (await db.query("select id,name,status,track_training_load_default,request_rpe_default,updated_at from plans.plans where id=any($1::uuid[]) order by id", [ids])).rows;
+  const before = await snapshot();
+  const targetSessions = async () => (await db.query("select ps.id,ps.logical_session_id,ps.rpe_enabled,ps.training_load_enabled from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id where pd.plan_id=any($1::uuid[]) order by ps.id", [ids])).rows;
+  const sessionsBefore = await targetSessions();
+  for (const [path, body] of [["/sync-batch", {}], ["/submit", { syncBatch: true }]]) {
+    const denied = await sync(path, body);
+    assert.deepEqual([denied.status, denied.body], [404, { error: "Draft program not found" }]);
+    assert.deepEqual(await snapshot(), before, "all three plans are unchanged");
+    assert.deepEqual(await targetSessions(), sessionsBefore, "no sibling session was recreated");
+  }
+  const primary = await http.api(coach.cookie, "/api/builder/plans/" + source.id, {
+    method: "PATCH", body: { name: "Primary rename is saved", syncBatch: true },
+  });
+  assert.equal(primary.status, 200, primary.text);
+  assert.equal(primary.body.plan.name, "Primary rename is saved");
+  assert.equal(primary.body.batchSyncMessage, "The draft was saved. The other plans did not take its RPE settings.");
+  const after = await snapshot();
+  assert.deepEqual(after.filter(row => row.id !== source.id), before.filter(row => row.id !== source.id));
+  assert.deepEqual(await targetSessions(), sessionsBefore);
+});
+
+test("live batch Submit checks the exact sibling chosen for a retained-session update", async () => {
+  const source = await fixturePlan(athleteId, "active", "2027-01-04");
+  const other = await fixturePlan(athleteId, "active", "2027-01-11", B);
+  const batch = randomUUID();
+  await db.query("update plans.plans set builder_batch_id=$1 where id=any($2::uuid[])", [batch, [source.id, other.id]]);
+  const draft = await openEditDraft(source.id);
+  const pending = await db.query(
+    "update plans.plan_sessions ps set rpe_enabled=false from plans.plan_days pd where pd.plan_id=$1 and pd.id=ps.plan_day_id returning ps.id",
+    [draft],
+  );
+  assert.equal(pending.rowCount, 1);
+  const sourceBefore = await flags(source.sessionId);
+  const siblingBefore = await flags(other.sessionId);
+  assert.equal(sourceBefore.rpe_enabled, true);
+  assert.equal(siblingBefore.rpe_enabled, true);
+  const denied = await http.api(coach.cookie, "/api/builder/plans/" + draft + "/submit", { method: "POST", body: { batchScope: "all" } });
+  assert.deepEqual([denied.status, denied.body], [404, { error: "Draft program not found" }]);
+  assert.deepEqual(await flags(source.sessionId), sourceBefore);
+  assert.deepEqual(await flags(other.sessionId), siblingBefore);
+  assert.equal((await flags(pending.rows[0].id)).rpe_enabled, false);
 });

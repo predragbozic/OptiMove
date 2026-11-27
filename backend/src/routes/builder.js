@@ -10,7 +10,7 @@ import { lockExerciseReuse, assertExerciseReuseAllowed } from "../exerciseAccess
 import { batchEditTestHooks, blockedPlanSessions, blockedSessionIdsOf, blockedSessionsOf, blockedSourceSessions, choiceTokenOf, loadWeeklyTree, planSiblingChange, readSiblingFacts, writeSiblingChange } from "../builderBatchEdit.js";
 import { completeCopiedExerciseImages, effectiveExerciseMediaSql } from "../exerciseSnapshotMedia.js";
 import { canManagePlanTrainingLoadInScope, isAthleteInWorkspaceScope, resolveExternalScheduleWorkspaceScope } from "../trainingLoadAccess.js";
-import { lockProgramRpeSettingsActor, nativeProgramRpeScope } from "../programRpeSettingsAccess.js";
+import { lockProgramRpeActor, lockProgramRpeSettingsActor, nativeProgramRpeScope, programRpeSettingsRightsStillHold } from "../programRpeSettingsAccess.js";
 import { decoratePlanItemEnglish } from "../planItemEnglish.js";
 import { MAX_TEMPLATE_WEEKS, WEEKLY_BLOCK_TYPE, assignChoiceToken, blockIndexOf, copyTemplateDaySessions, insertTemplateWeeks, isoDate, placeTemplateDays, renumberTemplateWeeks, weekOfIndex, weeklyTemplateFacts } from "../weeklyTemplate.js";
 
@@ -553,10 +553,13 @@ router.post("/plans/:planId/sync-batch", withBatchReuseGuard(async (req, res, ne
   try {
     const plan = await requirePlan(req, req.params.planId, res);
     if (!plan) return;
-    if (plan.builder_batch_id && !plan.is_edit_draft) await syncBatchFromPlan(plan, req.user, req.exerciseReuseGuard);
+    if (plan.builder_batch_id && !plan.is_edit_draft) await syncBatchFromPlan(plan, req, req.exerciseReuseGuard);
     const freshPlan = await getEditablePlan(req, plan.id);
     res.json(await buildDraft(freshPlan || plan, req));
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (error?.code === "program_rpe_scope") return res.status(404).json({ error: "Draft program not found" });
+    next(error);
+  }
 }));
 
 router.post("/plans", withBatchReuseGuard(async (req, res, next) => {
@@ -721,7 +724,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
     // whichever of the two reaches the row first.
     let activatedPlans;
     if (shouldSyncBatch) {
-      const result = await timing.measure("batch", () => syncAndActivateBatchWithClient(client, plan.id, req.user, req.exerciseReuseGuard));
+      const result = await timing.measure("batch", () => syncAndActivateBatchWithClient(client, plan, req, req.exerciseReuseGuard));
       if (result.emptyDraftResponse) {
         await client.query("commit");
         client.release();
@@ -768,6 +771,7 @@ router.post("/plans/:planId/submit", withBatchReuseGuard(async (req, res, next) 
       try { await client.query("rollback"); } catch {}
       client.release();
     }
+    if (error?.code === "program_rpe_scope") return res.status(404).json({ error: "Draft program not found" });
     next(error);
   }
 }));
@@ -2738,11 +2742,18 @@ async function respondWithDraft(req, res, user, plan, options = {}) {
   // targetPlan is already fresh, so re-fetching it a second time here was a
   // redundant round-trip on every single Builder edit.
   let freshPlan = targetPlan;
+  let batchRpeRefused = false;
   if (wantsBatchSync(req, targetPlan)) {
-    await syncBatchFromPlan(targetPlan, user, req.exerciseReuseGuard);
-    freshPlan = await getEditablePlan(req, targetPlan.id);
+    try {
+      await syncBatchFromPlan(targetPlan, req, req.exerciseReuseGuard);
+      freshPlan = await getEditablePlan(req, targetPlan.id);
+    } catch (error) {
+      if (error?.code !== "program_rpe_scope") throw error;
+      batchRpeRefused = true;
+    }
   }
   const draft = await buildDraft(freshPlan || targetPlan, req);
+  if (batchRpeRefused) draft.batchSyncMessage = "The draft was saved. The other plans did not take its RPE settings.";
   if (options.status) return res.status(options.status).json(draft);
   return res.json(draft);
 }
@@ -2923,16 +2934,38 @@ async function syncBatchContentWithClient(client, sourceRow, siblingRows, guard 
 // instead, via syncAndActivateBatchWithClient) and delegates every bit of
 // actual locking/copying logic to lockBatchPlansForUpdate/
 // syncBatchContentWithClient above - never its own separate copy of it.
-async function syncBatchFromPlan(sourcePlan, user, guard = null) {
+async function prepareWeeklyRpeSync(client, sourcePlan, req, guard) {
+  if (sourcePlan?.plan_type !== "weekly" || !sourcePlan.builder_batch_id) return null;
+  const scope = await resolveExternalScheduleWorkspaceScope(req);
+  if (!nativeProgramRpeScope(scope)) return null;
+  // Match edit-draft Saves: take exercise reuse before the role and plan
+  // locks. Restore the original plan-lock wait before claiming members;
+  // the copy phase keeps its own existing reuse timeout.
+  const timeout = (await client.query("select current_setting('lock_timeout') as timeout")).rows[0].timeout;
+  await lockExerciseReuse(client, guard);
+  const actor = await lockProgramRpeActor(client, req, scope);
+  await client.query("select set_config('lock_timeout',$1,true)", [timeout]);
+  return { actor, scope };
+}
+
+async function checkSyncRpeDefaults(client, rpe, source, siblings) {
+  if (!rpe) return;
+  const ids = siblings.filter(row => changesRpeFields(row, source, programRpePlanFields)).map(row => row.id);
+  await assertProgramRpeTargets(client, rpe.actor, rpe.scope, ids);
+}
+
+async function syncBatchFromPlan(sourcePlan, req, guard = null) {
   if (!sourcePlan?.id || sourcePlan.is_edit_draft) return;
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, user);
+    const rpe = await prepareWeeklyRpeSync(client, sourcePlan, req, guard);
+    const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, req.user);
     if (!sourceRow?.builder_batch_id) {
       await client.query("rollback");
       return;
     }
+    await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows);
     await syncBatchContentWithClient(client, sourceRow, siblingRows, guard);
     await client.query("commit");
   } catch (error) {
@@ -2957,8 +2990,9 @@ async function syncBatchFromPlan(sourcePlan, user, guard = null) {
 // return this directly, exactly like the existing single-plan
 // removeEmptyDraftOnSubmit path already does) or `{ activatedPlans }`
 // (ready for notifyPlanAssignments, in this SAME transaction).
-async function syncAndActivateBatchWithClient(client, sourcePlanId, user, guard = null) {
-  const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlanId, user);
+async function syncAndActivateBatchWithClient(client, sourcePlan, req, guard = null) {
+  const rpe = await prepareWeeklyRpeSync(client, sourcePlan, req, guard);
+  const { sourceRow, siblingRows } = await lockBatchPlansForUpdate(client, sourcePlan.id, req.user);
   if (!sourceRow) return { activatedPlans: [] };
   if (!sourceRow.builder_batch_id) {
     // Not actually part of a batch (or no longer owned/active) - the
@@ -2966,6 +3000,7 @@ async function syncAndActivateBatchWithClient(client, sourcePlanId, user, guard 
     // this SAME locked source row, never a second independent lock.
     return { sourceRow, activatedPlans: null };
   }
+  await checkSyncRpeDefaults(client, rpe, sourceRow, siblingRows);
   await syncBatchContentWithClient(client, sourceRow, siblingRows, guard);
 
   const emptinessTargets = sourceRow.status === "draft" ? [sourceRow, ...siblingRows] : siblingRows;
@@ -3104,13 +3139,70 @@ async function sourceSessionsLocked(client, source, freshDraft) {
   return blocked.length ? blocked : null;
 }
 
+const programRpePlanFields = ["track_training_load_default", "request_rpe_default"];
+const programRpeSessionFields = ["training_load_enabled", "rpe_enabled"];
+
+function changesRpeFields(before, after, fields) {
+  return fields.some(field => Boolean(before[field]) !== Boolean(after[field]));
+}
+
+function batchMemberChangesRpe({ ops }) {
+  return programRpePlanFields.some(field => Object.hasOwn(ops.plan, field)) ||
+    ops.update.some(({ set }) => programRpeSessionFields.some(field => Object.hasOwn(set, field)));
+}
+
+async function lockRpeEditSessions(client, liveIds, draftId) {
+  const sessions = (await client.query(
+    `select ps.logical_session_id, ps.training_load_enabled, ps.rpe_enabled, pd.plan_id
+     from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id
+     where pd.plan_id=any($1::uuid[]) order by pd.plan_id,ps.id for update of ps`, [liveIds],
+  )).rows;
+  // Published quick toggles lock their live row before the edit-draft copy.
+  const draft = (await client.query(
+    `select ps.logical_session_id, ps.training_load_enabled, ps.rpe_enabled
+     from plans.plan_sessions ps join plans.plan_days pd on pd.id=ps.plan_day_id
+     where pd.plan_id=$1 order by ps.id for update of ps`, [draftId],
+  )).rows;
+  return { sessions, draft };
+}
+
+async function assertProgramRpeTargets(client, actor, scope, ids) {
+  if (!ids.length || !nativeProgramRpeScope(scope)) return;
+  const refuse = () => Object.assign(new Error("Draft program not found"), { status: 404, code: "program_rpe_scope" });
+  if (!await programRpeSettingsRightsStillHold(client, actor, scope)) throw refuse();
+  const { rows } = await client.query(
+    "select * from training_load.plan_workspace_ownership where plan_id=any($1::uuid[]) order by plan_id for share", [ids],
+  );
+  if (rows.length !== ids.length || rows.some(owner => !canManagePlanTrainingLoadInScope(scope, owner))) throw refuse();
+  for (const id of ids) {
+    if (!await getEditablePlan(actor, id, client.query.bind(client))) throw refuse();
+  }
+}
+
+async function checkEditedRpeEffects(client, rpe, source, draft, sessions, batch) {
+  if (!rpe) return;
+  const before = (await client.query(
+    "select track_training_load_default,request_rpe_default from plans.plans where id=$1", [source.id],
+  )).rows[0];
+  const retained = new Map(sessions.sessions.filter(row => row.plan_id === source.id).map(row => [row.logical_session_id, row]));
+  const sourceChanges = changesRpeFields(before, draft, programRpePlanFields) || sessions.draft.some(row => {
+    const live = retained.get(row.logical_session_id);
+    return live && changesRpeFields(live, row, programRpeSessionFields);
+  });
+  const ids = (batch?.apply ?? []).filter(batchMemberChangesRpe).map(member => member.planId);
+  if (sourceChanges) ids.push(source.id);
+  await assertProgramRpeTargets(client, rpe.actor, rpe.scope, ids.sort());
+}
+
 async function applyEditDraft(req, draftPlan, timing) {
   let client;
   let committed = false;
   try {
+    const scope = draftPlan.plan_type === "weekly" ? await resolveExternalScheduleWorkspaceScope(req) : null;
     client = await pool.connect();
     await client.query("begin");
     await lockExerciseReuse(client);
+    const rpe = scope && nativeProgramRpeScope(scope) ? { scope, actor: await lockProgramRpeActor(client, req, scope) } : null;
     // Lock and re-read the draft's OWN plans.plans row fresh, inside this
     // transaction - the caller's draftPlan parameter was read before this
     // transaction (often before the whole request started - POST /plans/
@@ -3150,6 +3242,7 @@ async function applyEditDraft(req, draftPlan, timing) {
     // source alone first. Otherwise the source alone, as before.
     const wantsAll = req.body?.batchScope === "all" && freshDraft.plan_type === "weekly" && source.builder_batch_id;
     let batch = null;
+    let rpeSessions;
     if (wantsAll) {
       const locked = await lockBatchPlansForUpdate(client, source.id, req.user, { members: "live" });
       if (!locked.sourceRow) throw new Error("Original program not found or not editable.");
@@ -3166,6 +3259,7 @@ async function applyEditDraft(req, draftPlan, timing) {
         client = null;
         return { sourceChanged: true };
       }
+      if (rpe) rpeSessions = await lockRpeEditSessions(client, [source.id, ...locked.siblingRows.map(row => row.id)], freshDraft.id);
       const locks = await sourceSessionsLocked(client, source, freshDraft);
       if (locks) {
         await client.query("rollback");
@@ -3182,6 +3276,7 @@ async function applyEditDraft(req, draftPlan, timing) {
       }
     } else {
       await client.query("select id from plans.plans where id=$1 for update", [source.id]);
+      if (rpe) rpeSessions = await lockRpeEditSessions(client, [source.id], freshDraft.id);
       const locks = await sourceSessionsLocked(client, source, freshDraft);
       if (locks) {
         await client.query("rollback");
@@ -3190,6 +3285,7 @@ async function applyEditDraft(req, draftPlan, timing) {
         return { sessionsLocked: locks };
       }
     }
+    await checkEditedRpeEffects(client, rpe, source, freshDraft, rpeSessions, batch);
     const retained = await client.query(`select item.exercise_id, count(*)::integer as uses
       from plans.plan_items item join plans.plan_sessions session on session.id = item.plan_session_id
       join plans.plan_days day on day.id = session.plan_day_id

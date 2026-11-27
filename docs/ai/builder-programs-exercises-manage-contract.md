@@ -93,3 +93,26 @@ sibling with zero writes in the whole atomic operation, and a denied
 post-commit propagation with the primary result preserved. Use both old
 and bridge binaries before considering exposure. Cases without a stable
 baseline remain explicitly open.
+
+### Implemented local subset of indirect checks
+
+The current Builder checkpoint covers retained weekly sessions keyed by
+logical_session_id, source/target plan defaults where a scalar difference
+can be proven, and the exact session ids and fields in existing live-batch
+ops.update. Live session rows are locked before edit-draft copies, matching
+the quick-toggle cascade. The check reads plan defaults again under the
+existing plan locks and completes every changed target's ownership and
+permission checks before mutation.
+
+Whole-tree sync keeps its existing treatment of unpairable sessions. Its
+weekly per-target default differences can be checked without inferring
+session lineage. Atomic sync and Submit refuse before any sibling mutation
+or notification. A separate post-commit sync checks scope inside that
+transaction. A specific RPE refusal preserves the primary save and includes
+the plain batchSyncMessage with the saved draft response. Other existing
+sync failure paths retain their prior handling.
+
+Unmatched additions and stale deleted-source rows, non-weekly copy legs,
+first activation without a trustworthy creation baseline and whole-tree
+session replacements remain open for the narrow provenance contract.
+No role exposure is implied by this partial implementation.

@@ -12,7 +12,7 @@ export function nativeProgramRpeScope(scope) {
 
 // Resolve the expected scope before the first entity lock. The fresh role
 // and workspace are checked on the same client as the plan/session write.
-export async function lockProgramRpeSettingsActor(client, req, scope, { trainingLoadView = false } = {}) {
+export async function lockProgramRpeActor(client, req, scope) {
   const scopeId = nativeProgramRpeScope(scope);
   if (!scopeId) return scope.type === "platform" || scope.type === "private_coach" ? req : null;
   const clubId = await clubOfScope(client, scope.type, scopeId);
@@ -44,12 +44,24 @@ export async function lockProgramRpeSettingsActor(client, req, scope, { training
   const actor = { user, authz };
   const fresh = externalScheduleScopeForWorkspace(workspace, actor);
   if (fresh.type !== scope.type || String(nativeProgramRpeScope(fresh)) !== String(scopeId)) return null;
+  return actor;
+}
+
+export async function programRpeSettingsRightsStillHold(client, actor, scope, { trainingLoadView = false } = {}) {
+  if (!actor) return false;
+  const scopeId = nativeProgramRpeScope(scope);
+  if (!scopeId) return true;
   const right = await client.query(
     `select public.permission_word_honoured('programs.rpe_settings')
        and public.user_has_permission($1, 'programs.view', $2, $3)
        and public.user_has_permission($1, 'programs.rpe_settings', $2, $3)
        and (not $4::boolean or public.user_has_permission($1, 'load.view.team', $2, $3)) as allowed`,
-    [user.id, scope.type, scopeId, trainingLoadView],
+    [actor.user.id, scope.type, scopeId, trainingLoadView],
   );
-  return right.rows[0]?.allowed === true ? actor : null;
+  return right.rows[0]?.allowed === true;
+}
+
+export async function lockProgramRpeSettingsActor(client, req, scope, options) {
+  const actor = await lockProgramRpeActor(client, req, scope);
+  return await programRpeSettingsRightsStillHold(client, actor, scope, options) ? actor : null;
 }
