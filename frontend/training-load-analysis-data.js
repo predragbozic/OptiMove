@@ -749,7 +749,7 @@ export async function saveAnalysisMetricPanel(onPainted) {
   if (panel.galleryDraft) {
     if(panel.galleryRequest?.previewBody!==panel.preview.body){
       panel.galleryRequest={previewBody:panel.preview.body,body:{
-        requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),
+        requestId:crypto.randomUUID(),requestIssuedAt:panel.preview.requestIssuedAt,
         expectedPageRevision:a.page.revision,expectedDashboardRevision:a.dashboard.revision,
         draft:JSON.parse(panel.preview.body).galleryDraft,
       }};

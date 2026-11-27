@@ -135,13 +135,13 @@ async function fetchCanonicalFactsForActivities(activityIds, queryRunner, clubDi
        )
      )` : "";
   const r = await queryRunner(
-    `with eligible as materialized (
+    `select a.id as activity_id, a.occurred_local_date::text as local_date, a.started_at,
+            r.canonical_activity_id, r.canonical_participant_id, r.athlete_id, r.fact_kind, r.detail
+     from (
        select a.id, a.occurred_local_date, a.started_at, a.owner_team_id from training.activities a
        where a.id = any($1::uuid[]) ${clubActivityPredicate}
-     )
-     select a.id as activity_id, a.occurred_local_date::text as local_date, a.started_at,
-            r.canonical_activity_id, r.canonical_participant_id, r.athlete_id, r.fact_kind, r.detail
-     from eligible a
+       offset 0
+     ) a
      cross join lateral training.canonical_activity_results(a.id) r
      where a.id = any($1::uuid[]) ${clubDistancePredicate}`,
     clubDistance ? [activityIds, ...clubDistance] : [activityIds],

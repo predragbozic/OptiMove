@@ -1459,6 +1459,12 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
         delete draft.versionId;
         delete draft.anchorKey;
         draft.teamId="";
+        draft.series.forEach(row=>{
+          if(a.metricPicker.definitions.find(def=>def.id===row.metricDefinitionId)?.calculation){
+            delete row.metricDefinitionId;
+            row.analyticalAggregation="sum";
+          }
+        });
         panel.groupBy="cohort";
       }else{
         delete draft.teamId;

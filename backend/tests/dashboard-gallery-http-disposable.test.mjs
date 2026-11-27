@@ -83,7 +83,7 @@ test('Page gallery previews and atomically creates every shape with matching val
   const count=async()=>(await q.query('select count(*)::int n from training_load.dashboard_widgets where page_id=$1 and title=$2',[pageId,galleryDraft.title])).rows[0].n;
   assert.equal(await count(),0);
   const state=await api(url,null,'GET',club);
-  const body={requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),draft:galleryDraft,
+  const body={requestId:crypto.randomUUID(),requestIssuedAt:preview.body.requestIssuedAt,draft:galleryDraft,
    expectedDashboardRevision:state.body.dashboard.revision,expectedPageRevision:state.body.page.revision};
   const save=await api(url+'/gallery',body,'POST',club);
   assert.equal(save.status,200,save.text);
@@ -114,7 +114,7 @@ test('new Radar uses measured team reference and binds the newly saved series ID
  assert.equal(preview.status,200,preview.text);
  assert.equal(preview.body.result.references.axes.length,3);
  assert.equal(preview.body.result.references.status,'ready',preview.text);
- const body={requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),draft,
+ const body={requestId:crypto.randomUUID(),requestIssuedAt:preview.body.requestIssuedAt,draft,
   expectedDashboardRevision:d.revision,expectedPageRevision:page.revision};
  const denied=await api(url+'/gallery',body,'POST',world.accounts.find(a=>a.role==='athlete'));
  assert.equal(denied.status,404,denied.text);
@@ -163,7 +163,7 @@ test('new Radar shows actual club values against a published reference before sa
  assert.equal(preview.body.result.references.status,'ready',preview.text);
  assert.equal(preview.body.result.references.axes[0].points.length,3);
  assert.ok(preview.body.result.references.axes.every(axis=>axis.points.every(point=>Number.isFinite(point.normalized))));
- const saved=await api(url+'/gallery',{requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),draft,
+ const saved=await api(url+'/gallery',{requestId:crypto.randomUUID(),requestIssuedAt:preview.body.requestIssuedAt,draft,
   expectedDashboardRevision:dash.body.dashboard.revision,expectedPageRevision:page.revision},'POST',club);
  assert.equal(saved.status,200,saved.text);
  const result=await api(url+'/query',{...period,widgetIds:[saved.body.widgetId]},'POST',club);
