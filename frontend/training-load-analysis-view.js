@@ -722,16 +722,25 @@ function renderPanelPreviewHtml(panel) {
 }
 
 function renderNewGallerySettings(panel, definitions) {
-  const {kind,series,teamId,additive}=panel.galleryDraft;
+  const {kind,series,teamId,tableId,anchorKey,additive}=panel.galleryDraft;
+  const preset=kind==="radar"&&tableId!==undefined;
   const distribution=["heatmap","boxplot"].includes(kind);
   const metrics=definitions.filter(def=>["numeric","number"].includes(def.valueType)&&!def.hiddenInClub
-    && (!["radar","stacked"].includes(kind)||!def.calculation));
+    && (kind!=="stacked"&&(kind!=="radar"||preset)||!def.calculation)
+    && (!preset||!panel.galleryPreset||panel.galleryPreset.columns.some(col=>col.definition_id===def.id)));
   const builtin=kind==="radar"?[]:BUILT_IN_SERIES.filter(def=>def.key!=="last_session_date");
   const field=(name,index)=>`data-action="training-load-analysis-panel-gallery-field" data-field="${name}" data-index="${index}"`;
   const teamOptions=state.trainingLoad.references?.options?.teams??[];
+  const tables=(state.trainingLoad.references?.tables??[]).filter(table=>table.published_version_id&&!table.archived);
+  const flexible=["area","horizontal_bar","combined","stacked","radar"].includes(kind);
+  const minimum=kind==="radar"?3:["stacked","combined"].includes(kind)?2:1;
   return `<fieldset class="tl-metric-panel-gallery-settings" ${panel.saving?"disabled":""}><legend>Measurements</legend>
-    ${kind==="radar"?`<label>Reference team<select ${field("teamId",0)}><option value="">Choose a team</option>${teamOptions.map(team=>optionHtml(team.id,team.name,teamId)).join("")}</select></label>
-      ${!teamOptions.length?'<p role="status">Radar requires an active team and access to dashboard references.</p>':""}`:""}
+    ${kind==="radar"?`<label>Reference source<select ${field("referenceMode",0)}>${optionHtml("preset","Published reference table",preset?"preset":"team")}${optionHtml("team","Team average",preset?"preset":"team")}</select></label>
+      ${preset?`<label>Reference table<select ${field("tableId",0)}><option value="">Choose a published table</option>${tables.map(table=>optionHtml(table.id,table.name,tableId)).join("")}</select></label>
+        ${!tables.length?'<p role="status">Publish a reference table before using it in Radar.</p>':""}
+        ${panel.galleryPreset?`<label>100% reference<select ${field("anchorKey",0)}>${panel.galleryPreset.valueKinds.map(kind=>optionHtml(kind.key,kind.name,anchorKey)).join("")}</select></label>`:""}`
+      :`<label>Reference team<select ${field("teamId",0)}><option value="">Choose a team</option>${teamOptions.map(team=>optionHtml(team.id,team.name,teamId)).join("")}</select></label>
+        ${!teamOptions.length?'<p role="status">Radar requires an active team and access to dashboard references.</p>':""}`}`:""}
     ${series.map((row,index)=>{
       const definition=metrics.find(def=>def.id===row.metricDefinitionId);
       const fixed=BUILT_IN_FIXED_SCOPE[row.builtInSeriesKey];
@@ -742,9 +751,11 @@ function renderNewGallerySettings(panel, definitions) {
         ${distribution?"<p>Uses each measurement.</p>":`<label>Calculate<select ${field("analyticalAggregation",index)}>${(definition?.allowedAggregations??AGGREGATIONS).filter(value=>value!=="none"&&(value!=="ratio"||definition?.calculation?.kind==="ratio")).map(value=>optionHtml(value,AGGREGATION_LABELS[value],row.analyticalAggregation)).join("")}</select></label>`}
         ${kind==="combined"?`<label>Mark<select ${field("mark",index)}>${["bar","line"].map(mark=>optionHtml(mark,mark,row.mark)).join("")}</select></label>
           <label>Axis<select ${field("axis",index)}>${["primary","secondary"].map(axis=>optionHtml(axis,AXIS_LABELS[axis],row.axis)).join("")}</select></label>`:""}
+        ${flexible&&series.length>minimum?`<button type="button" class="plain-button compact-button" ${field("remove",index)}>Remove measurement ${index+1}</button>`:""}
       </div>`;
     }).join("")}
     ${kind==="stacked"?`<label><input type="checkbox" ${field("additive",0)} ${additive?"checked":""}> Measurements are separate parts of the same total</label>`:""}
+    ${flexible&&series.length<8?`<button type="button" class="plain-button compact-button" ${field("append",0)}>Add measurement</button>`:""}
   </fieldset>`;
 }
 

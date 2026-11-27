@@ -99,9 +99,9 @@ test('Page gallery previews and atomically creates every shape with matching val
 
 test('new Radar uses measured team reference and binds the newly saved series IDs',async()=>{
  await q.query('update training_load.dashboard_pages_activation set enabled=true');
- const club=world.accounts.find(a=>a.role==='club_admin');
- const measured=await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,athleteIds:world.ids.athleteIds,
-  entryMethod:'api_import',labels:['Radar distance A','Radar distance B','Radar distance C']});
+ const club=world.accounts.find(a=>a.role==='team_coach');
+ const measured=await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,teamId:world.ids.teamA,athleteIds:world.ids.athleteIds,
+  entryMethod:'csv_import',labels:['Radar distance A','Radar distance B','Radar distance C']});
  const created=await api('/api/training-load/dashboards',{name:'New Radar gallery'},'POST',club);
  assert.equal(created.status,201,created.text);
  const d=created.body.dashboard;
@@ -126,4 +126,47 @@ test('new Radar uses measured team reference and binds the newly saved series ID
  const queried=await api(url+'/query',{...period,widgetIds:[saved.body.widgetId]},'POST',club);
  assert.equal(queried.status,200,queried.text);
  assert.deepEqual(queried.body.widgets[0].references.axes.map(axis=>axis.points),preview.body.result.references.axes.map(axis=>axis.points));
+});
+
+test('new Radar shows actual club values against a published reference before saving',async()=>{
+ await q.query('update training_load.dashboard_pages_activation set enabled=true');
+ const club=world.accounts.find(a=>a.role==='club_admin');
+ const ids=world.ids.athleteIds.slice(0,3);
+ const measured=await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,athleteIds:ids,labels:['Preset A','Preset B','Preset C']});
+ const position=(await q.query('select id from public.sport_positions order by sort_order limit 1')).rows[0].id;
+ await q.query('begin');
+ try{
+  await q.query("select set_config('optimove.position_actor',$1||':'||pg_current_xact_id()::text,true)",[club.id]);
+  for(const id of ids)await q.query("insert into public.athlete_positions(athlete_id,club_id,position_id,set_by_user_id,basis,request_key,request_hash) values($1,$2,$3,$4,'club_admin',gen_random_uuid(),repeat('a',64))",[id,world.ids.clubA,position,club.id]);
+  await q.query('commit');
+ }catch(error){await q.query('rollback');throw error;}
+ const reference='/api/training-load/reference-tables';
+ const made=await api(reference,{requestId:crypto.randomUUID(),name:'Radar benchmarks'},'POST',club);
+ assert.equal(made.status,201,made.text);
+ const table=reference+'/'+made.body.id;
+ const edited=await api(table+'/draft',{requestId:crypto.randomUUID(),expectedRevision:1,draft:{
+  columns:measured.map((def,order)=>({definitionId:def.id,unit:'m',aggregation:'sum',dataLevel:'session',order})),
+  rows:[{positionId:position,order:0}],valueKinds:[{key:'target',name:'Target',order:0}],
+  cells:measured.map(def=>({positionId:position,definitionId:def.id,valueKey:'target',value:100})),
+ }},'PATCH',club);
+ assert.equal(edited.status,200,edited.text);
+ const published=await api(table+'/publish',{requestId:crypto.randomUUID(),expectedRevision:edited.body.revision},'POST',club);
+ assert.equal(published.status,200,published.text);
+ const dash=await api('/api/training-load/dashboards',{name:'Club Radar'},'POST',club);
+ assert.equal(dash.status,201,dash.text);
+ const page=(await q.query('select * from training_load.dashboard_pages where dashboard_id=$1',[dash.body.dashboard.id])).rows[0];
+ const url=`/api/training-load/dashboards/${dash.body.dashboard.id}/pages/${page.id}`;
+ const draft={kind:'radar',title:'Club comparison',groupBy:'athlete',tableId:made.body.id,versionId:published.body.publishedVersionId,
+  anchorKey:'target',series:measured.map(def=>({metricDefinitionId:def.id,dataScopeLevel:'session',analyticalAggregation:'sum'}))};
+ const preview=await api(url+'/query',{...period,galleryDraft:draft},'POST',club);
+ assert.equal(preview.status,200,preview.text);
+ assert.equal(preview.body.result.references.status,'ready',preview.text);
+ assert.equal(preview.body.result.references.axes[0].points.length,3);
+ assert.ok(preview.body.result.references.axes.every(axis=>axis.points.every(point=>Number.isFinite(point.normalized))));
+ const saved=await api(url+'/gallery',{requestId:crypto.randomUUID(),requestIssuedAt:new Date().toISOString(),draft,
+  expectedDashboardRevision:dash.body.dashboard.revision,expectedPageRevision:page.revision},'POST',club);
+ assert.equal(saved.status,200,saved.text);
+ const result=await api(url+'/query',{...period,widgetIds:[saved.body.widgetId]},'POST',club);
+ assert.equal(result.status,200,result.text);
+ assert.deepEqual(result.body.widgets[0].references.axes.map(axis=>axis.points),preview.body.result.references.axes.map(axis=>axis.points));
 });

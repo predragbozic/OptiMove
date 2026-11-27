@@ -188,7 +188,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
     const results=await queryDashboardForViewer(target.workspace,[widget],period,{...options,queryRunner:q},{namedAthletes});
     const clubId=widget.presentation_config.referenceConfig?.clubId;
     const [result]=await attachReferenceResults({query:q,widgets:[widget],results,workspace:target.workspace,period,...options,referenceClubId:clubId,enabled:Boolean(clubId)&&namedAthletes});
-    const previewWidget={...widget,series:widget.series.map(({galleryCalculation,...entry})=>entry)};
+    const previewWidget={...widget,series:widget.series.map(({galleryCalculation,galleryUnit,...entry})=>entry)};
     return {widget:previewWidget,result:attachGalleryResult(widget,result),resolvedPeriod:period};
    }
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;

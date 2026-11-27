@@ -622,11 +622,11 @@ export function metricPanelCanSave(panel = state.trainingLoad.analysis.metricPan
 
 export function metricPanelCanPreview(panel) {
   if (!panel?.galleryDraft) return metricPanelCanSave(panel);
-  const {kind,series,teamId,additive}=panel.galleryDraft;
+  const {kind,series,teamId,tableId,versionId,anchorKey,additive}=panel.galleryDraft;
   const metrics=series.map(row=>row.metricDefinitionId??row.builtInSeriesKey);
   return Boolean(panel.title.trim() && !panel.saving && metrics.every(Boolean)
     && new Set(metrics).size===series.length
-    && (kind!=="radar"||teamId) && (kind!=="stacked"||additive));
+    && (kind!=="radar"||teamId||tableId&&versionId&&anchorKey) && (kind!=="stacked"||additive));
 }
 
 export function metricPanelPreviewBody(panel) {

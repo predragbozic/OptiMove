@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { validGalleryShape } from '../dashboardGallery/contract.js';
 import { galleryAvailable } from '../dashboardGallery/query.js';
 import { assertReferenceSource } from '../dashboardReferences/preview.js';
+import { validReferenceConfig } from '../dashboardReferences/contract.js';
 import { resolveReferenceContext } from '../dashboardReferences/access.js';
 import { allowedDashboardAggregations } from '../dashboardRatios.js';
 import { isMetricVisibleToDashboard } from '../trainingLoadDashboardAccess.js';
@@ -12,7 +13,7 @@ function fail(code = 'invalidRequest', httpStatus = 400) {
 }
 
 export async function buildGalleryDraft(query, target, draft) {
-  const allowed = ['kind', 'title', 'groupBy', 'series', 'additive', 'teamId'];
+  const allowed = ['kind', 'title', 'groupBy', 'series', 'additive', 'teamId', 'tableId', 'versionId', 'anchorKey'];
   if (!draft || typeof draft !== 'object' || Array.isArray(draft) || Object.keys(draft).some(key => !allowed.includes(key))
     || !['area', 'horizontal_bar', 'combined', 'heatmap', 'scatter', 'stacked', 'boxplot', 'radar'].includes(draft.kind)
     || typeof draft.title !== 'string' || !draft.title.trim() || draft.title.length > 200
@@ -22,7 +23,10 @@ export async function buildGalleryDraft(query, target, draft) {
   if (!radar && !await galleryAvailable(query)) fail('notFound', 404);
   const distribution = ['heatmap', 'boxplot'].includes(draft.kind);
   if (distribution && !['day', 'week'].includes(draft.groupBy)) fail();
-  if (radar && (draft.groupBy !== 'cohort' || !isUuid(draft.teamId) || draft.series.length < 3)) fail();
+  const preset=radar&&Object.hasOwn(draft,'tableId');
+  if(radar&&(draft.series.length<3||
+    (preset?draft.groupBy!=='athlete'||!isUuid(draft.tableId)||!isUuid(draft.versionId)||typeof draft.anchorKey!=='string'
+      :draft.groupBy!=='cohort'||!isUuid(draft.teamId))))fail();
   const id = randomUUID();
   const series = [];
   for (const entry of draft.series) {
@@ -49,12 +53,12 @@ export async function buildGalleryDraft(query, target, draft) {
     if (metadata?.value_type !== 'numeric' || metadata.scopes.length && !metadata.scopes.includes(entry.dataScopeLevel)
       || !allowedDashboardAggregations('numeric', metadata.calculation?.kind).includes(entry.analyticalAggregation)
       || (entry.analyticalAggregation === 'none') !== distribution
-      || ['radar', 'stacked'].includes(draft.kind) && metadata.calculation) fail();
+      || (draft.kind==='stacked'||radar&&!preset)&&metadata.calculation) fail();
     series.push({
       id: randomUUID(), widget_id: id, series_order: series.length + 1, resolution_status: 'resolved',
       metric_definition_id:entry.metricDefinitionId??null,built_in_series_key:entry.builtInSeriesKey??null,data_scope_level:entry.dataScopeLevel,
       analytical_aggregation: entry.analyticalAggregation, axis: entry.axis ?? 'primary',
-      display_label: metadata.label, galleryCalculation: metadata.calculation,
+      display_label:metadata.label,galleryCalculation:metadata.calculation,galleryUnit:metadata.unit,
       aggregation_role_policy: metadata.calculation?.kind === 'ratio' ? 'all_including_derived' : 'standalone_and_source_rollup',
       source_policy:entry.builtInSeriesKey?'not_applicable':'all_with_conflicts',coverage_policy:'complete_and_partial',
     });
@@ -65,9 +69,22 @@ export async function buildGalleryDraft(query, target, draft) {
     const req = { ...target.req, _resolvedDataWorkspacePromise: Promise.resolve(target.workspace) };
     const context = process.env.DASHBOARD_REFERENCES_ENABLED === 'true' ? await resolveReferenceContext(req) : null;
     if (!context || context.readOnly) fail('notFound', 404);
-    const referenceConfig = { schemaVersion: 1, source: 'teamAverage', mode: 'radar', clubId: context.owner.clubId,
-      teamId: draft.teamId, axes: series.map(s => ({ seriesId: s.id, valueKeys: ['teamAverage'] })) };
+    const referenceConfig = {schemaVersion:1,mode:'radar',clubId:context.owner.clubId,...(preset?{
+      source:'preset',tableId:draft.tableId,versionId:draft.versionId,
+      axes:series.map(s=>({seriesId:s.id,anchorKey:draft.anchorKey,valueKeys:[draft.anchorKey]})),
+    }:{
+      source:'teamAverage',teamId:draft.teamId,axes:series.map(s=>({seriesId:s.id,valueKeys:['teamAverage']})),
+    })};
+    if(!validReferenceConfig(referenceConfig))fail();
     await assertReferenceSource(query, referenceConfig, context.owner.clubId, context.workspace);
+    if(preset){
+      const columns=(await query('select definition_id,unit,aggregation,data_level from training_load.dashboard_reference_columns where version_id=$1',[draft.versionId])).rows;
+      const anchor=(await query('select 1 from training_load.dashboard_reference_value_kinds where version_id=$1 and key=$2',[draft.versionId,draft.anchorKey])).rowCount;
+      if(!anchor||!series.every(s=>columns.some(c=>c.definition_id===s.metric_definition_id&&c.unit&&c.unit===s.galleryUnit
+        &&c.aggregation===s.analytical_aggregation&&c.data_level===s.data_scope_level))){
+        fail('referenceNotAvailable',400);
+      }
+    }
     presentation = { schemaVersion: 1, referenceConfig };
   } else {
     const chartShape = { schemaVersion: 1, kind: draft.kind, seriesIds: series.map(s => s.id),
