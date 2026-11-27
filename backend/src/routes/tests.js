@@ -10,7 +10,7 @@ import {
   viewScopeReadsSchedule,
 } from "../testsAccess.js";
 import { canView, viewEntryGate } from "../moduleView.js";
-import { lockTestsScheduleCreateAccess } from "../testsScheduleWriteAccess.js";
+import { lockTestsScheduleCreateAccess, lockTestsScheduleMutation } from "../testsScheduleWriteAccess.js";
 import { ensureCurrentOccurrence, assignmentIsOpen, loadAthleteTodayTestAssignments } from "../testsOccurrenceService.js";
 import { completeTestAssessmentWithDerivedResults } from "../testAssessmentCalculations.js";
 import { emitRealtimeEvent } from "../realtime.js";
@@ -1376,12 +1376,12 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
     // Locks the schedule row for the rest of this transaction - a
     // concurrent PATCH/DELETE on the same schedule serializes behind this
     // one instead of racing it.
-    const scheduleResult = await client.query(`select * from tests.test_schedules where id = $1 for update`, [req.params.scheduleId]);
-    const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageSchedule(req, schedule)) {
+    const mutation = await lockTestsScheduleMutation(client, req, req.params.scheduleId);
+    if (!mutation) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
+    const { schedule, writeRequest } = mutation;
     // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
     if (await scheduleManagedByCalendar(client, "test", schedule.id)) {
       await client.query("rollback");
@@ -1592,7 +1592,7 @@ router.patch("/schedules/:scheduleId", async (req, res, next) => {
 
     let resolvedTargets = null;
     if (body.targets !== undefined) {
-      const resolved = await resolveValidTargets(req, body.targets);
+      const resolved = await resolveValidTargets(writeRequest, body.targets, client.query.bind(client));
       if (!resolved.ok) {
         await client.query("rollback");
         return res.status(resolved.status).json({ error: resolved.error });
@@ -1679,12 +1679,12 @@ router.delete("/schedules/:scheduleId", async (req, res, next) => {
   try {
     if (!requireCoachWorkspace(req, res)) return;
     await client.query("begin");
-    const scheduleResult = await client.query(`select * from tests.test_schedules where id = $1 for update`, [req.params.scheduleId]);
-    const schedule = scheduleResult.rows[0];
-    if (!schedule || !canManageSchedule(req, schedule)) {
+    const mutation = await lockTestsScheduleMutation(client, req, req.params.scheduleId);
+    if (!mutation) {
       await client.query("rollback");
       return res.status(404).json({ error: "Schedule not found." });
     }
+    const { schedule } = mutation;
     // K2b-2a-1 (9.1.13 ⚑6): a schedule a calendar question names changes on its event.
     if (await scheduleManagedByCalendar(client, "test", schedule.id)) {
       await client.query("rollback");

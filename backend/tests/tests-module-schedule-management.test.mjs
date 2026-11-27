@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { applyRoleReadMigrations } from "./_gpexe-disposable-db.mjs";
+import { asActor } from "./support/permission-roles-world.mjs";
 
 
 // Tests-only seed for the future bridge. The marker exists only in this fixture
@@ -1418,4 +1419,110 @@ test("Manage: native schedule creation and bulk creation require the staged word
   }
   assert.equal((await api("/api/tests/schedules", { ...options, body: input })).status, 201);
   assert.equal((await api("/api/tests/schedules/bulk", { ...options, body: { ...input, dates: [input.startDate] } })).status, 201);
+});
+
+test("Manage: edits and deletes honor the destination holding, including delegated and off-active access", async () => {
+  const destination = await makeClubWithAthletes("manage-destination", 1);
+  const other = await makeClubWithAthletes("manage-other", 0);
+  const teamId = await makeTeam(destination.clubId, "Destination team");
+  const otherTeamId = await makeTeam(other.clubId, "Other team");
+  await addMembership(destination.athletes[0].athleteId, { teamId });
+  const coachId = await makeUser({ email: "manage-destination-team@test.local" });
+  await grantTeamCoach(coachId, teamId);
+  await grantTeamCoach(coachId, otherTeamId);
+  const coach = await loginCookie(coachId);
+  const pick = async (cookie, type, scopeId) => {
+    const result = await api("/api/auth/workspace", { method: "PUT", cookie, body: { type, scopeId } });
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+  };
+  await pick(coach, "team", teamId);
+  const input = baseCreateBody([{ kind: "team", id: teamId }]);
+  const created = await api("/api/tests/schedules", { method: "POST", cookie: coach, body: input });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.schedule.ownerScope, "team");
+  const path = `/api/tests/schedules/${created.body.schedule.id}`;
+  const missing = "/api/tests/schedules/00000000-0000-0000-0000-000000000000";
+  const patch = (cookie, status = "paused", target = path) => api(target, { method: "PATCH", cookie, body: { status } });
+  const remove = (cookie, target = path) => api(target, { method: "DELETE", cookie });
+  assert.deepEqual(await patch(other.coachCookie), await patch(other.coachCookie, "paused", missing));
+  assert.deepEqual(await remove(other.coachCookie), await remove(other.coachCookie, missing));
+
+  await pick(coach, "team", otherTeamId);
+  assert.equal((await patch(coach)).status, 200, "a direct coach can edit from another held team");
+  await grantClubAdmin(destination.coachId, other.clubId);
+  await pick(destination.coachCookie, "club", other.clubId);
+  assert.equal((await patch(destination.coachCookie, "active")).status, 200, "an off-active club holding can delegate to the destination team");
+
+  const platformId = await makeUser({ email: "manage-destination-platform@test.local" });
+  await query("insert into public.user_global_roles(user_id,role) values ($1,'platform_admin')", [platformId]);
+  const platform = await loginCookie(platformId);
+  const licence = (change) => api(`/api/organization/roles/clubs/${destination.clubId}/ceiling`, {
+    method: "POST", cookie: platform, body: { requestKey: crypto.randomUUID(), reason: "Test destination licence", ...change },
+  });
+  // Hold the uncommitted closure while PATCH sees the old entry snapshot.
+  const blocker = new pg.Client({ connectionString: db.url });
+  await blocker.connect();
+  let queued;
+  try {
+    await blocker.query("begin");
+    await blocker.query(
+      "select set_config('optimove.permission_actor',$1 || ':' || pg_current_xact_id()::text,true)",
+      [platformId],
+    );
+    await blocker.query("select public.lock_club_ceiling($1,'exclusive')", [[destination.clubId]]);
+    await blocker.query(
+      "insert into public.club_permission_ceiling(club_id,module_word,closed_by_user_id,reason) values ($1,'tests',$2,'Test destination licence')",
+      [destination.clubId, platformId],
+    );
+    await blocker.query(
+      "insert into public.club_permission_ceiling_changes(club_id,module_word,action,performed_by_user_id,reason) values ($1,'tests','close',$2,'Test destination licence')",
+      [destination.clubId, platformId],
+    );
+    const { rows: [{ pid }] } = await blocker.query("select pg_backend_pid() as pid");
+    queued = patch(coach);
+    await waitUntilBlockedBy(pid);
+    await blocker.query("commit");
+  } finally {
+    await blocker.query("rollback").catch(() => {});
+    await blocker.end();
+  }
+  assert.deepEqual(await queued, await patch(coach, "paused", missing));
+  const unchanged = () => query("select owner_scope,status from tests.test_schedules where id=$1", [created.body.schedule.id]);
+  const before = (await unchanged()).rows;
+  assert.deepEqual(await patch(coach), await patch(coach, "paused", missing));
+  assert.deepEqual(await remove(destination.coachCookie), await remove(destination.coachCookie, missing));
+  assert.deepEqual((await unchanged()).rows, before);
+  const reopened = await licence({ open: ["tests"] });
+  assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
+  await asActor(db.url, platformId, async (client) => {
+    await client.query("select public.lock_club_ceiling($1,'exclusive')", [[destination.clubId]]);
+    const { rows: [role] } = await client.query(
+      "select id,revision from public.permission_roles where basic_key='team_coach'",
+    );
+    const { rows: [version] } = await client.query(
+      `insert into public.permission_club_role_versions(club_id,system_role_id,based_on_revision,answered_revision,created_by_user_id)
+       values ($1,$2,$3,$3,$4) returning id`,
+      [destination.clubId, role.id, role.revision, platformId],
+    );
+    const { rows: [items] } = await client.query(
+      `select array_agg(permission_word order by permission_word) as words
+       from public.permission_role_items where role_id=$1 and permission_word<>'tests.schedule.manage'`,
+      [role.id],
+    );
+    await client.query(
+      "insert into public.permission_club_role_version_items(version_id,permission_word) select $1,unnest($2::text[])",
+      [version.id, items.words],
+    );
+    await client.query(
+      `insert into public.permission_club_role_version_changes(version_id,revision_after,kind,performed_by_user_id,basis,reason,items_added)
+       values ($1,1,'create',$2,'platform_admin','Test manage revocation',$3)`,
+      [version.id, platformId, items.words],
+    );
+  });
+  assert.equal((await api(path, { cookie: coach })).status, 200, "View stays available when Manage is removed");
+  assert.deepEqual(await patch(coach), await patch(coach, "paused", missing));
+  assert.deepEqual(await remove(coach), await remove(coach, missing));
+  assert.deepEqual((await unchanged()).rows, before);
+  assert.equal((await remove(destination.coachCookie)).status, 200, "the delegated admin can remove the idle schedule");
+  assert.equal((await unchanged()).rowCount, 0);
 });
