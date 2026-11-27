@@ -965,7 +965,7 @@ export async function materializeNaturalKeyActivity(client, {
     throw new Error("materializeNaturalKeyActivity: exactly one of logicalSessionId/externalAssignmentId is required");
   }
   const naturalKey = logicalSessionId || externalAssignmentId;
-  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`activity-link:${athleteId}:${naturalKey}`]);
+  await lockNaturalActivityKey(client, athleteId, naturalKey);
   // Test-only hook (default no-op), same convention as every other
   // deterministic-lock-proof point in this module (acceptMatchSuggestion/
   // dismissMatchSuggestion) and in trainingLoadMetricsMeasurements.js
