@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import {
-  builderRpeFixtureApi, createBuilderRpeFixtureDraft, enableBuilderRpeFixtureDraft, withBuilderRpeGuardFixture,
+  builderRpeFixtureApi, createBuilderRpeFixtureDraft, withBuilderRpeGuardFixture,
 } from "./support/builder-rpe-guard-fixture.mjs";
 import { execFileSync } from "node:child_process";
 import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
@@ -24,7 +24,10 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
     });
     assert.equal(added.status, 201, JSON.stringify(added.body));
     const templateSession = added.body.blocks[0].sessions[0].id;
-    await enableBuilderRpeFixtureDraft(oldApi, templateId, templateSession);
+    const enabled = await oldApi(`/api/builder/sessions/${templateSession}`, {
+      method: "PATCH", body: { trackingEnabled: true, rpeEnabled: true },
+    });
+    assert.equal(enabled.status, 200, JSON.stringify(enabled.body));
     await stopPrevious();
     const bridge = await previousDashboardServer(db.url, {}, process.env.OPTIMOVE_BUILDER_RPE_BRIDGE_SHA
       ?? "66220c1224abdbdc0eaa1a23fa8d53591064a98a");
