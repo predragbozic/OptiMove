@@ -160,9 +160,9 @@ test('whole-page copy rolls back destination, widgets, series and receipt after 
  copyFixture.copied=final;
 });
 
-test('v100 rehearsal verifies the writer, rolls back without data loss, and reapplies it',async()=>{
+test('v104 rehearsal verifies the writer, rolls back without data loss, and reapplies it',async()=>{
  const {dashboard,copied}=copyFixture;
- const sql=kind=>readFile(new URL(`../../docs/runbooks/dashboard-page-copy-v100-${kind}.sql`,import.meta.url),'utf8');
+ const sql=kind=>readFile(new URL(`../../docs/runbooks/dashboard-page-copy-v104-${kind}.sql`,import.meta.url),'utf8');
  const assertChecks=async kind=>{
   const result=await q.query(await sql(kind));
   for(const [name,passed] of Object.entries(result.rows[0]))assert.equal(passed,true,name);
