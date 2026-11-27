@@ -122,6 +122,36 @@ test("guard preserves ambiguous predecessor drafts and publishes all-off and pro
       const legacyPublished = await snapshot([legacyActive.id]);
       assert.equal(legacyPublished.plans[0].request_rpe_default, true);
       assert.equal(legacyPublished.sessions[0].rpe_enabled, true);
+      const sourceSession = legacyPublished.sessions[0];
+      await db.client.query("begin");
+      let concurrentCopy;
+      try {
+        await db.client.query("select id from plans.plans where id=$1 for no key update", [legacyActive.id]);
+        concurrentCopy = api(`/api/builder/sessions/${sourceSession.id}/copy-into/${targetDay}`, { method: "POST", body: {} });
+        const deadline = Date.now() + 4000;
+        let blocked = false;
+        while (!blocked && Date.now() < deadline) {
+          const { rows: [state] } = await db.client.query(
+            `select exists (
+               select 1 from pg_stat_activity where datname=current_database()
+                 and pg_backend_pid()=any(pg_blocking_pids(pid))
+                 and query like '%order by id for no key update%'
+             ) as blocked`,
+          );
+          blocked = state.blocked;
+          if (!blocked) await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        assert.equal(blocked, true, "session copy waits on its exact source plan");
+        await db.client.query("update plans.plan_sessions set rpe_enabled=false,training_load_enabled=false where id=$1", [sourceSession.id]);
+        await db.client.query("commit");
+      } finally {
+        await db.client.query("rollback");
+        if (concurrentCopy) await Promise.allSettled([concurrentCopy]);
+      }
+      const afterSourceChange = await concurrentCopy;
+      assert.equal(afterSourceChange.status, 200, JSON.stringify(afterSourceChange.body));
+      const copiedAfterChange = (await snapshot([cases.off.id])).sessions.find(row => row.id !== cases.off.sessionId);
+      assert.deepEqual([copiedAfterChange.training_load_enabled, copiedAfterChange.rpe_enabled], [false, false]);
       const off = await submit(cases.off.id);
       assert.equal(off.status, 200, JSON.stringify(off.body));
       const established = await createBuilderRpeFixtureDraft(api, athleteCode, "2027-05-03", { enable: true });
