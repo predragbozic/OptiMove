@@ -196,6 +196,12 @@ event. Keep the role word uneditable if that evidence is unavailable. After drai
 change adds the word to the checked/editable JS catalog, native `/me` projection and client
 controls. Both releases use the same SQL checks in transactions. Test the second release's
 inventory, effective permissions, grant/revoke behavior and native controls against v99.
+In release 2 the existing Settings role editor can grant or revoke the "Manage RPE session
+schedules" word. The native Schedule tab uses both the projected View and Manage words.
+The same client check guards create, edit, lifecycle and schedule-again actions. Both
+the transaction checks and the view workspace's read-only surface stay in force. Release 2
+uses the existing v99 schema.
+
 Train/Calendar deployments and the separate mobile Calendar PR have no automatic coupling.
 Production migration, the follow-up release and any activation require their own recorded orders.
 

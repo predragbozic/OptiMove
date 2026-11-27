@@ -1,6 +1,6 @@
 // Roles R4-1 (docs/ai/roles-r4-contract.md sections 4 and 13): two static proofs over backend/src.
 //   A. "Checked means every gate" (7b's static half): every word of ENFORCED_PERMISSIONS is checked by can() in each
-//      gate file it lists, and every can() call with a literal word in backend/src names a listed word from a listed
+//      gate file it lists (or the named transaction SQL check), and every can() call with a literal word in backend/src names a listed word from a listed
 //      file - except the two global-only words (accounts.manage, platform.admin), which R2's test 17-honoured pins to
 //      GLOBAL_SCOPE call sites. A word moves into the list only with every gate of its module (section 4).
 //   B. The standing rule of R4-1 (.claude/rules/backend-security.md, "Workspace types"): every branch on a workspace
@@ -25,9 +25,11 @@ function files(dir) {
 }
 const SOURCES = files(SRC).map((f) => ({ rel: path.relative(SRC, f).split(path.sep).join("/"), text: fs.readFileSync(f, "utf8") }));
 const CAN_CALL = /\bcan\(\s*[A-Za-z_.?]+\s*,\s*"([a-z_.]+)"/g;
+// The schedule writer rechecks the actual row under locks using the Postgres twin.
+const SQL_CHECKED = Object.freeze({ "externalScheduleWriteAccess.js": Object.freeze(["load.schedule.manage"]) });
 const GLOBAL_ONLY = new Set(["accounts.manage", "platform.admin"]);
 
-test("A1. every listed gate file checks its word through can()", () => {
+test("A1. every listed gate file checks its word through can() or its named transaction SQL check", () => {
   for (const [word, gates] of Object.entries(ENFORCED_PERMISSIONS)) {
     assert.ok(Object.hasOwn(PERMISSIONS, word), word);
     assert.ok(gates.length > 0, `${word} lists its gates`);
@@ -35,7 +37,9 @@ test("A1. every listed gate file checks its word through can()", () => {
       const src = SOURCES.find((s) => s.rel === gate);
       assert.ok(src, `${word}: gate file ${gate} exists`);
       const words = [...src.text.matchAll(CAN_CALL)].map((m) => m[1]);
-      assert.ok(words.includes(word), `${word}: ${gate} calls can() with it`);
+      const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1, '([a-z_.]+)', \$2, \$3\)/g)].map((m) => m[1]);
+      words.push(...sqlWords.filter((checked) => SQL_CHECKED[gate]?.includes(checked)));
+      assert.ok(words.includes(word), `${word}: ${gate} checks the word`);
     }
   }
 });

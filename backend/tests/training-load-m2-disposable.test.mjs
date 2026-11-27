@@ -80,17 +80,17 @@ before(async () => {
 });
 after(async () => { await world?.stop(); });
 
-test("M-2: the staged SQL word and all seven native writes work without exposing it", async () => {
+test("M-2: the checked SQL word projects and all seven native writes work", async () => {
   const { roles, clubs, teams } = actors;
   const { ENFORCED_PERMISSIONS, STORABLE_PERMISSIONS } = await import("../src/permissions.js");
-  assert.equal(STORABLE_PERMISSIONS.includes(MANAGE), false);
-  assert.equal(Object.hasOwn(ENFORCED_PERMISSIONS, MANAGE), false);
+  assert.equal(STORABLE_PERMISSIONS.includes(MANAGE), true);
+  assert.equal(Object.hasOwn(ENFORCED_PERMISSIONS, MANAGE), true);
   assert.deepEqual(await world.q("select public.permission_word_honoured($1) as honoured", [MANAGE]), [{ honoured: true }]);
 
   for (const [actor, scopeType, scopeId] of [[roles.teamCoach, "team", teams.t1], [roles.clubAdmin, "club", clubs.c1]]) {
     const me = await world.api("/api/auth/me", { cookie: actor.cookie });
     assert.ok(me.body.user.permissions.includes(VIEW), me.text);
-    assert.ok(!me.body.user.permissions.includes(MANAGE), me.text);
+    assert.ok(me.body.user.permissions.includes(MANAGE), me.text);
     assert.equal(await holding(actor, scopeType, scopeId), true);
     const id = await create(actor, scopeId, scopeType);
     for (const [method, path, input, good] of checks(id)) {
@@ -181,62 +181,35 @@ test("M-2: private ownership, platform ownership and athlete write denial stay d
   assert.equal((await call(roles.athlete.cookie, `/${userSchedule}`, "PATCH", { eventName: "Athlete staff attempt" })).status, 403);
 });
 
-test("M-2: role editing inherits and preserves seeded words but cannot make them editable", async () => {
+test("M-2: a club role manager revokes and restores the checked word without widening scope", async () => {
+  const { roles } = actors;
   const club = await world.fx.makeClub("M-2 role editor");
   const team = await world.fx.makeTeam(club);
+  const otherTeam = await world.fx.makeTeam(club);
+  const admin = await world.fx.clubAdminOf(club);
   const coach = await world.fx.coachOf(team);
-  const cookie = actors.roles.platformAdmin.cookie;
-  const id = ROLE_IDS.team_coach;
-  const rolePath = `/${id}/change`;
-  const info = async () => (await world.q(`select r.revision,array(
-    select i.permission_word from public.permission_role_items i where i.role_id=r.id order by 1
-  ) as items from public.permission_roles r where r.id=$1`, [id]))[0];
-  const original = await info();
-  const omission = await change(cookie, rolePath, {
-    expectedRevision: original.revision, items: original.items.filter((w) => w !== MANAGE),
-  });
-  assert.equal(omission.status, 409, omission.text);
-  assert.deepEqual(await info(), original);
+  const path = `/${ROLE_IDS.team_coach}/clubs/${club}/version`;
+  const me = () => world.api("/api/auth/me", { cookie: coach.cookie });
+  assert.ok((await me()).body.user.permissions.includes(MANAGE));
+  const id = await create(coach, team, "team");
 
-  const versionPath = `/${id}/clubs/${club}/version`;
-  const version = await change(cookie, versionPath, { expectedRevision: null, remove: ["athletes.remove"] });
-  assert.equal(version.status, 200, version.text);
-  assert.equal(await holding(coach, "team", team), true);
-  const remove = await change(cookie, versionPath, { expectedRevision: 1, remove: [MANAGE] });
-  assert.equal(remove.status, 409, remove.text);
-  const full = await change(cookie, rolePath, {
-    expectedRevision: original.revision, items: original.items, description: "Bridge retains the full list",
-  });
-  assert.equal(full.status, 200, full.text);
-  assert.deepEqual((await info()).items, original.items);
-  const systemRevision = (await info()).revision;
-  const accepted = await change(cookie, versionPath + "/answer", { systemRevision, choice: "accept_default" });
-  assert.equal(accepted.status, 200, accepted.text);
-  assert.equal(await holding(coach, "team", team), true);
+  const revoked = await change(admin.cookie, path, { expectedRevision: null, remove: [MANAGE] });
+  assert.equal(revoked.status, 200, revoked.text);
+  assert.equal(await holding(coach, "team", team), false);
+  assert.ok(!(await me()).body.user.permissions.includes(MANAGE));
+  assert.equal((await call(coach.cookie, `/${id}`)).status, 200);
+  assert.equal((await call(coach.cookie, "", "POST", body(team))).status, 403);
 
-  const customPath = `/users/${coach.id}/clubs/${club}/custom`;
-  const custom = await change(cookie, customPath, {
-    roleId: id, scopeType: "team", scopeId: team, expectedRevision: null, remove: ["athletes.remove"],
-  });
-  assert.equal(custom.status, 200, custom.text);
-  const customRefusal = await change(cookie, customPath, {
-    roleId: id, scopeType: "team", scopeId: team, expectedRevision: 1, remove: [MANAGE],
-  });
-  assert.equal(customRefusal.status, 409, customRefusal.text);
+  const restored = await change(admin.cookie, path, { expectedRevision: 1, add: [MANAGE] });
+  assert.equal(restored.status, 200, restored.text);
+  assert.ok((await me()).body.user.permissions.includes(MANAGE));
   assert.equal(await holding(coach, "team", team), true);
-  const [active] = await world.q(`select id from public.permission_custom_roles where user_id=$1 and ended_at is null`, [coach.id]);
-  const ended = await change(cookie, `/users/${coach.id}/custom/${active.id}/end`, {});
-  assert.equal(ended.status, 200, ended.text);
-  assert.equal(await holding(coach, "team", team), true);
-
-  const copied = await change(cookie, `/${id}/copy`, { clubId: club, name: "M-2 own version" });
+  assert.equal(await holding(coach, "team", otherTeam), false);
+  assert.ok(await create(coach, team, "team"));
+  assert.equal((await call(coach.cookie, "", "POST", body(otherTeam))).status, 403);
+  const copied = await change(roles.platformAdmin.cookie, `/${ROLE_IDS.team_coach}/copy`, { clubId: club, name: "M-2 own version" });
   assert.equal(copied.status, 200, copied.text);
-  assert.ok(!copied.body.role.items.includes(MANAGE), copied.text);
-  assert.deepEqual(await info().then((x) => x.items), original.items);
-  const add = await change(cookie, `/${copied.body.role.id}/change`, {
-    expectedRevision: copied.body.role.revision, items: [...copied.body.role.items, MANAGE],
-  });
-  assert.equal(add.status, 409, add.text);
+  assert.ok(copied.body.role.items.includes(MANAGE), copied.text);
 });
 
 test("M-2: the real writer locks targets in D45 order without rewriting the submitted set", async () => {

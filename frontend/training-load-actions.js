@@ -1,3 +1,4 @@
+import { canManageExternalSchedules } from "./permission-nav.js";
 import { loadReferenceSection, referencesMayBeLeft, referenceAction } from "./dashboard-references.js";
 import {formatDate as formatDashboardReportDate} from './utils.js';
 import {printDashboardPage} from './training-load-dashboard-print.js';
@@ -2187,6 +2188,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- Coach: "New RPE session" (external scheduling) --------------------
 
   if (type === "training-load-open-schedule-form") {
+    if (!canManageExternalSchedules()) return true;
     const defaultTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     state.trainingLoad.scheduleForm = emptyExternalScheduleForm({
       timezone: defaultTimezone,
@@ -2411,6 +2413,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   // -------------------- New RPE session: submit (create/update) --------------------
 
   if (type === "training-load-schedule-submit") {
+    if (!canManageExternalSchedules()) return true;
     await submitExternalScheduleForm(renderTrainingLoad);
     return true;
   }
@@ -2427,14 +2430,17 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-open-edit-external-schedule") {
+    if (!canManageExternalSchedules()) return true;
     await openEditExternalSchedule(action.dataset.scheduleId, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-external-schedule-again") {
+    if (!canManageExternalSchedules()) return true;
     await openExternalScheduleAgain(action.dataset.scheduleId, renderTrainingLoad);
     return true;
   }
   if (type === "training-load-set-external-schedule-status") {
+    if (!canManageExternalSchedules()) return true;
     const scheduleId = action.dataset.scheduleId;
     const statusAction = action.dataset.status; // "pause" | "resume" | "cancel"
     if (statusAction === "cancel" && !window.confirm("Cancel this RPE session? It can no longer be edited or reactivated - existing results stay available in Athletes.")) {
