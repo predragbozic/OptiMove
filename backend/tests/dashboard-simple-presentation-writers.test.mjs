@@ -25,6 +25,7 @@ if (needsModuleMocksRelaunch()) {
   } });
   mock.module("../src/trainingLoadDashboardAccess.js", { namedExports: {
     resolveActiveDataWorkspace: async request => request.pilotWorkspace ?? workspace,
+    dataWorkspaceForActiveWorkspace: () => workspace,
     canManageDashboardRow: (request, row) => row.owner_user_id === request.user.id,
     canViewDashboardRow: (request, row) => row.owner_scope === "system" || row.owner_user_id === request.user.id,
     dashboardManageBasis: () => "owner",
