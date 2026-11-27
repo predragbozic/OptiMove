@@ -156,6 +156,16 @@ test("open: one proposal read; the methods with their numbers, an unavailable on
   assert.match(page, /An estimate is always labelled and is never counted as measured/);
 });
 
+test("an open estimate editor stops sending once the roster no longer authorizes it", async () => {
+  const roster = await openRoster(server());
+  await act("training-load-roster-estimate-open", { athleteId: "ath-8" });
+  assert.equal(proposalGets().length, 1);
+  roster.data.viewer = { basis: "team_coach", canDecideRoster: true };
+  assert.doesNotMatch(html(), /training-load-roster-estimate-(?:open|save)/);
+  await act("training-load-roster-estimate-save");
+  assert.deepEqual(posts(), []);
+});
+
 test("save: one POST with a fresh request key and only the method's fields; Saved, the panel closes and the roster is read again", async () => {
   const roster = await openRoster(server({ onWrite: () => ({ status: 201, body: { method: "team_average", estimates: [] } }) }));
   await act("training-load-roster-estimate-open", { athleteId: "ath-8" });

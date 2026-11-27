@@ -2431,6 +2431,78 @@ async function assertStagedActivityRoleOperations(call) {
   await assertSeed();
 }
 
+async function assertActivityRoleExposure(bridgeCall = null) {
+  const {clubId} = await makeClubCoach("m3c-exposure-club");
+  const {adminCookie} = await makePlatformAdmin("m3c-exposure-platform");
+  const {rows:[{id:teamId}]} = await query("insert into public.teams (club_id,name) values ($1,'Exposure team') returning id",[clubId]);
+  const coachId = await makeUser();
+  await query("insert into public.user_team_roles (user_id,team_id,role) values ($1,$2,'team_coach')",[coachId,teamId]);
+  await setActiveWorkspace(coachId,"team",teamId);
+  const cookie = await loginCookie(coachId);
+  const {athleteId} = await makeAthleteInClub(clubId);
+  await query("insert into public.athlete_memberships (athlete_id,club_id,team_id,membership_type,status) values ($1,$2,$3,'team','active')",[athleteId,clubId,teamId]);
+
+  const word = "load.activities.manage";
+  const role = "00000000-0000-4000-8000-000000000843";
+  const path = `/api/organization/roles/${role}/clubs/${clubId}/version`;
+  const edit = (expectedRevision, change) => api(path,{
+    method:"POST",cookie:adminCookie,body:{requestKey:crypto.randomUUID(),reason:"Activity exposure rehearsal",expectedRevision,...change},
+  });
+  const permissions = async () => {
+    const me = await api("/api/auth/me",{cookie});
+    assert.equal(me.status,200,JSON.stringify(me.body));
+    return [...me.body.user.permissions].sort();
+  };
+  const catalog = await api(`/api/organization/roles/catalog?clubId=${clubId}`,{cookie:adminCookie});
+  assert.equal(catalog.status,200,JSON.stringify(catalog.body));
+  assert.equal(catalog.body.permissions.find(item => item.word === word)?.honoured,true);
+  assert.ok(catalog.body.delegable.includes(word));
+  const original = await permissions();
+  assert.ok(original.includes(word));
+
+  const route = "/api/training-activity/materialize";
+  const input = {requestKey:uid(),athleteId,localDate:"2026-09-08",timezone:"UTC"};
+  const send = (body,call=api) => call(route,{method:"POST",cookie,body});
+  const created = await send(input);
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const read = () => api(`/api/training-activity/${created.body.activityId}`,{cookie});
+  const beforeRead = await read();
+  assert.equal(beforeRead.status,200,JSON.stringify(beforeRead.body));
+
+  const removed = await edit(null,{remove:[word]});
+  assert.equal(removed.status,200,JSON.stringify(removed.body));
+  assert.ok(!removed.body.role.effectiveItems.includes(word));
+  assert.deepEqual(await permissions(),original.filter(item => item !== word));
+  assert.deepEqual(await read(),beforeRead);
+
+  const receipts = () => query("select request_key from training.activity_write_requests where requested_by_user_id=$1 order by request_key",[coachId]);
+  const before = (await receipts()).rows;
+  const fresh = {...input,requestKey:uid(),localDate:"2026-09-09"};
+  const refused = {status:403,body:{error:"Forbidden"}};
+  for (const caller of bridgeCall ? [api,bridgeCall] : [api]) {
+    assert.deepEqual(await send(input,caller),refused,"revocation denies the earlier receipt");
+    assert.deepEqual(await send(fresh,caller),refused,"revocation denies a new write");
+  }
+  assert.deepEqual((await receipts()).rows,before);
+
+  const restored = await edit(removed.body.role.version.revision,{add:[word]});
+  assert.equal(restored.status,200,JSON.stringify(restored.body));
+  assert.ok(restored.body.role.effectiveItems.includes(word));
+  assert.deepEqual(await permissions(),original);
+  for (const caller of bridgeCall ? [api,bridgeCall] : [api]) {
+    const replay = await send(input,caller);
+    assert.equal(replay.status,201,JSON.stringify(replay.body));
+    assert.equal(replay.body.activityId,created.body.activityId);
+    assert.equal(replay.body.matchStatus,"replay");
+  }
+  assert.deepEqual((await receipts()).rows,before);
+  assert.equal((await send(fresh)).status,201);
+}
+
+test("M-3c exposure: Settings Roles removes and restores native activity authority without affecting reads", async () => {
+  await assertActivityRoleExposure();
+});
+
 const previousActivityServer = process.env.OPTIMOVE_M3C_PREVIOUS_SERVER;
 test("M-3c: the exact pre-bridge materialization receipt replays in the bridge", { skip: !previousActivityServer }, async () => {
   const actual = execFileSync("git", ["-C", previousActivityServer, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -2457,7 +2529,6 @@ test("M-3c: the exact pre-bridge materialization receipt replays in the bridge",
     assert.deepEqual(replay, {status:201, body:{activityId:result.activityId, participantId:result.participantId, reused:true, matchStatus:"replay"}});
     const {rows:[receipt]} = await query("select count(*)::int as n from training.activity_write_requests where request_key=$1", [input.requestKey]);
     assert.equal(receipt.n, 1);
-    await assertStagedActivityRoleOperations(api);
     const priorUrl = `http://127.0.0.1:${oldServer.address().port}`;
     const priorCall = async (pathname,{method="GET",cookie,body}={}) => {
       const response = await fetch(priorUrl+pathname,{
@@ -2466,6 +2537,7 @@ test("M-3c: the exact pre-bridge materialization receipt replays in the bridge",
       return {status:response.status,body:await response.json()};
     };
     await assertStagedActivityRoleOperations(priorCall);
+    await assertActivityRoleExposure(priorCall);
     // Existing source validation remains observable to an authorized caller in
     // both builds. The native foreign/missing case is intentionally hardened.
     const { logicalSessionId } = await makePlanSessionForAthlete(athleteId,{
