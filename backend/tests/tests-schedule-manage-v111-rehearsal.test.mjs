@@ -298,16 +298,31 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
     }
     const linkCount = async () => (await client.query("select 1 from tests.test_access_links where schedule_id=$1", [old.body.schedule.id])).rowCount;
     for (const layer of [
-      { id: versionId, cookie: versionCookie, path: clubRolePath, table: "permission_club_role_versions", context: {} },
-      { id: customId, cookie: coachCookie, path: customRolePath, table: "permission_custom_roles", context: { roleId, scopeType: "team", scopeId: team } },
+      { id: versionId, cookie: versionCookie, path: clubRolePath, table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", context: {} },
+      { id: customId, cookie: coachCookie, path: customRolePath, table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id", context: { roleId, scopeType: "team", scopeId: team } },
     ]) {
+
       const revise = async direction => {
+        const auditCount = async () => (await client.query(
+          "select count(*)::int as count from public." + layer.auditTable + " where " + layer.auditKey + "=$1",
+          [layer.id],
+        )).rows[0].count;
+        const before = await auditCount();
         const { rows: [{ revision }] } = await client.query("select revision from public." + layer.table + " where id=$1", [layer.id]);
-        const res = await call(current, layer.path, {
+        const input = {
           requestKey: key(), expectedRevision: revision, reason: "Review Tests Schedule Manage",
           [direction]: [word], ...layer.context,
-        });
-        assert.equal(res.status, 200, JSON.stringify(res.body));
+        };
+        const result = await call(current, layer.path, input);
+        assert.equal(result.status, 200, JSON.stringify(result.body));
+        assert.equal(await auditCount(), before + 1);
+        const stored = await roleData(client);
+        const replay = await call(staged, layer.path, input);
+        assert.equal(replay.status, 200, JSON.stringify(replay.body));
+        assert.equal(replay.body.replayed, true);
+        assert.deepEqual(replay.body, { ...result.body, replayed: true });
+        assert.equal(await auditCount(), before + 1);
+        assert.deepEqual(await roleData(client), stored);
       };
       const readPermissions = async () => {
         const me = await current.api(layer.cookie, "/api/auth/me");
