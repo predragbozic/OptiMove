@@ -181,6 +181,15 @@ test('v104 rehearsal verifies the writer, rolls back without data loss, and reap
  await q.query(await sql('rollback'));
  assert.deepEqual(await pageSnapshot(dashboard.id),copied);
  await assertChecks('preflight');
+ await q.query('begin');
+ try{
+  await q.query(`insert into public.schema_migrations (migration_name,checksum,execution_time_ms,runner_version)
+    values ('migrations_v2/202612051000_reserved_predecessor.sql',repeat('0',64),0,'rehearsal')`);
+  const checks=(await q.query(await sql('preflight'))).rows[0];
+  assert.equal(checks.v102_is_latest,false);
+ }finally{
+  await q.query('rollback');
+ }
  await runMigrations({databaseUrl:world.databaseUrl,migrationsRoot:fileURLToPath(new URL('../../migrations_v2/',import.meta.url))});
  await assertChecks('postcheck');
  assert.deepEqual(await pageSnapshot(dashboard.id),copied);
