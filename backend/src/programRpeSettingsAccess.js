@@ -28,13 +28,27 @@ export async function lockProgramRpeSettingsActor(client, req, scope, { training
   const user = (await client.query("select * from public.users where id=$1 and is_active", [req.user.id])).rows[0];
   if (!user) return null;
   await client.query("select user_id from public.user_workspace_preferences where user_id=$1 for share", [user.id]);
-  const authz = await loadAuthorizationContext(user, client.query.bind(client));
-  const { workspace } = await resolveActiveWorkspaceReadOnly(user.id, authz, client.query.bind(client));
+  // Authorization loads several independent reads together. Serialize them
+  // on this transaction client so they share its locks and connection.
+  let tail = Promise.resolve();
+  const runQuery = (sql, values) => {
+    const running = tail.then(() => client.query(sql, values));
+    tail = running.catch(() => {});
+    return running;
+  };
+  const { authz, workspace } = await (async () => {
+    const authz = await loadAuthorizationContext(user, runQuery);
+    const { workspace } = await resolveActiveWorkspaceReadOnly(user.id, authz, runQuery);
+    return { authz, workspace };
+  })().finally(() => tail);
   const actor = { user, authz };
   const fresh = externalScheduleScopeForWorkspace(workspace, actor);
   if (fresh.type !== scope.type || String(nativeProgramRpeScope(fresh)) !== String(scopeId)) return null;
   const right = await client.query(
-    "select public.permission_word_honoured('programs.rpe_settings') and public.user_has_permission($1, 'programs.view', $2, $3) and public.user_has_permission($1, 'programs.rpe_settings', $2, $3) and (not $4::boolean or public.user_has_permission($1, 'load.view.team', $2, $3)) as allowed",
+    `select public.permission_word_honoured('programs.rpe_settings')
+       and public.user_has_permission($1, 'programs.view', $2, $3)
+       and public.user_has_permission($1, 'programs.rpe_settings', $2, $3)
+       and (not $4::boolean or public.user_has_permission($1, 'load.view.team', $2, $3)) as allowed`,
     [user.id, scope.type, scopeId, trainingLoadView],
   );
   return right.rows[0]?.allowed === true ? actor : null;
