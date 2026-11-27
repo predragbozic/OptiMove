@@ -164,7 +164,7 @@ test("v112 applies, rolls back and restores the audited Variables catalogue", as
 });
 
 test("v112 old and current Settings and native variable operations share an exact disposable cutover", async () => {
-  const fixture = await createPagesDatabase({ through: "202612131000", label: "variables_rename_overlap_v112" });
+  const fixture = await createPagesDatabase({ through: "202612131000", label: "vars_overlap_v112" });
   const { client } = fixture;
   let current, previous;
   try {
