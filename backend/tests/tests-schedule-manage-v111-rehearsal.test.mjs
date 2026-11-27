@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import pg from "pg";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
 import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
 import { asActor, fixtures, key, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
@@ -235,9 +236,48 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
     assert.equal(pause.body.status, "paused");
     const firstUsed = await marker();
     assert.ok(firstUsed);
-    const rotated = await write(current, oldPath + "/link", "POST", {});
+
+    const blocker = new pg.Client({ connectionString: fixture.url });
+    await blocker.connect();
+    let oldRevoke, bridgeRotate;
+    try {
+      await blocker.query("begin");
+      const blockPid = (await blocker.query("select pg_backend_pid() as pid")).rows[0].pid;
+      await blocker.query("select id from tests.test_access_links where id=$1 for update", [link.body.link.id]);
+      const waitOnLink = async (pattern, possibleBlockers) => {
+        const stopAt = Date.now() + 3500;
+        while (Date.now() < stopAt) {
+          const { rows: [queued] } = await client.query(
+            `select pid from pg_stat_activity
+             where datname=current_database() and wait_event_type='Lock' and query like $1
+               and pg_blocking_pids(pid) && $2::int[]`,
+            [pattern, possibleBlockers],
+          );
+          if (queued) return queued.pid;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        assert.fail("The old and new link writes did not reach the planned row-lock interleaving.");
+      };
+      oldRevoke = write(previous, "/api/tests/links/" + link.body.link.id + "/revoke", "POST", {});
+      const previousPid = await waitOnLink("update tests.test_access_links set status = 'revoked'%where id = $1%", [blockPid]);
+      bridgeRotate = write(current, oldPath + "/link", "POST", {});
+      await waitOnLink("select id from tests.test_access_links%where schedule_id=$1%for update%", [blockPid, previousPid]);
+      await blocker.query("commit");
+    } finally {
+      await blocker.query("rollback").catch(() => {});
+      await blocker.end();
+      await Promise.allSettled([oldRevoke, bridgeRotate]);
+    }
+    const retired = await oldRevoke;
+    assert.equal(retired.status, 200, JSON.stringify(retired.body));
+    const rotated = await bridgeRotate;
     assert.equal(rotated.status, 201, JSON.stringify(rotated.body));
     assert.notEqual(rotated.body.link.id, link.body.link.id);
+    const activeLinks = (await client.query(
+      "select id from tests.test_access_links where schedule_id=$1 and status='active'", [old.body.schedule.id],
+    )).rows;
+    assert.deepEqual(activeLinks, [{ id: rotated.body.link.id }]);
+
     const revoked = await write(previous, "/api/tests/links/" + rotated.body.link.id + "/revoke", "POST", {});
     assert.equal(revoked.status, 200, JSON.stringify(revoked.body));
     const linkStatuses = (await client.query(
