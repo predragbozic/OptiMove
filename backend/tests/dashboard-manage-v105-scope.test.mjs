@@ -134,9 +134,9 @@ test("real Dashboard routes preserve standalone-team authorization and private o
       assert.equal(bridge.commit, bridgeCommit);
       console.log("Exact Dashboard Manage bridge build:", bridge.commit);
     }
-    const bridgeApi = (target, options = {}) => fetch(bridge.baseUrl + target, {
+    const bridgeApi = (target, options = {}, cookie = viewer) => fetch(bridge.baseUrl + target, {
       method: options.method,
-      headers: { Cookie: viewer, ...(options.body ? { "Content-Type": "application/json" } : {}) },
+      headers: { Cookie: cookie, ...(options.body ? { "Content-Type": "application/json" } : {}) },
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
     if (bridge) {
@@ -148,11 +148,28 @@ test("real Dashboard routes preserve standalone-team authorization and private o
       assert.equal((await before.json()).canManage, undefined);
     }
 
-    const change = (expectedRevision, effect) => server.api(platformCookie, `/api/organization/roles/${ROLE_IDS.team_coach}/clubs/${club}/version`, {
+    const rolePath = `/api/organization/roles/${ROLE_IDS.team_coach}/clubs/${club}/version`;
+    const roleRequest = (expectedRevision, effect) => ({
       method: "POST", body: { requestKey: randomUUID(), expectedRevision, reason: "Adjust Dashboard Manage", ...effect },
     });
-    const removed = await change(null, { remove: ["dashboards.manage"] });
+    const removeRequest = roleRequest(null, { remove: ["dashboards.manage"] });
+    const removed = await server.api(platformCookie, rolePath, removeRequest);
     assert.equal(removed.status, 200, removed.text);
+    if (bridge) {
+      const evidence = async () => (await sql.query(`
+        select (select count(*)::int from public.permission_club_role_versions v where v.club_id=$1 and v.system_role_id=$2) as versions,
+               (select count(*)::int from public.permission_club_role_version_changes c join public.permission_club_role_versions v on v.id=c.version_id
+                where v.club_id=$1 and v.system_role_id=$2) as audit,
+               (select count(*)::int from public.permission_requests r where r.requested_by_user_id=$3 and r.request_key=$4) as receipts
+      `, [club, ROLE_IDS.team_coach, platform, removeRequest.body.requestKey])).rows[0];
+      assert.deepEqual(await evidence(), { versions: 1, audit: 1, receipts: 1 });
+      const replay = await bridgeApi(rolePath, removeRequest, platformCookie);
+      assert.equal(replay.status, 200);
+      const { replayed, role } = await replay.json();
+      assert.equal(replayed, true);
+      assert.deepEqual(role.version, removed.body.role.version);
+      assert.deepEqual(await evidence(), { versions: 1, audit: 1, receipts: 1 });
+    }
     assert.deepEqual((await server.api(viewer, "/api/auth/me")).body.user.permissions, originalWords.filter(word => word !== "dashboards.manage"));
     const detail = await server.api(viewer, targetPath);
     assert.equal(detail.status, 200, detail.text);
@@ -175,7 +192,7 @@ test("real Dashboard routes preserve standalone-team authorization and private o
     }
     assert.equal((await server.api(viewer, `${path}/active`, { method: "POST", body: { dashboardId: target.body.dashboard.id } })).status, 200);
     assert.equal((await server.api(viewer, `${path}/active`, { method: "DELETE" })).status, 200);
-    const restored = await change(removed.body.role.version.revision, { add: ["dashboards.manage"] });
+    const restored = await server.api(platformCookie, rolePath, roleRequest(removed.body.role.version.revision, { add: ["dashboards.manage"] }));
     assert.equal(restored.status, 200, restored.text);
     assert.deepEqual((await server.api(viewer, "/api/auth/me")).body.user.permissions, originalWords);
     assert.equal((await server.api(viewer, targetPath)).body.canManage, true);
