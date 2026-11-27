@@ -51,17 +51,42 @@ test('Page data query applies the separate active data-workspace gate',async()=>
  const period={dateFrom:'2026-11-01',dateTo:'2026-11-07'};
  const ok=await api(path,{...period,shellFilter:{clubIds:[],teamIds:[],athleteIds:[]}},'POST');
  assert.equal(ok.status,200,ok.text);assert.deepEqual(JSON.parse(ok.text).widgets,[]);
+ const galleryPath=path.replace(/query$/,'gallery');
+ const draft={kind:'area',title:'Workspace-scoped gallery',groupBy:'day',series:[{builtInSeriesKey:'session_count',dataScopeLevel:'day',analyticalAggregation:'sum'}]};
+ const preview=await api(path,{...period,galleryDraft:draft},'POST');
+ assert.equal(preview.status,200,preview.text);
+ const envelope={requestId:crypto.randomUUID(),requestIssuedAt:JSON.parse(preview.text).requestIssuedAt,
+  expectedPageRevision:JSON.parse(ok.text).pageRevision,expectedDashboardRevision:JSON.parse(ok.text).dashboardRevision,draft};
+ const saved=await api(galleryPath,envelope,'POST');
+ assert.equal(saved.status,200,saved.text);
+ const snapshot=async()=>(await q.query(`select
+   (select jsonb_agg(to_jsonb(w) order by w.id) from training_load.dashboard_widgets w where w.page_id=$1) widgets,
+   (select jsonb_agg(to_jsonb(s) order by s.id) from training_load.dashboard_widget_series s join training_load.dashboard_widgets w on w.id=s.widget_id where w.page_id=$1) series,
+   (select jsonb_agg(to_jsonb(r) order by r.request_id) from training_load.dashboard_page_requests r where r.dashboard_id=$2) receipts`,[home,dashboard.id])).rows[0];
+ const before=await snapshot();
  await q.query("insert into public.user_club_roles(user_id,club_id,role,is_active) values($1,$2,'club_admin',true)",[actor.id,world.ids.clubA]);
  await q.query("update public.user_workspace_preferences set workspace_type='club',scope_id=$2 where user_id=$1",[actor.id,world.ids.clubA]);
  try{
   const mismatch=await api(path,period,'POST');assert.equal(mismatch.status,404,mismatch.text);assert.equal(mismatch.text,'{"error":"notFound"}');
+  for(const denied of [await api(path,{...period,galleryDraft:draft},'POST'),await api(galleryPath,envelope,'POST'),
+    await api(galleryPath,{...envelope,requestId:crypto.randomUUID(),draft:{...draft,kind:'radar'}},'POST')]){
+   assert.equal(denied.status,404,denied.text);assert.equal(denied.text,'{"error":"notFound"}');
+  }
+  assert.deepEqual(await snapshot(),before);
   const {createPageService}=await import('../src/dashboardPages/service.js');const pool=new pg.Pool({connectionString:world.databaseUrl}),statements=[];
   try{const recorded={async connect(){const c=await pool.connect();return{query(sql,args){statements.push(sql);return c.query(sql,args)},release(){c.release()}}}};
    await assert.rejects(createPageService({pool:recorded}).queryPage({req:{user:{id:actor.id}},dashboardId:dashboard.id,pageId:home,body:period}),e=>e.httpStatus===404);
    assert.equal(statements.some(sql=>/select \* from training_load\.dashboard_widgets/.test(sql)),false,'workspace mismatch stops before reading widget content');
   }finally{await pool.end()}
 
- }finally{await q.query("update public.user_workspace_preferences set workspace_type='platform',scope_id=null where user_id=$1",[actor.id]);await q.query("delete from public.user_club_roles where user_id=$1 and club_id=$2",[actor.id,world.ids.clubA])}
+ }finally{
+  await q.query("update public.user_workspace_preferences set workspace_type='platform',scope_id=null where user_id=$1",[actor.id]);
+  await q.query("delete from public.user_club_roles where user_id=$1 and club_id=$2",[actor.id,world.ids.clubA]);
+  const id=JSON.parse(saved.text).widgetId;
+  const {revision}=(await q.query('select revision from training_load.dashboard_widgets where id=$1',[id])).rows[0];
+  const deleted=await api(path.replace(/query$/,`widgets/${id}`),{expectedWidgetRevision:revision},'DELETE');
+  assert.equal(deleted.status,200,deleted.text);
+ }
 });
 
 test('Edit metric preview queries the draft without storing a widget',async()=>{

@@ -45,9 +45,9 @@ before(async () => {
   ({ runDashboardBatchQuery: run } = await import('../src/trainingLoadDashboardQuery.js'));
 });
 after(async () => { if(server){server.closeAllConnections();await new Promise(r=>server.close(r));} await pool?.end();await client?.end();await db?.drop();process.env.DATABASE_URL=original; });
-async function query(aggregation='ratio', groupBy='cohort', extra={}, range={}) {
+async function query(aggregation='ratio', groupBy='cohort', extra={}, range={}, options={}) {
   const [result] = await run({ dataWorkspaceType: 'team', dataWorkspaceScopeId: org.teamId, dateFrom:'2026-09-14',dateTo:'2026-09-14',...range },
-    [{widgetId:'widget',seriesId:'series',metricDefinitionId:String(ratio.id),dataScopeLevel:'session',aggregationRolePolicy:'all_including_derived',sourcePolicy:'all_with_conflicts',groupBy,analyticalAggregation:aggregation,...extra}], {queryRunner:(sql,params)=>client.query(sql,params)});
+    [{widgetId:'widget',seriesId:'series',metricDefinitionId:String(ratio.id),dataScopeLevel:'session',aggregationRolePolicy:'all_including_derived',sourcePolicy:'all_with_conflicts',groupBy,analyticalAggregation:aggregation,...extra}], {queryRunner:(sql,params)=>client.query(sql,params),...options});
   return result;
 }
 test('ratio created through the admin API pools exact inputs, includes zero and returns coverage', async () => {
@@ -59,12 +59,55 @@ test('club dashboard reads GPEXE session distance from its active team', async (
   const distance = { metricDefinitionId: world.gpexe_total_distance.variableId, analyticalAggregation: 'sum',
     aggregationRolePolicy: 'standalone_and_source_rollup' };
   const team = await query('sum', 'athlete', distance);
-  const club = await query('sum', 'athlete', distance, { dataWorkspaceType: 'club', dataWorkspaceScopeId: org.clubId });
+  const scope={dataWorkspaceType:'club',dataWorkspaceScopeId:org.clubId};
+  const opt={includeClubDistance:true};
+  const club = await query('sum', 'athlete', distance, scope,opt);
   assert.equal(club.status, 'ok', JSON.stringify(club));
   assert.equal(club.data.current.length, 3);
   assert.deepEqual(club.data.current, team.data.current);
-  const foreignClub = await query('sum', 'athlete', distance, { dataWorkspaceType: 'club', dataWorkspaceScopeId: crypto.randomUUID() });
+  const foreignClub = await query('sum', 'athlete', distance, { ...scope, dataWorkspaceScopeId: crypto.randomUUID() },opt);
   assert.deepEqual(foreignClub.data.current, []);
+  for(const result of [
+   await query('sum','athlete',distance,scope),
+   await query('sum','athlete',{...distance,sourcePolicy:'manual'},scope,opt),
+   await query('sum','athlete',{...distance,allowClubDistance:false},scope,opt),
+   await query('sum','athlete',{...distance,metricDefinitionId:world.gpexe_time_min.variableId},scope,opt),
+   await query('sum','athlete',distance,scope,{...opt,referenceMeasurementsOnly:true}),
+  ])assert.deepEqual(result.data.current,[]);
+  const batchSpecs=[
+    {widgetId:'distance',seriesId:'distance',dataScopeLevel:'session',groupBy:'athlete',sourcePolicy:'all_with_conflicts',...distance},
+    reviewSpec(),
+  ];
+  const batch=await run({...scope,dateFrom:'2026-09-14',dateTo:'2026-09-14'},batchSpecs,{...opt,queryRunner:(sql,params)=>client.query(sql,params)});
+  assert.deepEqual(batch[0].data.current,club.data.current);
+  assert.deepEqual(batch[1].data.current,[]);
+  await client.query('begin');
+  try{
+    await client.query('update public.teams set is_active=false where id=$1',[org.teamId]);
+    assert.deepEqual((await query('sum','athlete',distance,scope,opt)).data.current,[]);
+  }finally{await client.query('rollback');}
+});
+test('club distance excludes the prior occasion after a GPEXE correction',async()=>{
+ const {importGpexeBundle}=await import('../src/gpexeImportWriter.js');
+ const date='2026-09-24',athletes=standardAthletes();
+ const importSession=async(updatedOn)=>{
+  const bundle=makeBundle({gpexeTeamId:9743,sessionId:5900,start:date+'T18:08:12',updatedOn,athletes});
+  bundle.teamSession.end_timestamp=date+'T19:19:35';
+  return importGpexeBundle(client,bundle,{ownerTeamId:org.teamId,performedByUserId:org.userId,
+   athleteIdByGpexeId:{101:org.athleteIds[0],102:org.athleteIds[1],103:org.athleteIds[2]},batchFilename:'distance correction test'});
+ };
+ const range={dataWorkspaceType:'club',dataWorkspaceScopeId:org.clubId,dateFrom:date,dateTo:date};
+ const spec={metricDefinitionId:world.gpexe_total_distance.variableId,athleteIds:[org.athleteIds[0]],
+  analyticalAggregation:'none',aggregationRolePolicy:'standalone_and_source_rollup'};
+ await importSession('2026-09-25T08:00:00');
+ const before=await query('none','athlete',spec,range,{includeClubDistance:true});
+ assert.equal(before.data.current.length,1);
+ athletes[0].parts[0].distance+=100;
+ const corrected=await importSession('2026-09-26T08:00:00');
+ assert.ok(corrected.results.some(row=>row.outcome==='corrected'));
+ const after=await query('none','athlete',spec,range,{includeClubDistance:true});
+ assert.equal(after.data.current.length,1);
+ assert.equal(after.data.current[0].value,before.data.current[0].value+100);
 });
 test('all grouping modes and allowed aggregations run; highest/latest stay stored, none is per occasion', async()=>{
   for(const group of ['day','week','session','athlete','cohort']){const r=await query('ratio',group);assert.equal(r.status,'ok',JSON.stringify(r));assert.ok(r.data.current.length);}
@@ -160,6 +203,10 @@ test('a valid ratio template clones without changing aggregation or policy',asyn
 });
 
 test('two sources on one ratio target are conflicts, never pooled or selected',async()=>{
+  const distance={metricDefinitionId:world.gpexe_total_distance.variableId,analyticalAggregation:'sum',aggregationRolePolicy:'standalone_and_source_rollup'};
+  const scope={dataWorkspaceType:'club',dataWorkspaceScopeId:org.clubId};
+  const opt={includeClubDistance:true};
+  const prior=await query('sum','athlete',distance,scope,opt);
   await client.query('begin');
   try {
     const original=(await client.query(`select r.computed_by_ref,o.id,p.athlete_id,e.source_connection_id,l.activity_id,pl.activity_participant_id
@@ -177,6 +224,8 @@ test('two sources on one ratio target are conflicts, never pooled or selected',a
     const occasion=(await client.query("insert into training_load.metric_measurement_occasions(event_participant_id,entry_method) values($1,'manual') returning id",[participant])).rows[0].id;
     await client.query(`insert into training_load.metric_values(occasion_id,metric_definition_id,metric_definition_version_id,value_numeric,unit_at_capture,is_derived,aggregation_role,coverage)
       select $1,metric_definition_id,metric_definition_version_id,case when metric_definition_id=$3 then value_numeric*2 else value_numeric end,unit_at_capture,false,'standalone','not_applicable' from training_load.metric_values where occasion_id=$2 and not is_derived and value_numeric is not null`,[occasion,original.id,world.gpexe_total_distance.variableId]);
+    assert.deepEqual((await query('sum','athlete',distance,scope,opt)).data.current,prior.data.current);
+    assert.deepEqual((await query('sum','athlete',{...distance,sourcePolicy:'source_connection',sourceConnectionId:connection},scope,opt)).data.current,[]);
     const {writeCalculatedValues}=await import('../src/calculatedValues.js');await writeCalculatedValues(client,{occasionId:occasion,level:'full',ownerTeamId:org.teamId});
     const stored=(await client.query('select value_numeric::float8 as value from training_load.metric_values where occasion_id=$1 and metric_definition_id=$2',[occasion,ratio.id])).rows[0];assert.ok(stored,'second source has a real stored ratio');
     for(const agg of ['ratio','max','last']){

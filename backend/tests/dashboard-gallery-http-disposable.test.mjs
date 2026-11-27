@@ -126,6 +126,23 @@ test('new Radar uses measured team reference and binds the newly saved series ID
  const queried=await api(url+'/query',{...period,widgetIds:[saved.body.widgetId]},'POST',club);
  assert.equal(queried.status,200,queried.text);
  assert.deepEqual(queried.body.widgets[0].references.axes.map(axis=>axis.points),preview.body.result.references.axes.map(axis=>axis.points));
+ const snapshot=async()=>(await q.query(`select
+  (select to_jsonb(w) from training_load.dashboard_widgets w where w.id=$1) widget,
+  (select jsonb_agg(to_jsonb(s) order by s.id) from training_load.dashboard_widget_series s where s.widget_id=$1) series,
+  (select to_jsonb(p) from training_load.dashboard_page_requests p where p.initiator_user_id=$2 and p.request_id=$3) page_receipt,
+  (select to_jsonb(r) from training_load.dashboard_reference_requests r where r.actor_id=$2 and r.request_id=$3) reference_receipt`,
+ [saved.body.widgetId,club.id,body.requestId])).rows[0];
+ const before=await snapshot();
+ await q.query("insert into public.user_club_roles(user_id,club_id,role,is_active) values($1,$2,'club_admin',true)",[club.id,world.ids.clubA]);
+ await q.query("update public.user_workspace_preferences set workspace_type='club',scope_id=$2 where user_id=$1",[club.id,world.ids.clubA]);
+ try{
+  const replay=await api(url+'/gallery',body,'POST',club);
+  assert.deepEqual([replay.status,replay.body],[404,{error:'notFound'}]);
+  assert.deepEqual(await snapshot(),before);
+ }finally{
+  await q.query("update public.user_workspace_preferences set workspace_type='team',scope_id=$2 where user_id=$1",[club.id,world.ids.teamA]);
+  await q.query("delete from public.user_club_roles where user_id=$1 and club_id=$2",[club.id,world.ids.clubA]);
+ }
 });
 
 test('new Radar shows actual club values against a published reference before saving',async()=>{

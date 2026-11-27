@@ -185,7 +185,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
     const widget=await buildGalleryDraft(q,target,body.galleryDraft);
     const namedAthletes=dashboardNamedAthletesAllowed(target.req,target.workspace);
     const options={defaultFilter:page.default_filter,requestFilter:filter,shellFilter};
-    const results=await queryDashboardForViewer(target.workspace,[widget],period,{...options,queryRunner:q},{namedAthletes});
+    const results=await queryDashboardForViewer(target.workspace,[widget],period,{...options,queryRunner:q,includeClubDistance:true},{namedAthletes});
     const clubId=widget.presentation_config.referenceConfig?.clubId;
     const [result]=await attachReferenceResults({query:q,widgets:[widget],results,workspace:target.workspace,period,...options,referenceClubId:clubId,enabled:Boolean(clubId)&&namedAthletes});
     const previewWidget={...widget,series:widget.series.map(({galleryCalculation,galleryUnit,...entry})=>entry)};
@@ -198,7 +198,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
     if(!canManageDashboardRow(target.req,target.dashboard)||!dashboardManageOffered(target.req,target.workspace,target.dashboard))throw pageError();
     if(body.widgetIds!==undefined||body.referencePreview!==undefined)throw pageError('invalidRequest',400);
     const widget=await buildMetricPreviewWidget(q,target.dashboard,selected,body.metricPreview);
-    const [result]=await queryDashboardForViewer(target.workspace,[widget],period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
+    const [result]=await queryDashboardForViewer(target.workspace,[widget],period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q,includeClubDistance:true},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
     const [galleryWidget]=await hydrateGalleryWidgets(q,[widget]);
     const {id,widget_type,group_by,title,display_config,presentation_config,series:previewSeries}=widget;
     const previewWidget={id,widget_type,group_by,title,display_config,presentation_config,series:previewSeries.map(s=>({
@@ -215,7 +215,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
     const ctx=await resolveReferenceContext(referenceRequest);
     selected=referencePreviewWidgets(selected,body.referencePreview,ctx?.owner.clubId);await assertReferenceSource(q,body.referencePreview.referenceConfig,ctx.owner.clubId,ctx.workspace,widgets.find(w=>w.id===body.referencePreview.widgetId)?.presentation_config?.referenceConfig);
    }
-   const result=await queryDashboardForViewer(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
+   const result=await queryDashboardForViewer(target.workspace,selected,period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q,includeClubDistance:body.referencePreview===undefined},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
    const galleryWidgets=await hydrateGalleryWidgets(q,selected);
    const referenceEnabled=process.env.DASHBOARD_REFERENCES_ENABLED==='true';
    const referenceContext=referenceEnabled&&selected.some(w=>w.presentation_config?.referenceConfig)?await resolveReferenceContext(referenceRequest):null;
@@ -259,6 +259,9 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    await q('select pg_advisory_xact_lock(hashtextextended($1,0))',[`dashboard-page:${req.user.id.toLowerCase()}:${body.requestId.toLowerCase()}`]);
    if(body.draft?.kind==='radar')await q('select pg_advisory_xact_lock(hashtextextended($1,0))',[`dashboard-reference:${req.user.id.toLowerCase()}:${body.requestId.toLowerCase()}`]);
    const target=await lockManagedPageTarget(q,req,dashboardId);
+   // Management ownership does not authorize the selected data workspace.
+   // Verify the locked dashboard before looking up even an existing receipt.
+   if(!dataWorkspaceMatches(target.workspace,target.dashboard))throw pageError();
    const operation='createGallery';
    const hash=createHash('sha256').update(canonicalKey({dashboardId,pageId,operation,body})).digest('hex');
    const replay=await recordedPageRequest(q,target,req.user.id,body.requestId,hash,operation,now);
