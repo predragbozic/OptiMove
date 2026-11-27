@@ -49,6 +49,7 @@ import {
 } from "./sourceMetricMappingService.js";
 import { lockHides } from "./sourceMetricActivationSteps.js";
 import { classificationFilterSql, variableClassification } from "./canonicalClassificationService.js";
+import { createHash } from "node:crypto";
 import { resolveActiveWorkspace } from "./workspace.js";
 import { can, teamScope } from "./permissions.js";
 import { lockClubCeiling } from "./clubCeilingLock.js";
@@ -1103,7 +1104,7 @@ export async function resolveVariableEditor(req, known = undefined) {
   if (!workspace) return null;
   if (workspace.type !== "team") {
     const ctx = await resolveMappingAdmin(req, workspace);
-    return ctx ? { ...ctx, view: "admin", editorScope: { type: workspace.type, id: workspace.scopeId } } : null;
+    return ctx ? { ...ctx, view: "admin", editorScope: { type: workspace.type, id: workspace.scopeId }, sessionToken: req.sessionToken } : null;
   }
   const teamId = workspace.scopeId ? String(workspace.scopeId).toLowerCase() : null;
   if (!teamId || !UUID.test(teamId)) return null;
@@ -1126,7 +1127,7 @@ export async function resolveVariableEditor(req, known = undefined) {
   // Roles V-1: the module's view word at the team (the club's licence is inside can(); a platform admin passes).
   if (!can(req.authz, "variables.view", teamScope(teamId))) return null;
   const basis = row.platform_admin ? "platform_admin" : row.club_admin ? "club_admin" : "team_coach";
-  return { userId, basis, owner: { scope: "club", clubId: String(row.club_id) }, view: "coach", editorScope: { type: "team", id: teamId }, ...(basis === "team_coach" ? { teamId } : {}) };
+  return { userId, basis, owner: { scope: "club", clubId: String(row.club_id) }, view: "coach", editorScope: { type: "team", id: teamId }, sessionToken: req.sessionToken, ...(basis === "team_coach" ? { teamId } : {}) };
 }
 
 // Roles V-1 (docs/ai/roles-v-steps-plan.md section 2.1): the context of the two variable reads in a view workspace
@@ -1197,6 +1198,7 @@ async function authorizeVariableChange(client, ctx, id) {
   const { rows: [phase] } = await client.query("select public.permission_word_honoured('variables.rename_archive') as staged");
   if (!phase?.staged) throw NOT_FOUND();
   await lockClubCeiling(client, [ctx.owner.clubId], "shared");
+  // Preserve the deployed domain order: the definition before legacy actor rows.
   await lockWritableDefinition(client, ctx, id);
   if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
   if (type === "team") {
@@ -1214,13 +1216,24 @@ async function authorizeVariableChange(client, ctx, id) {
        and public.user_has_permission($1, 'variables.rename_archive', $2, $3) as allowed`,
     [ctx.userId, type, scopeId],
   );
-  if (!rights?.allowed) throw NOT_FOUND();
+  if (!rights?.allowed || !ctx.sessionToken) throw NOT_FOUND();
+  const tokenHash = createHash("sha256").update(ctx.sessionToken).digest("base64url");
+  const session = await client.query(
+    "select 1 from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share",
+    [ctx.userId, tokenHash],
+  );
+  if (!session.rowCount) throw NOT_FOUND();
+  const preference = await client.query(
+    "select 1 from public.user_workspace_preferences where user_id=$1 and workspace_type=$2 and scope_id=$3 for share",
+    [ctx.userId, type, scopeId],
+  );
+  if (!preference.rowCount) throw NOT_FOUND();
   return true;
 }
 
 async function runChange({ ctx, variableId, operation, requestKey, requestHash, reason, check, update, texts }) {
   const id = variableId.toLowerCase();
-  const authorizeTarget = operation === "variable_icon" ? undefined : (client) => authorizeVariableChange(client, ctx, id);
+  const authorizeTarget = ctx.basis === "platform_admin" ? undefined : (client) => authorizeVariableChange(client, ctx, id);
   return runWrite({
     ctx, where: operation, requestKey, requestHash, action: operation, authorizeTarget,
     requests: VARIABLE_REQUESTS, classify: classifyChangeError, idsOf: variableIdsOf,

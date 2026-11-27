@@ -922,7 +922,11 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       if (commitCertainlyRefused(commitError)) throw classify(commitError) ?? commitError;
       console.error(`[source-metric-mappings] the COMMIT of ${where} was not confirmed (${commitError?.code ?? ""}); checking the request record`);
       let found = false;
-      try { found = await requestIsCommitted(ctx.userId, requestKey, requests.exists); } catch { found = false; }
+      try {
+        found = await requestIsCommitted(ctx.userId, requestKey, requests.exists, authorizeTarget);
+      } catch (error) {
+        if (authorizeTarget && error instanceof SourceMetricMappingError && error.status === 404) throw error;
+      }
       if (!found) throw refusal(503, "outcome_unknown", "The database did not confirm this request, and it could not be verified yet. Repeat it with the same requestKey.", { requestKey });
       return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget)), replayed: false, commitConfirmation: "verified_after_commit_error" };
     }
@@ -962,7 +966,7 @@ async function answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget) {
   if (!rightConfirmed) return { readError: true };
   return { readError: true, ...idsOf(written) };
 }
-async function requestIsCommitted(userId, requestKey, existsSql) {
+async function requestIsCommitted(userId, requestKey, existsSql, authorizeTarget) {
   const deadline = Date.now() + uncertainCheckTimeoutMs;
   const left = () => Math.max(1, deadline - Date.now());
   const connecting = pool.connect();
@@ -981,9 +985,18 @@ async function requestIsCommitted(userId, requestKey, existsSql) {
       fault.catch(() => {});
       await withinBound(fault, left());
     }
-    const answer = client.query({ text: existsSql, values: [userId, requestKey], query_timeout: left() });
-    answer.catch(() => {});
-    return (await withinBound(answer, left())).rowCount === 1;
+    const verify = (async () => {
+      if (authorizeTarget) {
+        await client.query("begin");
+        await client.query("set local lock_timeout = '" + ROW_LOCK_TIMEOUT_MS + "ms'");
+        await authorizeTarget(client);
+      }
+      const answer = await client.query({ text: existsSql, values: [userId, requestKey], query_timeout: left() });
+      if (authorizeTarget) await client.query("commit");
+      return answer.rowCount === 1;
+    })();
+    verify.catch(() => {});
+    return await withinBound(verify, left());
   } catch (error) {
     broken = true;
     throw error;

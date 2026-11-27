@@ -8,7 +8,7 @@
 // preflight / apply / post-check / rollback /
 // re-apply, one migrated through v45 for the behaviour. Contract:
 // docs/ai/gpexe-metric-variable-mapping-discovery.md, section J3b.11.
-import { seedVariableRenameGrants } from "./support/variable-rename-grants.mjs";
+import { seedVariableRenameGrants, varyRenameGrant } from "./support/variable-rename-grants.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -728,4 +728,74 @@ test("9. v45 reads back the same after pg_dump and pg_restore (what gpexe-backup
     await target.drop();
     await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("native shared icon changes gate audited writes and replay on current owner and workspace", async () => {
+  const variable = await created(W.caA.cookie);
+  const path = "/variables/" + variable.id + "/icon";
+  const body = { requestKey: key(), expectedIconKey: null, iconKey: ICON_KEYS[0] };
+  const snapshot = async () => (await k.query(
+    "select icon_url,(select count(*)::int from training_load.metric_variable_changes where metric_definition_id=d.id) as changes,"
+    + " (select count(*)::int from training_load.metric_variable_requests where metric_definition_id=d.id) as receipts"
+    + " from training_load.metric_definitions d where id=$1", [variable.id],
+  )).rows[0];
+  const before = await snapshot();
+  await varyRenameGrant(k, "team_coach", false);
+  try {
+    const denied = await post(path, W.coachA1.cookie, body);
+    const missing = await post("/variables/" + key() + "/icon", W.coachA1.cookie, body);
+    const foreign = await post(path, W.coachB1.cookie, body);
+    assert.equal(missing.status, 404);
+    for (const response of [denied, foreign]) {
+      assert.deepEqual([response.status,response.text,response.headers.get("cache-control")],
+        [404,missing.text,missing.headers.get("cache-control")]);
+    }
+    assert.deepEqual(await snapshot(), before);
+  } finally {
+    await varyRenameGrant(k, "team_coach", true);
+  }
+  const saved = ok200(await post(path, W.coachA1.cookie, body));
+  assert.equal(saved.variable.icon, body.iconKey);
+  const after = await snapshot();
+  assert.deepEqual(after, { icon_url: "icon:" + body.iconKey, changes: before.changes + 1, receipts: before.receipts + 1 });
+  await varyRenameGrant(k, "team_coach", false);
+  try {
+    const replay = await post(path, W.coachA1.cookie, body);
+    assert.deepEqual([replay.status,replay.text], [404,'{"error":"notFound"}']);
+    assert.deepEqual(await snapshot(), after);
+  } finally {
+    await varyRenameGrant(k, "team_coach", true);
+  }
+  assert.equal(ok200(await post(path, W.coachA1.cookie, body)).replayed, true);
+  assert.deepEqual(await snapshot(), after);
+});
+
+test("a native icon write queued on the definition rechecks the selected team", async () => {
+  const variable = await created(W.caA.cookie);
+  const other = await team(W.clubA);
+  const coach = await person("Switching icon coach", { coachOf: [W.teamA1, other], ws: ["team", W.teamA1] });
+  const path = "/variables/" + variable.id + "/icon";
+  const body = { requestKey: key(), expectedIconKey: null, iconKey: ICON_KEYS[0] };
+  let pending;
+  await k2.query("begin");
+  try {
+    const { pid } = await one(k2, "select pg_backend_pid() as pid");
+    await k2.query("select id from training_load.metric_definitions where id=$1 for update", [variable.id]);
+    pending = post(path, coach.cookie, body);
+    assert.ok(await until(async () => (await one(k,
+      "select exists(select 1 from pg_stat_activity where datname=current_database() and query like $1 and $2=any(pg_blocking_pids(pid))) as waiting",
+      ["select id, owner_scope, owner_club_id from training_load.metric_definitions%for update", pid],
+    )).waiting), "the real HTTP write is blocked on the definition after resolving its workspace");
+    await workspace(coach.id, "team", other);
+  } finally {
+    await k2.query("rollback");
+    await pending?.catch(() => {});
+  }
+  const denied = await pending;
+  assert.deepEqual([denied.status, denied.text], [404, '{"error":"notFound"}']);
+  assert.deepEqual(await changesOf(variable.id), []);
+  assert.equal((await one(k, "select count(*)::int as n from training_load.metric_variable_requests where request_key=$1", [body.requestKey])).n, 0);
+  const allowed = ok200(await post(path, coach.cookie, body));
+  assert.equal(allowed.variable.icon, body.iconKey);
+  assert.deepEqual((await changesOf(variable.id)).map(change => [change.basis,change.basis_team_id]), [["team_coach", other]]);
 });
