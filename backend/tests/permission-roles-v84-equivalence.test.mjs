@@ -66,8 +66,8 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
   const words = Object.keys(perms.PERMISSIONS);
   const rosterDecide = "load.roster.decide";
   const estimatesManage = "load.estimates.manage";
-  assert.ok(!perms.HONOURED_PERMISSIONS.includes(estimatesManage));
-  assert.ok(!perms.STORABLE_PERMISSIONS.includes(estimatesManage));
+  assert.ok(perms.HONOURED_PERMISSIONS.includes(estimatesManage));
+  assert.ok(perms.STORABLE_PERMISSIONS.includes(estimatesManage));
   assert.ok(perms.HONOURED_PERMISSIONS.includes(rosterDecide), "M-3a exposure checks the projected word");
   assert.ok(perms.STORABLE_PERMISSIONS.includes(rosterDecide), "M-3a exposure lets the role editor grant the word");
   let cells = 0, differences = 0;
@@ -97,11 +97,10 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           const rolesManage = word === "roles.manage" && clubAdminHere && ctx.platformRoles.length === 0;
           const seededEstimates = word === estimatesManage && ctx.platformRoles.length === 0
             && oracle.canR1(ctx, "org.view", scope);
-          if (seededEstimates) assert.ok(!perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id }).permissions.includes(word));
           const expected = rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates ? true : r1;
-          if (word === rosterDecide && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
+          if ((word === rosterDecide || word === estimatesManage) && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
             const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
-            assert.equal(projection.permissions.includes(rosterDecide), expected, `${name}: exposed word on ${scopeName}`);
+            assert.equal(projection.permissions.includes(word), expected, `${name}: exposed ${word} on ${scopeName}`);
           }
           if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster && !seededEstimates) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);

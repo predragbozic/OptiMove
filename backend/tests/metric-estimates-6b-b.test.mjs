@@ -1549,12 +1549,68 @@ async function assertStagedEstimateRoleOperations(server) {
   assert.deepEqual((await defaultRole()).items, original.items);
 }
 
-test("M-3b: Roles writes through the bridge preserve the staged estimates permission", async () => {
-  await assertStagedEstimateRoleOperations(apiBase);
+test("M-3b exposure: Settings can revoke and grant estimate editing independently of attendance", async () => {
+  const team = await setupTeam();
+  const session = await importSession(team, bundleOf({ sessionId: 9893, ids: [101, 102, 104] }));
+  const word = "load.estimates.manage";
+  const path = `/api/organization/roles/${ROLE_IDS.team_coach}/clubs/${team.clubId}/version`;
+  const edit = (expectedRevision, change) => call("", path, {
+    method: "POST", cookie: team.cadmin.cookie,
+    body: { requestKey: key(), reason: "Adjust estimate editing rights", expectedRevision, ...change },
+  });
+  const roster = () => tapi(`/${session.activityId}/roster`, { cookie: team.coach.cookie });
+  const permissions = async () => {
+    const response = await call("", "/api/auth/me", { cookie: team.coach.cookie });
+    assert.equal(response.status, 200, response.text);
+    return response.body.user.permissions;
+  };
+  const catalog = await call("", `/api/organization/roles/catalog?clubId=${team.clubId}`, { cookie: team.cadmin.cookie });
+  assert.equal(catalog.status, 200, catalog.text);
+  const entry = catalog.body.permissions.find((item) => item.word === word);
+  assert.deepEqual([entry?.storable, entry?.honoured, entry?.checked], [true, true, true]);
+  assert.ok(catalog.body.delegable.includes(word));
+
+  const initial = await roster();
+  assert.equal(initial.status, 200, initial.text);
+  assert.equal(initial.body.viewer.estimates, true);
+  assert.equal(initial.body.viewer.canDecideRoster, true);
+  const originalWords = await permissions();
+  assert.ok(originalWords.includes(word));
+
+  const removed = await edit(null, { remove: [word] });
+  assert.equal(removed.status, 200, removed.text);
+  assert.ok(!removed.body.role.effectiveItems.includes(word));
+  assert.deepEqual((await permissions()).sort(), originalWords.filter((item) => item !== word).sort());
+  const denied = await roster();
+  assert.equal(denied.status, 200, denied.text);
+  assert.deepEqual(denied.body.viewer, { basis: "team_coach", canDecideRoster: true, manualValues: true });
+  const athleteId = team.athleteIds[DAN];
+  const before = await writes(team.teamId);
+  for (const response of [
+    await proposal(team, session, athleteId),
+    await save(team, session, { athleteId, method: "team_average" }),
+  ]) assert.deepEqual([response.status, response.body], [404, { error: "notFound" }], response.text);
+  assert.deepEqual(await writes(team.teamId), before);
+
+  const granted = await edit(removed.body.role.version.revision, { add: [word], remove: ["load.roster.decide"] });
+  assert.equal(granted.status, 200, granted.text);
+  assert.ok(granted.body.role.effectiveItems.includes(word));
+  assert.deepEqual((await permissions()).sort(), originalWords.filter((item) => item !== "load.roster.decide").sort());
+  assert.deepEqual((await roster()).body.viewer, { basis: "team_coach", canDecideRoster: false, estimates: true, manualValues: true });
+  const allowed = await proposal(team, session, athleteId);
+  assert.equal(allowed.status, 200, allowed.text);
+  const flag = process.env.ESTIMATES_ENABLED;
+  try {
+    process.env.ESTIMATES_ENABLED = "false";
+    assert.deepEqual((await roster()).body.viewer, { basis: "team_coach", canDecideRoster: false, manualValues: true });
+    assert.equal((await proposal(team, session, athleteId)).status, 404);
+  } finally {
+    process.env.ESTIMATES_ENABLED = flag;
+  }
 });
 
 const previousEstimateServer = process.env.OPTIMOVE_M3B_PREVIOUS_SERVER;
-test("M-3b: the exact previous server's native club and team estimate receipts replay through the bridge", { skip: !previousEstimateServer }, async () => {
+test("M-3b: the exact previous server's bridge and exposure honor the same Settings grant and revoke", { skip: !previousEstimateServer }, async () => {
   const sha = execFileSync("git", ["-C", previousEstimateServer, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   assert.match(sha, /^[a-f0-9]{40}$/);
   assert.equal(sha, process.env.OPTIMOVE_M3B_PREVIOUS_SHA);
@@ -1568,25 +1624,58 @@ test("M-3b: the exact previous server's native club and team estimate receipts r
     await new Promise(resolve => oldServer.listen(0, "127.0.0.1", resolve));
     const priorUrl = `http://127.0.0.1:${oldServer.address().port}`;
     await assertStagedEstimateRoleOperations(priorUrl);
-    await assertStagedEstimateRoleOperations(apiBase);
-    const beforeMarker = await estimateWriteMarker();
+    let writeMarker = await estimateWriteMarker();
     const team = await setupTeam();
     const s = await importSession(team, bundleOf({ sessionId: 9894, ids: [101, 102, 104] }));
     const route = `/api/training-activity/${s.activityId}/estimates`;
+    let coachInput;
     for (const [actor, athleteId] of [[team.coach, team.athleteIds[DAN]], [team.cadmin, team.athleteIds[EVA]]]) {
       const priorProposal = await call("", `${route}/proposal?athleteId=${athleteId}`, { server: priorUrl, cookie: actor.cookie });
       assert.equal(priorProposal.status, 200, priorProposal.text);
       assert.equal((await proposal(team, s, athleteId, { cookie: actor.cookie })).status, 200);
       const input = { requestKey: key(), athleteId, method: "team_average" };
+      if (actor === team.coach) coachInput = input;
       const priorWrite = await call("", route, { server: priorUrl, method: "POST", cookie: actor.cookie, body: input });
       assert.equal(priorWrite.status, 201, priorWrite.text);
+      const markerAfterWrite = await estimateWriteMarker();
+      assert.ok(markerAfterWrite instanceof Date);
+      if (writeMarker) assert.deepEqual(markerAfterWrite, writeMarker);
+      writeMarker = markerAfterWrite;
       const rows = await estimateRows(team.teamId);
       const replay = await save(team, s, input, { cookie: actor.cookie });
       assert.equal(replay.status, 200, replay.text);
       assert.deepEqual(replay.body, priorWrite.body);
-      assert.deepEqual(await estimateWriteMarker(), beforeMarker);
+      assert.deepEqual(await estimateWriteMarker(), writeMarker);
       assert.deepEqual(await estimateRows(team.teamId), rows);
     }
+    const word = "load.estimates.manage";
+    const rolePath = `/api/organization/roles/${ROLE_IDS.team_coach}/clubs/${team.clubId}/version`;
+    const changeRole = (expectedRevision, change) => call("", rolePath, {
+      method: "POST", cookie: team.cadmin.cookie,
+      body: { requestKey: key(), reason: "Adjust estimate editing rights", expectedRevision, ...change },
+    });
+    const removed = await changeRole(null, { remove: [word] });
+    assert.equal(removed.status, 200, removed.text);
+    const beforeDenied = await writes(team.teamId);
+    for (const server of [priorUrl, apiBase]) {
+      const options = { server, cookie: team.coach.cookie };
+      const denied = await call("", `${route}/proposal?athleteId=${coachInput.athleteId}`, options);
+      assert.deepEqual([denied.status, denied.body], [404, { error: "notFound" }], denied.text);
+      const replay = await call("", route, { ...options, method: "POST", body: coachInput });
+      assert.deepEqual([replay.status, replay.body], [404, { error: "notFound" }], replay.text);
+    }
+    assert.deepEqual(await writes(team.teamId), beforeDenied);
+    const granted = await changeRole(removed.body.role.version.revision, { add: [word] });
+    assert.equal(granted.status, 200, granted.text);
+    for (const server of [priorUrl, apiBase]) {
+      const options = { server, cookie: team.coach.cookie };
+      const allowed = await call("", `${route}/proposal?athleteId=${coachInput.athleteId}`, options);
+      assert.equal(allowed.status, 200, allowed.text);
+      const replay = await call("", route, { ...options, method: "POST", body: coachInput });
+      assert.equal(replay.status, 200, replay.text);
+    }
+    assert.deepEqual(await writes(team.teamId), beforeDenied);
+    assert.deepEqual(await estimateWriteMarker(), writeMarker);
   } finally {
     oldServer.closeAllConnections();
     if (oldServer.listening) await new Promise(resolve => oldServer.close(resolve));
