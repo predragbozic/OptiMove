@@ -1,3 +1,5 @@
+import { asActor, ROLE_IDS } from "./support/permission-roles-world.mjs";
+import { applyRosterBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // Phase 5a2: roster decisions, Complete / Reopen and the automatic
 // complete -> needs_review (migration v26, backend/src/activityRosterCommands.js).
 // Contract: docs/ai/phase5a-discovery-and-contract.md (sections 3.3, 3.4, 3.6,
@@ -21,7 +23,8 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { execFileSync } from "node:child_process";
 import pg from "pg";
 import {
   applyGpexeTestMigrations, createGpexeDisposableDb, GPEXE_TEST_MIGRATIONS,
@@ -335,12 +338,13 @@ function gate() {
 // Setup
 // ---------------------------------------------------------------------------
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "roster5a2" });
+  db = await createGpexeDisposableDb({ roleRead: true, baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "roster5a2" });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   assert.ok((await q(`select to_regprocedure('training.roster_record_change(uuid[],uuid[],varchar,uuid,uuid,boolean,text)') as f`))[0].f, "v26 applied");
 
+  await applyRosterBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   const serverModule = await import("../src/server.js");
   ({ createSession } = await import("../src/auth.js"));
@@ -382,9 +386,12 @@ test("0. the app pool and the test connections are on the disposable database, n
 // ---------------------------------------------------------------------------
 test("1. Did not participate with a reason and a note: one decision, one request, the revision and one log row", async () => {
   const s = await plainSession("Decide");
+  const writeMarker = async () => (await q("select first_checked_write_at from training_load.activity_roster_m3a_use where singleton"))[0].first_checked_write_at;
+  assert.equal(await writeMarker(), null);
   const res = await put(s.activityId, s.athletes[0], s.coach.cookie, dnp({ reasonKey: "contact_injury", note: "  hamstring  " }));
   assert.equal(res.status, 200, res.text);
   assert.equal(res.body.decision.kind, "did_not_participate");
+  assert.ok(await writeMarker(), "a real checked staff write closes the rollback boundary");
   assert.equal(res.body.decision.reasonKey, "contact_injury");
   assert.equal(res.body.decision.note, "hamstring", "the note is trimmed");
   assert.equal(res.body.decision.decidedBy.basis, "team_coach");
@@ -786,6 +793,10 @@ test("21. everyone outside the active-workspace path gets the identical 404 on e
   await alsoCoachOfOther(clubAdminInTeamWs.id);
   const padminInTeamWs = await platformAdmin("Platform admin active in another team");
   await alsoCoachOfOther(padminInTeamWs.id);
+  const siblingTeam = (await q("insert into public.teams (club_id,name) values ($1,$2) returning id", [s.clubId, "Other team in this club"]))[0].id;
+  const coachInSibling = await coachOf(s.teamId, "Coach active in a sibling team");
+  await q("insert into public.user_team_roles (user_id,team_id,role,is_active) values ($1,$2,'team_coach',true)", [coachInSibling.id, siblingTeam]);
+  await setWorkspace(coachInSibling.id, "team", siblingTeam);
   const nobody = await withCookie(await makeUser("Nobody"));
   const archived = await plainSession("Archived team", 1);
   await q(`update public.teams set is_active = false where id = $1`, [archived.teamId]);
@@ -802,7 +813,7 @@ test("21. everyone outside the active-workspace path gets the identical 404 on e
   for (const res of reference) assert.deepEqual([res.status, res.text], [404, JSON.stringify({ error: "notFound" })]);
   const malformed = await put("not-a-uuid", s.athletes[0], s.coach.cookie, dnp());
   assert.deepEqual([malformed.status, malformed.text], [404, reference[0].text]);
-  for (const who of [otherCoach, otherClubAdmin, wrongWorkspace, clubAdminInTeamWs, padminInTeamWs, nobody]) {
+  for (const who of [otherCoach, otherClubAdmin, wrongWorkspace, clubAdminInTeamWs, padminInTeamWs, coachInSibling, nobody]) {
     for (const res of await Promise.all(calls(s.activityId, s.athletes[0], who.cookie))) {
       assert.deepEqual([res.status, res.text], [404, reference[0].text], `${who.id}`);
     }
@@ -2149,4 +2160,231 @@ test("71. a decision in flight, a team archive and a club archive together: both
   }
   assert.deepEqual((await q(`select t.is_active as team, c.is_active as club from public.teams t join public.clubs c on c.id = t.club_id where t.id = $1`, [s.teamId]))[0], { team: false, club: false });
   assert.equal(await decisionsOn(s.activityId), 1);
+});
+
+async function omitRosterPermission(clubId, word) {
+  const platform = await platformAdmin("Roster permissions");
+  await asActor(db.url, platform.id, async (tx) => {
+    await tx.query("select public.lock_club_ceiling($1::uuid[],'exclusive')", [[clubId]]);
+    const { rows: [version] } = await tx.query(
+      `insert into public.permission_club_role_versions
+        (club_id,system_role_id,based_on_revision,answered_revision,created_by_user_id)
+       select $1,id,revision,revision,$3 from public.permission_roles where id=$2 returning id`,
+      [clubId, ROLE_IDS.team_coach, platform.id],
+    );
+    await tx.query(
+      `insert into public.permission_club_role_version_items
+       select $1,permission_word from public.permission_role_items where role_id=$2 and permission_word<>$3`,
+      [version.id, ROLE_IDS.team_coach, word],
+    );
+    await tx.query(
+      `insert into public.permission_club_role_version_changes
+       (version_id,revision_after,kind,performed_by_user_id,basis,reason,items_added)
+       values ($1,1,'create',$2,'platform_admin','Roster bridge test',
+         array(select permission_word from public.permission_club_role_version_items where version_id=$1))`,
+      [version.id, platform.id],
+    );
+  });
+}
+
+test("M-3a: all five staff routes require Roster Decide before a receipt or write", async () => {
+  const s = await plainSession("Bridge missing Decide", 1);
+  const [athlete] = s.athletes;
+  const body = pnv();
+  const prior = await put(s.activityId, athlete, s.coach.cookie, body);
+  assert.equal(prior.status, 200, prior.text);
+  await omitRosterPermission(s.clubId, "load.roster.decide");
+  const before = await rowCounts();
+  const responses = [
+    await put(s.activityId, athlete, s.coach.cookie, body),
+    await del(s.activityId, athlete, s.coach.cookie, { expectedDecisionId: key(), requestKey: key() }),
+    await bulk(s.activityId, s.coach.cookie, { ...pnv(), athletes: [{ athleteId: athlete, expectedDecisionId: null }] }),
+    await complete(s.activityId, s.coach.cookie, { expectedRevision: 0, expectedFingerprint: "0".repeat(64), requestKey: key() }),
+    await reopen(s.activityId, s.coach.cookie, { reason: "Check roster", expectedRevision: 0, requestKey: key() }),
+  ];
+  for (const r of responses) assert.deepEqual([r.status, r.body.error], [403, "not_a_team_coach"], r.text);
+  assert.deepEqual(await rowCounts(), before);
+  const admin = await clubAdminOf(s.clubId, "Bridge club admin");
+  const allowed = await put(s.activityId, athlete, admin.cookie, pnv({ expectedDecisionId: prior.body.decision.id }));
+  assert.equal(allowed.status, 200, allowed.text);
+});
+
+test("M-3a: a lost COMMIT cannot disclose a receipt after Roster Decide is removed", async () => {
+  const s = await plainSession("Bridge lost COMMIT", 1);
+  const body = pnv();
+  const r = await withHooks({
+    afterCommit: async () => {
+      await omitRosterPermission(s.clubId, "load.roster.decide");
+      throw new Error("answer lost after permission changed");
+    },
+  }, () => put(s.activityId, s.athletes[0], s.coach.cookie, body));
+  assert.deepEqual([r.status, r.body.error], [503, "outcome_unknown"], r.text);
+  assert.equal((await q(
+    "select id from training.activity_roster_requests where activity_id=$1 and request_key=$2",
+    [s.activityId, body.requestKey],
+  )).length, 1);
+  assert.equal((await put(s.activityId, s.athletes[0], s.coach.cookie, body)).status, 403);
+});
+
+test("M-3a: staff writes recheck View after the request passes its module gate", async () => {
+  const s = await plainSession("Bridge lost View", 1);
+  const before = await rowCounts();
+  const sql = [];
+  const r = await withHooks({
+    beforeLocks: async ({ client }) => {
+      await omitRosterPermission(s.clubId, "load.view.team");
+      const query = client.query.bind(client);
+      // Record the order for this checked-out command only.
+      client.query = (statement, ...args) => {
+        sql.push(typeof statement === "string" ? statement : statement.text);
+        if (statement === "rollback") client.query = query;
+        return query(statement, ...args);
+      };
+    },
+  }, () => put(s.activityId, s.athletes[0], s.coach.cookie, pnv()));
+  assert.deepEqual([r.status, r.body.error], [403, "not_a_team_coach"], r.text);
+  const order = ["select public.lock_club_ceiling", "select training.lock_activity_decider",
+    "select public.lock_permission_actor", "select public.permission_word_honoured"];
+  assert.deepEqual(sql.slice(0, 5).filter((entry) => order.some((prefix) => entry.startsWith(prefix)))
+    .map((entry) => order.findIndex((prefix) => entry.startsWith(prefix))), [0, 1, 2, 3]);
+  assert.deepEqual(await rowCounts(), before);
+});
+
+
+async function assertStagedRoleOperations(call) {
+  const s = await plainSession("Staged role editing", 1);
+  const actor = await platformAdmin("Staged role editor");
+  const id = ROLE_IDS.team_coach;
+  const word = "load.roster.decide";
+  const change = (route, body) => call(`/api/organization/roles${route}`, {
+    method: "POST", cookie: actor.cookie, body: { requestKey: key(), reason: "Staged roster rehearsal", ...body },
+  });
+  const defaultRole = async () => (await q(
+    `select r.revision,array(select i.permission_word from public.permission_role_items i
+        where i.role_id=r.id order by 1) as items from public.permission_roles r where r.id=$1`, [id],
+  ))[0];
+  const storedWord = async () => (await q(
+    "select public.user_has_permission($1,$2,'team',$3) as allowed", [s.coach.id, word, s.teamId],
+  ))[0].allowed;
+  const original = await defaultRole();
+  const clubAdmin = await clubAdminOf(s.clubId, "Staged roster club admin");
+  for (const native of [s.coach, clubAdmin]) {
+    const me = await call("/api/auth/me", { method: "GET", cookie: native.cookie });
+    assert.equal(me.status, 200, me.text);
+    assert.ok(me.body.user.permissions.includes("load.view.team"), me.text);
+    assert.ok(!me.body.user.permissions.includes(word), me.text);
+  }
+  const platformMe = await call("/api/auth/me", { method: "GET", cookie: actor.cookie });
+  assert.ok(platformMe.body.user.permissions.includes(word), platformMe.text);
+  assert.equal(await storedWord(), true);
+  const refusal = await change(`/${id}/change`, {
+    expectedRevision: original.revision, items: original.items.filter((item) => item !== word),
+  });
+  assert.equal(refusal.status, 409, refusal.text);
+  assert.deepEqual(await defaultRole(), original);
+
+  const version = `/${id}/clubs/${s.clubId}/version`;
+  const custom = `/users/${s.coach.id}/clubs/${s.clubId}/custom`;
+  const createVersion = await change(version, { expectedRevision: null, remove: ["athletes.remove"] });
+  assert.equal(createVersion.status, 200, createVersion.text);
+  const editVersion = await change(version, { expectedRevision: 1, remove: [word] });
+  assert.equal(editVersion.status, 409, editVersion.text);
+
+  const editDefault = await change(`/${id}/change`, {
+    expectedRevision: original.revision, items: original.items, description: `Rehearsal ${s.clubId}`,
+  });
+  assert.equal(editDefault.status, 200, editDefault.text);
+  const { revision: systemRevision } = await defaultRole();
+  const accept = await change(version + "/answer", { systemRevision, choice: "accept_default" });
+  assert.equal(accept.status, 200, accept.text);
+  assert.equal(await storedWord(), true);
+
+  const createCustom = await change(custom, { roleId: id, scopeType: "team", scopeId: s.teamId,
+    expectedRevision: null, remove: ["athletes.remove"] });
+  assert.equal(createCustom.status, 200, createCustom.text);
+  const editCustom = await change(custom, { roleId: id, scopeType: "team", scopeId: s.teamId,
+    expectedRevision: 1, remove: [word] });
+  assert.equal(editCustom.status, 409, editCustom.text);
+  const [active] = await q("select id from public.permission_custom_roles where user_id=$1 and ended_at is null", [s.coach.id]);
+  const bulk = await change(`/${id}/clubs/${s.clubId}/custom-word-removal`, { word, customIds: [active.id] });
+  assert.equal(bulk.status, 409, bulk.text);
+  assert.equal(await storedWord(), true);
+  const end = await change(`/users/${s.coach.id}/custom/${active.id}/end`, {});
+  assert.equal(end.status, 200, end.text);
+  assert.equal(await storedWord(), true);
+
+  const copy = await change(`/${id}/copy`, { clubId: s.clubId, name: "Rehearsal club role" });
+  assert.equal(copy.status, 200, copy.text);
+  assert.ok(!copy.body.role.items.includes(word), copy.text);
+  assert.deepEqual((await defaultRole()).items, original.items);
+}
+
+test("M-3a: the bridge role editor keeps Roster Decide staged", async () => {
+  await assertStagedRoleOperations(api);
+});
+
+const previousServerRoot = process.env.OPTIMOVE_M3A_PREVIOUS_SERVER;
+test("M-3a: exact pre-bridge server writes a receipt the bridge can replay through a canonical alias", { skip: !previousServerRoot }, async () => {
+  const sha = execFileSync("git", ["-C", previousServerRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  assert.match(sha, /^[a-f0-9]{40}$/);
+  assert.equal(sha, process.env.OPTIMOVE_M3A_PREVIOUS_SHA, "the checked-out prior server matches the recorded SHA");
+  assert.equal(execFileSync("git", ["-C", previousServerRoot, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf8" }).trim(), "");
+
+  const oldSrc = path.resolve(previousServerRoot, "backend/src");
+  const { app: oldApp } = await import(pathToFileURL(path.join(oldSrc, "server.js")));
+  const { pool: oldPool } = await import(pathToFileURL(path.join(oldSrc, "db.js")));
+  const oldServer = http.createServer(oldApp);
+  try {
+    assert.equal((await oldPool.query("select current_database() as db")).rows[0].db, db.name);
+    await new Promise((resolve) => oldServer.listen(0, "127.0.0.1", resolve));
+    const s = await plainSession("Pre-bridge roster", 1);
+    const input = pnv();
+    const result = await fetch(`http://127.0.0.1:${oldServer.address().port}/api/training-activity/${s.activityId}/roster/${s.athletes[0]}/decision`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Cookie: s.coach.cookie },
+      body: JSON.stringify(input),
+    });
+    const oldBody = await result.json();
+    assert.equal(result.status, 200, JSON.stringify(oldBody));
+    const survivor = await makeActivity({ teamId: s.teamId, name: "Canonical session after merge" });
+    await supersedeInto(s.activityId, survivor);
+    assert.equal((await q("select training.resolve_canonical_activity_id($1) as id", [s.activityId]))[0].id, survivor);
+    const bridge = await put(s.activityId, s.athletes[0], s.coach.cookie, input);
+    assert.equal(bridge.status, 200, bridge.text);
+    assert.deepEqual(bridge.body, oldBody);
+    const receipts = await q(
+      "select activity_id, request_key from training.activity_roster_requests where activity_id in (select activity_id from training.activity_alias_ids($1))",
+      [survivor],
+    );
+    assert.deepEqual(receipts, [{ activity_id: s.activityId, request_key: input.requestKey }]);
+
+    await assertStagedRoleOperations(async (pathname, request) => {
+      const answer = await fetch(`http://127.0.0.1:${oldServer.address().port}${pathname}`, {
+        method: request.method,
+        headers: { "Content-Type": "application/json", Cookie: request.cookie },
+        body: JSON.stringify(request.body),
+      });
+      const text = await answer.text();
+      return { status: answer.status, text, body: JSON.parse(text) };
+    });
+  } finally {
+    oldServer.closeAllConnections();
+    if (oldServer.listening) await new Promise((resolve) => oldServer.close(resolve));
+    await oldPool.end();
+  }
+});
+
+test("M-3a: a session moved before the locks gets the same 404 as a missing session", async () => {
+  const session = await plainSession("Bridge owner change", 1);
+  const other = await plainSession("Bridge new owner", 1);
+  const body = pnv();
+  const missing = await put(key(), session.athletes[0], session.coach.cookie, body);
+  const before = await rowCounts();
+  const moved = await withHooks({
+    beforeLocks: async () => {
+      await supersedeInto(session.activityId, other.activityId);
+    },
+  }, () => put(session.activityId, session.athletes[0], session.coach.cookie, body));
+  assert.deepEqual([moved.status, moved.text], [404, missing.text], moved.text);
+  assert.deepEqual(await rowCounts(), before);
 });

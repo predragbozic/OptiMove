@@ -1,3 +1,4 @@
+import { applyRosterBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // U5 (J19-U5, migration v57): the in-app undo of one imported GPEXE session. Through the real server on a disposable
 // database; GPEXE is the fake server3 source; the import is the real approval (batch route), so every undo here removes
 // a session the real importer wrote, mapping provenance included.
@@ -44,6 +45,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyRosterBridgeForCuratedFixture(db.url, { historicalRollback: true });
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.SOURCE_CREDENTIAL_KEYS = (await import("../src/sourceCredentialCrypto.js")).generateKeyEntry(1);

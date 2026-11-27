@@ -1,3 +1,4 @@
+import { applyRosterBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // 6b-B (phase 5b): the estimate proposal and save routes, migration v64 (the request key, the estimate participant's time zone),
 // the import writer's re-snapshot and the preview's list of replaced estimates. Disposable databases; the imports are the real
 // approvals through the routes.
@@ -45,6 +46,7 @@ before(async () => {
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await applyRosterBridgeForCuratedFixture(db.url);
   process.env.DATABASE_URL = db.url;
   delete process.env.GPEXE_IMPORT_APPLY_ENABLED;
   process.env.ESTIMATES_ENABLED = "true";
