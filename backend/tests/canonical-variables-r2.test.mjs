@@ -1244,6 +1244,7 @@ test("rename, archive and restore check the staged word at the owning workspace,
       (select count(*)::int from training_load.metric_variable_requests where metric_definition_id=d.id) as receipts
     from training_load.metric_definitions d where id=$1`, [v.id]);
 
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, false);
   await varyRenameGrant(k, "team_coach", false);
   const before = await snapshot();
   // A predecessor schema may still have legacy roles and even a stored role item. The runtime requires the SQL word.
