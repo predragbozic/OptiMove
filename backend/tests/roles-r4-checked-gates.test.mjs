@@ -133,7 +133,7 @@ const REVIEWED = Object.freeze({
   // P3 owner contract: both helpers explicitly close every workspace except club/team.
   "dashboardManageAccess.js": 4, // native owner/workspace scopes, standalone team, and scoped edit capability
   "dashboardPages/service.js": 2, // Page scope consistency and athlete Training Load licence
-  "dashboardReferences/access.js": 1,
+  "dashboardReferences/access.js": 2, // existing read scope plus the locked authoring workspace recheck
   "dashboardReferences/bindingRouter.js": 2, // grouping validation and rechecking the same active workspace before a protected write
   "dashboardReferences/query.js": 1,
   "dashboardReferences/router.js": 1, // team picker narrows to the active team
