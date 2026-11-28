@@ -35,6 +35,8 @@ import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./
 import {
   blockedByMapping, buildCandidatePreview, canonicalJson, isImportWaitError, isSessionEndedError, previewLocked, setImportTransactionBounds, sha256Hex,
 } from "./gpexeImportPreview.js";
+import { nativeSourceConnectionStanding } from "./sourceConnectionService.js";
+import { lockClubCeiling } from "./clubCeilingLock.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 import { ImportBindingNotActiveError, ImportMappingChangedError, prepareImportMapping, readImportBinding } from "./gpexeImportMapping.js";
 import { recordImportObservations } from "./activitySourceObservations.js";
@@ -143,8 +145,8 @@ export function resolveCheckWindow({ from, to } = {}, now = new Date()) {
 // Settings
 // ---------------------------------------------------------------------------
 
-export async function getTeamSettings(teamId) {
-  const row = (await query(
+export async function getTeamSettings(teamId, executor = pool) {
+  const row = (await executor.query(
     `select s.gpexe_team_id, s.configured_at, s.change_reason,
             coalesce(nullif(u.display_name, ''), u.full_name, u.email) as configured_by_name
        from training_load.gpexe_team_settings s join public.users u on u.id = s.configured_by_user_id
@@ -232,7 +234,7 @@ const canonicalGpexeId = (raw) => (typeof raw === "string" && /^[0-9]{1,12}$/.te
 // club) and the club's verified GPEXE connection FOR SHARE. Anything missing is the same 404 as
 // a team that does not exist, except the connection, which is its own stable refusal. A club
 // admin sets a FIRST pair only: changing one stays with a platform admin.
-async function assertClubAdminMayApprovePair(client, { userId, clubId, teamId }) {
+async function assertClubAdminMayApprovePair(client, { userId, clubId, teamId, sessionToken }) {
   // Two statements, so the order is fixed: the users row, then the role row.
   const userRow = await client.query(`select 1 from public.users where id = $1 and is_active = true for share`, [userId]);
   const right = userRow.rowCount
@@ -241,6 +243,11 @@ async function assertClubAdminMayApprovePair(client, { userId, clubId, teamId })
   const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [clubId]);
   const team = await client.query(`select 1 from public.teams where id = $1 and club_id = $2 and coalesce(is_active, true) for share`, [teamId, clubId]);
   if (!right.rowCount || !club.rowCount || !team.rowCount) throw new GpexeImportServiceError(404, "notFound", "Not found.");
+  const standing = await nativeSourceConnectionStanding(client, {
+    userId, sessionToken, basis: "club_admin", workspace: { type: "club", scopeId: String(clubId) },
+  }, clubId);
+  if (standing === "missing") throw new GpexeImportServiceError(404, "notFound", "Not found.");
+  if (standing !== "allowed") throw new GpexeImportServiceError(403, "forbidden", "Only a platform admin may do this.");
   const connection = await client.query(
     `select 1 from training_load.source_credential_connections
       where owner_club_id = $1 and source_system = 'gpexe' and owner_scope = 'club' and state = 'verified' limit 1 for share`,
@@ -261,7 +268,7 @@ function takenError(clubAdminClubId) {
   return new GpexeImportServiceError(409, "gpexe_team_taken", "This GPEXE team is already connected to another OptiMove team.");
 }
 
-export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId, clubAdminClubId = null }) {
+export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId, clubAdminClubId = null, sessionToken = null }) {
   if (typeof gpexeTeamId !== "string" || !/^[0-9]{1,12}$/.test(gpexeTeamId)) {
     throw new GpexeImportServiceError(400, "invalid_gpexe_team_id", "gpexeTeamId must be a numeric GPEXE team id.");
   }
@@ -270,8 +277,9 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId, clu
     await client.query("begin");
     // A team whose import or check is running must not make this wait forever.
     await client.query(`set local lock_timeout = '${SETTINGS_LOCK_TIMEOUT_MS}ms'`);
+    if (clubAdminClubId) await lockClubCeiling(client, [clubAdminClubId], "shared");
     await lockTeamForImport(client, teamId);
-    if (clubAdminClubId) await assertClubAdminMayApprovePair(client, { userId, clubId: clubAdminClubId, teamId });
+    if (clubAdminClubId) await assertClubAdminMayApprovePair(client, { userId, clubId: clubAdminClubId, teamId, sessionToken });
     const current = (await client.query(
       `select gpexe_team_id from training_load.gpexe_team_settings where owner_team_id = $1 for update`,
       [teamId],
@@ -281,8 +289,9 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId, clu
     // is the idempotent answer and never overwrites who approved the pair.
     if (current && (current.gpexe_team_id === gpexeTeamId || (clubAdminClubId && canonicalGpexeId(current.gpexe_team_id) === canonicalGpexeId(gpexeTeamId)))) {
       // Idempotent: nothing is written, so nothing is appended to the history.
+      const ownResult = clubAdminClubId ? await getTeamSettings(teamId, client) : null;
       await client.query("commit");
-      return getTeamSettings(teamId);
+      return clubAdminClubId ? ownResult : getTeamSettings(teamId);
     }
     if (clubAdminClubId && current && canonicalGpexeId(current.gpexe_team_id) !== canonicalGpexeId(gpexeTeamId)) {
       throw new GpexeImportServiceError(409, "pair_change_requires_platform_admin", "This team already has an approved GPEXE team. Changing it is done by a platform administrator (Settings > Data sources). Nothing was changed.");
@@ -331,7 +340,9 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId, clu
          configured_at = now(), change_reason = excluded.change_reason`,
       [teamId, gpexeTeamId, userId, why],
     );
+    const ownResult = clubAdminClubId ? await getTeamSettings(teamId, client) : null;
     await client.query("commit");
+    if (clubAdminClubId) return ownResult;
   } catch (error) {
     await client.query("rollback").catch(() => {});
     if (error.code === "23505" && ["gpexe_team_settings_gpexe_team_id_key", "gpexe_team_settings_canonical_team_id_key"].includes(error.constraint)) {

@@ -1349,6 +1349,15 @@ test("29. U2a: the club admin of the team's club approves a FIRST pair in the cl
   const ca = await clubAdmin(o.club);
   const conn = await verified(ca, o.club);
   approvedTeams.push(o.team);
+  await setSourceConnectFixture(admin, false);
+  try {
+    const refused = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
+    assert.deepEqual([refused.status, refused.body], [403, { error: "forbidden", message: "Only a platform admin may do this." }]);
+    assert.deepEqual(await settingsOf(o.team), []);
+    assert.deepEqual(await historyOf(o.team), []);
+  } finally {
+    await setSourceConnectFixture(admin, true);
+  }
   const first = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
   assert.equal(first.status, 200, first.text);
   assert.deepEqual((await settingsOf(o.team)).map((r) => [r.gpexe_team_id, r.configured_by_user_id]), [["981", ca.id]]);
@@ -1356,6 +1365,14 @@ test("29. U2a: the club admin of the team's club approves a FIRST pair in the cl
   const again = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
   assert.equal(again.status, 200, again.text);
   assert.equal((await historyOf(o.team)).length, 1, "the same value writes no second history row");
+  await setSourceConnectFixture(admin, false);
+  try {
+    const refused = await pairApi(o.team, ca.cookie, { gpexeTeamId: "0981" });
+    assert.deepEqual([refused.status, refused.body.error], [403, "forbidden"]);
+    assert.equal((await historyOf(o.team)).length, 1, "losing the permission hides the repeat without writing");
+  } finally {
+    await setSourceConnectFixture(admin, true);
+  }
   const change = await pairApi(o.team, ca.cookie, { gpexeTeamId: "982", reason: "typo" });
   assert.deepEqual([change.status, change.body.error], [409, "pair_change_requires_platform_admin"], change.text);
   assert.deepEqual((await settingsOf(o.team)).map((r) => r.gpexe_team_id), ["981"], "nothing changed");

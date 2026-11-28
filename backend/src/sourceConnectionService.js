@@ -229,28 +229,32 @@ async function rightsStillHold(client, ctx, clubId) {
 }
 // Local writes keep the existing actor/resource lock order. The legacy
 // check still holds the active user, Club admin row and club under share.
-async function localConnectionRights(client, ctx, clubId) {
-  if (ctx.basis === "platform_admin") return rightsStillHold(client, ctx, clubId);
-  if (ctx.basis !== "club_admin" || !clubVisible(ctx, clubId) || !ctx.sessionToken) return false;
-  const phase = await client.query("select public.permission_word_honoured('sources.connect') as staged");
-  if (phase.rows[0]?.staged !== true) return false;
+export async function nativeSourceConnectionStanding(client, ctx, clubId) {
+  if (ctx.basis !== "club_admin" || !clubVisible(ctx, clubId) || !ctx.sessionToken) return "missing";
   await lockClubCeiling(client, [clubId], "shared");
-  if (!await rightsStillHold(client, ctx, clubId)) return false;
+  if (!await rightsStillHold(client, ctx, clubId)) return "missing";
   const hash = crypto.createHash("sha256").update(ctx.sessionToken).digest("base64url");
   const session = await client.query(
     "select 1 from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share",
     [ctx.userId, hash],
   );
-  if (!session.rowCount) return false;
+  if (!session.rowCount) return "missing";
   const preference = await client.query(
     "select 1 from public.user_workspace_preferences where user_id=$1 and workspace_type='club' and scope_id=$2 for share",
     [ctx.userId, clubId],
   );
-  if (!preference.rowCount) return false;
+  if (!preference.rowCount) return "missing";
+  const phase = await client.query("select public.permission_word_honoured('sources.connect') as staged");
+  if (phase.rows[0]?.staged !== true) return "forbidden";
   const actor = await client.query("select public.lock_permission_actor($1, 'club', $2) as basis", [ctx.userId, clubId]);
-  if (actor.rows[0]?.basis === "platform_admin") return false;
+  if (actor.rows[0]?.basis === "platform_admin") return "missing";
   const right = await client.query("select public.user_has_permission($1, 'sources.connect', 'club', $2) as allowed", [ctx.userId, clubId]);
-  return right.rows[0]?.allowed === true;
+  return right.rows[0]?.allowed === true ? "allowed" : "forbidden";
+}
+
+async function localConnectionRights(client, ctx, clubId) {
+  if (ctx.basis === "platform_admin") return rightsStillHold(client, ctx, clubId);
+  return await nativeSourceConnectionStanding(client, ctx, clubId) === "allowed";
 }
 
 async function bindingTeamInClub(client, clubId, teamId) {
