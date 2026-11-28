@@ -812,7 +812,8 @@ test("native Sources Connect rechecks the role, workspace and session before Cre
   assertMissing(await pending);
   assertMissing(await create(CREATE(other.club, { requestKey: request.requestKey })));
   await setWorkspace(ca.id, "club", club);
-  assert.deepEqual([(await create({ ...request, accountLabel: "Own conflicting key" })).status], [409]);
+  const conflict = await create({ ...request, accountLabel: "Own conflicting key" });
+  assert.deepEqual([conflict.status, conflict.body.error], [409, "request_key_reused"]);
   assert.equal((await create(request)).body.replayed, true);
 
   const { conn, binding } = await bound(ca, club, team);
@@ -854,5 +855,8 @@ test("native Sources Connect rechecks the role, workspace and session before Cre
     expired.release();
   }
   assertMissing(await pendingReplay);
+  const freshCookie = await cookieFor(ca.id);
+  await q("update public.teams set club_id=$2 where id=$1", [team, other.club]);
+  assertMissing(await unbindApi(conn.id, binding.bindingId, freshCookie, body));
   assert.equal((await auditOf(conn.id)).length, before + 1);
 });

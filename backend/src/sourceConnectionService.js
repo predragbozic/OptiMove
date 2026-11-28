@@ -380,8 +380,8 @@ export async function createConnection({ ctx, sourceSystem, body }) {
     if (requestKey !== null) {
       // S2: the request record is the successful Create's own audit row (request_id, request_hash), read behind the
       // per-user lock and BEFORE any insert, so two Creates with one key make one connection. A refusal is not a
-      // record: the same key may repeat a refused Create. The key is bound to this user AND the owning club: the same
-      // key for another club, or with another label or host, is request_key_reused, never a replay.
+      // record: the same key may repeat a refused Create. The key is bound to the user and owning club. Native club
+      // callers can only resolve receipts from the active club. Within that club a different body is request_key_reused.
       await client.query(`set local lock_timeout = '${userLockWaitMs}ms'`);
       await client.query(`set local statement_timeout = '${userLockWaitMs + 2_000}ms'`);
       try {
