@@ -248,3 +248,42 @@ test("Programs Assign and Publish can be changed independently in Settings", asy
     await context.close();
   }
 });
+
+test("Tests Schedule Manage can be changed independently of Tests View in Settings", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "club_admin", WIDTHS.phone);
+  try {
+    await openRoles(page);
+    await page.locator("[data-club-role=\"" + coachRoleId + "\"]").getByRole("button", { name: "Open" }).click();
+    const editor = page.locator("[data-club-roles-editor=\"" + coachRoleId + "\"]");
+    const tests = editor.locator('[data-role-words-group="tests"]');
+    const schedule = tests.locator('[data-role-word="tests.schedule.manage"]');
+    const view = tests.locator('[data-role-word="tests.view"]');
+    await schedule.waitFor();
+    assert.ok(await schedule.isEnabled());
+    assert.ok(await schedule.isChecked());
+    assert.ok(await view.isChecked());
+    const save = page.locator("[data-club-roles-save]");
+    async function apply(reason) {
+      await save.locator("textarea").fill(reason);
+      await save.getByRole("button", { name: /Save for Example Club/ }).click();
+      await page.getByText("Saved for this club: Team coach.").waitFor();
+    }
+    const items = async () => {
+      const response = await request(context, world, R + "/clubs/" + world.ids.clubA + "/roles");
+      assert.equal(response.status, 200, response.text);
+      return JSON.parse(response.text).systemRoles.find(role => role.roleId === coachRoleId).effectiveItems;
+    };
+    await schedule.uncheck();
+    await apply("Review schedule access");
+    const reduced = await items();
+    assert.ok(!reduced.includes("tests.schedule.manage"));
+    assert.ok(reduced.includes("tests.view") && reduced.includes("tests.results.view"));
+    await schedule.check();
+    await apply("Restore schedule access");
+    const restored = await items();
+    assert.ok(restored.includes("tests.schedule.manage") && restored.includes("tests.view") && restored.includes("tests.results.view"));
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});

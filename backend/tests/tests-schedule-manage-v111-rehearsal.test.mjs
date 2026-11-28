@@ -68,6 +68,7 @@ function roleData(client) {
 
 
 const previousBuild = "a715b1641b7afa8e683a0b2ea0ccaa9cf8851d36";
+const stagedBuild = "519ad0107d0e1328de7ddb5689e87fec3f09d383";
 const migration = "202612131000";
 const word = "tests.schedule.manage";
 const read = name => readFile(new URL("../../docs/runbooks/tests-schedule-manage-v111-" + name + ".sql", import.meta.url), "utf8");
@@ -75,14 +76,14 @@ const read = name => readFile(new URL("../../docs/runbooks/tests-schedule-manage
 test("v111 stages schedule management, preserves old Settings and guards rollback", async () => {
   const fixture = await createPagesDatabase({ through: "202612121000", label: "tests_manage_v111" });
   const { client } = fixture;
-  let current, previous;
+  let current, previous, staged;
   const check = row => assert.ok(Object.values(row).every(value => value === true), JSON.stringify(row));
   const marker = async () => (await client.query("select first_checked_write_at from tests.schedule_manage_bridge_use")).rows[0].first_checked_write_at;
   const catalogue = async () => (await client.query(
     "select relname,relkind,relrowsecurity from pg_class where relnamespace='tests'::regnamespace order by relname,relkind",
   )).rows;
   try {
-    const { versionId, customId, club, team, platform, coach } = await seedNativeRoleLayers(fixture);
+    const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null)", [platform]);
     await client.query("insert into plans.program_assign_publish_v110_use (singleton) values (true)");
     const beforeCatalogue = await catalogue();
@@ -154,6 +155,7 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
 
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, previousBuild);
+    staged = await previousDashboardServer(fixture.url, {}, stagedBuild);
     const cookie = await current.cookieFor(platform);
     const root = "/api/organization/roles";
     async function call(server, path, body) {
@@ -166,7 +168,7 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
       return { status: response.status, body: await response.json() };
     }
     const roleId = ROLE_IDS.team_coach;
-    for (const server of [previous, current]) {
+    for (const server of [previous, staged]) {
       const { rows: [roles] } = await client.query(
         "select (select revision from public.permission_roles where id=$1) as role_revision,"
         + " (select revision from public.permission_club_role_versions where id=$2) as version_revision,"
@@ -284,6 +286,69 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
       "select status from tests.test_access_links where schedule_id=$1 order by id", [old.body.schedule.id],
     )).rows;
     assert.deepEqual(linkStatuses, [{ status: "revoked" }, { status: "revoked" }]);
+    const exposedCatalog = await call(current, root + "/catalog?clubId=" + club);
+    assert.equal(exposedCatalog.status, 200);
+    assert.equal(exposedCatalog.body.permissions.find(entry => entry.word === word)?.checked, true);
+    const clubRolePath = root + "/" + roleId + "/clubs/" + club + "/version";
+    const customRolePath = root + "/users/" + coach + "/clubs/" + club + "/custom";
+    const versionCookie = await current.cookieFor(versionCoach);
+    for (const actorCookie of [coachCookie, versionCookie]) {
+      const active = await current.api(actorCookie, "/api/auth/workspace", { method: "PUT", body: { type: "team", scopeId: team } });
+      assert.equal(active.status, 200, active.text);
+    }
+    const linkCount = async () => (await client.query("select 1 from tests.test_access_links where schedule_id=$1", [old.body.schedule.id])).rowCount;
+    for (const layer of [
+      { id: versionId, cookie: versionCookie, path: clubRolePath, table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", receipt: "role", context: {} },
+      { id: customId, cookie: coachCookie, path: customRolePath, table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id", receipt: "custom", context: { roleId, scopeType: "team", scopeId: team } },
+    ]) {
+
+      const revise = async direction => {
+        const auditCount = async () => (await client.query(
+          "select count(*)::int as count from public." + layer.auditTable + " where " + layer.auditKey + "=$1",
+          [layer.id],
+        )).rows[0].count;
+        const before = await auditCount();
+        const { rows: [{ revision }] } = await client.query("select revision from public." + layer.table + " where id=$1", [layer.id]);
+        const input = {
+          requestKey: key(), expectedRevision: revision, reason: "Review Tests Schedule Manage",
+          [direction]: [word], ...layer.context,
+        };
+        const result = await call(current, layer.path, input);
+        assert.equal(result.status, 200, JSON.stringify(result.body));
+        assert.equal(await auditCount(), before + 1);
+        const stored = await roleData(client);
+        const replay = await call(staged, layer.path, input);
+        assert.equal(replay.status, 200, JSON.stringify(replay.body));
+        assert.equal(replay.body.replayed, true);
+        // Fresh responses can also describe other holdings. Compare the durable role receipt.
+        assert.ok(result.body[layer.receipt]);
+        assert.deepEqual(replay.body, { [layer.receipt]: result.body[layer.receipt], replayed: true });
+        assert.equal(await auditCount(), before + 1);
+        assert.deepEqual(await roleData(client), stored);
+      };
+      const readPermissions = async () => {
+        const me = await current.api(layer.cookie, "/api/auth/me");
+        assert.equal(me.status, 200, me.text);
+        return me.body.user.permissions;
+      };
+      assert.ok((await readPermissions()).includes(word));
+      await revise("remove");
+      const reduced = await readPermissions();
+      assert.ok(!reduced.includes(word) && reduced.includes("tests.view"));
+      const readable = await current.api(layer.cookie, oldPath);
+      assert.equal(readable.status, 200, readable.text);
+      const before = await linkCount();
+      const denied = await current.api(layer.cookie, oldPath + "/link", { method: "POST", body: {} });
+      assert.equal(denied.status, 404, denied.text);
+      assert.equal(await linkCount(), before);
+      await revise("add");
+      assert.ok((await readPermissions()).includes(word));
+      const restored = await current.api(layer.cookie, oldPath + "/link", { method: "POST", body: {} });
+      assert.equal(restored.status, 201, restored.text);
+      assert.equal(await linkCount(), before + 1);
+      assert.deepEqual(await marker(), firstUsed);
+    }
+
     assert.deepEqual(await marker(), firstUsed);
 
     const next = await write(previous, oldPath + "/link", "POST", {});
@@ -333,7 +398,7 @@ test("v111 stages schedule management, preserves old Settings and guards rollbac
     assert.deepEqual(await marker(), firstUsed);
   } finally {
     try {
-      await previous?.stop();
+      await Promise.all([previous?.stop(), staged?.stop()]);
     } finally {
       try { await current?.stop(); } finally { await fixture.drop(); }
     }
