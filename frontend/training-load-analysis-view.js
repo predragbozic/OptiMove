@@ -943,18 +943,14 @@ function renderEditorHtml() {
           <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-tl-editor-field="title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(draft.title)}" maxlength="200" ${off}></label>
           <label><span class="tl-editor-type-label">${typeIcon} Display type</span><select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}" ${off}>${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, draft.widgetType)).join("")}</select></label>
           <label>${table ? "Table rows" : "Show per"}<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
-          <div class="tl-analysis-control">
-            <span>Activity override</span>
-            ${override.activityId
-              ? `<button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-activity-filter" data-widget-id="${escapeAttr(widget.id)}" ${off}>Clear activity override</button>`
-              : `<span class="muted">Uses dashboard/runtime filter</span>`}
-          </div>
-          <div class="tl-analysis-control">
-            <span>Component override</span>
-            ${override.componentId
-              ? `<button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-component-filter" data-widget-id="${escapeAttr(widget.id)}" ${off}>Clear component override</button>`
-              : `<span class="muted">Uses dashboard/runtime filter</span>`}
-          </div>
+          ${override.activityId ? `<div class="tl-analysis-control">
+            <span>Activity filter for this widget</span>
+            <button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-activity-filter" data-widget-id="${escapeAttr(widget.id)}" ${off}>Clear activity filter</button>
+          </div>` : ""}
+          ${override.componentId ? `<div class="tl-analysis-control">
+            <span>Activity segment filter for this widget</span>
+            <button type="button" class="plain-button compact-button" value="" data-action="training-load-analysis-widget-component-filter" data-widget-id="${escapeAttr(widget.id)}" ${off}>Clear segment filter</button>
+          </div>` : ""}
         </div>
         ${a.chartShapes&&['line_chart','bar_chart'].includes(draft.widgetType)?`<fieldset class="tl-gallery-editor"><legend>Chart gallery</legend>
           ${renderGalleryPicker(draft.galleryKind??'standard',GALLERY_CHOICES,'training-load-analysis-gallery-kind',saving)}

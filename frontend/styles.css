@@ -16276,6 +16276,15 @@ optimove-dashboard-chart {
   color: var(--tl-accent);
 }
 
+.tl-analysis-editor .tl-analysis-series-row.is-active,
+.tl-analysis-editor .tl-analysis-metric-option.is-active,
+.tl-analysis-editor .tl-analysis-builtins .plain-button.is-active,
+.tl-analysis-editor .tl-gallery-pick.is-selected {
+  background: var(--surface, #fff);
+  border-color: var(--tl-accent);
+  box-shadow: inset 0 0 0 1px var(--tl-accent);
+}
+
 .tl-analysis-editor-grid label small {
   display: block;
   margin-top: 4px;
