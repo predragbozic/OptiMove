@@ -178,7 +178,7 @@ router.post("/confirmations", handle(async (req, res) => {
   if (!ctx) return;
   if (!board.mayUseBoard(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await boardSave.saveConfirmation({ ctx, body: req.body }), 200);
+  writeAnswer(res, await boardSave.saveConfirmation({ ctx: { ...ctx, sessionToken: req.sessionToken }, body: req.body }), 200);
 }));
 // Routes 6 and 7 (section 5.8): an active platform admin in the platform
 // workspace erases one confirmation's values on request, or removes one batch

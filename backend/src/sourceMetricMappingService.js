@@ -1069,7 +1069,7 @@ async function requireOwnActivationBindings(client, ctx, { operationId, activati
 }
 
 function runMappingWrite(options) {
-  const { ctx, body, bindingEffect = false } = options;
+  const { ctx, body, bindingEffect = false, lockReceiptTarget, verifyReceiptTarget } = options;
   if (ctx.basis === "platform_admin") return runWrite(options);
   const check = client => checkMappingManage(client, ctx);
   return runWrite({
@@ -1077,10 +1077,12 @@ function runMappingWrite(options) {
     authorizeReplayOnly: true,
     authorizeTarget: async client => {
       await lockClubCeiling(client, [ctx.owner.clubId], "shared");
+      await lockReceiptTarget?.(client);
       return check(client);
     },
     authorizeReceipt: async (client, row) => {
       const bound = row.operation_id ? await requireOwnActivationBindings(client, ctx, { operationId: row.operation_id }) : 0;
+      await verifyReceiptTarget?.(client, row);
       if (bindingEffect && bound > 0) return;
       if (bindingEffect || !row.mapping_id) throw NOT_FOUND();
       const target = await client.query(
