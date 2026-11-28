@@ -284,7 +284,7 @@ test("v114 old and current Settings and native mapping operations share an exact
         return me.body.user.permissions;
       };
       const original = await permissions();
-      assert.ok([word, "variables.view", "variables.manage", "variables.rename_archive", "tests.view"].every(entry => original.includes(entry)));
+      assert.ok([word, "variables.view", "variables.manage", "variables.rename_archive", "tests.view"].every(entry => original.includes(entry)), layer.receipt + ": " + original.join(", "));
       const change = async direction => {
         const { rows: [{ revision }] } = await client.query("select revision from public." + layer.table + " where id=$1", [layer.id]);
         const auditCount = async () => (await client.query(
