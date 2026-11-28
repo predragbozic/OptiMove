@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
-import { stageBoardManageFixture } from "./support/board-manage-fixture.mjs";
+import { stageMappingsManageForTest, MAPPINGS_MANAGE } from "./support/mappings-manage-grants.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
 import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
 import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
@@ -73,7 +73,7 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
-  await stageBoardManageFixture(k);
+  await stageMappingsManageForTest(k);
   await world();
 });
 
@@ -780,20 +780,7 @@ test("Board holder of Variables View still needs Mappings Manage", async () => {
   const target = await variable(W.caA, { unit: "min" });
   const row = await newRow(W.caA, t, cand, f, target);
   const requestKey = key();
-  const patch = async remove => {
-    await k.query("begin");
-    try {
-      await k.query("alter table public.permission_role_items disable trigger user");
-      await k.query(remove
-        ? "delete from public.permission_role_items where permission_word='mappings.manage'"
-        : "insert into public.permission_role_items(role_id,permission_word) select id,'mappings.manage' from public.permission_roles where basic_key='club_admin'");
-      await k.query("alter table public.permission_role_items enable trigger user");
-      await k.query("commit");
-    } catch (error) {
-      await k.query("rollback");
-      throw error;
-    }
-  };
+  const patch = remove => editVariablesManageTestRole(k, MAPPINGS_MANAGE, !remove);
   await patch(true);
   try {
     assert.equal((await boardOf(W.caA, t)).status, 200);

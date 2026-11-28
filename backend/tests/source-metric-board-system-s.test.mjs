@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
-import { stageBoardManageFixture } from "./support/board-manage-fixture.mjs";
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
 import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
 import { EXTRACTORS, setExtractorFallbackForTests } from "../src/sourceMetricExtractors.js";
@@ -70,7 +70,7 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
-  await stageBoardManageFixture(k);
+  await stageMappingsManageForTest(k);
   await world();
 });
 

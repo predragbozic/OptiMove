@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { applyGpexeTestMigrations, createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS, GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE } from "./_gpexe-disposable-db.mjs";
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
 import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
 
@@ -125,6 +126,7 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
+  await stageMappingsManageForTest(k);
   await world();
 });
 

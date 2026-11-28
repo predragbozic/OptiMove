@@ -1,3 +1,4 @@
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // G1b-2 (docs/ai/gpexe-field-inventory-plan.md, section 8.2; J18's routes 8, 9 and 10) on disposable databases through
 // the real routes: the platform's comparison of a generic field (route 8), its tick (route O) and the stored comparisons
@@ -34,6 +35,7 @@ before(async () => {
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
   await stageVariablesManageForTest(k);
   await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
+  await stageMappingsManageForTest(k);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
