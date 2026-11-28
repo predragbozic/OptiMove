@@ -16,6 +16,9 @@ export async function setSourceConnectFixture(client, enabled) {
       assert.notEqual(staged, ddl);
       await client.query(staged);
     }
+    await client.query(`create table if not exists training_load.sources_connect_local_bridge_use (
+      singleton boolean primary key default true check (singleton), first_checked_write_at timestamptz
+    ); insert into training_load.sources_connect_local_bridge_use(singleton) values (true) on conflict do nothing`);
     await reviseFixtureRole(client, "sources.connect", enabled);
     await client.query("commit");
   } catch (error) {

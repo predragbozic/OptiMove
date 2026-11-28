@@ -35,7 +35,7 @@ import { normalizeImportAudience, projectBlockedCodes, projectPreview } from "./
 import {
   blockedByMapping, buildCandidatePreview, canonicalJson, isImportWaitError, isSessionEndedError, previewLocked, setImportTransactionBounds, sha256Hex,
 } from "./gpexeImportPreview.js";
-import { nativeSourceConnectionStanding } from "./sourceConnectionService.js";
+import { nativeSourceConnectionStanding, recordNativeSourceConnectUse } from "./sourceConnectionService.js";
 import { lockClubCeiling } from "./clubCeilingLock.js";
 import { lockTeamForImport } from "./gpexeImportWriter.js";
 import { ImportBindingNotActiveError, ImportMappingChangedError, prepareImportMapping, readImportBinding } from "./gpexeImportMapping.js";
@@ -340,6 +340,7 @@ export async function setTeamSettings(teamId, { gpexeTeamId, reason, userId, clu
          configured_at = now(), change_reason = excluded.change_reason`,
       [teamId, gpexeTeamId, userId, why],
     );
+    if (clubAdminClubId) await recordNativeSourceConnectUse(client);
     const ownResult = clubAdminClubId ? await getTeamSettings(teamId, client) : null;
     await client.query("commit");
     if (clubAdminClubId) return ownResult;

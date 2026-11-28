@@ -252,6 +252,20 @@ export async function nativeSourceConnectionStanding(client, ctx, clubId) {
   return right.rows[0]?.allowed === true ? "allowed" : "forbidden";
 }
 
+export async function recordNativeSourceConnectUse(client) {
+  const updated = await client.query(
+    `update training_load.sources_connect_local_bridge_use
+        set first_checked_write_at=clock_timestamp()
+      where singleton and first_checked_write_at is null`,
+  );
+  if (updated.rowCount === 1) return;
+  const existing = await client.query(
+    `select 1 from training_load.sources_connect_local_bridge_use
+      where singleton and first_checked_write_at is not null`,
+  );
+  if (existing.rowCount !== 1) throw new Error("Sources Connect bridge evidence is unavailable");
+}
+
 async function localConnectionRights(client, ctx, clubId) {
   if (ctx.basis === "platform_admin") return rightsStillHold(client, ctx, clubId);
   return await nativeSourceConnectionStanding(client, ctx, clubId) === "allowed";
@@ -454,6 +468,7 @@ export async function createConnection({ ctx, sourceSystem, body }) {
       [sourceSystem, b.ownerClubId, b.hostKey, b.accountLabel.trim(), b.credentialKind, ctx.userId],
     )).rows[0];
     const auditId = await insertAudit(client, { connectionId: row.id, action: "create", outcome: "ok", userId: ctx.userId, basis: ctx.basis, metadata: { host_key: b.hostKey, credential_kind: b.credentialKind, ...(requestKey !== null ? { request_id: requestKey, request_hash: requestHash } : {}) } });
+    if (ctx.basis === "club_admin") await recordNativeSourceConnectUse(client);
     if (createCommitHold && requestKey !== null) await createCommitHold(client);
     // The same bounded COMMIT and verify as an attempt: once the COMMIT is
     // sent, the answer never says "nothing was created".
@@ -561,6 +576,8 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
     }
     await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
     await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
+    // Take the shared ceiling before connection and team locks, matching the pointer writer.
+    if (ctx.basis === "club_admin") await lockClubCeiling(client, [pre.owner_club_id], "shared");
     // 3. The connection row.
     let row;
     try {
@@ -670,6 +687,7 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
       connectionId: row.id, teamId: binding.team_id, action, outcome: "ok", userId: ctx.userId, basis: ctx.basis, reason: request.reason,
       metadata: { host_key: row.host_key, credential_kind: row.credential_kind, source_team_id: binding.source_team_id, binding_id: binding.id, bound_team_count: Math.max(0, bindings.length - 1), counted: false, source_contacted: false, attempt_id: attemptId, request_id: request.requestKey, request_hash: requestHash },
     });
+    if (ctx.basis === "club_admin") await recordNativeSourceConnectUse(client);
     recorded = true;
     released = true;
     const confirmation = await commitAttempt(client, release, auditId, row.id, attemptId, binding.team_id);
