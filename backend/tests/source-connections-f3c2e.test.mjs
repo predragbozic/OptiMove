@@ -1,3 +1,5 @@
+import { reviseFixtureRole, takeFixtureCeilings } from "./support/variables-manage-grants.mjs";
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // F3c2e — the verified team binding (POST …/connections/:id/bindings) and
 // the club-admin path of the source connection routes, against a fake
 // source, on a disposable optimove_tests_gpexe_* database (never OPTIMOVE).
@@ -43,9 +45,10 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2e" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2e", roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await setSourceConnectFixture(admin, true);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   process.env.DATABASE_URL = db.url;
@@ -1347,6 +1350,44 @@ test("29. U2a: the club admin of the team's club approves a FIRST pair in the cl
   const ca = await clubAdmin(o.club);
   const conn = await verified(ca, o.club);
   approvedTeams.push(o.team);
+  await setSourceConnectFixture(admin, false);
+  try {
+    const refused = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
+    assert.deepEqual([refused.status, refused.body], [403, { error: "forbidden", message: "Only a platform admin may do this." }]);
+    assert.deepEqual(await settingsOf(o.team), []);
+    assert.deepEqual(await historyOf(o.team), []);
+  } finally {
+    await setSourceConnectFixture(admin, true);
+  }
+  const barrier = new pg.Client({ connectionString: db.url });
+  await barrier.connect();
+  let queued;
+  try {
+    await barrier.query("begin");
+    await takeFixtureCeilings(barrier);
+    const pid = (await barrier.query("select pg_backend_pid() pid")).rows[0].pid;
+    queued = pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
+    let waiting = false;
+    for (let attempt = 0; attempt < 60 && !waiting; attempt++) {
+      waiting = (await admin.query(
+        "select exists(select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid))) waiting",
+        [pid],
+      )).rows[0].waiting;
+      if (!waiting) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(waiting, true, "pointer write is waiting on the permission ceiling");
+    await reviseFixtureRole(barrier, "sources.connect", false);
+    await barrier.query("commit");
+    const denied = await queued;
+    assert.deepEqual([denied.status, denied.body.error], [403, "forbidden"]);
+    assert.deepEqual(await historyOf(o.team), []);
+  } finally {
+    await barrier.query("rollback");
+    await barrier.end();
+    await queued?.catch(() => {});
+    const present = (await admin.query("select 1 from public.permission_role_items i join public.permission_roles r on r.id=i.role_id where r.basic_key='club_admin' and i.permission_word='sources.connect'")).rowCount;
+    if (!present) await setSourceConnectFixture(admin, true);
+  }
   const first = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
   assert.equal(first.status, 200, first.text);
   assert.deepEqual((await settingsOf(o.team)).map((r) => [r.gpexe_team_id, r.configured_by_user_id]), [["981", ca.id]]);
@@ -1354,6 +1395,14 @@ test("29. U2a: the club admin of the team's club approves a FIRST pair in the cl
   const again = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
   assert.equal(again.status, 200, again.text);
   assert.equal((await historyOf(o.team)).length, 1, "the same value writes no second history row");
+  await setSourceConnectFixture(admin, false);
+  try {
+    const refused = await pairApi(o.team, ca.cookie, { gpexeTeamId: "0981" });
+    assert.deepEqual([refused.status, refused.body.error], [403, "forbidden"]);
+    assert.equal((await historyOf(o.team)).length, 1, "losing the permission hides the repeat without writing");
+  } finally {
+    await setSourceConnectFixture(admin, true);
+  }
   const change = await pairApi(o.team, ca.cookie, { gpexeTeamId: "982", reason: "typo" });
   assert.deepEqual([change.status, change.body.error], [409, "pair_change_requires_platform_admin"], change.text);
   assert.deepEqual((await settingsOf(o.team)).map((r) => r.gpexe_team_id), ["981"], "nothing changed");
@@ -1410,7 +1459,7 @@ test("31. U2a: the right is checked again INSIDE the write - a role revoked, a c
   const other = await org({ approve: false });
   const ca = await clubAdmin(o.club);
   const conn = await verified(ca, o.club);
-  const attempt = () => settings.setTeamSettings(o.team, { gpexeTeamId: "981", userId: ca.id, clubAdminClubId: o.club }).then(() => null, (e) => e);
+  const attempt = () => settings.setTeamSettings(o.team, { gpexeTeamId: "981", userId: ca.id, clubAdminClubId: o.club, sessionToken: ca.cookie.slice("optimove_session=".length) }).then(() => null, (e) => e);
   approvedTeams.push(o.team);
   await q(`update public.user_club_roles set is_active = false where user_id = $1`, [ca.id]);
   let e = await attempt();

@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // Phase 7i (7i-B1) - a club uses, copies or hides a system variable, and moves
 // a team from the system variable to its copy, with migration v53.
 // Contract: docs/ai/phase7i-system-variables-club-contract.md (J15), section 10.
@@ -124,6 +125,7 @@ before(async () => {
   await stageVariablesManageForTest(k);
   await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   await stageMappingsManageForTest(k);
+  await setSourceConnectFixture(k, true);
   await world();
 });
 

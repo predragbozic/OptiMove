@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // F3c2d — GPEXE Connect / Reconnect / Test routes against a fake source,
 // on a disposable optimove_tests_gpexe_* database (never OPTIMOVE).
 // Contract: docs/ai/source-connections-f3c2-contract.md sections 2 and 3.
@@ -41,9 +42,10 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2d" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2d", roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await setSourceConnectFixture(admin, true);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   process.env.DATABASE_URL = db.url;
   process.env.SOURCE_CREDENTIAL_KEYS = cryptoMod.generateKeyEntry(1);
