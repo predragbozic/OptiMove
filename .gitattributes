@@ -203,3 +203,7 @@ backend/scripts/sources-provider-v117-rehearsal.* text eol=lf
 migrations_v2/202612201000_training_load_v118_sources_provider_binding_generations.sql text eol=lf
 docs/runbooks/sources-provider-v118-*.sql text eol=lf
 backend/scripts/sources-provider-v118-rehearsal.* text eol=lf
+
+migrations_v2/202612211000_training_load_v119_sources_provider_team_pointer_generations.sql text eol=lf
+docs/runbooks/sources-provider-v119-*.sql text eol=lf
+backend/scripts/sources-provider-v119-rehearsal.* text eol=lf
