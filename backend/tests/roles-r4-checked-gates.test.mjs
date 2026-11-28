@@ -27,6 +27,7 @@ const SOURCES = files(SRC).map((f) => ({ rel: path.relative(SRC, f).split(path.s
 const CAN_CALL = /\bcan\(\s*[A-Za-z_.?]+\s*,\s*"([a-z_.]+)"/g;
 // The schedule writer rechecks the actual row under locks using the Postgres twin.
 const SQL_CHECKED = Object.freeze({
+  "canonicalVariableAdminService.js": Object.freeze(["variables.rename_archive"]),
   "testsScheduleWriteAccess.js": Object.freeze(["tests.schedule.manage"]),
   "activityRosterCommands.js": Object.freeze(["load.roster.decide"]),
   "trainingActivityWriteAccess.js": Object.freeze(["load.activities.manage"]),

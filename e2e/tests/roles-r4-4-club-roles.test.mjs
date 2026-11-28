@@ -287,3 +287,40 @@ test("Tests Schedule Manage can be changed independently of Tests View in Settin
     await context.close();
   }
 });
+
+test("Variables Rename and Archive is editable independently of Variables View and Manage", async () => {
+  const { context, page, pageErrors } = await openAs(browser, world, "club_admin", WIDTHS.phone);
+  try {
+    await openRoles(page);
+    await page.locator('[data-club-role="' + coachRoleId + '"]').getByRole("button", { name: "Open" }).click();
+    const editor = page.locator('[data-club-roles-editor="' + coachRoleId + '"]');
+    const rename = editor.locator('[data-role-word="variables.rename_archive"]');
+    const view = editor.locator('[data-role-word="variables.view"]');
+    await rename.waitFor();
+    assert.ok(await rename.isEnabled());
+    assert.ok(await rename.isChecked());
+    assert.ok(await view.isChecked());
+    const save = page.locator("[data-club-roles-save]");
+    const apply = async reason => {
+      await save.locator("textarea").fill(reason);
+      await save.getByRole("button", { name: /Save for Example Club/ }).click();
+      await page.getByText("Saved for this club: Team coach.").waitFor();
+    };
+    const items = async () => {
+      const answer = await request(context, world, R + "/clubs/" + world.ids.clubA + "/roles");
+      assert.equal(answer.status, 200, answer.text);
+      return JSON.parse(answer.text).systemRoles.find(role => role.roleId === coachRoleId).effectiveItems;
+    };
+    const initial = await items();
+    assert.ok(initial.includes("tests.view") && !initial.includes("variables.manage"));
+    await rename.uncheck();
+    await apply("Revoke variable change permission");
+    assert.deepEqual(await items(), initial.filter(word => word !== "variables.rename_archive"));
+    await rename.check();
+    await apply("Restore variable change permission");
+    assert.deepEqual(await items(), initial);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});
