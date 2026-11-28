@@ -3596,7 +3596,7 @@ for (const [key, scope, aggregation, unit] of [
   assert.equal(snapshot.metric.fixed_data_scope_level, scope);
   assert.equal(snapshot.metric.default_analytical_aggregation, aggregation);
   assert.equal(snapshot.metric.is_active, true);
-  assert.deepEqual(snapshot.metric.allowed_aggregations, catalog.value_type === "numeric" ? ["sum", "avg", "max", "last", "none"] : ["last", "none"]);
+  assert.deepEqual(snapshot.metric.allowed_aggregations, catalog.value_type === "numeric" ? ["sum", "avg", "min", "max", "last", "none"] : ["last", "none"]);
   const compiled = fixture.compileSimpleDraft(draft, snapshot, s2aContext());
   assert.equal(compiled.status, "valid", JSON.stringify(compiled));
   assert.equal(compiled.semanticBinding.unit, catalog.unit);

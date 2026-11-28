@@ -768,10 +768,10 @@ test("12. v79: a staff definition answer says how a variable is calculated - kin
     [String(share.id)]: { calculation: { kind: "ratio", scale: 100, inputs: [await named(String(hmld.id)), await named(id("gpexe_total_distance"))] },
       allowedAggregations: ["ratio", "max", "last", "none"] },
     [String(rest.id)]: { calculation: { kind: "difference", inputs: [await named(id("gpexe_total_distance")), await named(String(hmld.id))] },
-      allowedAggregations: ["sum", "avg", "max", "last", "none"] },
+      allowedAggregations: ["sum", "avg", "min", "max", "last", "none"] },
     [String(hmld.id)]: { calculation: { kind: "sum", inputs: await Promise.all(ZONES.map((z) => named(id(z)))) },
-      allowedAggregations: ["sum", "avg", "max", "last", "none"] },
-    [id("gpexe_total_distance")]: { calculation: null, allowedAggregations: ["sum", "avg", "max", "last", "none"] },
+      allowedAggregations: ["sum", "avg", "min", "max", "last", "none"] },
+    [id("gpexe_total_distance")]: { calculation: null, allowedAggregations: ["sum", "avg", "min", "max", "last", "none"] },
   };
   // The coach's list (with and without the dashboard picker's purpose) and GET one: the same fields, the existing names kept.
   for (const purpose of ["", "&purpose=dashboardSeries"]) {

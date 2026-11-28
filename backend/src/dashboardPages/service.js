@@ -3,7 +3,7 @@ import { attachReferenceResults } from "../dashboardReferences/query.js";
 import { resolveReferenceContext } from "../dashboardReferences/access.js";
 import {attachGalleryResult,hydrateGalleryWidgets} from '../dashboardGallery/query.js';
 import { isMetricVisibleToDashboard, isSourceConnectionVisibleToDashboard } from '../trainingLoadDashboardAccess.js';
-import { assertDashboardAggregation } from '../dashboardRatios.js';
+import { DASHBOARD_ANALYTICAL_AGGREGATIONS, assertDashboardAggregation } from '../dashboardRatios.js';
 import { queryDashboardForViewer } from '../trainingLoadDashboardQuery.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { resolvePeriod } from '../dashboardSimple/compiler.js';
@@ -30,7 +30,7 @@ async function buildMetricPreviewWidget(q, dashboard, widgets, draft) {
    ||!['kpi','table','line_chart','bar_chart'].includes(draft.widgetType)
    ||!['day','week','athlete','session','component','cohort'].includes(draft.groupBy)
    ||!['day','session','component'].includes(draft.dataScopeLevel)
-   ||!['sum','avg','max','last','none','ratio'].includes(draft.analyticalAggregation)
+   ||!DASHBOARD_ANALYTICAL_AGGREGATIONS.includes(draft.analyticalAggregation)
    ||typeof draft.title!=='string'||!draft.title.trim()||draft.title.length>200
    ||(draft.metricDefinitionId!==undefined)===(draft.builtInSeriesKey!==undefined)
    ||draft.metricDefinitionId!==undefined&&!isUuid(draft.metricDefinitionId)
@@ -45,11 +45,12 @@ async function buildMetricPreviewWidget(q, dashboard, widgets, draft) {
  if(draft.metricDefinitionId){
   const {visible,def}=await isMetricVisibleToDashboard(dashboard,draft.metricDefinitionId,q);
   if(!visible||!def||def.state!=='active'&&!sameMetric)throw pageError();
+  if(draft.analyticalAggregation==='min'&&def.value_type!=='numeric')throw pageError('invalidRequest',400);
   role=def.calculation_kind==='ratio'?'all_including_derived':role;
   assertDashboardAggregation(def.calculation_kind==='ratio'?{kind:'ratio'}:null,draft.analyticalAggregation,sameMetric?old.aggregation_role_policy:role);
  }else{
-  const builtin=(await q('select fixed_data_scope_level from training_load.dashboard_builtin_series where key=$1 and is_active',[draft.builtInSeriesKey])).rows[0];
-  if(!builtin||builtin.fixed_data_scope_level&&builtin.fixed_data_scope_level!==draft.dataScopeLevel)throw pageError('invalidRequest',400);
+  const builtin=(await q('select fixed_data_scope_level, value_type from training_load.dashboard_builtin_series where key=$1 and is_active',[draft.builtInSeriesKey])).rows[0];
+  if(!builtin||builtin.fixed_data_scope_level&&builtin.fixed_data_scope_level!==draft.dataScopeLevel||draft.analyticalAggregation==='min'&&builtin.value_type!=='numeric')throw pageError('invalidRequest',400);
  }
  const shape=sameMetric&&widget.widget_type===draft.widgetType?widget.presentation_config?.chartShape:null;
  return {...widget,id,widget_type:draft.widgetType,group_by:draft.groupBy,title:draft.title,

@@ -120,12 +120,12 @@ test('forbidden aggregations and role policy are series errors, never sums or av
   assert.equal((await query('ratio','cohort',{aggregationRolePolicy:'standalone_only'})).error,'aggregation_not_allowed');
 });
 
-test('ratio series saves through real routes; sum and average refuse with no new series',async()=>{
+test('ratio series saves through real routes; sum, average and minimum refuse with no new series',async()=>{
   const made=await api('/api/training-load/dashboards',{name:'Ratio fixture'});assert.equal(made.status,201,JSON.stringify(made));
   const id=made.body.dashboard.id;
   const widget=await api('/api/training-load/dashboards/'+id+'/widgets',{expectedDashboardRevision:made.body.dashboard.revision,widgetType:'table',title:'Ratio fixture',groupBy:'cohort',widgetOrder:0,x:0,y:0,width:6,height:4,mobileOrder:0});assert.equal(widget.status,201,JSON.stringify(widget));
   const endpoint='/api/training-load/dashboards/'+id+'/widgets/'+widget.body.widgetId+'/series';
-  for(const agg of ['sum','avg']){const r=await api(endpoint,{expectedWidgetRevision:1,seriesOrder:0,metricDefinitionId:ratio.id,dataScopeLevel:'session',analyticalAggregation:agg,aggregationRolePolicy:'all_including_derived'});assert.equal(r.status,409,JSON.stringify(r));assert.equal(r.body.error,'aggregation_not_allowed');}
+  for(const agg of ['sum','avg','min']){const r=await api(endpoint,{expectedWidgetRevision:1,seriesOrder:0,metricDefinitionId:ratio.id,dataScopeLevel:'session',analyticalAggregation:agg,aggregationRolePolicy:'all_including_derived'});assert.equal(r.status,409,JSON.stringify(r));assert.equal(r.body.error,'aggregation_not_allowed');}
   const allowed=await api(endpoint,{expectedWidgetRevision:1,seriesOrder:0,metricDefinitionId:ratio.id,dataScopeLevel:'session',analyticalAggregation:'ratio',aggregationRolePolicy:'all_including_derived'});assert.equal(allowed.status,201,JSON.stringify(allowed));
 });
 test('coverage includes entirely omitted old-session buckets, independently of output rows',async()=>{

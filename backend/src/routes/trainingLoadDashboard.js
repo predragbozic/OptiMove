@@ -33,6 +33,7 @@ import {
 import { queryDashboardForViewer } from "../trainingLoadDashboardQuery.js";
 import { query } from "../db.js";
 import { validateContract } from "../dashboardSimple/schema.js";
+import { DASHBOARD_ANALYTICAL_AGGREGATIONS } from "../dashboardRatios.js";
 
 const router = Router();
 
@@ -67,7 +68,7 @@ const WIDGET_STATE_VALUES = new Set(["active", "collapsed"]);
 const AXIS_VALUES = new Set(["primary", "secondary"]);
 const SOURCE_POLICY_VALUES = new Set(["all_with_conflicts", "source_connection", "manual", "api_import", "csv_import", "derived", "not_applicable", "estimate"]);
 const DATA_SCOPE_LEVEL_VALUES = new Set(["day", "session", "component"]);
-const ANALYTICAL_AGGREGATION_VALUES = new Set(["sum", "avg", "max", "last", "none", "ratio"]);
+const ANALYTICAL_AGGREGATION_VALUES = new Set(DASHBOARD_ANALYTICAL_AGGREGATIONS);
 const AGGREGATION_ROLE_POLICY_VALUES = new Set(["standalone_only", "standalone_and_source_rollup", "all_including_derived"]);
 const COVERAGE_POLICY_VALUES = new Set(["complete_only", "complete_and_partial", "any"]);
 const COMPARISON_PERIOD_VALUES = new Set(["previous_period", "previous_year"]);

@@ -1,5 +1,8 @@
+const numericAggregations = ['sum', 'avg', 'min', 'max', 'last', 'none'];
+export const DASHBOARD_ANALYTICAL_AGGREGATIONS = Object.freeze([...numericAggregations, 'ratio']);
+
 export function allowedDashboardAggregations(type, kind) {
-  return ['text', 'boolean'].includes(type) ? ['last', 'none'] : kind === 'ratio' ? ['ratio', 'max', 'last', 'none'] : ['sum', 'avg', 'max', 'last', 'none'];
+  return ['text', 'boolean'].includes(type) ? ['last', 'none'] : kind === 'ratio' ? ['ratio', 'max', 'last', 'none'] : [...numericAggregations];
 }
 
 export const RATIO_AGGREGATION_MESSAGE = 'This metric cannot be totalled or averaged. Choose Ratio, Highest or Latest.';
