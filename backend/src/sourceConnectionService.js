@@ -172,6 +172,8 @@ let compensationDelayMs = 0;
 export function setSourceConnectionCompensationDelayForTests(ms) { compensationDelayMs = ms ?? 0; }
 // A fault injected into the read a route makes AFTER a confirmed COMMIT:
 // tests prove that such a read never turns a committed attempt into a 500.
+let unbindResponseHold = null;
+export function setSourceUnbindResponseHoldForTests(fn) { unbindResponseHold = fn ?? null; }
 let postCommitReadFault = null;
 export function setPostCommitReadFaultForTests(fn) { postCommitReadFault = fn ?? null; }
 export function setSourceConnectionCommitForTests({ fault = null, timeoutMs = COMMIT_ANSWER_TIMEOUT_MS, checkFault = null, checkTimeoutMs = UNCERTAIN_COMMIT_CHECK_TIMEOUT_MS } = {}) {
@@ -719,6 +721,22 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
     throw internal(action, error);
   } finally {
     if (!released) release();
+  }
+}
+
+export async function readNativeUnbindResponse({ ctx, sourceSystem, result }) {
+  if (unbindResponseHold) await unbindResponseHold();
+  const clubId = ctx.workspace.scopeId;
+  const teamStillInClub = (client) => bindingTeamInClub(client, clubId, result.binding.teamId);
+  try {
+    return await localReceipt(ctx, clubId, async (client) => {
+      if (!await teamStillInClub(client)) return null;
+      const connection = await getConnection({ ctx, sourceSystem, id: result.connectionId, executor: client });
+      return connection ? { result, connection } : null;
+    });
+  } catch {
+    if (!await localReceipt(ctx, clubId, teamStillInClub).catch(() => false)) return null;
+    return { result, connection: null, connectionReadError: true };
   }
 }
 

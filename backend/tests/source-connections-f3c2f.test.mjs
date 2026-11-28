@@ -930,3 +930,53 @@ test("native Unbind and pointer queue behind the shared club-ceiling order", asy
     await Promise.all([holder.end(), settingsWriter.end()]);
   }
 });
+
+test("native Unbind returns no receipt or connection after authority changes before response projection", async () => {
+  const { club, team } = await org();
+  const other = await org({ approve: false });
+  const ca = await clubAdmin(club);
+  await addClubAdminRole(ca.id, other.club);
+  const pa = await platformAdmin();
+  const { conn, binding } = await bound(pa, club, team);
+  const body = unbindBody(binding);
+  const missing = await unbindApi(conn.id, crypto.randomUUID(), ca.cookie, body);
+  assert.equal(missing.status, 404);
+  const before = (await auditOf(conn.id)).length;
+  const submit = () => unbindApi(conn.id, binding.bindingId, ca.cookie, body);
+  async function duringProjection(change) {
+    const permissionChange = gate();
+    let arrived = false;
+    service.setSourceUnbindResponseHoldForTests(async () => { arrived = true; await permissionChange.p; });
+    const pending = submit();
+    try {
+      await waitFor(() => arrived);
+      assert.equal((await bindingRow(binding.bindingId)).state, "ended", "the request committed before the response query");
+      await change();
+    } finally {
+      service.setSourceUnbindResponseHoldForTests(null);
+      permissionChange.release();
+    }
+    const reply = await pending;
+    assert.deepEqual([reply.status, reply.body], [missing.status, missing.body]);
+  }
+  await duringProjection(() => setWorkspace(ca.id, "club", other.club));
+  await setWorkspace(ca.id, "club", club);
+  await duringProjection(() => q("update public.user_club_roles set is_active=false where user_id=$1 and club_id=$2", [ca.id,club]));
+  await q("update public.user_club_roles set is_active=true where user_id=$1 and club_id=$2", [ca.id,club]);
+
+  service.setSourcePostCommitReadFaultForTests(() => { throw new Error("Test read fault"); });
+  try {
+    const reply = await submit();
+    assert.equal(reply.status, 200, JSON.stringify(reply.body));
+    assert.equal(reply.body.result.replayed, true);
+    assert.equal(reply.body.result.binding.bindingId, binding.bindingId);
+    assert.equal(reply.body.connection, null);
+    assert.equal(reply.body.connectionReadError, true);
+  } finally {
+    service.setSourcePostCommitReadFaultForTests(null);
+  }
+  const restored = await submit();
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.connection.id, conn.id);
+  assert.equal((await auditOf(conn.id)).length, before + 1);
+});

@@ -169,9 +169,10 @@ router.post("/:source/connections/:id/bindings/:bindingId/unbind", handle(async 
   if (!jsonObjectBody(req, res)) return;
   const body = req.body;
   req.body = undefined;
+  const requestContext = { ...ctx, sessionToken: req.sessionToken };
   let result;
   try {
-    result = await service.unbindTeam({ ctx: { ...ctx, sessionToken: req.sessionToken }, sourceSystem: req.params.source, id: req.params.id, bindingId: req.params.bindingId, body });
+    result = await service.unbindTeam({ ctx: requestContext, sourceSystem: req.params.source, id: req.params.id, bindingId: req.params.bindingId, body });
   } catch (error) {
     if (error instanceof service.SourceConnectionError && error.code === "outcome_unknown" && error.details?.connectionId) {
       await service.recordUnknownOutcome({ connectionId: error.details.connectionId, action: "unbind", ctx, attemptId: error.details.attemptId ?? null, teamId: error.details.teamId ?? null });
@@ -181,6 +182,10 @@ router.post("/:source/connections/:id/bindings/:bindingId/unbind", handle(async 
     scrub(body);
   }
   if (!result) return notFound(res);
+  if (ctx.basis === "club_admin") {
+    const response = await service.readNativeUnbindResponse({ ctx: requestContext, sourceSystem: req.params.source, result });
+    return response ? res.json(response) : notFound(res);
+  }
   let connection = null;
   let connectionReadError = false;
   try {
