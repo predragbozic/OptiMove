@@ -59,7 +59,38 @@ test("bound set, team and approved pointer snapshots advance independently with 
     await approve(legacy, "00701");
     const historical = await bind(legacy, "701", legacyConnection);
     await unbind(historical);
-    await client.query(await readFile(pointerFixture, "utf8")); await client.query(await readFile(new URL("./support/source-provider-binding-sparse-fixture.sql", import.meta.url), "utf8"));
+    await client.query(await readFile(pointerFixture, "utf8"));
+    const readDraft = name => readFile(new URL(`./support/source-provider-binding-sparse-${name}.draft.sql`, import.meta.url), "utf8");
+    const up = await readDraft("up");
+    const down = await readDraft("down");
+    await client.query(`
+      create role anon;
+      create role authenticated;
+      create role service_role;
+      alter default privileges in schema training_load grant all on tables to anon,authenticated,service_role;
+      alter default privileges in schema training_load grant execute on functions to anon,authenticated,service_role;
+    `);
+    const getTriggers = async () => (await client.query(`
+      select tgname,tgenabled,tgtype,md5(prosrc) as body
+      from pg_trigger t join pg_proc p on t.tgfoid=p.oid
+      where tgrelid='training_load.source_team_bindings'::regclass and not tgisinternal
+      order by tgname
+    `)).rows;
+    const pre = await getTriggers();
+    await t.test("draft SQL cleans the API defaults and immediate down restores the trigger catalogue", async () => {
+      await client.query(up);
+      const privateAcl = await client.query(`
+        select rolname from pg_roles
+        where rolname in ('anon','authenticated','service_role')
+          and (has_table_privilege(oid,'training_load.source_binding_sparse_delta','SELECT,UPDATE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+            or has_function_privilege(oid,'training_load.source_binding_sparse_generation(uuid)','EXECUTE'))
+      `);
+      assert.equal(privateAcl.rowCount, 0);
+      await client.query(down);
+      assert.deepEqual(await getTriggers(), pre);
+      assert.equal((await client.query("select to_regclass('training_load.source_binding_sparse_delta') as delta")).rows[0].delta, null);
+      await client.query(up);
+    });
 
     let activeBinding;
     await t.test("old rows keep their history; missing and first-approved pointer snapshots differ", async () => {
@@ -166,6 +197,12 @@ test("bound set, team and approved pointer snapshots advance independently with 
       assert.deepEqual(await snapshot(), {generation: String(Number(previously.generation)+2), active: previously.active});
     });
 
+    await t.test("generation captured by the actual binding writer prevents rollback", async () => {
+      const before = await snapshot();
+      await assert.rejects(client.query(down), /Sparse generation already captured/);
+      await client.query("rollback");
+      assert.deepEqual(await snapshot(), before);
+    });
     assert.deepEqual((await client.query("select enabled,epoch from training_load.source_provider_admission")).rows,
       [{ enabled: false, epoch: "0" }]);
     assert.equal((await client.query("select 1 from training_load.source_provider_attempts")).rowCount, 0);
