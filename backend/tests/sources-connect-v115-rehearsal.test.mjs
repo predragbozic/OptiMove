@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
 import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
+import { encryptCredential, generateKeyEntry, parseKeyring } from "../src/sourceCredentialCrypto.js";
 import { asActor, fixtures, key, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
 
 async function seedNativeRoleLayers(fixture, { teamRole = false } = {}) {
@@ -26,7 +27,7 @@ async function seedNativeRoleLayers(fixture, { teamRole = false } = {}) {
          (club_id,system_role_id,based_on_revision,answered_revision,created_by_user_id)
        select $1,id,revision,revision,$3 from public.permission_roles where id=$2 returning id`, [club,role,platform],
     );
-    await tx.query("insert into public.permission_club_role_version_items select $1,permission_word from public.permission_role_items where role_id=$2 and permission_word not in ('variables.view','mappings.manage')", [version.id,role]);
+    await tx.query("insert into public.permission_club_role_version_items select $1,permission_word from public.permission_role_items where role_id=$2 and permission_word<>'mappings.manage'", [version.id,role]);
     await tx.query(
       `insert into public.permission_club_role_version_changes
          (version_id,revision_after,kind,performed_by_user_id,basis,reason,items_added)
@@ -74,7 +75,7 @@ const migration = "202612171000";
 const word = "sources.connect";
 const read = name => readFile(new URL("../../docs/runbooks/sources-connect-v115-" + name + ".sql", import.meta.url), "utf8");
 
-test("v115 applies, rolls back and restores the audited Mappings catalogue", async () => {
+test("v115 applies, rolls back and restores the audited Sources Connect catalogue", async () => {
   const fixture = await createPagesDatabase({ through: "202612161000", label: "sources_connect_v115" });
   const { client } = fixture;
   const check = row => assert.ok(Object.values(row).every(value => value === true), JSON.stringify(row));
@@ -161,8 +162,8 @@ test("v115 applies, rolls back and restores the audited Mappings catalogue", asy
   }
 });
 
-test("v115 old and current Settings and native mapping operations share an exact disposable cutover", async () => {
-  const fixture = await createPagesDatabase({ through: "202612161000", label: "map_overlap_v115" });
+test("v115 old and current Settings and native Sources operations share an exact disposable cutover", async () => {
+  const fixture = await createPagesDatabase({ through: "202612161000", label: "sources_overlap_v115" });
   const { client } = fixture;
   let current, previous;
   try {
@@ -272,5 +273,98 @@ test("v115 old and current Settings and native mapping operations share an exact
     await previous?.stop();
     await current?.stop();
     await fixture.drop();
+  }
+});
+
+test("each v115 local writer stamps first use only on its own new effect", async t => {
+  for (const operation of ["Unbind", "approved pointer"]) {
+    await t.test(operation, async () => {
+      const fixture = await createPagesDatabase({ through: "202612161000", label: "sources_first_use_v115" });
+      const { client } = fixture;
+      let server, previous;
+      try {
+        const f = fixtures(client);
+        const club = await f.club("First-use club " + key());
+        const actor = await f.user("First-use native Club admin");
+        const platform = await f.user("First-use platform administrator");
+        await f.grantClub(actor, club);
+        await f.grantPlatform(platform);
+        await client.query(
+          "insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'club',$2),($3,'platform',null)",
+          [actor, club, platform],
+        );
+        const connection = key();
+        const parts = encryptCredential("disposable-source-token", {
+          connectionId: connection, ownerScope: "club", ownerClubId: club, ownerTeamId: null,
+          sourceSystem: "gpexe", hostKey: "server3", credentialKind: "exchanged_token",
+        }, parseKeyring(generateKeyEntry(1)));
+        await client.query(
+          "insert into training_load.source_credential_connections(id,source_system,owner_scope,owner_club_id,host_key,account_label,credential_kind,created_by_user_id,state,credential_ciphertext,credential_nonce,credential_auth_tag,credential_key_version,last_verified_at)"
+          + " values($1,'gpexe','club',$2,'server3','Disposable','exchanged_token',$3,'verified',$4,$5,$6,$7,now())",
+          [connection,club,platform,parts.ciphertext,parts.nonce,parts.authTag,parts.keyVersion],
+        );
+        const existingTeam = await f.team(club);
+        const freshTeam = await f.team(club);
+        await client.query(
+          "insert into training_load.gpexe_team_settings(owner_team_id,gpexe_team_id,configured_by_user_id) values($1,'981',$2)",
+          [existingTeam, platform],
+        );
+        await fixture.applyThrough(migration);
+        server = await startServer(fixture.url);
+        const cookie = await server.cookieFor(actor);
+        const marker = async () => (await client.query("select first_checked_write_at from training_load.sources_connect_local_bridge_use")).rows[0].first_checked_write_at;
+        let effect;
+        if (operation === "Unbind") {
+          await client.query(
+            "insert into training_load.gpexe_team_settings(owner_team_id,gpexe_team_id,configured_by_user_id) values($1,'982',$2)",
+            [freshTeam, platform],
+          );
+          async function bind(team, source) {
+            const { rows: [binding] } = await client.query(
+              "insert into training_load.source_team_bindings(team_id,connection_id,source_system,source_team_id,bound_by_user_id,legacy_gpexe_settings_team_id)"
+              + " values($1,$2,'gpexe',$3,$4,$1) returning id", [team, connection, source, platform],
+            );
+            return { path: "/api/training-load/sources/gpexe/connections/" + connection + "/bindings/" + binding.id + "/unbind",
+              body: { requestKey: key(), reason: "Disposable first-use check", expected: { teamId: team, sourceTeamId: source } } };
+          }
+          const legacy = await bind(existingTeam, "981");
+          const fresh = await bind(freshTeam, "982");
+          previous = await previousDashboardServer(fixture.url, {}, previousBuild);
+          const saved = await fetch(previous.baseUrl + legacy.path, {
+            method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(legacy.body),
+          });
+          assert.equal(saved.status, 200, await saved.clone().text());
+          const replay = await server.api(cookie, legacy.path, { method: "POST", body: legacy.body });
+          assert.equal(replay.status, 200, replay.text);
+          assert.equal(replay.body.result.replayed, true);
+          const denial = await server.api(cookie, fresh.path, { method: "POST", body: { ...fresh.body, expected: { teamId: freshTeam, sourceTeamId: "999" } } });
+          assert.equal(denial.status, 409, denial.text);
+          effect = () => server.api(cookie, fresh.path, { method: "POST", body: fresh.body });
+        } else {
+          const update = (team, gpexeTeamId) => server.api(cookie, "/api/training-load/gpexe/teams/" + team + "/settings", {
+            method: "PUT", body: { gpexeTeamId },
+          });
+          const noOp = await update(existingTeam, "0981");
+          assert.equal(noOp.status, 200, noOp.text);
+          const denial = await update(existingTeam, "999");
+          assert.equal(denial.status, 409, denial.text);
+          effect = () => update(freshTeam, "982");
+        }
+        assert.equal(await marker(), null);
+        const written = await effect();
+        assert.equal(written.status, 200, written.text);
+        const first = await marker();
+        assert.ok(first);
+        const repeated = await effect();
+        assert.equal(repeated.status, 200, repeated.text);
+        assert.deepEqual(await marker(), first);
+        await assert.rejects(client.query(await read("rollback")), /refuses checked Sources Connect writer use/);
+        await client.query("rollback");
+      } finally {
+        await previous?.stop();
+        await server?.stop();
+        await fixture.drop();
+      }
+    });
   }
 });

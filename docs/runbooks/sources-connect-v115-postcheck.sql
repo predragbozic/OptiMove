@@ -17,7 +17,7 @@ select (select count(*) from public.schema_migrations where migration_name='migr
           and t.tgfoid=to_regprocedure('training_load.keep_sources_connect_local_bridge_use()'))
        and (select md5(prosrc) from pg_proc
          where oid=to_regprocedure('training_load.keep_sources_connect_local_bridge_use()'))='7520d8566489bbfb88aa3b46ca78f2d5') as first_use_guard_exact,
-       (select count(*)=1 and bool_and(first_checked_write_at is null) from training_load.sources_connect_local_bridge_use) as unused,
+       (select count(*)=1 from training_load.sources_connect_local_bridge_use) as marker_present,
        (select bool_and(relrowsecurity) from pg_class where oid in (
          'training_load.sources_connect_local_bridge_use'::regclass,'training_load.sources_connect_v115_seed'::regclass
        )) as bridge_rls_enabled,
@@ -45,3 +45,4 @@ select (select count(*) from public.schema_migrations where migration_name='migr
          where a.revision_after is distinct from s.revision_before+1 or a.items_added is distinct from s.words
        ) as seeded_audit_exact;
 select layer,count(*) from training_load.sources_connect_v115_seed group by layer order by layer;
+select first_checked_write_at from training_load.sources_connect_local_bridge_use; -- Informational

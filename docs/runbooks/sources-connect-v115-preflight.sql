@@ -5,7 +5,7 @@ select exists (select 1 from public.schema_migrations where migration_name='migr
        (select count(*) from public.permission_roles r where basic_key='club_admin' and archived_at is null)=1 as exact_native_seed_roles,
        not (exists (select 1 from public.permission_role_items where permission_word = 'sources.connect')
     or exists (select 1 from public.permission_club_role_version_items where permission_word = 'sources.connect')
-    or exists (select 1 from public.permission_custom_role_items where permission_word = 'sources.connect')) as mappings_manage_items_unstaged,
+    or exists (select 1 from public.permission_custom_role_items where permission_word = 'sources.connect')) as sources_connect_items_unstaged,
        public.permission_word_honoured('variables.view') and public.permission_word_honoured('programs.assign')
          and public.permission_word_honoured('programs.publish') and public.permission_word_honoured('tests.schedule.manage')
          and public.permission_word_honoured('variables.rename_archive')

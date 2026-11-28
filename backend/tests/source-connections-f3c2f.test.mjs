@@ -842,10 +842,10 @@ test("native Sources Connect rechecks the role, workspace and session before Cre
   const block = gate();
   waiting = false;
   service.setSourceUnbindHoldForTests(async () => { waiting = true; await block.p; });
+  await setSourceConnectFixture(admin, false);
   const pendingUnbind = unbindApi(conn.id, binding.bindingId, ca.cookie, body);
   try {
     await waitFor(() => waiting);
-    await setSourceConnectFixture(admin, false);
     await q("insert into public.user_global_roles(user_id,role,is_active) values($1,'platform_admin',true)", [ca.id]);
   } finally {
     service.setSourceUnbindHoldForTests(null);
@@ -881,4 +881,52 @@ test("native Sources Connect rechecks the role, workspace and session before Cre
   await q("update public.teams set club_id=$2 where id=$1", [team, other.club]);
   assertMissing(await unbindApi(conn.id, binding.bindingId, freshCookie, body));
   assert.equal((await auditOf(conn.id)).length, before + 1);
+});
+
+test("native Unbind and pointer queue behind the shared club-ceiling order", async () => {
+  const { club, team } = await org();
+  const ca = await clubAdmin(club);
+  const pa = await platformAdmin();
+  const { conn, binding } = await bound(pa, club, team);
+  const holder = new pg.Client({ connectionString: db.url });
+  const settingsWriter = new pg.Client({ connectionString: db.url });
+  await Promise.all([holder.connect(), settingsWriter.connect()]);
+  const contents = "select public.lock_club_ceiling($1::uuid[], $2)";
+  const blockers = async (pid) => (await q(
+    "select count(*)::int as n from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid))", [pid],
+  ))[0].n;
+  async function untilBlocked(pid, count) {
+    for (let i = 0; i < 75; i++) {
+      if (await blockers(pid) >= count) return;
+      await new Promise(resolve => setTimeout(resolve, 15));
+    }
+    assert.fail("expected the PostgreSQL lock wait");
+  }
+  let exclusive, unbind, pointer;
+  try {
+    await holder.query("begin");
+    await holder.query(contents, [[club], "shared"]);
+    await settingsWriter.query("begin");
+    exclusive = settingsWriter.query(contents, [[club], "exclusive"]);
+    await untilBlocked(holder.processID, 1);
+    unbind = unbindApi(conn.id, binding.bindingId, ca.cookie, unbindBody(binding));
+    pointer = fetch(apiBase + "/api/training-load/gpexe/teams/" + team + "/settings", {
+      method: "PUT", headers: { cookie: ca.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ gpexeTeamId: "981" }),
+    });
+    await untilBlocked(settingsWriter.processID, 2);
+    await holder.query("select training_load.hold_gpexe_team_lock($1, 'unbind')", [team]);
+    await holder.query("rollback");
+    await exclusive;
+    await settingsWriter.query("rollback");
+    const outcomes = [(await unbind).status, (await pointer).status];
+    assert.ok(outcomes.every(status => [200, 409].includes(status)), outcomes.join(", "));
+    assert.ok(outcomes.includes(200));
+  } finally {
+    await holder.query("rollback").catch(() => {});
+    await exclusive?.catch(() => {});
+    await settingsWriter.query("rollback").catch(() => {});
+    await Promise.allSettled([unbind, pointer]);
+    await Promise.all([holder.end(), settingsWriter.end()]);
+  }
 });
