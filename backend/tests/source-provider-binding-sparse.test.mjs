@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync, fork } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
@@ -12,6 +15,7 @@ test("bound set, team and approved pointer snapshots advance independently with 
   const lab = await createPagesDatabase({ through: "202612191000", label: "binding_generations" });
   const { client } = lab;
   let peer;
+  let previousWriter;
   try {
     const world = fixtures(client);
     const club = await world.club("Binding generations home");
@@ -59,6 +63,20 @@ test("bound set, team and approved pointer snapshots advance independently with 
     await approve(legacy, "00701");
     const historical = await bind(legacy, "701", legacyConnection);
     await unbind(historical);
+    const overlapTeam = await world.team(club, "Previous server");
+    const overlapConnection = await create("Previous server");
+    await approve(overlapTeam, "755");
+    const overlapBinding = await bind(overlapTeam, "755", overlapConnection);
+    await client.query("insert into public.user_global_roles (user_id,role,is_active) values($1,'platform_admin',true)", [actor]);
+    await client.query("insert into public.user_workspace_preferences (user_id,workspace_type,scope_id) values($1,'platform',null)", [actor]);
+    previousWriter = fork(new URL("./support/source-provider-binding-old-writer.mjs", import.meta.url), {
+      env: { ...process.env, DATABASE_URL: lab.url, SPARSE_FIXTURE_ACTOR: actor },
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+    });
+    const [previousEndpoint] = await Promise.race([
+      once(previousWriter, "message", { signal: AbortSignal.timeout(10000) }),
+      once(previousWriter, "exit").then(([code]) => { throw new Error(`Previous writer exited with ${code}`); }),
+    ]);
     await client.query(await readFile(pointerFixture, "utf8"));
     const readDraft = name => readFile(new URL(`./support/source-provider-binding-sparse-${name}.draft.sql`, import.meta.url), "utf8");
     const up = await readDraft("up");
@@ -76,6 +94,30 @@ test("bound set, team and approved pointer snapshots advance independently with 
       where tgrelid='training_load.source_team_bindings'::regclass and not tgisinternal
       order by tgname
     `)).rows;
+    const dumpDb = new URL(lab.url);
+    assert.equal(dumpDb.hostname, "127.0.0.1");
+    assert.match(dumpDb.pathname, /^\/optimove_tests_[a-z0-9_]+$/);
+    const dumpSchema = () => execFileSync("pg_dump", [
+      "--schema-only", "--no-password", "--host", dumpDb.hostname, "--port", dumpDb.port,
+      "--username", decodeURIComponent(dumpDb.username), "--dbname", dumpDb.pathname.slice(1),
+    ], {
+      env: { ...process.env, PGPASSWORD: decodeURIComponent(dumpDb.password) },
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    }).split(/\r?\n/).filter(line => !/^\\(?:un)?restrict /.test(line)).join("\n");
+    const beforeSchema = dumpSchema();
+    const peerCheck = new client.constructor({ connectionString: lab.url });
+    await peerCheck.connect();
+    try {
+      await peerCheck.query("begin");
+      await peerCheck.query(`update ${bindings} set end_reason=end_reason where false`);
+      await assert.rejects(client.query(up), { code: "55P03" });
+      await client.query("rollback");
+      assert.equal(dumpSchema(), beforeSchema);
+    } finally {
+      await peerCheck.query("rollback");
+      await peerCheck.end();
+    }
     const pre = await getTriggers();
     await t.test("draft SQL cleans the API defaults and immediate down restores the trigger catalogue", async () => {
       await client.query(up);
@@ -88,8 +130,28 @@ test("bound set, team and approved pointer snapshots advance independently with 
       assert.equal(privateAcl.rowCount, 0);
       await client.query(down);
       assert.deepEqual(await getTriggers(), pre);
+      assert.equal(dumpSchema(), beforeSchema);
       assert.equal((await client.query("select to_regclass('training_load.source_binding_sparse_delta') as delta")).rows[0].delta, null);
       await client.query(up);
+    });
+
+    await t.test("v117 HTTP Unbind process started before capture invalidates the same witness once", async () => {
+      const { port, cookie } = previousEndpoint;
+      const body = { requestKey: randomUUID(), reason: "Disposable predecessor test",
+        expected: { teamId: overlapTeam, sourceTeamId: "755" } };
+      const send = () => fetch(`http://127.0.0.1:${port}/api/training-load/sources/gpexe/connections/${overlapConnection}/bindings/${overlapBinding}/unbind`, {
+        method: "POST",
+        headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10000),
+      });
+      assert.deepEqual(await snapshot(overlapConnection), { generation: "1", active: [overlapTeam] });
+      const first = await send();
+      assert.equal(first.status, 200, await first.text());
+      assert.deepEqual(await snapshot(overlapConnection), { generation: "2", active: [] });
+      const replay = await send();
+      assert.equal(replay.status, 200, await replay.text());
+      assert.deepEqual(await snapshot(overlapConnection), { generation: "2", active: [] });
     });
 
     let activeBinding;
@@ -207,7 +269,45 @@ test("bound set, team and approved pointer snapshots advance independently with 
       [{ enabled: false, epoch: "0" }]);
     assert.equal((await client.query("select 1 from training_load.source_provider_attempts")).rowCount, 0);
   } finally {
+    if (previousWriter?.exitCode === null && previousWriter.connected) {
+      const ended = once(previousWriter, "exit", { signal: AbortSignal.timeout(10000) });
+      previousWriter.send("stop");
+      try { await ended; } catch { previousWriter.kill(); }
+    }
     await peer?.end();
+    await lab.drop();
+  }
+});
+
+test("actual cap rejects 10,001 pre-existing rows with no capture DDL left behind", async () => {
+  const lab = await createPagesDatabase({ through: "202612191000", label: "binding_cap" });
+  const { client } = lab;
+  try {
+    const world = fixtures(client);
+    const actor = await world.user("Cap actor");
+    const club = await world.club("Cap club");
+    const team = await world.team(club, "Cap team");
+    const {rows: [connection]} = await client.query(`
+      insert into training_load.source_credential_connections
+      (source_system,owner_scope,owner_club_id,host_key,account_label,credential_kind,created_by_user_id)
+      values('gpexe','club',$1,'server3','Cap account','exchanged_token',$2) returning id
+    `, [club, actor]);
+    await client.query(`
+      insert into ${bindings}(team_id,connection_id,source_system,source_team_id,bound_by_user_id,state,ended_at,ended_by_user_id,end_reason)
+      select $1,$2,'gpexe',i::text,$3,'ended',statement_timestamp(),$3,'Disposable cap fixture'
+      from generate_series(1,10001) i
+    `, [team, connection.id, actor]);
+    const up = await readFile(new URL("./support/source-provider-binding-sparse-up.draft.sql", import.meta.url), "utf8");
+    await assert.rejects(client.query(up), /exceeds the 10000-row prototype cap/);
+    await client.query("rollback");
+    const {rows: [state]} = await client.query(`
+      select (select count(*)::int from ${bindings} where connection_id=$1) as history,
+        to_regclass('training_load.source_binding_sparse_base') as base,
+        to_regclass('training_load.source_binding_sparse_delta') as delta,
+        to_regprocedure('training_load.capture_binding_sparse_delta()') as capture
+    `, [connection.id]);
+    assert.deepEqual(state, {history:10001,base:null,delta:null,capture:null});
+  } finally {
     await lab.drop();
   }
 });
