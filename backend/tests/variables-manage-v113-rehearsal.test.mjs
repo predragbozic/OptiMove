@@ -266,7 +266,7 @@ test("v113 old and current Settings and native variable operations share an exac
     assert.equal(publicCatalog.status, 200);
     assert.equal(publicCatalog.body.permissions.find(entry => entry.word === word)?.checked, true);
     assert.equal(publicCatalog.body.permissions.find(entry => entry.word === "variables.rename_archive")?.checked, true);
-    assert.equal(publicCatalog.body.permissions.find(entry => entry.word === "mappings.manage")?.checked, false);
+    assert.equal(publicCatalog.body.permissions.find(entry => entry.word === "mappings.manage")?.checked, true);
 
     const createInput = label => ({ ...input, label, requestKey: key() });
     const receipts = async () => (await client.query(

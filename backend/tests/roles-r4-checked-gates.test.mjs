@@ -29,6 +29,7 @@ const CAN_CALL = /\bcan\(\s*[A-Za-z_.?]+\s*,\s*"([a-z_.]+)"/g;
 const SQL_CHECKED = Object.freeze({
   "canonicalVariableAdminService.js": Object.freeze(["variables.rename_archive", "variables.manage"]),
   "dashboardReferences/access.js": Object.freeze(["variables.manage"]),
+  "sourceMetricMappingService.js": Object.freeze(["mappings.manage"]),
   "testsScheduleWriteAccess.js": Object.freeze(["tests.schedule.manage"]),
   "activityRosterCommands.js": Object.freeze(["load.roster.decide"]),
   "trainingActivityWriteAccess.js": Object.freeze(["load.activities.manage"]),

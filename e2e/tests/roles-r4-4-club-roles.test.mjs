@@ -326,7 +326,7 @@ test("Variables Rename and Archive is editable independently of Variables View a
   }
 });
 
-test("Variables Manage is editable for Club admin without changing Rename and Archive", async () => {
+test("Mappings Manage and Variables Manage can be edited independently for Club admin", async () => {
   const fixture = new pg.Client({ connectionString: world.databaseUrl });
   await fixture.connect();
   try {
@@ -347,11 +347,14 @@ test("Variables Manage is editable for Club admin without changing Rename and Ar
     await page.locator('[data-club-role="' + clubRoleId + '"]').getByRole("button", { name: "Open" }).click();
     const editor = page.locator('[data-club-roles-editor="' + clubRoleId + '"]');
     const manage = editor.locator('[data-role-word="variables.manage"]');
+    const mapping = editor.locator('[data-role-word="mappings.manage"]');
     const view = editor.locator('[data-role-word="variables.view"]');
     await manage.waitFor();
     assert.ok(await manage.isEnabled());
     assert.ok(await manage.isChecked());
     assert.ok(await view.isChecked());
+    assert.ok(await mapping.isEnabled());
+    assert.ok(await mapping.isChecked());
     const save = page.locator("[data-club-roles-save]");
     const apply = async reason => {
       await save.locator("textarea").fill(reason);
@@ -370,6 +373,13 @@ test("Variables Manage is editable for Club admin without changing Rename and Ar
     assert.deepEqual(await items(), initial.filter(word => word !== "variables.manage"));
     await manage.check();
     await apply("Restore full Variables Manage");
+    assert.deepEqual(await items(), initial);
+    await mapping.uncheck();
+    await apply("Remove Mappings Manage");
+    assert.deepEqual(await items(), initial.filter(word => word !== "mappings.manage"));
+    assert.ok(await manage.isChecked() && await view.isChecked());
+    await mapping.check();
+    await apply("Restore Mappings Manage");
     assert.deepEqual(await items(), initial);
     assert.deepEqual(pageErrors, []);
   } finally {
