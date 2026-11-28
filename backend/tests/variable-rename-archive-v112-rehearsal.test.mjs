@@ -67,7 +67,7 @@ function roleData(client) {
 
 
 const previousBuild = "bc8e3995489c711a5aafa5750dd99bc9b0a9608f";
-const stagedBuild = "39f40e5b488df3a33f614783112cac65571f2986";
+const stagedBuild = "8cf041c8424848ee694280ccb3e32690f9d4f593";
 const migration = "202612141000";
 const word = "variables.rename_archive";
 const read = name => readFile(new URL("../../docs/runbooks/variable-rename-archive-v112-" + name + ".sql", import.meta.url), "utf8");
@@ -81,7 +81,7 @@ test("v112 applies, rolls back and restores the audited Variables catalogue", as
     "select relname,relkind,relrowsecurity from pg_class where relnamespace='training_load'::regnamespace order by relname,relkind",
   )).rows;
   try {
-    const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
+    const { versionId, customId, club, team, platform, coach } = await seedNativeRoleLayers(fixture);
     await seedNativeRoleLayers(fixture, { includeView: false });
     await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null)", [platform]);
     await client.query("update tests.schedule_manage_bridge_use set first_checked_write_at=clock_timestamp()");
@@ -169,7 +169,7 @@ test("v112 old and current Settings and native variable operations share an exac
   const { client } = fixture;
   let current, previous, staged;
   try {
-    const { versionId, customId, club, team, platform, coach } = await seedNativeRoleLayers(fixture);
+    const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await fixture.applyThrough(migration);
     const f = fixtures(client);
     const clubAdmin = await f.user("Variables Rename and Archive club admin");
@@ -288,9 +288,9 @@ test("v112 old and current Settings and native variable operations share an exac
     let icon = nextIcon;
     for (const layer of [
       { id: versionId, cookie: await current.cookieFor(versionCoach), path: root + "/" + roleId + "/clubs/" + club + "/version",
-        table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", context: {} },
+        table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", receipt: "role", context: {} },
       { id: customId, cookie: coachCookie, path: root + "/users/" + coach + "/clubs/" + club + "/custom",
-        table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id",
+        table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id", receipt: "custom",
         context: { roleId, scopeType: "team", scopeId: team } },
     ]) {
       const permissions = async () => {
@@ -314,7 +314,8 @@ test("v112 old and current Settings and native variable operations share an exac
         const stored = await roleData(client);
         const repeated = await call(staged, layer.path, input);
         assert.equal(repeated.status, 200, JSON.stringify(repeated.body));
-        assert.deepEqual(repeated.body, { ...saved.body, replayed: true });
+        assert.ok(saved.body[layer.receipt]);
+        assert.deepEqual(repeated.body, { [layer.receipt]: saved.body[layer.receipt], replayed: true });
         assert.equal(await auditCount(), before + 1);
         assert.deepEqual(await roleData(client), stored);
       };
