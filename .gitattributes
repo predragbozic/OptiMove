@@ -195,3 +195,7 @@ backend/scripts/sources-connect-v115-rehearsal.* text eol=lf
 migrations_v2/202612181000_training_load_v116_sources_provider_store.sql text eol=lf
 docs/runbooks/sources-provider-v116-*.sql text eol=lf
 backend/scripts/sources-provider-v116-rehearsal.* text eol=lf
+
+migrations_v2/202612191000_training_load_v117_sources_provider_host_connection_generations.sql text eol=lf
+docs/runbooks/sources-provider-v117-*.sql text eol=lf
+backend/scripts/sources-provider-v117-rehearsal.* text eol=lf
