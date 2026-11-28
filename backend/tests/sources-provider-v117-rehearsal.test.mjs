@@ -28,7 +28,7 @@ async function catalogue(client) {
 }
 
 test("audited v117 host and connection generation installation is private, NOWAIT and reversible before first capture", async () => {
-  const db = await createPagesDatabase({ through: "202612181000", label: "sources_host_connection_v117" });
+  const db = await createPagesDatabase({ through: "202612181000", label: "sources_v117" });
   const { client } = db;
   const apiRoles = ["anon", "authenticated", "service_role"];
   const created = [];
