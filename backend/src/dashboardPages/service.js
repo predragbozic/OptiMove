@@ -17,8 +17,9 @@ import {canViewDashboardRow,canManageDashboardRow,dashboardWidgetsForViewer,dash
 import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
-import {buildGalleryDraft,bindGallerySeries} from './galleryDraft.js';
+import {buildGalleryDraft,bindGallerySeries,isDashboardDraftGrouping} from './galleryDraft.js';
 import {adminWriteKit} from '../sourceMetricMappingService.js';
+const {rightsStillHold,hashOf} = adminWriteKit;
 import {dashboardManageOffered,dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor,markDashboardManageWrite} from '../dashboardManageAccess.js';
 
 export const pageError=(code='notFound',status=404)=>Object.assign(new Error(code),{code,httpStatus:status,status});
@@ -27,7 +28,7 @@ async function buildMetricPreviewWidget(q, dashboard, widgets, draft) {
  const fields=['widgetId','widgetType','groupBy','title','metricDefinitionId','builtInSeriesKey','dataScopeLevel','analyticalAggregation'];
  if(!draft||typeof draft!=='object'||Array.isArray(draft)||Object.keys(draft).some(key=>!fields.includes(key))
    ||!['kpi','table','line_chart','bar_chart'].includes(draft.widgetType)
-   ||!['day','week','athlete','session','component','cohort'].includes(draft.groupBy)
+   ||!isDashboardDraftGrouping(draft.groupBy)
    ||!['day','session','component'].includes(draft.dataScopeLevel)
    ||!['sum','avg','max','last','none','ratio'].includes(draft.analyticalAggregation)
    ||typeof draft.title!=='string'||!draft.title.trim()||draft.title.length>200
@@ -267,7 +268,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    if(body.draft?.kind==='radar'){
     if(process.env.DASHBOARD_REFERENCES_ENABLED!=='true'||!dashboardNamedAthletesAllowed(target.req,target.workspace))throw pageError();
     referenceContext=await resolveReferenceContext({...target.req,_resolvedDataWorkspacePromise:Promise.resolve(target.workspace)});
-    if(!referenceContext||referenceContext.readOnly||!await adminWriteKit.rightsStillHold({query:q},referenceContext))throw pageError();
+    if(!referenceContext||referenceContext.readOnly||!await rightsStillHold({query:q},referenceContext))throw pageError();
    }
    const operation='createGallery';
    const hash=createHash('sha256').update(canonicalKey({dashboardId,pageId,operation,body})).digest('hex');
@@ -293,7 +294,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    }
    const presentation=bindGallerySeries(draft.presentation_config,ids);
    if(reference){
-    const referenceHash=adminWriteKit.hashOf({dashboardId,pageId,widgetId,draft:body.draft});
+    const referenceHash=hashOf({dashboardId,pageId,widgetId,draft:body.draft});
     await q('select training_load.save_dashboard_reference_binding($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',
      [req.user.id,reference.clubId,referenceContext.teamId??null,body.requestId,referenceHash,dashboardId,widgetId,revision,draft.group_by,presentation.referenceConfig]);
    }else{
