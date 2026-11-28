@@ -71,8 +71,11 @@ at `be5f62b` (merge of PR #709); nothing else was re-derived then.
 **Roles V package complete.** The mixed-account fix (#775), Dashboard views (#772), Programs and Exercises
 views (#773) and Training Load views with athlete licence enforcement (#776) are merged. Role assignment
 from Users → Manage account → Give a role (#777) is included. The [V plan](roles-v-steps-plan.md#v-package-as-built)
-records the release commits, read boundaries and gates. These changes add no migration. Next is the M
-package for write permissions, starting with Calendar and Training Load. Imports are last, and Plan Limits follow M.
+records the release commits, read boundaries and gates. These changes add no migration. The M
+package for write permissions started with Calendar and Training Load. The [M release record](roles-m-steps-plan.md#m-package-as-built)
+tracks the exposed rights through Mappings Manage (#816, `66e4d67f`). That build makes the word editable in
+Settings → Roles using the deployed v114 bridge (#815, `70179aa7`). Messages remains on legacy authorization. Sources Connect and Imports
+follow in separate releases, with Imports last. Plan Limits follow M.
 
 **J18, the drag mapping board (C112): 18-1 to 18-4 merged and deployed (added 2026-11-15 at `165612ef`; nothing else
 was re-derived then).** Contract `docs/ai/c112-drag-mapping-contract.md`, section 15.

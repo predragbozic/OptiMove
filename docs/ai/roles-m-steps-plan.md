@@ -6,6 +6,32 @@ The V package is complete (#778). The R4 contract, decision O7, puts Calendar an
 
 Every staff write retains the module VIEW check and the current workspace and resource relationship checks. Each M slice adds its write permission and the licence ceiling at the actual operation. A club_view or team_view workspace stays read-only. Existing view-only custom-role accounts do not acquire a writable workspace through a MANAGE word. A different workspace entitlement would need its own contract.
 
+## M package as built
+
+Status snapshot at `66e4d67f` (#816). The release and bridge columns use first-parent merge
+commits. “Editable” means the word is exposed in Settings → Roles at this snapshot.
+
+| Slice | Bridge / migration | Editable release | Boundary |
+| --- | --- | --- | --- |
+| Calendar M-1 | v98, #781 `ef2a8933` | #781 `ef2a8933` | Calendar event management and Calendar Settings are separate rights. |
+| Training Load M-2 | v99, #783 `872019a5` | #785 `fc788d58` | External RPE schedule actions. |
+| Training Load M-3a | v101, #788 `27f64183` | #789 `5a7f9bf4` | Staff attendance decisions. |
+| Training Load M-3b | v102, #790 `7d9ef14d` | #791 `a5229401` | Estimate management. |
+| Training Load M-3c | v103, #792 `6b6ddf29` | #793 `007a2be5` | Activity identity management. |
+| Dashboards | v105, #795 `e19f9a5e` | #796 `4d7d0ced` | Dashboard Manage includes the v104 Page Copy path. |
+| Builder RPE settings | v106, #797 `66220c12`; v107 guard #798 `88788c19`; recovery #799 `cc1c423c` | #800 `d6d9f752` | Planned RPE settings right with explicit recovery for ambiguous older drafts. |
+| Exercises | v108, #801 `10a3aaa1` | #803 `200e31cc` | Add and Remove, with existing exercise ownership and scoped reuse rules. |
+| Programs Edit | v109, #804 `aa7e62cb` | #805 `58762744` | Edit on actual program changes. |
+| Programs Assign and Publish | v110, #807 `2d31d54e` | #808 `a715b164` | Assign and Publish checked separately according to each operation. |
+| Tests | v111, #809 `519ad010` | #810 `bc8e3995` | Schedule management, with Calendar-owned writes on their existing path. |
+| Variables Rename and Archive | v112, #811 `17008c33` | #812 `904458d0` | Rename, icon, archive and restore. |
+| Variables Manage | v113, #813 `e4fd0132` | #814 `7a78d82a` | Canonical variable writes and P3 reference table management under their existing resource checks. |
+| Mappings Manage | v114, #815 `70179aa7` | #816 `66e4d67f` | Mapping, activation and Board writes use the scoped native Club check. Settings exposes the same word. |
+
+Sources Connect and Imports remain separate contracts.
+Imports still needs a release plan that preserves existing approval and undo authority within the
+team-scoped catalogue. The Messages Send word remains outside the enabled registry at this snapshot. Plan Limits follow the M package.
+
 ## M-1 Calendar
 
 | Surface | Permission and scope |
