@@ -69,7 +69,7 @@ function roleData(client) {
 
 
 
-const stagedBuild = "cf4693b2479996f971d8b5962d9a7f182f928c4c";
+const stagedBuild = "e4fd0132c1e3bf56d81e658a057949fba9cf943c";
 const previousBuild = "904458d0590f84d01e5c13df6109a9a4ce770d36";
 const migration = "202612151000";
 const word = "variables.manage";
