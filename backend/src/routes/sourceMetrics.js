@@ -323,21 +323,21 @@ router.post("/mappings", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await service.createMapping({ ctx, body: req.body }), 201);
+  writeAnswer(res, await service.createMapping({ ctx: { ...ctx, sessionToken: req.sessionToken }, body: req.body }), 201);
 }));
 
 router.post("/mappings/:mappingId/versions", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await service.createVersion({ ctx, mappingId: req.params.mappingId, body: req.body }), 201);
+  writeAnswer(res, await service.createVersion({ ctx: { ...ctx, sessionToken: req.sessionToken }, mappingId: req.params.mappingId, body: req.body }), 201);
 }));
 
 router.post("/mappings/:mappingId/versions/:versionId/submit", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await service.submitVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
+  writeAnswer(res, await service.submitVersion({ ctx: { ...ctx, sessionToken: req.sessionToken }, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
 }));
 
 // Phase 7e (J11): the aggregate preview of a mapping version over one saved

@@ -46,6 +46,7 @@ import { statusProven } from "./sourceFieldEvidence.js";
 import crypto from "node:crypto";
 import pg from "pg";
 import { pool } from "./db.js";
+import { lockClubCeiling } from "./clubCeilingLock.js";
 import { boundedText } from "./metricTextRules.js";
 import {
   SourceMetricMappingError, refusal, TRY_AGAIN_TEXT, UUID, resolveMappingAdminWith, rightsStillHold, ownerKeyOf, readableOwnerKeys,
@@ -863,7 +864,7 @@ const MAPPING_REQUESTS = Object.freeze({
 });
 // The ids a committed write names when its answer could not be read (readError).
 const mappingIdsOf = (written) => ({ mappingId: written.mapping_id ?? null, ...(written.mapping_version_id ? { versionId: written.mapping_version_id } : {}) });
-async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf, authorizeTarget, authorizeReplayOnly = false, matchesWrittenReceipt, recordEffect }) {
+async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf, authorizeTarget, authorizeReplayOnly = false, matchesWrittenReceipt, recordEffect, authorizeReceipt }) {
   const client = await pool.connect();
   const release = guardClient(client);
   let released = false;
@@ -886,6 +887,7 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     const earlier = (await client.query(requests.find, [ctx.userId, requestKey])).rows[0];
     if (earlier) {
       if (authorizeReplayOnly) targetAuthorized = await authorizeTarget?.(client);
+      await authorizeReceipt?.(client, earlier);
       if (earlier.operation !== action || earlier.request_hash !== requestHash) throw refusal(409, "request_key_reused", "This requestKey was already used for a different request; use a new key.");
       // A replay is a read of the current state, after the right is checked again.
       if (!targetAuthorized && !(await rightsStillHold(client, ctx))) throw NOT_FOUND();
@@ -926,7 +928,7 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       let found = false;
       try {
                 const scopedReceipt = authorizeTarget ? {
-          authorizeTarget, action, requestHash,
+          authorizeTarget, authorizeReceipt, action, requestHash,
           matchesWritten: matchesWrittenReceipt ? (record) => matchesWrittenReceipt(record, written) : undefined,
         } : null;
         found = await requestIsCommitted(ctx.userId, requestKey, scopedReceipt ? requests.find : requests.exists, scopedReceipt);
@@ -935,7 +937,7 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
             && (error.status === 404 || error.code === "request_key_reused")) throw error;
       }
       if (!found) throw refusal(503, "outcome_unknown", "The database did not confirm this request, and it could not be verified yet. Repeat it with the same requestKey.", { requestKey });
-      return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget)), replayed: false, commitConfirmation: "verified_after_commit_error" };
+      return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget, authorizeReceipt)), replayed: false, commitConfirmation: "verified_after_commit_error" };
     }
     return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget)), replayed: false };
   } catch (error) {
@@ -955,12 +957,13 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
 // failure: it keeps its status with readError, and names the ids of what was
 // written only once the right was confirmed again (a replay with the same
 // requestKey answers the rest).
-async function answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget) {
+async function answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget, authorizeReceipt) {
   let rightConfirmed = false;
   let outcome = null;
   try {
     outcome = await boundedRead(async (client) => {
       if (!(await authorizeTarget?.(client)) && !(await rightsStillHold(client, ctx))) return { lost: true };
+      await authorizeReceipt?.(client, written);
       rightConfirmed = true;
       if (rereadFault) await rereadFault(client);
       return { current: await reread(client, written) };
@@ -1001,6 +1004,7 @@ async function requestIsCommitted(userId, requestKey, receiptSql, scopedReceipt)
       const answer = await client.query({ text: receiptSql, values: [userId, requestKey], query_timeout: left() });
       if (scopedReceipt) {
         const [record] = answer.rows;
+        if (record) await scopedReceipt.authorizeReceipt?.(client, record);
         if (record && (record.operation !== scopedReceipt.action || record.request_hash !== scopedReceipt.requestHash)) {
           throw refusal(409, "request_key_reused", "This requestKey was already used for a different request; use a new key.");
         }
@@ -1018,6 +1022,64 @@ async function requestIsCommitted(userId, requestKey, receiptSql, scopedReceipt)
   }
 }
 
+// The staged word applies only to explicitly opted-in native mapping writers.
+// Keep the historical domain locks ahead of the actor row locks.
+async function checkMappingManage(client, ctx) {
+  const clubId = ctx.owner?.clubId;
+  if (ctx.basis !== "club_admin" || ctx.owner.scope !== "club" || !clubId || !ctx.sessionToken) throw NOT_FOUND();
+  if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+  await client.query("select public.lock_permission_actor($1, 'club', $2)", [ctx.userId, clubId]);
+  const { rows: [rights] } = await client.query(
+    "select public.permission_word_honoured('mappings.manage') and public.user_has_permission($1, 'variables.view', 'club', $2) and public.user_has_permission($1, 'mappings.manage', 'club', $2) as allowed",
+    [ctx.userId, clubId],
+  );
+  if (!rights?.allowed) throw NOT_FOUND();
+  const hash = crypto.createHash("sha256").update(ctx.sessionToken).digest("base64url");
+  const session = await client.query(
+    "select 1 from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share",
+    [ctx.userId, hash],
+  );
+  if (!session.rowCount) throw NOT_FOUND();
+  const preference = await client.query(
+    "select 1 from public.user_workspace_preferences where user_id=$1 and workspace_type='club' and scope_id=$2 for share",
+    [ctx.userId, clubId],
+  );
+  if (!preference.rowCount) throw NOT_FOUND();
+  return true;
+}
+
+function runMappingWrite(options) {
+  const { ctx, body } = options;
+  if (ctx.basis === "platform_admin") return runWrite(options);
+  const check = client => checkMappingManage(client, ctx);
+  return runWrite({
+    ...options,
+    authorizeReplayOnly: true,
+    authorizeTarget: async client => {
+      await lockClubCeiling(client, [ctx.owner.clubId], "shared");
+      return check(client);
+    },
+    authorizeReceipt: async (client, row) => {
+      if (!row.mapping_id) throw NOT_FOUND();
+      const target = await client.query(
+        "select 1 from training_load.source_metric_mappings where id=$1 and owner_key=$2",
+        [row.mapping_id, ctx.owner.clubId],
+      );
+      if (!target.rowCount) throw NOT_FOUND();
+    },
+    matchesWrittenReceipt: (record, written) => record.mapping_id === written.mapping_id
+      && (record.mapping_version_id ?? null) === (written.mapping_version_id ?? null),
+    body: async (client, operationId) => {
+      await lockClubCeiling(client, [ctx.owner.clubId], "shared");
+      try {
+        return await body(client, operationId, check);
+      } catch (error) {
+        if (error instanceof SourceMetricMappingError && error.status !== 404) await check(client);
+        throw error;
+      }
+    },
+  });
+}
 // The operation's keyed T8 row; `reason` for a disable and a replacement (R7).
 async function insertRequestRecord(client, { action, mappingId, mappingVersionId = null, fromStatus = null, toStatus = null, reason = null, ctx, operationId, requestKey, requestHash }) {
   await client.query(
@@ -1035,13 +1097,13 @@ export async function createMapping({ ctx, body }) {
   const sourceMetricId = uuidField(body.sourceMetricId);
   const metricDefinitionId = uuidField(body.metricDefinitionId);
   const requestHash = hashOf({ route: "mapping_create", sourceMetricId, metricDefinitionId });
-  return runWrite({
+  return runMappingWrite({
     ctx, where: "mapping_create", requestKey, requestHash, action: "mapping_create",
     reread: async (executor, record) => {
       const mapping = await writableMappingSummary(executor, ctx, record.mapping_id);
       return mapping ? { mapping } : null;
     },
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       // T2a, then the canonical definition, both FOR SHARE (lock order).
       const field = (await client.query(
         `select id, state from training_load.source_metric_definitions where id = $1 for share`, [sourceMetricId],
@@ -1063,7 +1125,7 @@ export async function createMapping({ ctx, body }) {
         [sourceMetricId, metricDefinitionId],
       )).rows[0];
       if (existing) throw refusal(409, "mapping_exists", "A mapping of this source metric to this canonical definition already exists.", { current: { mappingId: existing.id } });
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (!(await check(client))) throw NOT_FOUND();
       if (writeHold) await writeHold(client, "mapping_create");
       const mapping = (await client.query(
         `insert into training_load.source_metric_mappings (source_metric_definition_id, source_system, api_family, metric_definition_id, owner_scope, owner_club_id, created_by_user_id)
@@ -1078,10 +1140,19 @@ export async function createMapping({ ctx, body }) {
     // A pair created meanwhile by another request: name the existing mapping
     // (same owner, so visible), read after the rollback.
     if (error instanceof SourceMetricMappingError && error.code === "mapping_exists" && !error.details) {
-      const existing = (await boundedRead((client) => client.query(
-        `select id from training_load.source_metric_mappings where source_metric_definition_id = $1 and metric_definition_id = $2 and owner_key = $3`,
-        [sourceMetricId, metricDefinitionId, ownerKeyOf(ctx)],
-      )).catch(() => ({ rows: [] }))).rows[0];
+      const existing = (await boundedRead(async client => {
+        if (ctx.basis !== "platform_admin") {
+          await lockClubCeiling(client, [ctx.owner.clubId], "shared");
+          await checkMappingManage(client, ctx);
+        }
+        return client.query(
+          "select id from training_load.source_metric_mappings where source_metric_definition_id = $1 and metric_definition_id = $2 and owner_key = $3",
+          [sourceMetricId, metricDefinitionId, ownerKeyOf(ctx)],
+        );
+      }, { locks: ctx.basis !== "platform_admin" }).catch(error => {
+        if (error instanceof SourceMetricMappingError && error.status === 404) throw error;
+        return { rows: [] };
+      })).rows[0];
       if (existing) error.details = { current: { mappingId: existing.id } };
     }
     throw error;
@@ -1160,13 +1231,13 @@ export async function createVersion({ ctx, mappingId, body }) {
   const parameterInput = canonicalParameterInput(body.sourceParameters);
   const id = mappingId.toLowerCase();
   const requestHash = hashOf({ route: "mapping_version_create", mappingId: id, sourceRevisionId, appliesToSession: body.appliesToSession, appliesToDrill: body.appliesToDrill, conversionNote, sourceParameters: parameterInput });
-  return runWrite({
+  return runMappingWrite({
     ctx, where: "mapping_version_create", requestKey, requestHash, action: "mapping_version_create",
     reread: async (executor, record) => {
       const version = await writableVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
       return version ? { version } : null;
     },
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       // Plain reads first, to learn the units; then the locks in order.
       const mapping = (await client.query(
         `select id, owner_scope, owner_key, source_metric_definition_id, metric_definition_id from training_load.source_metric_mappings where id = $1`, [id],
@@ -1293,7 +1364,7 @@ export async function createVersion({ ctx, mappingId, body }) {
       if ((body.appliesToSession && !lockedScopes.includes("session")) || (body.appliesToDrill && !lockedScopes.includes("component"))) {
         throw refusal(409, "level_not_allowed", MESSAGES.level_not_allowed);
       }
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (!(await check(client))) throw NOT_FOUND();
       if (writeHold) await writeHold(client, "mapping_version_create");
       const expectedFingerprint = parameterFingerprint(revision.parameter_kind, source);
       const sourceJson = revision.parameter_kind === "none" ? {} : source;
@@ -1328,13 +1399,13 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
   const mId = mappingId.toLowerCase();
   const vId = versionId.toLowerCase();
   const requestHash = hashOf({ route: "mapping_status", mappingId: mId, versionId: vId, toStatus: "needs_review" });
-  return runWrite({
+  return runMappingWrite({
     ctx, where: "mapping_status", requestKey, requestHash, action: "mapping_status",
     reread: async (executor, record) => {
       const version = await writableVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
       return version ? { version } : null;
     },
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       const plain = (await client.query(
         `select v.id, v.source_metric_version_id, m.owner_key from training_load.source_metric_mapping_versions v
            join training_load.source_metric_mappings m on m.id = v.mapping_id
@@ -1352,7 +1423,7 @@ export async function submitVersion({ ctx, mappingId, versionId, body }) {
       )).rows[0];
       // The states, answered only after the right (J14 R5, as A1 and A2): a
       // caller who lost it meanwhile sees the identical 404, never `current`.
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (!(await check(client))) throw NOT_FOUND();
       if (version.status !== "draft") throw refusal(409, "version_not_draft", "Only a draft version is submitted.", { current: { status: version.status } });
       if (!revision || !["draft", "active"].includes(revision.state)) throw refusal(409, "revision_not_usable", MESSAGES.revision_not_usable);
       if (writeHold) await writeHold(client, "mapping_status");
