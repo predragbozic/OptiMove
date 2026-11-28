@@ -752,7 +752,7 @@ test("pre-Board-gate binary saves a confirmation that the current binary scopes 
   ].join("\n");
   const old = await previousDashboardServer(db.url, {
     NODE_OPTIONS: "--import=data:text/javascript;base64," + Buffer.from(fixtureSource).toString("base64"),
-  }, "904458d0590f84d01e5c13df6109a9a4ce770d36");
+  }, "7a78d82a12b175476bd4e09656e28ca5f357ba72");
   await k.query("update training_load.mappings_manage_bridge_use set first_checked_write_at=null");
   const usedAt = async () => (await one("select first_checked_write_at from training_load.mappings_manage_bridge_use")).first_checked_write_at;
   let original;
