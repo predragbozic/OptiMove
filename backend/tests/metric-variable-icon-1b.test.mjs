@@ -96,6 +96,8 @@ before(async () => {
   assert.equal((await r.query("select current_database() as d")).rows[0].d, rdb.name, "SAFETY");
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
   assert.equal((await k.query(`select 1 from public.schema_migrations where migration_name = $1`, [V45_NAME])).rowCount, 1, "the behaviour database carries v45");
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
@@ -117,8 +119,6 @@ before(async () => {
   apiBase = `http://localhost:${server.address().port}`;
   await world();
   await seedVariableRenameGrants(k);
-  await stageVariablesManageForTest(k);
-  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
 });
 
 function resetSeams() {
