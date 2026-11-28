@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // PR-1b (I1) - changing the icon of a canonical variable
 // (backend/src/canonicalVariableAdminService.js changeVariableIcon, the route
 // POST /api/training-load/sources/metrics/variables/:id/icon) and migration v45
@@ -116,6 +117,8 @@ before(async () => {
   apiBase = `http://localhost:${server.address().port}`;
   await world();
   await seedVariableRenameGrants(k);
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
 });
 
 function resetSeams() {

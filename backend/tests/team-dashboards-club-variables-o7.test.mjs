@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // O7 (migration v55): a team's dashboards may chart the variables of the team's own club (J15 section 12;
 // the Rukovodilac's plan GO of 2026-11-04). One function body is replaced,
 // training_load.dashboard_widget_series_validate_metric_visibility (v16); the application's twin
@@ -49,6 +50,8 @@ before(async () => {
   await k.connect();
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
   await seedVariableRenameGrants(k);
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   v55Sql = await fs.readFile(path.resolve(here, "../../migrations_v2", V55), "utf8");
   rollbackSql = await fs.readFile(ROLLBACK, "utf8");
   await k.query(`alter table public.user_club_roles add column if not exists granted_by_user_id uuid,

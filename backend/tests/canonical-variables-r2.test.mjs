@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 import { seedVariableRenameGrants, varyRenameGrant } from "./support/variable-rename-grants.mjs";
 // R2 - renaming, archiving and restoring a canonical variable, with a team coach
 // for club variables (backend/src/canonicalVariableAdminService.js, the routes
@@ -120,6 +121,8 @@ before(async () => {
   apiBase = `http://localhost:${server.address().port}`;
   await world();
   await seedVariableRenameGrants(k);
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
 });
 
 function resetSeams() {

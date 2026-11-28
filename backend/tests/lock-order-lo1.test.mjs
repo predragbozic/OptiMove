@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // LO-1, the lock-order pull request (J14 section 7 and R13; J15 section 5 and
 // R13; the Rukovodilac's L0 (a), 2026-11-03): every rights check of the
 // services locks the users row before the role row - `u, g` for the platform
@@ -54,6 +55,8 @@ before(async () => {
   await k.connect();
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
   await seedVariableRenameGrants(k);
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   // The columns the real revocation routes write and read (as in the 7h suite).
   await k.query(`alter table public.user_club_roles add column if not exists granted_by_user_id uuid,
                    add column if not exists revoked_at timestamptz, add column if not exists revoked_by_user_id uuid,
