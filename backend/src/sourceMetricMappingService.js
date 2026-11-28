@@ -939,7 +939,7 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       if (!found) throw refusal(503, "outcome_unknown", "The database did not confirm this request, and it could not be verified yet. Repeat it with the same requestKey.", { requestKey });
       return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget, authorizeReceipt)), replayed: false, commitConfirmation: "verified_after_commit_error" };
     }
-    return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget)), replayed: false };
+    return { ...(await answerAfterCommit(ctx, written, reread, idsOf, authorizeTarget, authorizeReceipt)), replayed: false };
   } catch (error) {
     await finish();
     // An allowlisted refusal becomes its stable code; anything else goes up

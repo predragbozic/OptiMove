@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import { stageBoardManageFixture } from "./support/board-manage-fixture.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
 import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
 import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
@@ -72,32 +73,10 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
-  await stageManageFixture();
+  await stageBoardManageFixture(k);
   await world();
 });
 
-async function stageManageFixture() {
-  // The historical Board fixture has the storage contract but no post-v92
-  // Roles migrations. Stage the three words only on this disposable database.
-  const words = ["variables.view", "variables.manage", "mappings.manage"];
-  const { rows: [{ prosrc }] } = await k.query("select prosrc from pg_proc where oid='public.permission_word_honoured(text)'::regprocedure");
-  const added = words.map(word => "'" + word + "'").join(",");
-  await k.query("begin");
-  try {
-    await k.query("create or replace function public.permission_word_honoured(p_word text) returns boolean language sql immutable set search_path=pg_catalog, public as $fixture$ "
-      + prosrc.trim() + " or p_word in (" + added + ") $fixture$");
-    await k.query("alter table public.permission_role_items disable trigger user");
-    await k.query("insert into public.permission_role_items(role_id,permission_word)"
-      + " select id,unnest($1::text[]) from public.permission_roles where basic_key='club_admin' on conflict do nothing", [words]);
-    await k.query("alter table public.permission_role_items enable trigger user");
-    await k.query("create table training_load.variables_manage_v113_use (singleton boolean primary key, first_checked_write_at timestamptz)");
-    await k.query("insert into training_load.variables_manage_v113_use(singleton) values(true)");
-    await k.query("commit");
-  } catch (error) {
-    await k.query("rollback");
-    throw error;
-  }
-}
 after(async () => {
   if (server) { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
   if (appPool) {
@@ -791,6 +770,36 @@ test("pre-Board-gate binary saves a confirmation that the current binary scopes 
   assert.deepEqual(shape(nonOwner), shape(missingTeam));
   assert.deepEqual(shape(nonOwner), NOT_FOUND);
 });
+test("Board holder of Variables View still needs Mappings Manage", async () => {
+  const { t, cand } = await freshTeam();
+  const f = await field("time");
+  const target = await variable(W.caA, { unit: "min" });
+  const row = await newRow(W.caA, t, cand, f, target);
+  const requestKey = key();
+  const patch = async remove => {
+    await k.query("begin");
+    try {
+      await k.query("alter table public.permission_role_items disable trigger user");
+      await k.query(remove
+        ? "delete from public.permission_role_items where permission_word='mappings.manage'"
+        : "insert into public.permission_role_items(role_id,permission_word) select id,'mappings.manage' from public.permission_roles where basic_key='club_admin'");
+      await k.query("alter table public.permission_role_items enable trigger user");
+      await k.query("commit");
+    } catch (error) {
+      await k.query("rollback");
+      throw error;
+    }
+  };
+  await patch(true);
+  try {
+    assert.equal((await boardOf(W.caA, t)).status, 200);
+    const rejected = await nothingWritten(() => save(W.caA, t, cand, [row], { requestKey }));
+    assert.deepEqual(shape(rejected), NOT_FOUND);
+  } finally {
+    await patch(false);
+  }
+  assert.equal(ok(await save(W.caA, t, cand, [row], { requestKey })).replayed, false);
+});
 test("Board uncertain commit hides a durable confirmation after a workspace switch", async () => {
   const service = await import("../src/sourceMetricMappingService.js");
   const { t, cand } = await freshTeam();
@@ -873,6 +882,12 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
   const from = seen.findIndex((x) => x.includes("optimove.source_metric_actor"));
   const to = seen.findIndex((x, i) => i > from && /^commit$/i.test(x));
   assert.ok(from >= 0 && to > from, "the save's transaction was recorded");
+  const normalResponse = seen.slice(to + 1);
+  const bindingProof = normalResponse.findIndex(sql => sql.includes("source_metric_binding_club(a.source_team_binding_id) as club_id"));
+  const confirmationProof = normalResponse.findIndex(sql => sql.includes("where c.id=$1 and c.operation_id=$2"));
+  const protectedAnswer = normalResponse.findIndex(sql => sql.includes("select c.id, c.team_id, c.confirmed_at"));
+  assert.ok(bindingProof >= 0 && confirmationProof > bindingProof && protectedAnswer > confirmationProof,
+    "a normal COMMIT verifies the exact binding and confirmation before the protected response");
   const tx = seen.slice(from, to);
   const txValues = seenValues.slice(from, to);
   // The statements that carry an athlete's value (the confirmation's items, the only ones naming the value columns)
