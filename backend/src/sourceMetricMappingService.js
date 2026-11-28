@@ -1107,10 +1107,16 @@ function runMappingWrite(options) {
       : record.mapping_id === written.mapping_id && (record.mapping_version_id ?? null) === (written.mapping_version_id ?? null),
     body: async (client, operationId) => {
       await lockClubCeiling(client, [ctx.owner.clubId], "shared");
+      let checkedActor = false;
       try {
-        return await body(client, operationId, check);
+        return await body(client, operationId, async () => {
+          checkedActor = await check(client);
+          return checkedActor;
+        });
       } catch (error) {
-        if (error instanceof SourceMetricMappingError && error.status !== 404) await check(client);
+        // Late database conflicts can abort the transaction after the actor
+        // was checked and locked. Preserve their refusal without querying it.
+        if (!checkedActor && error instanceof SourceMetricMappingError && error.status !== 404) await check(client);
         throw error;
       }
     },
