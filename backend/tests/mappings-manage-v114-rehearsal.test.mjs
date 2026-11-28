@@ -70,7 +70,7 @@ function roleData(client) {
 
 
 const previousBuild = "7a78d82a12b175476bd4e09656e28ca5f357ba72";
-const stagedBuild = "107b70f9c4a0eb6f8329be1357ce731d90380c27";
+const stagedBuild = "70179aa735d3449386c0f54e1cc651ee7cabc9d8";
 const migration = "202612161000";
 const word = "mappings.manage";
 const read = name => readFile(new URL("../../docs/runbooks/mappings-manage-v114-" + name + ".sql", import.meta.url), "utf8");
