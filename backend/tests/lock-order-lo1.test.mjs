@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // LO-1, the lock-order pull request (J14 section 7 and R13; J15 section 5 and
@@ -59,6 +60,7 @@ before(async () => {
   await stageVariablesManageForTest(k);
   await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   await stageMappingsManageForTest(k);
+  await setSourceConnectFixture(k, true);
   // The columns the real revocation routes write and read (as in the 7h suite).
   await k.query(`alter table public.user_club_roles add column if not exists granted_by_user_id uuid,
                    add column if not exists revoked_at timestamptz, add column if not exists revoked_by_user_id uuid,
