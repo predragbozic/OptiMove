@@ -1,3 +1,4 @@
+import { recordVariableManageUse } from "./variableManageFirstUse.js";
 // Domains and categories of canonical variables (phase 12b; the contract is J6,
 // docs/ai/phase12-domains-categories-contract.md, decision C101 of
 // docs/ai/gpexe-metric-variable-mapping-discovery.md).
@@ -326,6 +327,7 @@ function write({ ctx, operation, requestKey, requestHash, body }) {
   return runWrite({
     ctx, where: operation, requestKey, requestHash, action: operation,
     authorizeTarget: authorizeVariableManage(ctx), authorizeReplayOnly: true,
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse,
     matchesWrittenReceipt: (record, written) => record.metric_classification_change_id === written.metric_classification_change_id
       && record.owner_scope === written.owner_scope && record.owner_club_id === written.owner_club_id,
     body: async (client) => {

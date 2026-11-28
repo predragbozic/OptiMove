@@ -13,6 +13,13 @@ export async function stageVariablesManageForTest(client) {
   const { rows: [{ evaluator }] } = await client.query(
     "select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as evaluator",
   );
+  const { rows: [{ present }] } = await client.query(
+    "select to_regclass('training_load.variables_manage_v113_use') is not null as present",
+  );
+  if (!present) {
+    await client.query("create table training_load.variables_manage_v113_use (singleton boolean primary key check (singleton), first_checked_write_at timestamptz)");
+    await client.query("insert into training_load.variables_manage_v113_use(singleton) values (true)");
+  }
   if (evaluator.includes("'variables.manage'")) return;
   const staged = evaluator.replace("'variables.view'", "'variables.view', 'variables.manage'");
   assert.notEqual(staged, evaluator);

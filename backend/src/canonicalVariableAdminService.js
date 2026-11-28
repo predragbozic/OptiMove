@@ -1,3 +1,4 @@
+import { recordVariableManageUse } from "./variableManageFirstUse.js";
 // Canonical-variable administration (M3-0): the admin API for OptiMove's own
 // canonical variables - Metrics Core definitions, independent of any source -
 // under /api/training-load/sources/metrics/variables. It reads the variables of
@@ -1007,7 +1008,8 @@ export async function createVariable({ ctx, body }) {
     },
   });
   return runWrite({
-    ctx, where: "variable_create", requestKey, requestHash, action: "variable_create", authorizeTarget: authorizeVariableManage(ctx), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
+    ctx, where: "variable_create", requestKey, requestHash, action: "variable_create",
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse, authorizeTarget: authorizeVariableManage(ctx), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
     requests: VARIABLE_REQUESTS, classify: classifyVariableError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
@@ -1073,7 +1075,8 @@ export async function createVariableVersion({ ctx, variableId, body }) {
     },
   });
   return runWrite({
-    ctx, where: "variable_version_create", requestKey, requestHash, action: "variable_version_create", authorizeTarget: authorizeVariableManage(ctx, client => lockWritableDefinition(client, ctx, id)), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
+    ctx, where: "variable_version_create", requestKey, requestHash, action: "variable_version_create",
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse, authorizeTarget: authorizeVariableManage(ctx, client => lockWritableDefinition(client, ctx, id)), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
     requests: VARIABLE_REQUESTS, classify: classifyVariableError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
@@ -1259,8 +1262,12 @@ async function authorizeVariableChange(client, ctx, id) {
   const { type, id: scopeId } = ctx.editorScope ?? {};
   if (ctx.basis === "platform_admin") return false;
   if ((type !== "club" && type !== "team") || !scopeId) throw NOT_FOUND();
-  const { rows: [phase] } = await client.query("select public.permission_word_honoured('variables.rename_archive') as staged");
-  if (!phase?.staged) throw NOT_FOUND();
+  const { rows: [phase] } = await client.query(
+    "select public.permission_word_honoured('variables.rename_archive') as narrow,"
+    + " ($1 = 'club' and public.permission_word_honoured('variables.manage')) as full",
+    [type],
+  );
+  if (!phase?.narrow && !phase?.full) throw NOT_FOUND();
   await lockClubCeiling(client, [ctx.owner.clubId], "shared");
   // Preserve the deployed domain order: the definition before legacy actor rows.
   await lockWritableDefinition(client, ctx, id);
@@ -1276,13 +1283,14 @@ async function authorizeVariableChange(client, ctx, id) {
   }
   await client.query("select public.lock_permission_actor($1, $2, $3)", [ctx.userId, type, scopeId]);
   const { rows: [rights] } = await client.query(
-    `select public.user_has_permission($1, 'variables.view', $2, $3)
-       and public.user_has_permission($1, 'variables.rename_archive', $2, $3) as allowed`,
-    [ctx.userId, type, scopeId],
+    `select public.user_has_permission($1, 'variables.view', $2, $3) as can_view,
+            ($4 and public.user_has_permission($1, 'variables.rename_archive', $2, $3)) as narrow,
+            ($5 and public.user_has_permission($1, 'variables.manage', $2, $3)) as full`,
+    [ctx.userId, type, scopeId, phase.narrow, phase.full],
   );
-  if (!rights?.allowed) throw NOT_FOUND();
+  if (!rights?.can_view || (!rights.narrow && !rights.full)) throw NOT_FOUND();
   await lockVariableEditorSession(client, ctx);
-  return true;
+  return rights.narrow ? "rename_archive" : "manage";
 }
 
 async function lockVariableEditorSession(client, ctx) {
@@ -1350,7 +1358,8 @@ async function runChange({ ctx, variableId, operation, requestKey, requestHash, 
         [requestKey, ctx.userId, operation, requestHash, ctx.owner.scope, ctx.owner.clubId, ctx.basis,
           ctx.basis === "team_coach" ? ctx.teamId : null, id, changes[0].id, reason],
       );
-      if (targetAuthorized) await recordVariableRenameArchiveUse(client);
+      if (targetAuthorized === "rename_archive") await recordVariableRenameArchiveUse(client);
+      if (targetAuthorized === "manage") await recordVariableManageUse(client);
       return { operation, metric_definition_id: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
     },
   });
@@ -1601,6 +1610,7 @@ export async function copyVariable({ ctx, variableId, body }) {
   };
   return runWrite({
     ctx, where: "variable_copy", requestKey, requestHash, action: "variable_copy",
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse,
     authorizeTarget: authorizeSystemVariablePreference(ctx, id, true), authorizeReplayOnly: true,
     matchesWrittenReceipt: (record, written) => matchesVariableManageReceipt(record, written) && record.operation_id === written.operation_id,
     requests: VARIABLE_REQUESTS, classify, idsOf: variableIdsOf,
@@ -1792,6 +1802,7 @@ async function setHidden({ ctx, variableId, body, hide }) {
   return runWrite({
     ctx, where: operation, requestKey, requestHash, action: operation,
     authorizeTarget: authorizeSystemVariablePreference(ctx, id, false), authorizeReplayOnly: true,
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse,
     matchesWrittenReceipt: (saved, written) => saved.metric_definition_id === written.metric_definition_id
       && saved.club_id === written.club_id && saved.hide_record_id === written.hide_record_id,
     requests: HIDE_REQUESTS, classify, idsOf: () => ({ variableId: id }),

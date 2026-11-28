@@ -52,15 +52,62 @@ test("native variable create and version need the staged Manage right; a queued 
     assert.equal(system.status, 201, system.text);
 
     await stageVariablesManageForTest(client);
+    const firstUse = async (narrow = false) => (await client.query(
+      narrow
+        ? "select first_checked_write_at from training_load.variable_rename_archive_v112_use"
+        : "select first_checked_write_at from training_load.variables_manage_v113_use",
+    )).rows[0].first_checked_write_at;
+    assert.equal(await firstUse(), null);
+    const callRename = (variableId, body) => post(aCookie, path + "/" + variableId + "/rename", body);
     denied(await post(aCookie, path, create));
     await editRole(manage, true);
     denied(await post(coachCookie, path, createInput("Not a club administrator")));
+    const noop = await post(aCookie, path + "/" + system.body.variable.id + "/show", { requestKey: key() });
+    assert.equal(noop.status, 200, noop.text);
+    assert.equal(noop.body.idempotent, true);
+    assert.equal(await firstUse(), null, "a fresh no-op is not first use");
+    const platformWhileStaged = await post(platformCookie, path, createInput("Another system variable"));
+    assert.equal(platformWhileStaged.status, 201, platformWhileStaged.text);
+    assert.equal(await firstUse(), null, "existing platform writes do not stamp native use");
+    const mapping = await import("../src/sourceMetricMappingService.js");
+    mapping.setMappingCommitForTests({ fault: async transaction => {
+      mapping.setMappingCommitForTests();
+      await transaction.query("rollback");
+      throw new Error("Commit not confirmed");
+    } });
+    const rolledBack = await post(aCookie, path, create);
+    assert.deepEqual([rolledBack.status, rolledBack.body.error], [503, "outcome_unknown"]);
+    assert.equal(await firstUse(), null);
+    assert.equal(await receipts(create.requestKey), 0);
     const made = await post(aCookie, path, create);
     assert.equal(made.status, 201, made.text);
     assert.equal(await receipts(create.requestKey), 1);
     assert.equal((await post(aCookie, path, create)).body.replayed, true);
 
+    const marked = await firstUse();
+    assert.ok(marked instanceof Date);
+    assert.equal(await firstUse(true), null);
     const definitionId = made.body.variable.id;
+    const rename = async label => {
+      const current = await server.api(aCookie, path + "/" + definitionId);
+      assert.equal(current.status, 200, current.text);
+      return { requestKey: key(), labelsToken: current.body.variable.labelsToken, label };
+    };
+    const narrowRename = await rename("Narrow preferred");
+    const renamed = await callRename(definitionId, narrowRename);
+    assert.equal(renamed.status, 200, renamed.text);
+    const narrowMarked = await firstUse(true);
+    assert.ok(narrowMarked instanceof Date);
+    await editRole("variables.rename_archive", false);
+    const fullOnly = await callRename(definitionId, await rename("Full permission alternative"));
+    assert.equal(fullOnly.status, 200, fullOnly.text);
+    assert.deepEqual(await firstUse(), marked);
+    assert.deepEqual(await firstUse(true), narrowMarked);
+    assert.equal((await callRename(definitionId, narrowRename)).body.replayed, true);
+    const hideNoop = await post(aCookie, path + "/" + system.body.variable.id + "/show", { requestKey: key() });
+    assert.equal(hideNoop.status, 200, hideNoop.text);
+    assert.equal(hideNoop.body.idempotent, true);
+    assert.deepEqual(await firstUse(), marked);
     const endpoint = path + "/" + definitionId + "/versions";
     const versionId = (await client.query(
       "select current_version_id from training_load.metric_definitions where id=$1", [definitionId],
@@ -116,7 +163,6 @@ test("native variable create and version need the staged Manage right; a queued 
     // An old create hash did not encode the workspace. A genuinely different
     // club's committed row cannot confirm the first rolled-back transaction.
     await f.grantClub(a, clubB);
-    const mapping = await import("../src/sourceMetricMappingService.js");
     const uncertain = createInput("Same submitted input in two clubs");
     const selectClub = async scopeId => {
       const selected = await server.api(aCookie, "/api/auth/workspace", {

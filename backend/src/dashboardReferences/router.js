@@ -1,3 +1,4 @@
+import { recordVariableManageUse } from "../variableManageFirstUse.js";
 import { getVariable } from "../canonicalVariableAdminService.js";
 import { Router } from "express";
 import { adminWriteKit } from "../sourceMetricMappingService.js";
@@ -86,7 +87,13 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
       // Same order as the deployed table writer: actor checks, then the request lock.
       await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
         ["dashboard-reference:" + ctx.userId.toLowerCase() + ":" + req.body.requestId.toLowerCase()]);
+      const native = ctx.basis !== "platform_admin";
+      const prior = native && (await client.query(
+        "select 1 from training_load.dashboard_reference_requests where actor_id=$1 and request_id=$2",
+        [ctx.userId, req.body.requestId],
+      )).rowCount;
       const result=await client.query("select training_load.mutate_dashboard_reference($1,$2,$3,$4,$5,$6,$7,$8) receipt",[ctx.userId,ctx.owner.clubId,req.body.requestId,hash,req.params.id??null,req.body.expectedRevision??null,action,payload]);
+      if (native && !prior) await recordVariableManageUse(client);
       return result.rows[0].receipt;
     },{locks:true});
     return res.status(action === "create"?201:200).json(receipt);

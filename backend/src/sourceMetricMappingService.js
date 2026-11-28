@@ -863,7 +863,7 @@ const MAPPING_REQUESTS = Object.freeze({
 });
 // The ids a committed write names when its answer could not be read (readError).
 const mappingIdsOf = (written) => ({ mappingId: written.mapping_id ?? null, ...(written.mapping_version_id ? { versionId: written.mapping_version_id } : {}) });
-async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf, authorizeTarget, authorizeReplayOnly = false, matchesWrittenReceipt }) {
+async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf, authorizeTarget, authorizeReplayOnly = false, matchesWrittenReceipt, recordEffect }) {
   const client = await pool.connect();
   const release = guardClient(client);
   let released = false;
@@ -902,6 +902,7 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     await client.query(ACTOR_CONTEXT_SQL, [String(ctx.userId).toLowerCase()]);
     const operationId = crypto.randomUUID();
     const written = await operation(client, operationId, targetAuthorized);
+    if (!written.noop) await recordEffect?.(client);
     // The bounded COMMIT (the F2 discipline).
     let commitError = null;
     try {

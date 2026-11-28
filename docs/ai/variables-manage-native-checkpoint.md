@@ -23,11 +23,17 @@ Owned classification domains, categories, icons and links use the same
 club-scoped Manage check. Classification reads and the existing link
 ownership rules retain their behavior.
 
-Remaining for the full Variables word:
+P3 reference-table writes follow the same active resource-club rule. Their
+existing actor checks precede the shared request lock. The writer checks the
+receipt under that lock before calling the sanctioned function. Chart and
+Radar widget bindings keep their existing Dashboard authorization.
 
-- P3 reference-table publishing and mutations at the resource club.
-  Widget bindings continue to use their dashboard permission.
-- Full Variables versus narrow Rename/Archive for overlapping effects,
-  legacy Settings overlap and the database seed/audit/rollback package.
+Native effects and their durable receipts commit with the first-use marker.
+No-op, replay, refusal and platform writes leave it untouched. An unconfirmed
+commit verifies the durable receipt under fresh authorization. Overlapping
+club lifecycle effects prefer the narrow Rename/Archive grant when both
+grants apply. Only the narrow grant applies in a team.
 
-Do not expose the full Variables word from this checkpoint.
+The bridge must retain existing Settings grants on the previous server and
+keep the full Manage word hidden until all previous instances drain. The
+database seed, audit, rollback and old-server rehearsal ship with the bridge.

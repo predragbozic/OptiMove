@@ -3,6 +3,7 @@ import { before,after,test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {createPagesDatabase} from './support/dashboard-pages-db.mjs';
+import {stageVariablesManageForTest} from './support/variables-manage-grants.mjs';
 import {fixtures,startServer,key} from './support/permission-roles-world.mjs';
 let db,q,F,srv,A,B,team,admin,coach,viewer,teamViewer,mixed,table;
 const R='/api/training-load/reference-tables';
@@ -31,7 +32,7 @@ async function setFixtureManageGrant(client, add) {
 before(async()=>{
  db=await createPagesDatabase({through:'202612071000',label:'references_http'});q=db.client;F=fixtures(q);
  await q.query("begin");
- try { await setFixtureManageGrant(q,true); await q.query("commit"); }
+ try { await stageVariablesManageForTest(q); await setFixtureManageGrant(q,true); await q.query("commit"); }
  catch (error) { await q.query("rollback"); throw error; }
  process.env.DASHBOARD_REFERENCES_ENABLED='true';process.env.DASHBOARD_PAGES_ENABLED='true';srv=await startServer(db.url);
  A=await F.club('Ref Alpha');B=await F.club('Ref Beta');team=await F.team(A);
@@ -41,7 +42,15 @@ before(async()=>{
  const r=await post(admin,'/api/organization/roles',{requestKey:key(),clubId:A,scopeTypes:['club','team'],items:['org.view'],name:'Reference viewer'});assert.equal(r.status,200,r.text);
  for(const [who,scopeType,scopeId]of [[viewer,'club',A],[teamViewer,'team',team],[mixed,'club',A]]){const assignment=await post(admin,'/api/organization/roles/assignments',{requestKey:key(),reason:'Reference access test',userId:who.id,roleId:r.body.role.id,scopeType,scopeId});assert.equal(assignment.status,200,assignment.text);}
  for(const who of [viewer,mixed])await q.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'club',$2) on conflict(user_id) do update set workspace_type='club',scope_id=excluded.scope_id",[who.id,A]);
- const created=await post(admin,R,{requestId:crypto.randomUUID(),name:'Game targets'});assert.equal(created.status,201,created.text);table=created.body;
+ const firstUse=async()=> (await q.query("select first_checked_write_at::text value from training_load.variables_manage_v113_use")).rows[0].value;
+ const body={requestId:key(),name:'Game targets'};
+ assert.equal(await firstUse(),null);
+ const denied=await post(coach,R,body);assert.equal(denied.status,404,denied.text);
+ assert.equal(await firstUse(),null);
+ const created=await post(admin,R,body);assert.equal(created.status,201,created.text);table=created.body;
+ const stamped=await firstUse();assert.ok(stamped);
+ const replay=await post(admin,R,body);assert.equal(replay.status,201,replay.text);
+ assert.deepEqual(replay.body,created.body);assert.equal(await firstUse(),stamped);
 });
 after(async()=>{await srv?.stop();await db?.drop();delete process.env.DASHBOARD_REFERENCES_ENABLED;delete process.env.DASHBOARD_PAGES_ENABLED;});
 test('club admin creates and reads; a coach reads the published catalog but cannot edit',async()=>{
