@@ -89,7 +89,7 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
         ["dashboard-reference:" + ctx.userId.toLowerCase() + ":" + req.body.requestId.toLowerCase()]);
       const native = ctx.basis !== "platform_admin";
       const prior = native && (await client.query(
-        "select 1 from training_load.dashboard_reference_requests where actor_id=$1 and request_id=$2",
+        "select 1 from training_load.dashboard_reference_requests where actor_id=$1 and request_id=$2 for share",
         [ctx.userId, req.body.requestId],
       )).rowCount;
       const result=await client.query("select training_load.mutate_dashboard_reference($1,$2,$3,$4,$5,$6,$7,$8) receipt",[ctx.userId,ctx.owner.clubId,req.body.requestId,hash,req.params.id??null,req.body.expectedRevision??null,action,payload]);
