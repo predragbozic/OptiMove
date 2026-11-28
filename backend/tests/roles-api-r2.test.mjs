@@ -88,7 +88,7 @@ async function clubAdminItems(pa, items) {
 const VIEW_SEED = ["athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team",
   "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"];
 const TEAM_COACH_SCOPE_SEED = [...VIEW_SEED, "calendar.events.manage", "dashboards.manage", "load.roster.decide", "load.schedule.manage", "load.estimates.manage", "load.activities.manage", "programs.rpe_settings", "exercises.add", "exercises.remove", "programs.edit", "programs.assign", "programs.publish", "tests.schedule.manage", "variables.rename_archive"];
-const CLUB_ADMIN_SEED = ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign", "calendar.settings.manage", "variables.manage", ...TEAM_COACH_SCOPE_SEED];
+const CLUB_ADMIN_SEED = ["athletes.manage", "athletes.remove", "org.club.edit", "org.teams.manage", "org.view", "roles.manage", "staff.assign", "calendar.settings.manage", "variables.manage", "mappings.manage", ...TEAM_COACH_SCOPE_SEED];
 
 // ---------------------------------------------------------------------------
 // Ceiling and dominance
