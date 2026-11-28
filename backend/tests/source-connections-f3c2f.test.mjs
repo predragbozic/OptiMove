@@ -810,7 +810,9 @@ test("native Sources Connect rechecks the role, workspace and session before Cre
     slip.release();
   }
   assertMissing(await pending);
+  assertMissing(await create(CREATE(other.club, { requestKey: request.requestKey })));
   await setWorkspace(ca.id, "club", club);
+  assert.deepEqual([(await create({ ...request, accountLabel: "Own conflicting key" })).status], [409]);
   assert.equal((await create(request)).body.replayed, true);
 
   const { conn, binding } = await bound(ca, club, team);

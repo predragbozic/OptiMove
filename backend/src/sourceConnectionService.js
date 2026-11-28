@@ -203,7 +203,7 @@ export async function resolveConnectionAdmin(req) {
     return { userId: String(req.user.id), basis: "platform_admin", workspace: { type: workspace.type, scopeId } };
   }
   if (workspace.type === "club" && scopeId && holdsClubAdminRole(req.authz, scopeId)) {
-    return { userId: String(req.user.id), basis: "club_admin", workspace: { type: "club", scopeId }, sessionToken: req.sessionToken };
+    return { userId: String(req.user.id), basis: "club_admin", workspace: { type: "club", scopeId } };
   }
   return null;
 }
@@ -250,6 +250,17 @@ async function localConnectionRights(client, ctx, clubId) {
   await client.query("select public.lock_permission_actor($1, 'club', $2)", [ctx.userId, clubId]);
   const right = await client.query("select public.user_has_permission($1, 'sources.connect', 'club', $2) as allowed", [ctx.userId, clubId]);
   return right.rows[0]?.allowed === true;
+}
+
+async function bindingTeamInClub(client, clubId, teamId) {
+  // A completed binding remains in history if its team moves. Native receipt
+  // recovery may reveal the current team name only while that team is in scope.
+  const team = await client.query("select 1 from public.teams where id=$1 and club_id=$2", [teamId, clubId]);
+  return team.rowCount > 0;
+}
+
+async function localBindingRights(client, ctx, clubId, teamId) {
+  return await localConnectionRights(client, ctx, clubId) && await bindingTeamInClub(client, clubId, teamId);
 }
 
 async function localReceipt(ctx, clubId, work) {
@@ -391,7 +402,8 @@ export async function createConnection({ ctx, sourceSystem, body }) {
       )).rows[0];
       if (earlier) {
         if (ctx.basis !== "platform_admin" && createReplayHold) await createReplayHold(client);
-        if (ctx.basis !== "platform_admin" && !await localConnectionRights(client, ctx, clubId)) {
+        if (ctx.basis !== "platform_admin" && (!clubVisible(ctx, earlier.owner_club_id)
+            || !await localConnectionRights(client, ctx, clubId))) {
           await client.query("rollback"); released = true; release();
           return null;
         }
@@ -581,7 +593,7 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
     )).rows[0];
     if (earlier) {
       if (ctx.basis !== "platform_admin" && unbindReplayHold) await unbindReplayHold(client);
-      if (ctx.basis !== "platform_admin" && !await localConnectionRights(client, ctx, clubId)) {
+      if (ctx.basis !== "platform_admin" && !await localBindingRights(client, ctx, clubId, earlier.team_id)) {
         await client.query("rollback"); released = true; release();
         return null;
       }
@@ -620,7 +632,7 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
     }
     if (!binding) { await client.query("rollback"); released = true; release(); return null; }
     if (ctx.basis !== "platform_admin" && unbindHold) await unbindHold(client);
-    if (ctx.basis !== "platform_admin" && !await localConnectionRights(client, ctx, clubId)) {
+    if (ctx.basis !== "platform_admin" && !await localBindingRights(client, ctx, clubId, binding.team_id)) {
       await client.query("rollback"); released = true; release();
       return null;
     }
@@ -656,7 +668,7 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
     recorded = true;
     released = true;
     const confirmation = await commitAttempt(client, release, auditId, row.id, attemptId, binding.team_id);
-    if (ctx.basis !== "platform_admin" && !await localReceipt(ctx, clubId, () => true).catch(() => false)) return null;
+    if (ctx.basis !== "platform_admin" && !await localReceipt(ctx, clubId, executor => bindingTeamInClub(executor, clubId, binding.team_id)).catch(() => false)) return null;
     return unbindResult(row.id, { ...binding, state: "ended", ended_at: ended.ended_at, ended_by_user_id: ctx.userId, end_reason: request.reason }, auditId, false, confirmation);
   } catch (error) {
     if (error?.code === "55P03" || error?.code === "40P01") error = refusal(409, "try_again", "Another change of this connection, its club or a team is running. Try again when it has finished.", { connectionId: id });
@@ -667,7 +679,10 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
       release(dead);
     }
     if (error instanceof SourceConnectionError) {
-      if (ctx.basis !== "platform_admin" && known && !await localReceipt(ctx, clubId ?? ctx.workspace.scopeId, () => true).catch(() => false)) return null;
+      if (ctx.basis !== "platform_admin" && known) {
+        const owner = clubId ?? ctx.workspace.scopeId;
+        if (!await localReceipt(ctx, owner, executor => bindingTeamInClub(executor, owner, known.teamId)).catch(() => false)) return null;
+      }
       const alreadyRecorded = recorded || error.code === "outcome_unknown";
       if (known && !alreadyRecorded && error.status !== 404) {
         // A refusal is audited once per request: the same user repeating the

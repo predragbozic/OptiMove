@@ -91,7 +91,7 @@ router.post("/:source/connections", handle(async (req, res) => {
   if (!jsonObjectBody(req, res)) return;
   let connection;
   try {
-    connection = await service.createConnection({ ctx, sourceSystem: req.params.source, body: req.body });
+    connection = await service.createConnection({ ctx: { ...ctx, sessionToken: req.sessionToken }, sourceSystem: req.params.source, body: req.body });
   } catch (error) {
     if (error instanceof service.SourceConnectionError && error.code === "outcome_unknown" && error.details?.connectionId) {
       await service.recordUnknownOutcome({ connectionId: error.details.connectionId, action: "create", ctx });
@@ -171,7 +171,7 @@ router.post("/:source/connections/:id/bindings/:bindingId/unbind", handle(async 
   req.body = undefined;
   let result;
   try {
-    result = await service.unbindTeam({ ctx, sourceSystem: req.params.source, id: req.params.id, bindingId: req.params.bindingId, body });
+    result = await service.unbindTeam({ ctx: { ...ctx, sessionToken: req.sessionToken }, sourceSystem: req.params.source, id: req.params.id, bindingId: req.params.bindingId, body });
   } catch (error) {
     if (error instanceof service.SourceConnectionError && error.code === "outcome_unknown" && error.details?.connectionId) {
       await service.recordUnknownOutcome({ connectionId: error.details.connectionId, action: "unbind", ctx, attemptId: error.details.attemptId ?? null, teamId: error.details.teamId ?? null });
