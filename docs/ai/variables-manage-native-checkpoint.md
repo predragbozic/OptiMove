@@ -19,9 +19,12 @@ without independent Mapping writes or activation. Hide and Show again
 retain their club preference and existing activation rules. Personal hide
 remains separate.
 
+Owned classification domains, categories, icons and links use the same
+club-scoped Manage check. Classification reads and the existing link
+ownership rules retain their behavior.
+
 Remaining for the full Variables word:
 
-- Owned classification writes for domains, categories and links.
 - P3 reference-table publishing and mutations at the resource club.
   Widget bindings continue to use their dashboard permission.
 - Full Variables versus narrow Rename/Archive for overlapping effects,

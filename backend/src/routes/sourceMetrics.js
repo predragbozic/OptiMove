@@ -498,21 +498,21 @@ router.get("/classification", handle(async (req, res) => {
 }));
 
 router.post("/classification/links", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await classification.createLink({ ctx, body: req.body }), 201);
 }));
 
 router.post("/classification/links/:linkId/remove", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await classification.removeLink({ ctx, linkId: req.params.linkId, body: req.body }), 200);
 }));
 
 router.post("/classification/:kind", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await classification.createNode({ ctx, kind: req.params.kind, body: req.body }), 201);
@@ -521,7 +521,7 @@ router.post("/classification/:kind", handle(async (req, res) => {
 // The icon (V4, J6.1) for the same callers as a rename.
 for (const [act, fn] of [["rename", "renameNode"], ["archive", "archiveNode"], ["restore", "restoreNode"], ["icon", "changeNodeIcon"]]) {
   router.post(`/classification/:kind/:nodeId/${act}`, handle(async (req, res) => {
-    const ctx = await adminContext(req, res);
+    const ctx = await variableManageContext(req, res);
     if (!ctx) return;
     if (!jsonObjectBody(req, res)) return;
     writeAnswer(res, await classification[fn]({ ctx, kind: req.params.kind, nodeId: req.params.nodeId, body: req.body }), 200);

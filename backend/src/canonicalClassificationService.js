@@ -17,11 +17,13 @@
 // removed link's row FOR UPDATE; then the rights FOR SHARE (rightsStillHold:
 // user, club). The v41 guards lock the same targets again, already held.
 import { adminWriteKit, SourceMetricMappingError, TEXT_LIMITS } from "./sourceMetricMappingService.js";
-import { ICON_PREFIX, KEY_RULE, iconOut, suggestVariableKey } from "./canonicalVariableAdminService.js";
+import {
+  ICON_PREFIX, KEY_RULE, authorizeVariableManage, iconOut, lockVariableManageCeiling, lockVariableManageOrPlatformActor, suggestVariableKey,
+} from "./canonicalVariableAdminService.js";
 import { isIconKey } from "./iconKeys.js";
 
 const {
-  runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
+  runWrite, boundedRead, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
   hashOf, UUID, ownerKeyOf,
 } = adminWriteKit;
 
@@ -234,6 +236,7 @@ export function classificationFilterSql(ctx, filter, params) {
 // ---------------------------------------------------------------------------
 const CLASSIFICATION_REQUESTS = Object.freeze({
   find: `select r.operation, r.request_hash, c.object_kind, c.domain_id, c.category_id, c.metric_definition_id, c.link_id,
+                r.metric_classification_change_id,
                 c.owner_scope, c.owner_club_id
            from training_load.metric_classification_requests r
            join training_load.metric_classification_changes c on c.id = r.metric_classification_change_id
@@ -321,7 +324,14 @@ async function reread(executor, ctx, record) {
 }
 function write({ ctx, operation, requestKey, requestHash, body }) {
   return runWrite({
-    ctx, where: operation, requestKey, requestHash, action: operation, body,
+    ctx, where: operation, requestKey, requestHash, action: operation,
+    authorizeTarget: authorizeVariableManage(ctx), authorizeReplayOnly: true,
+    matchesWrittenReceipt: (record, written) => record.metric_classification_change_id === written.metric_classification_change_id
+      && record.owner_scope === written.owner_scope && record.owner_club_id === written.owner_club_id,
+    body: async (client) => {
+      if (ctx.basis !== "platform_admin") await lockVariableManageCeiling(client, ctx);
+      return body(client);
+    },
     reread: (executor, record) => reread(executor, ctx, record),
     requests: CLASSIFICATION_REQUESTS, classify: classifyClassificationError, idsOf,
   });
@@ -367,15 +377,16 @@ export async function createNode({ ctx, kind: rawKind, body }) {
   return write({
     ctx, operation, requestKey, requestHash,
     body: async (client) => {
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await lockVariableManageOrPlatformActor(client, ctx);
       await textsAgree(client, [[name, NAME_MAX, TEXT.invalid_name], [description, DESCRIPTION_MAX, TEXT.invalid_description]]);
       const id = (await client.query(
         `insert into ${KINDS[kind].table} (name, description, key, icon_url, owner_scope, owner_club_id, created_by_user_id)
          values ($1, $2, $3, $4, $5, $6, $7) returning id`,
         [name, description, key, iconKey === null ? null : `${ICON_PREFIX}${iconKey}`, ctx.owner.scope, ctx.owner.clubId, ctx.userId],
       )).rows[0].id;
-      await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId: await changeIdOf(client, KINDS[kind].column, id) });
-      return { operation, object_kind: kind, [KINDS[kind].column]: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
+      const changeId = await changeIdOf(client, KINDS[kind].column, id);
+      await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId });
+      return { operation, metric_classification_change_id: changeId, object_kind: kind, [KINDS[kind].column]: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
     },
   });
 }
@@ -391,13 +402,14 @@ async function changeNode({ ctx, kind, id, operation, requestKey, requestHash, r
       if (!plain) throw NOT_FOUND();
       const locked = (await client.query(`select ${NODE_COLUMNS} from ${KINDS[kind].table} n where n.id = $1 for no key update`, [id])).rows[0];
       if (!locked || !isOwn(locked, ctx)) throw NOT_FOUND();
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await lockVariableManageOrPlatformActor(client, ctx);
       check(locked);
       await textsAgree(client, [...texts(locked), [reason, TEXT_LIMITS.reason, TEXT.invalid_reason]]);
       const set = update(locked);
       await client.query(`update ${KINDS[kind].table} set ${set.sql}, updated_at = now() where id = $1`, [id, ...set.values]);
-      await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId: await changeIdOf(client, KINDS[kind].column, id), reason });
-      return { operation, object_kind: kind, [KINDS[kind].column]: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
+      const changeId = await changeIdOf(client, KINDS[kind].column, id);
+      await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId, reason });
+      return { operation, metric_classification_change_id: changeId, object_kind: kind, [KINDS[kind].column]: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
     },
   });
 }
@@ -560,7 +572,7 @@ export async function createLink({ ctx, body }) {
       const cat = ids.categoryId ? (await client.query(`select id, owner_scope, owner_club_id, is_active from training_load.metric_categories where id = $1 for share`, [ids.categoryId])).rows[0] : null;
       const def = ids.variableId ? (await client.query(`select id, owner_scope, owner_club_id, state from training_load.metric_definitions where id = $1 for share`, [ids.variableId])).rows[0] : null;
       if ((ids.domainId && !dom) || (ids.categoryId && !cat) || (ids.variableId && !def)) throw NOT_FOUND();
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await lockVariableManageOrPlatformActor(client, ctx);
       // O4: the category (or the domain of a variable -> domain link) is this
       // workspace's own; the other end is its own or the system's.
       const ownOrSystem = (row) => row.owner_scope === "system" || isOwn(row, ctx);
@@ -583,9 +595,10 @@ export async function createLink({ ctx, body }) {
          values ($1, $2, $3, false, $4, $5, $6) returning id`,
         [ids.domainId ?? null, ids.categoryId ?? null, ids.variableId ?? null, ctx.owner.scope, ctx.owner.clubId, ctx.userId],
       )).rows[0].id;
-      await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId: await changeIdOf(client, "link_id", id) });
+      const changeId = await changeIdOf(client, "link_id", id);
+      await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId });
       return {
-        operation, object_kind: "link", link_id: id, domain_id: ids.domainId ?? null, category_id: ids.categoryId ?? null,
+        operation, metric_classification_change_id: changeId, object_kind: "link", link_id: id, domain_id: ids.domainId ?? null, category_id: ids.categoryId ?? null,
         metric_definition_id: ids.variableId ?? null, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId,
       };
     },
@@ -613,13 +626,14 @@ export async function removeLink({ ctx, linkId, body }) {
            from training_load.metric_structure_links where id = $1 for update`, [id],
       )).rows[0];
       if (!locked || !isOwn(locked, ctx)) throw NOT_FOUND();
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await lockVariableManageOrPlatformActor(client, ctx);
       await textsAgree(client, [[reason, TEXT_LIMITS.reason, TEXT.invalid_reason]]);
       // The v41 guard writes the removed link's change row, from the row, before it goes.
       await client.query(`delete from training_load.metric_structure_links where id = $1`, [id]);
-      await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId: await changeIdOf(client, "link_id", id), reason });
+      const changeId = await changeIdOf(client, "link_id", id);
+      await insertRequest(client, { ctx, requestKey, requestHash, operation, changeId, reason });
       return {
-        operation, object_kind: "link", link_id: id, domain_id: locked.domain_id, category_id: locked.category_id,
+        operation, metric_classification_change_id: changeId, object_kind: "link", link_id: id, domain_id: locked.domain_id, category_id: locked.category_id,
         metric_definition_id: locked.metric_definition_id, owner_scope: locked.owner_scope, owner_club_id: locked.owner_club_id,
       };
     },

@@ -906,7 +906,7 @@ export function setVariableWriteHoldForTests(fn) { writeHold = fn ?? null; }
 let classifyObserver = null;
 export function setVariableClassifyObserverForTests(fn) { classifyObserver = fn ?? null; }
 
-async function lockVariableManageCeiling(client, ctx) {
+export async function lockVariableManageCeiling(client, ctx) {
   const clubId = ctx.owner?.clubId;
   if (ctx.basis !== "club_admin" || ctx.owner.scope !== "club" || !clubId
       || ctx.editorScope?.type !== "club" || ctx.editorScope.id !== clubId || !ctx.sessionToken) throw NOT_FOUND();
@@ -929,7 +929,7 @@ async function lockVariableManageActor(client, ctx) {
 
 // New writes take their original domain locks first. Only replay or response
 // verification needs a separate fresh lock of the specific receipt target.
-function authorizeVariableManage(ctx, lockTarget) {
+export function authorizeVariableManage(ctx, lockTarget) {
   if (ctx.basis === "platform_admin") return undefined;
   return async client => {
     await lockVariableManageCeiling(client, ctx);
@@ -1553,7 +1553,7 @@ function authorizeSystemVariablePreference(ctx, id, copy) {
   });
 }
 
-async function lockVariableManageOrPlatformActor(client, ctx) {
+export async function lockVariableManageOrPlatformActor(client, ctx) {
   if (ctx.basis === "platform_admin") {
     if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
   } else {
