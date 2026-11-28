@@ -36,7 +36,12 @@ where (t.tgrelid, t.tgname) in (
   ('training_load.source_provider_attempts'::regclass, 'source_provider_attempts_keep_closed'),
   ('training_load.source_provider_attempt_teams'::regclass, 'source_provider_attempt_teams_keep_closed')
 ) and t.tgenabled = 'O' and t.tgtype = 62
-  and t.tgfoid = to_regprocedure('training_load.source_provider_store_closed()')) and ((select md5(prosrc) from pg_proc
+  and t.tgfoid = to_regprocedure('training_load.source_provider_store_closed()') and (select count(*) = 3 from pg_trigger a
+where not a.tgisinternal and a.tgrelid in (
+  'training_load.source_provider_admission'::regclass,
+  'training_load.source_provider_attempts'::regclass,
+  'training_load.source_provider_attempt_teams'::regclass
+))) and ((select md5(prosrc) from pg_proc
 where oid = to_regprocedure('training_load.source_provider_store_closed()')) = '952568303b4b671a17dd04ced6660840')) is distinct from true then
     raise exception 'Sources provider rollback refused: closed store guard changed';
   end if;

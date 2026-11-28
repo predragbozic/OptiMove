@@ -21,7 +21,33 @@ const catalogue = async (client) => (await client.query(`
 test("v116 is inaccessible, stays closed, rolls back exactly and reapplies", async () => {
   const fixture = await createPagesDatabase({ through: "202612171000", label: "sources_closed_v116" });
   const { client } = fixture;
+  const apiRoles = ["anon", "authenticated", "service_role"];
+  const createdRoles = [];
+  const defaults = async (action) => {
+    const parties = apiRoles.join(", ") + ", public";
+    const recipient = action === "grant" ? "to" : "from";
+    await client.query(`alter default privileges in schema training_load ${action} all on tables ${recipient} ${parties}`);
+    await client.query(`alter default privileges in schema training_load ${action} execute on functions ${recipient} ${parties}`);
+  };
   try {
+    for (const role of apiRoles) {
+      if (!(await client.query("select from pg_roles where rolname=$1", [role])).rowCount) {
+        await client.query("create role " + role + " nologin");
+        createdRoles.push(role);
+      }
+    }
+    await defaults("grant");
+    await client.query("create table training_load.v116_acl_control(id integer)");
+    try {
+      for (const role of apiRoles) {
+        const { rows: [{ granted }] } = await client.query(
+          "select has_table_privilege($1, 'training_load.v116_acl_control', 'REFERENCES') as granted", [role],
+        );
+        assert.equal(granted, true, role + " inherited positive default ACL control");
+      }
+    } finally {
+      await client.query("drop table training_load.v116_acl_control");
+    }
     const preflight = await read("preflight");
     const postcheck = await read("postcheck");
     const rollback = await read("rollback");
@@ -47,6 +73,14 @@ test("v116 is inaccessible, stays closed, rolls back exactly and reapplies", asy
     } finally {
       await client.query("alter table training_load.source_provider_attempt_teams enable trigger source_provider_attempt_teams_keep_closed");
     }
+    await client.query("create trigger fixture_extra_closure before insert on training_load.source_provider_attempts"
+      + " for each statement execute function training_load.source_provider_store_closed()");
+    try {
+      await assert.rejects(client.query(rollback), /closed store guard changed/);
+      await client.query("rollback");
+    } finally {
+      await client.query("drop trigger fixture_extra_closure on training_load.source_provider_attempts");
+    }
     const later = "migrations_v2/202612181100_sources_rehearsal_later.sql";
     await client.query("insert into public.schema_migrations(migration_name, checksum, runner_version, applied_at) values($1, repeat('0',64), 'test', now() - interval '1 day')", [later]);
     try {
@@ -62,6 +96,12 @@ test("v116 is inaccessible, stays closed, rolls back exactly and reapplies", asy
     check((await client.query(postcheck)).rows[0]);
     assert.deepEqual(await catalogue(client), installed);
   } finally {
-    await fixture.drop();
+    try {
+      await client.query("rollback");
+      await defaults("revoke");
+      for (const role of createdRoles) await client.query("drop role " + role);
+    } finally {
+      await fixture.drop();
+    }
   }
 });
