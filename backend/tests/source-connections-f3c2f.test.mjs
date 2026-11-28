@@ -964,7 +964,7 @@ test("native Unbind returns no receipt or connection after authority changes bef
   await duringProjection(() => q("update public.user_club_roles set is_active=false where user_id=$1 and club_id=$2", [ca.id,club]));
   await q("update public.user_club_roles set is_active=true where user_id=$1 and club_id=$2", [ca.id,club]);
 
-  service.setSourcePostCommitReadFaultForTests(() => { throw new Error("Test read fault"); });
+  service.setPostCommitReadFaultForTests(() => { throw new Error("Test read fault"); });
   try {
     const reply = await submit();
     assert.equal(reply.status, 200, JSON.stringify(reply.body));
@@ -973,7 +973,7 @@ test("native Unbind returns no receipt or connection after authority changes bef
     assert.equal(reply.body.connection, null);
     assert.equal(reply.body.connectionReadError, true);
   } finally {
-    service.setSourcePostCommitReadFaultForTests(null);
+    service.setPostCommitReadFaultForTests(null);
   }
   const restored = await submit();
   assert.equal(restored.status, 200);
