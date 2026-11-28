@@ -1573,7 +1573,14 @@ async function handleContentChange(event) {
   }
   const trainingLoadControl = event.target.closest("[data-action^='training-load-']");
   if (trainingLoadControl && trainingLoadControl.matches("select, input")) {
-    void handleTrainingLoadAction(trainingLoadControl, { renderTrainingLoad: renderActiveTrainingLoadSurface, openWeeklyPlanForAthleteOnDate });
+    const panelBody = trainingLoadControl.closest(".tl-metric-panel-body");
+    const renderTrainingLoad = panelBody ? () => {
+      const scrollTop = document.querySelector(".tl-metric-panel-body")?.scrollTop ?? 0;
+      renderActiveTrainingLoadSurface();
+      const updatedBody = document.querySelector(".tl-metric-panel-body");
+      if (updatedBody) updatedBody.scrollTop = scrollTop;
+    } : renderActiveTrainingLoadSurface;
+    void handleTrainingLoadAction(trainingLoadControl, { renderTrainingLoad, openWeeklyPlanForAthleteOnDate });
     return;
   }
   // Mirror the create-form's color-palette hidden input into state, same
@@ -3403,6 +3410,7 @@ async function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
+  if (action.matches("select") && action.closest(".tl-metric-panel")) return;
   if (type?.startsWith("my-training-")) {
     await handleMyTrainingAction(action, { render: renderMyTraining, pushHistory: pushAppHistory });
     return;

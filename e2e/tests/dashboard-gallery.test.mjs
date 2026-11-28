@@ -134,6 +134,20 @@ for(const width of [1280,390,360]) test(`${width}px: add Area from View and prev
   await page.getByRole('button',{name:'Add widget',exact:true}).click();
   const editor=page.getByRole('dialog',{name:'Add metric'});
   assert.equal(await editor.locator('.tl-metric-panel-types button:enabled svg').count(),12);
+  for(const field of ['groupBy','aggregation','scope']){
+   const select=editor.locator(`select[data-action="training-load-analysis-panel-field"][data-field="${field}"]`);
+   if(await select.isEnabled()){
+    await select.scrollIntoViewIfNeeded();
+    const original=await select.elementHandle();
+    const body=editor.locator('.tl-metric-panel-body');
+    const scrollBefore=await body.evaluate(el=>el.scrollTop);
+    await select.dispatchEvent('click');
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await original.evaluate(el=>el.isConnected),true,field);
+    assert.equal(await body.evaluate(el=>el.scrollTop),scrollBefore,field);
+    await original.dispose();
+   }
+  }
   if(width<720){
    const layout=await editor.locator('.tl-metric-panel-types').evaluate(grid=>{
     const buttons=[...grid.querySelectorAll('button')];
