@@ -1,3 +1,4 @@
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 import { seedVariableRenameGrants, varyRenameGrant } from "./support/variable-rename-grants.mjs";
 // R2 - renaming, archiving and restoring a canonical variable, with a team coach
@@ -103,6 +104,7 @@ before(async () => {
   assert.ok((await k.query(`select 1 from public.schema_migrations where migration_name = $1`, [V38_NAME])).rowCount === 1, "the behaviour database carries v38");
   await stageVariablesManageForTest(k);
   await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
+  await stageMappingsManageForTest(k);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
