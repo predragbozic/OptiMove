@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // 7h-V (C127, J14 O2 (a) and its 7h-V section; the Rukovodilac's V1–V7 of
 // 2026-11-02): an active coach of an active team of a club, in that team's
 // workspace, reads the name and unit of the club's own variables in that
@@ -47,6 +48,8 @@ before(async () => {
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   assert.equal((await k.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   const serverModule = await import("../src/server.js");
   ({ createSession } = await import("../src/auth.js"));

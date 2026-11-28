@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // J18, slice 18-3 - migration v66 (M-B): the gate on a club admin's activation of a
 // mapping version of a field without parameters, and R8's proof that the save of
 // section 4.3 is ONE transaction. Contract: docs/ai/c112-drag-mapping-contract.md
@@ -93,6 +94,8 @@ before(async () => {
   await k.connect();
   assert.equal((await r.query("select current_database() as d")).rows[0].d, rdb.name, "SAFETY");
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];

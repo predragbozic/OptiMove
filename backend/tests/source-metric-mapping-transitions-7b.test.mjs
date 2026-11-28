@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // Phase 7b - activating, replacing and disabling a mapping version (A1 / A2 under
 // /api/training-load/sources/metrics/mappings/:mappingId/versions/:versionId), the
 // revision lifecycle's pinned step for an active version, and migration v43 (G1, G2).
@@ -72,7 +73,7 @@ before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V43), "v43 is a test migration");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v43rb", migrations: UP_TO_V42 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v43" }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v43", roleRead: true }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });
@@ -81,6 +82,8 @@ before(async () => {
   await k.connect();
   assert.equal((await r.query("select current_database() as d")).rows[0].d, rdb.name, "SAFETY");
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
