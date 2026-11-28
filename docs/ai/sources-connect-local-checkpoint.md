@@ -25,6 +25,8 @@ replace a pair subject to the binding constraints. A native club admin in
 the owning workspace can approve the first pair, or repeat that same pair
 without a write, provided the club's verified connection is available. The
 team import lock and database guard prevent replacing an actively bound pair.
-This checkpoint leaves that route in its current authorization lane. Bind,
+The native write and same-pair response now check the staged Sources Connect word
+under the same transaction and keep the existing 403/404 split. Platform
+behavior and the separate session-time-zone route remain unchanged. Bind,
 Connect, Reconnect, Test, provider claims, credentials and Imports retain
 their deployed behavior.
