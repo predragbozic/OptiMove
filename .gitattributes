@@ -179,3 +179,7 @@ backend/scripts/tests-schedule-manage-v111-rehearsal.* text eol=lf
 migrations_v2/202612141000_training_load_v112_variable_rename_archive_bridge.sql text eol=lf
 docs/runbooks/variable-rename-archive-v112-*.sql text eol=lf
 backend/scripts/variable-rename-archive-v112-rehearsal.sh text eol=lf
+
+migrations_v2/202612151000_training_load_v113_variables_manage_bridge.sql text eol=lf
+docs/runbooks/variables-manage-v113-*.sql text eol=lf
+backend/scripts/variables-manage-v113-rehearsal.* text eol=lf
