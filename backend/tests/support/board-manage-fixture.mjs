@@ -16,6 +16,8 @@ export async function stageBoardManageFixture(k) {
     await k.query("alter table public.permission_role_items enable trigger user");
     await k.query("create table training_load.variables_manage_v113_use (singleton boolean primary key, first_checked_write_at timestamptz)");
     await k.query("insert into training_load.variables_manage_v113_use(singleton) values(true)");
+    await k.query("create table training_load.mappings_manage_bridge_use (singleton boolean primary key, first_checked_write_at timestamptz)");
+    await k.query("insert into training_load.mappings_manage_bridge_use(singleton) values(true)");
     await k.query("commit");
   } catch (error) {
     await k.query("rollback");

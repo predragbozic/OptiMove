@@ -1068,12 +1068,23 @@ async function requireOwnActivationBindings(client, ctx, { operationId, activati
   return rows.length;
 }
 
+async function recordMappingsManageUse(client) {
+  const first = await client.query(
+    "update training_load.mappings_manage_bridge_use set first_checked_write_at=clock_timestamp()"
+    + " where singleton and first_checked_write_at is null",
+  );
+  if (!first.rowCount && !(await client.query(
+    "select 1 from training_load.mappings_manage_bridge_use where singleton and first_checked_write_at is not null",
+  )).rowCount) throw new Error("Mappings Manage first-use record is missing.");
+}
+
 function runMappingWrite(options) {
   const { ctx, body, bindingEffect = false, lockReceiptTarget, verifyReceiptTarget } = options;
   if (ctx.basis === "platform_admin") return runWrite(options);
   const check = client => checkMappingManage(client, ctx);
   return runWrite({
     ...options,
+    recordEffect: recordMappingsManageUse,
     authorizeReplayOnly: true,
     authorizeTarget: async client => {
       await lockClubCeiling(client, [ctx.owner.clubId], "shared");

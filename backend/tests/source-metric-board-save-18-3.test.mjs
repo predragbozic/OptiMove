@@ -753,6 +753,8 @@ test("pre-Board-gate binary saves a confirmation that the current binary scopes 
   const old = await previousDashboardServer(db.url, {
     NODE_OPTIONS: "--import=data:text/javascript;base64," + Buffer.from(fixtureSource).toString("base64"),
   }, "6b7f6e02df9eff0984676e26a5a83132e3a71550");
+  await k.query("update training_load.mappings_manage_bridge_use set first_checked_write_at=null");
+  const usedAt = async () => (await one("select first_checked_write_at from training_load.mappings_manage_bridge_use")).first_checked_write_at;
   let original;
   try {
     const response = await fetch(old.baseUrl + PREFIX + "/confirmations", {
@@ -763,8 +765,10 @@ test("pre-Board-gate binary saves a confirmation that the current binary scopes 
   } finally {
     await old.stop();
   }
+  assert.equal(await usedAt(), null, "the archived Board writer does not mark the bridge");
   const replay = await nothingWritten(() => post("/confirmations", W.caA, body));
   assert.deepEqual(ok(replay), { ...original, replayed: true });
+  assert.equal(await usedAt(), null, "the current replay does not mark the bridge");
   const nonOwner = await nothingWritten(() => post("/confirmations", W.caB, body));
   const missingTeam = await nothingWritten(() => post("/confirmations", W.caB, { ...body, teamId: key() }));
   assert.deepEqual(shape(nonOwner), shape(missingTeam));
@@ -971,7 +975,8 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
   assert.ok(lastOf("~source_metric_mapping_activations") < firstOf("+source_metric_confirmations"), "the ends before the confirmation");
   assert.ok(lastOf("+source_metric_confirmation_items") < writes.findIndex((w, i) => w === "~source_metric_mapping_versions" && i > firstOf("+source_metric_confirmations")), "the confirmation's rows before the activation of a version");
   assert.ok(writes.findIndex((w, i) => w === "~source_metric_mapping_versions" && i > firstOf("+source_metric_confirmations")) < firstOf("+source_metric_mapping_activations"), "the versions active before the starts");
-  assert.equal(writes.at(-1), "+source_metric_audit:mapping_confirmation", "the keyed request record is the last write");
+  assert.deepEqual(writes.slice(-2), ["+source_metric_audit:mapping_confirmation", "~mappings_manage_bridge_use"],
+    "the keyed confirmation is durable in the transaction before the native first-use marker");
 });
 
 // ---------------------------------------------------------------------------

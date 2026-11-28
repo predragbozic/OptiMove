@@ -20,6 +20,8 @@ async function stage(client) {
     await client.query("alter table public.permission_role_items disable trigger user");
     await client.query("insert into public.permission_role_items(role_id,permission_word) values($1,'mappings.manage')", [ROLE_IDS.club_admin]);
     await client.query("alter table public.permission_role_items enable trigger user");
+    await client.query("create table training_load.mappings_manage_bridge_use (singleton boolean primary key, first_checked_write_at timestamptz)");
+    await client.query("insert into training_load.mappings_manage_bridge_use(singleton) values(true)");
     await client.query("commit");
   } catch (error) {
     await client.query("rollback");
@@ -71,10 +73,32 @@ test("native create, version and submit require Mappings Manage in the owning wo
     await deny("/mappings", input);
     assert.deepEqual(await digest(), before);
     await stage(client);
+    const usedAt = async () => (await client.query("select first_checked_write_at from training_load.mappings_manage_bridge_use")).rows[0].first_checked_write_at;
     await deny("/mappings", { ...input, metricDefinitionId: foreign });
     await deny("/mappings", { ...input, metricDefinitionId: key() });
+    assert.equal(await usedAt(), null);
+    // The normal mapping and ledger insert run; a deferred test guard then
+    // makes PostgreSQL itself reject COMMIT, including the first-use marker.
+    await client.query("create function training_load.fixture_fail_mapping_commit() returns trigger language plpgsql as $body$"
+      + " begin raise exception 'fixture deferred mapping failure' using errcode='23514'; end $body$");
+    await client.query("create constraint trigger fixture_fail_mapping_commit after insert on training_load.source_metric_audit"
+      + " deferrable initially deferred for each row execute function training_load.fixture_fail_mapping_commit()");
+    try {
+      const failed = await post(cookie, "/mappings", input);
+      assert.ok(failed.status >= 400, failed.text);
+      assert.deepEqual(await digest(), before);
+      assert.equal(await usedAt(), null);
+    } finally {
+      await client.query("drop trigger fixture_fail_mapping_commit on training_load.source_metric_audit");
+      await client.query("drop function training_load.fixture_fail_mapping_commit()");
+    }
     const created = await post(cookie, "/mappings", input);
     assert.equal(created.status, 201, created.text);
+    const firstUsed = await usedAt();
+    assert.ok(firstUsed instanceof Date);
+    const mappingReplay = await post(cookie, "/mappings", input);
+    assert.equal(mappingReplay.body.replayed, true);
+    assert.deepEqual(await usedAt(), firstUsed);
     const versionPath = "/mappings/" + created.body.mapping.id + "/versions";
     const versionInput = { requestKey: key(), sourceRevisionId: field.revision, appliesToSession: true, appliesToDrill: false };
     const version = await post(cookie, versionPath, versionInput);
@@ -249,6 +273,7 @@ test("native create, version and submit require Mappings Manage in the owning wo
     assert.equal((await post(cookie, ownSwitchPath, ownSwitchBody)).body.replayed, true);
     await move(native);
     await deny(ownSwitchPath, ownSwitchBody);
+    assert.deepEqual(await usedAt(), firstUsed);
   } finally {
     try { await server?.stop(); } finally { await db.drop(); }
   }
