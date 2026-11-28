@@ -10,6 +10,8 @@ import { fixtures } from "./support/permission-roles-world.mjs";
 const pointerFixture = new URL("./support/source-provider-binding-generation-fixture.sql", import.meta.url);
 const pointers = "training_load.gpexe_team_settings";
 const bindings = "training_load.source_team_bindings";
+const migration = new URL("../../migrations_v2/202612201000_training_load_v118_sources_provider_binding_generations.sql", import.meta.url);
+const readRunbook = name => readFile(new URL(`../../docs/runbooks/sources-provider-v118-${name}.sql`, import.meta.url), "utf8");
 
 test("bound set, team and approved pointer snapshots advance independently with Sources closed", async t => {
   const lab = await createPagesDatabase({ through: "202612191000", label: "binding_generations" });
@@ -78,9 +80,14 @@ test("bound set, team and approved pointer snapshots advance independently with 
       once(previousWriter, "exit").then(([code]) => { throw new Error(`Previous writer exited with ${code}`); }),
     ]);
     await client.query(await readFile(pointerFixture, "utf8"));
-    const readDraft = name => readFile(new URL(`./support/source-provider-binding-sparse-${name}.draft.sql`, import.meta.url), "utf8");
-    const up = await readDraft("up");
-    const down = await readDraft("down");
+    const up = "begin;\n" + await readFile(migration, "utf8") + "\ncommit;";
+    const down = await readRunbook("rollback");
+    const checks = async name => {
+      const results = await client.query(await readRunbook(name));
+      const row = results.find(result => result.command === "SELECT")?.rows[0];
+      assert.ok(row && Object.values(row).every(Boolean), JSON.stringify(row));
+    };
+    await checks("preflight");
     await client.query(`
       create role anon;
       create role authenticated;
@@ -95,10 +102,11 @@ test("bound set, team and approved pointer snapshots advance independently with 
       order by tgname
     `)).rows;
     const dumpDb = new URL(lab.url);
-    assert.equal(dumpDb.hostname, "127.0.0.1");
+    assert.ok(["127.0.0.1", "localhost", "[::1]"].includes(dumpDb.hostname));
+    assert.match(dumpDb.port, /^\d+$/);
     assert.match(dumpDb.pathname, /^\/optimove_tests_[a-z0-9_]+$/);
     const dumpSchema = () => execFileSync("pg_dump", [
-      "--schema-only", "--no-password", "--host", dumpDb.hostname, "--port", dumpDb.port,
+      "--schema-only", "--no-password", "--host", dumpDb.hostname.replace(/^\[|\]$/g, ""), "--port", dumpDb.port,
       "--username", decodeURIComponent(dumpDb.username), "--dbname", dumpDb.pathname.slice(1),
     ], {
       env: { ...process.env, PGPASSWORD: decodeURIComponent(dumpDb.password) },
@@ -119,8 +127,9 @@ test("bound set, team and approved pointer snapshots advance independently with 
       await peerCheck.end();
     }
     const pre = await getTriggers();
-    await t.test("draft SQL cleans the API defaults and immediate down restores the trigger catalogue", async () => {
-      await client.query(up);
+    await t.test("v118 cleans the API defaults and immediate down restores the trigger catalogue", async () => {
+      await lab.applyThrough("202612201000");
+      await checks("postcheck");
       const privateAcl = await client.query(`
         select rolname from pg_roles
         where rolname in ('anon','authenticated','service_role')
@@ -132,7 +141,8 @@ test("bound set, team and approved pointer snapshots advance independently with 
       assert.deepEqual(await getTriggers(), pre);
       assert.equal(dumpSchema(), beforeSchema);
       assert.equal((await client.query("select to_regclass('training_load.source_binding_sparse_delta') as delta")).rows[0].delta, null);
-      await client.query(up);
+      await lab.applyThrough("202612201000");
+      await checks("postcheck");
     });
 
     await t.test("v117 HTTP Unbind process started before capture invalidates the same witness once", async () => {
@@ -297,8 +307,8 @@ test("actual cap rejects 10,001 pre-existing rows with no capture DDL left behin
       select $1,$2,'gpexe',i::text,$3,'ended',statement_timestamp(),$3,'Disposable cap fixture'
       from generate_series(1,10001) i
     `, [team, connection.id, actor]);
-    const up = await readFile(new URL("./support/source-provider-binding-sparse-up.draft.sql", import.meta.url), "utf8");
-    await assert.rejects(client.query(up), /exceeds the 10000-row prototype cap/);
+    const up = "begin;\n" + await readFile(migration, "utf8") + "\ncommit;";
+    await assert.rejects(client.query(up), /exceeds the 10000-row cap/);
     await client.query("rollback");
     const {rows: [state]} = await client.query(`
       select (select count(*)::int from ${bindings} where connection_id=$1) as history,

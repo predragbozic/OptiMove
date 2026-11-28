@@ -2,7 +2,7 @@ import http from "node:http";
 import { once } from "node:events";
 
 const database = new URL(process.env.DATABASE_URL);
-if (database.hostname !== "127.0.0.1" || !/^\/optimove_tests_[a-z0-9_]+$/.test(database.pathname)) {
+if (!["127.0.0.1", "localhost", "[::1]"].includes(database.hostname) || !/^\/optimove_tests_[a-z0-9_]+$/.test(database.pathname)) {
   throw new Error("Source binding predecessor harness requires a disposable loopback database");
 }
 

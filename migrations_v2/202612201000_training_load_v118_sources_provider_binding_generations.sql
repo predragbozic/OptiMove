@@ -1,5 +1,4 @@
--- Local disposable rehearsal only. No migration slot.
-begin;
+-- Stage private sparse binding generations while provider admission remains closed.
 set local lock_timeout='2s';
 set local statement_timeout='3s';
 set local transaction_timeout='5s';
@@ -8,15 +7,12 @@ lock table training_load.source_provider_admission, training_load.source_provide
   training_load.source_provider_attempt_teams, public.schema_migrations in share mode nowait;
 do $gate$
 begin
-  if current_database() !~ '^optimove_tests_[a-z0-9_]+$' then
-    raise exception 'Sparse generation prototype requires a disposable database';
-  end if;
   if not exists (select from public.schema_migrations
     where migration_name='migrations_v2/202612191000_training_load_v117_sources_provider_host_connection_generations.sql'
       and checksum='8ed1a6b3e81ea8fef9db8e1d705fa5a9538b03a602178832b88aa3bcc0392786')
     or exists (select from public.schema_migrations where migration_name ~ '^migrations_v2/[0-9]{12}_'
       and migration_name > 'migrations_v2/202612191000_training_load_v117_sources_provider_host_connection_generations.sql') then
-    raise exception 'Sparse generation prototype requires exact v117';
+    raise exception 'Sparse generation migration requires exact v117';
   end if;
   if (select count(*)=1 and bool_and(singleton and not enabled and epoch=0)
       from training_load.source_provider_admission) is distinct from true
@@ -58,8 +54,8 @@ begin
     select connection_id, count(*) + count(*) filter (where state='ended')
     from sampled group by connection_id returning generation
   )
-  select (select count(*) from sampled) into seen from (select count(*) from tallied) complete;
-  if seen > 10000 then raise exception 'Sparse binding seed exceeds the 10000-row prototype cap'; end if;
+  select count(*) into seen from sampled;
+  if seen > 10000 then raise exception 'Sparse binding seed exceeds the 10000-row cap'; end if;
 end
 $seed$;
 
@@ -123,4 +119,3 @@ begin
   ) then raise exception 'Sparse binding sidecar exposes private privileges'; end if;
 end
 $verify$;
-commit;

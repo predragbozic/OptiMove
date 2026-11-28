@@ -1,22 +1,21 @@
--- Local disposable rehearsal only. First-effect or catalogue drift refuses.
+-- Closed and unused only. Refuse any first capture, catalogue or registry drift.
 begin;
 set local lock_timeout='2s';
 set local statement_timeout='3s';
 set local transaction_timeout='5s';
+do $migrator$ begin if not pg_try_advisory_xact_lock(822026) then raise exception 'v118 rollback refused: migrator running'; end if; end $migrator$;
 lock table training_load.source_team_bindings in access exclusive mode nowait;
 lock table training_load.source_provider_admission, training_load.source_provider_attempts,
-  training_load.source_provider_attempt_teams, public.schema_migrations in share mode nowait;
+  training_load.source_provider_attempt_teams in share mode nowait;
+lock table public.schema_migrations in share row exclusive mode nowait;
 do $gate$
 begin
-  if current_database() !~ '^optimove_tests_[a-z0-9_]+$' then
-    raise exception 'Sparse generation prototype requires a disposable database';
-  end if;
-  if not exists (select from public.schema_migrations
+  if not exists (select from public.schema_migrations where migration_name='migrations_v2/202612201000_training_load_v118_sources_provider_binding_generations.sql' and checksum='d05f048b211358a08de721b3e3f58312a4c3af7484b678577d30542efaf6bbc9') or not exists (select from public.schema_migrations
     where migration_name='migrations_v2/202612191000_training_load_v117_sources_provider_host_connection_generations.sql'
       and checksum='8ed1a6b3e81ea8fef9db8e1d705fa5a9538b03a602178832b88aa3bcc0392786')
     or exists (select from public.schema_migrations where migration_name ~ '^migrations_v2/[0-9]{12}_'
-      and migration_name > 'migrations_v2/202612191000_training_load_v117_sources_provider_host_connection_generations.sql') then
-    raise exception 'Sparse generation prototype requires exact v117';
+      and migration_name <> 'migrations_v2/202612201000_training_load_v118_sources_provider_binding_generations.sql' and (migration_name > 'migrations_v2/202612201000_training_load_v118_sources_provider_binding_generations.sql' or applied_at >= (select applied_at from public.schema_migrations where migration_name='migrations_v2/202612201000_training_load_v118_sources_provider_binding_generations.sql'))) then
+    raise exception 'Sparse generation rollback requires exact v117';
   end if;
   if (select count(*)=1 and bool_and(singleton and not enabled and epoch=0)
       from training_load.source_provider_admission) is distinct from true
@@ -79,4 +78,5 @@ $effect$;
 drop trigger zz_source_binding_sparse_delta on training_load.source_team_bindings;
 drop function training_load.capture_binding_sparse_delta(), training_load.source_binding_sparse_generation(uuid);
 drop table training_load.source_binding_sparse_base, training_load.source_binding_sparse_delta;
+delete from public.schema_migrations where migration_name='migrations_v2/202612201000_training_load_v118_sources_provider_binding_generations.sql';
 commit;
