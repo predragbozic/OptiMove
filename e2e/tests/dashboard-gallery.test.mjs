@@ -92,6 +92,9 @@ for (const width of [390, 1280]) test(`${width}px: Advanced table adds, reorders
   await editor.getByRole('button',{name:/Add variable/}).click();
   assert.equal(await editor.getByRole('button',{name:'Save changes',exact:true}).isEnabled(),false);
   assert.equal(await editor.getByRole('button',{name:'Load preview',exact:true}).isEnabled(),false);
+  await editor.getByRole('button',{name:'Remove variable: Choose a metric',exact:true}).click();
+  assert.equal(await editor.locator('.tl-editor-variable-row').count(),1);
+  await editor.getByRole('button',{name:/Add variable/}).click();
   await editor.getByRole('searchbox',{name:'Search metrics'}).fill('Distance part B');
   await editor.getByRole('button',{name:/Distance part B/}).click();
   await action(page,'analysis-series-aggregation').selectOption('max');

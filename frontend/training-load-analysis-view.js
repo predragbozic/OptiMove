@@ -980,6 +980,7 @@ function renderEditorHtml() {
                 </button>
                 <button type="button" class="plain-button icon-button" data-action="training-load-analysis-series-up" ${itemKey} aria-label="Move up: ${escapeAttr(label)}" ${saving || index === 0 ? "disabled" : ""}>&uarr;</button>
                 <button type="button" class="plain-button icon-button" data-action="training-load-analysis-series-down" ${itemKey} aria-label="Move down: ${escapeAttr(label)}" ${saving || index === entries.length - 1 ? "disabled" : ""}>&darr;</button>
+                <button type="button" class="plain-button icon-button tl-editor-remove-variable" data-action="training-load-analysis-delete-series" ${itemKey} aria-label="Remove variable: ${escapeAttr(label)}" title="Remove variable" ${off}>&times;</button>
               </div>`;
             }).join("") || `<p class="muted">Add a variable to show data.</p>`}
           </div>
@@ -1004,9 +1005,6 @@ function renderEditorHtml() {
             </div>
             </details>
           ` : ""}
-          ${entry ? `<div class="tl-analysis-series-actions">
-              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${off}>Remove variable</button>
-            </div>` : ""}
         </div>
         ${entry ? renderMetricPickerHtml(entry, off) : ""}
         </div>

@@ -16111,7 +16111,7 @@ optimove-dashboard-chart {
 
 .tl-editor-variable-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
   align-items: center;
   gap: 4px;
 }
@@ -16128,6 +16128,11 @@ optimove-dashboard-chart {
 .tl-editor-variable-row .icon-button {
   min-width: 44px;
   min-height: 44px;
+}
+
+.tl-editor-variable-row .tl-editor-remove-variable {
+  color: var(--danger, #a23b3b);
+  font-size: 20px;
 }
 
 .tl-editor-variable-row img,

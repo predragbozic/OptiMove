@@ -1792,8 +1792,12 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-analysis-delete-series") {
     const editor = state.trainingLoad.analysis.editor;
     if (!editor?.draft || editor.saving) return true;
-    editor.seriesKey = removeEditorSeries(editor.draft, action.dataset.seriesKey);
+    const key = action.dataset.seriesKey;
+    const nextKey = removeEditorSeries(editor.draft, key);
+    if (!editorSeriesEntry(editor.draft, editor.seriesKey)) editor.seriesKey = nextKey;
     renderTrainingLoad();
+    const dialog = globalThis.document?.querySelector(".tl-analysis-editor");
+    (dialog?.querySelector(".tl-analysis-series-row.is-active") ?? dialog?.querySelector("[data-choose-metric]"))?.focus({ preventScroll: true });
     return true;
   }
   if (type?.startsWith("training-load-analysis-series-")) {
