@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // F3c1: migration v27 (source credential connections, team bindings, audit)
 // on disposable databases only. Contract: docs/ai/gpexe-f3c-auth-discovery.md
 // sections 3, 5, 6 (F3c1), 8c; runbook docs/runbooks/source-connections-v27.md.
@@ -129,9 +130,10 @@ before(async () => {
   // The v27 contract is tested on a database up to v28: v29 (F3c2d) tightens
   // two of these rules (every state but not_connected holds a credential,
   // linked_untested carries its facts) and is tested in source-connections-f3c2d.test.mjs.
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c1", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf("202609291000_training_load_v28_source_host_server3.sql") + 1) });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c1", migrations: GPEXE_TEST_MIGRATIONS.slice(0, GPEXE_TEST_MIGRATIONS.indexOf("202609291000_training_load_v28_source_host_server3.sql") + 1), roleRead: true });
   c = new pg.Client({ connectionString: db.url });
   await c.connect();
+  await setSourceConnectFixture(c, true);
   assert.equal((await q("select current_database() as db"))[0].db, db.name);
   fx = await fixture();
   fx.ring = cryptoMod.parseKeyring(cryptoMod.generateKeyEntry(1));

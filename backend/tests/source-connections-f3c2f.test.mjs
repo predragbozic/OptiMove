@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // F3c2f — the safe Unbind (POST …/connections/:id/bindings/:bindingId/unbind)
 // on a disposable optimove_tests_gpexe_* database (never OPTIMOVE), against a
 // fake source that must never be called. Contract:
@@ -38,9 +39,10 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2f" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2f", roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await setSourceConnectFixture(admin, true);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   process.env.DATABASE_URL = db.url;
@@ -569,25 +571,30 @@ test("10. the right and the club are re-checked right before the write: a club a
   const { conn, binding } = await bound(ca, club, team);
   useSource();
   assert.equal((await api(`/gpexe/connections/${conn.id}/bindings`, { method: "POST", cookie: ca.cookie, body: { teamId: team2, sourceTeamId: "982" } })).status, 201);
-  const run = async (cookie, revoke, restore) => {
+  const run = async (cookie, revoke, restore, platform = false) => {
     const g = gate();
     let held = false;
     service.setSourceUnbindHoldForTests(async () => { held = true; await g.p; });
     const pending = unbindApi(conn.id, binding.bindingId, cookie, unbindBody(binding));
     await waitFor(() => held);
+    const before = (await auditOf(conn.id)).length;
     await revoke();
     g.release();
     const r = await pending;
     service.setSourceUnbindHoldForTests(null);
-    assert.deepEqual([r.status, r.body.error], [409, "rights_changed"], JSON.stringify(r.body));
+    assert.deepEqual([r.status, r.body.error], platform ? [409, "rights_changed"] : [404, "notFound"], JSON.stringify(r.body));
     assert.equal((await bindingRow(binding.bindingId)).state, "active", "nothing changed");
-    const last = (await auditOf(conn.id)).at(-1);
-    assert.deepEqual([last.action, last.outcome, last.error_code, last.team_id, last.metadata.counted], ["unbind", "refused", "rights_changed", team, false]);
+    const rows = await auditOf(conn.id);
+    assert.equal(rows.length, before + Number(platform));
+    if (platform) {
+      const last = rows.at(-1);
+      assert.deepEqual([last.action, last.outcome, last.error_code, last.team_id, last.metadata.counted], ["unbind", "refused", "rights_changed", team, false]);
+    }
     await restore();
   };
   await run(ca.cookie, () => q(`update public.user_club_roles set is_active = false where user_id = $1`, [ca.id]), () => q(`update public.user_club_roles set is_active = true where user_id = $1`, [ca.id]));
   await run(ca.cookie, () => q(`update public.clubs set is_active = false where id = $1`, [club]), () => q(`update public.clubs set is_active = true where id = $1`, [club]));
-  await run(pa.cookie, () => q(`update public.user_global_roles set is_active = false where user_id = $1`, [pa.id]), () => q(`update public.user_global_roles set is_active = true where user_id = $1`, [pa.id]));
+  await run(pa.cookie, () => q(`update public.user_global_roles set is_active = false where user_id = $1`, [pa.id]), () => q(`update public.user_global_roles set is_active = true where user_id = $1`, [pa.id]), true);
   // A lock held on the OTHER bound team (team2) does NOT block the Unbind of team's binding: an Unbind changes neither the
   // credential nor the connection's state, so only its own team is locked — an import of a sibling team never blocks the remedy.
   const peer = new pg.Client({ connectionString: db.url });
@@ -609,7 +616,7 @@ test("10. the right and the club are re-checked right before the write: a club a
     await peer.end();
   }
   // The replay path re-checks the right too: a club admin whose role is revoked while the replay is held gets
-  // rights_changed, not the saved answer (the right is read FOR SHARE at the replay's own moment).
+  // the same 404 as a missing binding, without the saved answer or a refusal audit.
   {
     const g = gate();
     let held = false;
@@ -621,10 +628,9 @@ test("10. the right and the club are re-checked right before the write: a club a
     g.release();
     const r = await pending;
     service.setSourceUnbindReplayHoldForTests(null);
-    assert.deepEqual([r.status, r.body.error], [409, "rights_changed"], JSON.stringify(r.body));
+    assert.deepEqual([r.status, r.body.error], [404, "notFound"], JSON.stringify(r.body));
     const rows = await auditOf(conn.id);
-    assert.equal(rows.length, before + 1, "one refusal row");
-    assert.deepEqual([rows.at(-1).action, rows.at(-1).outcome, rows.at(-1).error_code, rows.at(-1).metadata.binding_id], ["unbind", "refused", "rights_changed", binding.bindingId]);
+    assert.equal(rows.length, before, "no refusal row for a lost native grant");
     await q(`update public.user_club_roles set is_active = true where user_id = $1`, [ca.id]);
     const again = await unbindApi(conn.id, binding.bindingId, ca.cookie, unbindBody(binding, { requestKey: rows.find((a) => a.outcome === "ok" && a.metadata.binding_id === binding.bindingId).metadata.request_id }));
     assert.deepEqual([again.status, again.body.result?.replayed], [200, true], "with the right back the same key replays");
@@ -769,4 +775,82 @@ test("9. this suite runs on a disposable database only, left no active binding, 
   assert.ok(db.url !== ORIGINAL_DATABASE_URL);
   assert.equal((await q(`select count(*)::int as n from training_load.source_team_bindings where state = 'active'`))[0].n, 0, "no binding left active");
   for (const line of logLines) noSecret(line, "a console line");
+});
+
+test("native Sources Connect rechecks the role, workspace and session before Create and Unbind receipts", async () => {
+  const { club, team } = await org();
+  const other = await org({ approve: false });
+  const ca = await clubAdmin(club);
+  await addClubAdminRole(ca.id, other.club);
+  const create = (body) => api("/gpexe/connections", { method: "POST", cookie: ca.cookie, body });
+  const request = CREATE(club, { requestKey: crypto.randomUUID() });
+  const missing = await create(CREATE(crypto.randomUUID(), { requestKey: request.requestKey }));
+  const assertMissing = reply => assert.deepEqual([reply.status, reply.body], [missing.status, missing.body]);
+  assert.equal(missing.status, 404);
+
+  await setSourceConnectFixture(admin, false);
+  try {
+    assertMissing(await create(request));
+    assert.equal((await q("select 1 from training_load.source_connection_audit where metadata->>'request_id'=$1", [request.requestKey])).length, 0);
+  } finally {
+    await setSourceConnectFixture(admin, true);
+  }
+  const made = await create(request);
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  assert.equal((await create(request)).body.replayed, true);
+  const slip = gate();
+  let waiting = false;
+  service.setSourceCreateReplayHoldForTests(async () => { waiting = true; await slip.p; });
+  const pending = create({ ...request, accountLabel: "Conflicting key while switching" });
+  try {
+    await waitFor(() => waiting);
+    await setWorkspace(ca.id, "club", other.club);
+  } finally {
+    service.setSourceCreateReplayHoldForTests(null);
+    slip.release();
+  }
+  assertMissing(await pending);
+  await setWorkspace(ca.id, "club", club);
+  assert.equal((await create(request)).body.replayed, true);
+
+  const { conn, binding } = await bound(ca, club, team);
+  const body = unbindBody(binding);
+  const before = (await auditOf(conn.id)).length;
+  const block = gate();
+  waiting = false;
+  service.setSourceUnbindHoldForTests(async () => { waiting = true; await block.p; });
+  const pendingUnbind = unbindApi(conn.id, binding.bindingId, ca.cookie, body);
+  try {
+    await waitFor(() => waiting);
+    await setSourceConnectFixture(admin, false);
+  } finally {
+    service.setSourceUnbindHoldForTests(null);
+    block.release();
+  }
+  try {
+    assertMissing(await pendingUnbind);
+    assert.equal((await bindingRow(binding.bindingId)).state, "active");
+    assert.equal((await auditOf(conn.id)).length, before);
+  } finally {
+    await setSourceConnectFixture(admin, true);
+  }
+  const ended = await unbindApi(conn.id, binding.bindingId, ca.cookie, body);
+  assert.equal(ended.status, 200, JSON.stringify(ended.body));
+  const again = await unbindApi(conn.id, binding.bindingId, ca.cookie, body);
+  assert.deepEqual([again.status, again.body.result.replayed, again.body.result.auditId], [200, true, ended.body.result.auditId]);
+  assert.equal((await auditOf(conn.id)).length, before + 1);
+
+  const expired = gate();
+  waiting = false;
+  service.setSourceUnbindReplayHoldForTests(async () => { waiting = true; await expired.p; });
+  const pendingReplay = unbindApi(conn.id, binding.bindingId, ca.cookie, { ...body, reason: "A stale conflicting retry" });
+  try {
+    await waitFor(() => waiting);
+    await q("delete from public.auth_sessions where user_id=$1", [ca.id]);
+  } finally {
+    service.setSourceUnbindReplayHoldForTests(null);
+    expired.release();
+  }
+  assertMissing(await pendingReplay);
+  assert.equal((await auditOf(conn.id)).length, before + 1);
 });

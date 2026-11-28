@@ -37,6 +37,7 @@ import crypto from "node:crypto";
 import { pool } from "./db.js";
 import { isPlatformAdministrator, holdsClubAdminRole } from "./authz.js";
 import { resolveActiveWorkspace } from "./workspace.js";
+import { lockClubCeiling } from "./clubCeilingLock.js";
 import { resolveApprovedSourceHost, sourceExchange, sourceHost, isAllowedHostKey } from "./sourceHosts.js";
 import { adapterFamilies, createSourceAdapter } from "./sourceAdapters.js";
 import { encryptCredential, decryptCredential, keyringFromEnv } from "./sourceCredentialCrypto.js";
@@ -202,7 +203,7 @@ export async function resolveConnectionAdmin(req) {
     return { userId: String(req.user.id), basis: "platform_admin", workspace: { type: workspace.type, scopeId } };
   }
   if (workspace.type === "club" && scopeId && holdsClubAdminRole(req.authz, scopeId)) {
-    return { userId: String(req.user.id), basis: "club_admin", workspace: { type: "club", scopeId } };
+    return { userId: String(req.user.id), basis: "club_admin", workspace: { type: "club", scopeId }, sessionToken: req.sessionToken };
   }
   return null;
 }
@@ -226,6 +227,46 @@ async function rightsStillHold(client, ctx, clubId) {
   const club = await client.query(`select 1 from public.clubs where id = $1 and coalesce(is_active, true) for share`, [clubId]);
   return right.rowCount > 0 && club.rowCount > 0;
 }
+// Local writes keep the existing actor/resource lock order. The legacy
+// check still holds the active user, Club admin row and club under share.
+async function localConnectionRights(client, ctx, clubId) {
+  if (ctx.basis === "platform_admin") return rightsStillHold(client, ctx, clubId);
+  if (ctx.basis !== "club_admin" || !clubVisible(ctx, clubId) || !ctx.sessionToken) return false;
+  const phase = await client.query("select public.permission_word_honoured('sources.connect') as staged");
+  if (phase.rows[0]?.staged !== true) return false;
+  await lockClubCeiling(client, [clubId], "shared");
+  if (!await rightsStillHold(client, ctx, clubId)) return false;
+  const hash = crypto.createHash("sha256").update(ctx.sessionToken).digest("base64url");
+  const session = await client.query(
+    "select 1 from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share",
+    [ctx.userId, hash],
+  );
+  if (!session.rowCount) return false;
+  const preference = await client.query(
+    "select 1 from public.user_workspace_preferences where user_id=$1 and workspace_type='club' and scope_id=$2 for share",
+    [ctx.userId, clubId],
+  );
+  if (!preference.rowCount) return false;
+  await client.query("select public.lock_permission_actor($1, 'club', $2)", [ctx.userId, clubId]);
+  const right = await client.query("select public.user_has_permission($1, 'sources.connect', 'club', $2) as allowed", [ctx.userId, clubId]);
+  return right.rows[0]?.allowed === true;
+}
+
+async function localReceipt(ctx, clubId, work) {
+  const client = await pool.connect();
+  const release = guardClient(client);
+  let destroy = false;
+  try {
+    await client.query("begin");
+    await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
+    await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
+    return await localConnectionRights(client, ctx, clubId) ? await work(client) : null;
+  } finally {
+    await withinBound(client.query("rollback"), 5_000).catch(() => { destroy = true; });
+    release(destroy);
+  }
+}
+
 function clubVisible(ctx, clubId) {
   if (ctx.workspace.type === "platform") return ctx.basis === "platform_admin";
   return ctx.workspace.type === "club" && ctx.workspace.scopeId === String(clubId);
@@ -282,16 +323,16 @@ export async function listConnections({ ctx, sourceSystem, clubId }) {
   return out;
 }
 
-export async function getConnection({ ctx, sourceSystem, id }) {
+export async function getConnection({ ctx, sourceSystem, id, executor = pool }) {
   if (!SOURCE_SYSTEM.test(sourceSystem ?? "") || typeof id !== "string" || !UUID.test(id)) return null;
   if (postCommitReadFault) await postCommitReadFault();
-  const row = (await pool.query(
+  const row = (await executor.query(
     `select ${CONNECTION_COLUMNS} from training_load.source_credential_connections c join public.clubs cl on cl.id = c.owner_club_id
       where c.id = $1 and c.source_system = $2 and c.owner_scope = 'club'`,
     [id, sourceSystem],
   )).rows[0];
   if (!row || row.club_active === false || !clubVisible(ctx, row.owner_club_id)) return null;
-  return publicConnection(row, await bindingsOf(pool, row.id));
+  return publicConnection(row, await bindingsOf(executor, row.id));
 }
 
 // ---------------------------------------------------------------------------
@@ -317,7 +358,8 @@ export async function createConnection({ ctx, sourceSystem, body }) {
   const requestHash = requestKey === null ? null : crypto.createHash("sha256").update(JSON.stringify({
     sourceSystem, ownerScope: "club", ownerClubId: b.ownerClubId.toLowerCase(), hostKey: b.hostKey, accountLabel: b.accountLabel.trim(), credentialKind: b.credentialKind,
   })).digest("hex");
-  if (!clubVisible(ctx, b.ownerClubId)) return null;
+  const clubId = b.ownerClubId.toLowerCase();
+  if (!clubVisible(ctx, clubId)) return null;
   const client = await pool.connect();
   const release = guardClient(client);
   let released = false;
@@ -338,6 +380,7 @@ export async function createConnection({ ctx, sourceSystem, body }) {
         throw error;
       }
       await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
+      await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
       const earlier = (await client.query(
         `select a.connection_id, a.metadata, c.owner_club_id, c.source_system
            from training_load.source_connection_audit a
@@ -347,13 +390,23 @@ export async function createConnection({ ctx, sourceSystem, body }) {
         [ctx.userId, requestKey],
       )).rows[0];
       if (earlier) {
+        if (ctx.basis !== "platform_admin" && createReplayHold) await createReplayHold(client);
+        if (ctx.basis !== "platform_admin" && !await localConnectionRights(client, ctx, clubId)) {
+          await client.query("rollback"); released = true; release();
+          return null;
+        }
         if (earlier.metadata.request_hash !== requestHash || String(earlier.owner_club_id) !== b.ownerClubId.toLowerCase() || earlier.source_system !== sourceSystem) {
           throw refusal(409, "request_key_reused", "This requestKey was already used for a different Create; use a new key.");
         }
         // A replay is the caller's own earlier result, answered only while the connection is still theirs to see:
         // the club visible in this workspace and the right held now. Otherwise the identical 404.
-        if (createReplayHold) await createReplayHold(client);
         await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
+        if (ctx.basis !== "platform_admin") {
+          const connection = await getConnection({ ctx, sourceSystem, id: earlier.connection_id, executor: client });
+          await client.query("rollback"); released = true; release();
+          return connection ? { ...connection, replayed: true } : null;
+        }
+        if (createReplayHold) await createReplayHold(client);
         const holds = clubVisible(ctx, earlier.owner_club_id) && await rightsStillHold(client, ctx, earlier.owner_club_id);
         await client.query("rollback"); released = true; release();
         if (!holds) return null;
@@ -363,6 +416,10 @@ export async function createConnection({ ctx, sourceSystem, body }) {
     }
     await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
     await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
+    if (ctx.basis !== "platform_admin" && !await localConnectionRights(client, ctx, clubId)) {
+      await client.query("rollback"); released = true; release();
+      return null;
+    }
     const club = (await client.query(`select id from public.clubs where id = $1 and coalesce(is_active, true) for share`, [b.ownerClubId])).rows[0];
     if (!club) { await client.query("rollback"); released = true; release(); return null; }
     const catalog = (await client.query(`select source_system, host_key, state from training_load.source_host_catalog where source_system = $1 and host_key = $2 for share`, [sourceSystem, b.hostKey])).rows[0];
@@ -395,7 +452,11 @@ export async function createConnection({ ctx, sourceSystem, body }) {
     // S2: a bounded wait or statement that ran out (55P03, 57014) wrote nothing: try_again, so a Check result of a lost
     // Create keeps its key instead of reading a 500 as a settled refusal.
     if (error?.code === "55P03" || error?.code === "57014") throw refusal(409, "try_again", "Another change of this club or host is running. Try again when it has finished.");
-    if (error instanceof SourceConnectionError) throw error;
+    if (error instanceof SourceConnectionError) {
+      if (error.code === "outcome_unknown" && ctx.basis !== "platform_admin"
+          && !await localReceipt(ctx, clubId, () => true).catch(() => false)) return null;
+      throw error;
+    }
     throw internal("create", error);
   } finally {
     if (!released) release();
@@ -403,9 +464,12 @@ export async function createConnection({ ctx, sourceSystem, body }) {
   // The read after the COMMIT: if it fails, the creation still stands and a
   // minimal answer says so instead of a failure that would hide the write.
   try {
-    const connection = await getConnection({ ctx, sourceSystem, id: created.id });
+    const read = (executor) => getConnection({ ctx, sourceSystem, id: created.id, executor });
+    const connection = ctx.basis === "platform_admin" ? await read() : await localReceipt(ctx, clubId, read);
+    if (!connection && ctx.basis !== "platform_admin") return null;
     return connection ? { ...connection, ...(created.confirmation ? { commitConfirmation: created.confirmation } : {}) } : { id: created.id, state: "not_connected", readError: "connection_read_failed" };
   } catch {
+    if (ctx.basis !== "platform_admin" && !await localReceipt(ctx, clubId, () => true).catch(() => false)) return null;
     return { id: created.id, state: "not_connected", readError: "connection_read_failed" };
   }
 }
@@ -452,6 +516,7 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
   let released = false;
   let known = null;
   let recorded = false;
+  let clubId;
   try {
     await client.query("begin");
     await client.query(`set local statement_timeout = '${statementTimeoutMs}ms'`);
@@ -493,6 +558,7 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
       throw error;
     }
     if (!row || row.club_active === false || !clubVisible(ctx, row.owner_club_id)) { await client.query("rollback"); released = true; release(); return null; }
+    clubId = row.owner_club_id;
     // 4. The request record, behind the per-user lock and the connection row
     //    only: the same key of this user on this connection is the same saved
     //    answer (a retry after a lost answer never meets a busy team); the
@@ -514,13 +580,18 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
       [row.id, ctx.userId, request.requestKey],
     )).rows[0];
     if (earlier) {
+      if (ctx.basis !== "platform_admin" && unbindReplayHold) await unbindReplayHold(client);
+      if (ctx.basis !== "platform_admin" && !await localConnectionRights(client, ctx, clubId)) {
+        await client.query("rollback"); released = true; release();
+        return null;
+      }
       if (earlier.metadata.request_hash !== requestHash || String(earlier.binding_id) !== bindingId.toLowerCase()) {
         throw refusal(409, "request_key_reused", "This requestKey was already used for a different Unbind request; use a new key.", { current: { bindingId: earlier.binding_id, teamId: earlier.team_id, sourceTeamId: earlier.source_team_id, state: earlier.state, endedAt: earlier.ended_at } });
       }
       // A replay is a read of the caller's own earlier result; the right is
       // still re-checked, so the retry rule has no exception.
-      if (unbindReplayHold) await unbindReplayHold(client);
-      if (!(await rightsStillHold(client, ctx, row.owner_club_id))) throw refusal(409, "rights_changed", "The right to manage this connection changed; nothing was changed.");
+      if (ctx.basis === "platform_admin" && unbindReplayHold) await unbindReplayHold(client);
+      if (ctx.basis === "platform_admin" && !(await rightsStillHold(client, ctx, row.owner_club_id))) throw refusal(409, "rights_changed", "The right to manage this connection changed; nothing was changed.");
       await client.query("rollback"); released = true; release();
       return unbindResult(row.id, { id: earlier.binding_id, team_id: earlier.team_id, team_name: earlier.team_name, source_team_id: earlier.source_team_id, state: earlier.state, bound_at: earlier.bound_at, ended_at: earlier.ended_at, ended_by_user_id: earlier.ended_by_user_id, end_reason: earlier.end_reason }, earlier.id, true, null);
     }
@@ -548,6 +619,11 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
       throw error;
     }
     if (!binding) { await client.query("rollback"); released = true; release(); return null; }
+    if (ctx.basis !== "platform_admin" && unbindHold) await unbindHold(client);
+    if (ctx.basis !== "platform_admin" && !await localConnectionRights(client, ctx, clubId)) {
+      await client.query("rollback"); released = true; release();
+      return null;
+    }
     known.sourceTeamId = binding.source_team_id;
     const current = { bindingId: binding.id, teamId: binding.team_id, sourceTeamId: binding.source_team_id, state: binding.state, endedAt: binding.ended_at };
     // 7. The checks against the row as it is under the lock.
@@ -557,9 +633,9 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
     }
     // (test seam: hold the transaction here, with every lock taken and before
     // the final checks, to race it against other operations)
-    if (unbindHold) await unbindHold(client);
+    if (ctx.basis === "platform_admin" && unbindHold) await unbindHold(client);
     // 8. The right and the club, again, right before the write.
-    if (!(await rightsStillHold(client, ctx, row.owner_club_id))) throw refusal(409, "rights_changed", "The right to manage this connection changed; nothing was changed.");
+    if (ctx.basis === "platform_admin" && !(await rightsStillHold(client, ctx, row.owner_club_id))) throw refusal(409, "rights_changed", "The right to manage this connection changed; nothing was changed.");
     // 9. The end of the binding (the v27 immutability trigger allows exactly
     //    this change and re-takes the team's try-lock this transaction holds).
     const ended = (await client.query(
@@ -580,6 +656,7 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
     recorded = true;
     released = true;
     const confirmation = await commitAttempt(client, release, auditId, row.id, attemptId, binding.team_id);
+    if (ctx.basis !== "platform_admin" && !await localReceipt(ctx, clubId, () => true).catch(() => false)) return null;
     return unbindResult(row.id, { ...binding, state: "ended", ended_at: ended.ended_at, ended_by_user_id: ctx.userId, end_reason: request.reason }, auditId, false, confirmation);
   } catch (error) {
     if (error?.code === "55P03" || error?.code === "40P01") error = refusal(409, "try_again", "Another change of this connection, its club or a team is running. Try again when it has finished.", { connectionId: id });
@@ -590,6 +667,7 @@ export async function unbindTeam({ ctx, sourceSystem, id, bindingId, body }) {
       release(dead);
     }
     if (error instanceof SourceConnectionError) {
+      if (ctx.basis !== "platform_admin" && known && !await localReceipt(ctx, clubId ?? ctx.workspace.scopeId, () => true).catch(() => false)) return null;
       const alreadyRecorded = recorded || error.code === "outcome_unknown";
       if (known && !alreadyRecorded && error.status !== 404) {
         // A refusal is audited once per request: the same user repeating the
