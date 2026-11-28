@@ -88,6 +88,8 @@ test("v115 applies, rolls back and restores the audited Sources Connect catalogu
   try {
     const { versionId, customId, club, team, platform, coach } = await seedNativeRoleLayers(fixture);
     await seedNativeRoleLayers(fixture, { teamRole: true });
+    const stale = await seedNativeRoleLayers(fixture);
+    await client.query("update public.user_club_roles set updated_at=clock_timestamp()+interval '1 minute' where user_id=$1 and club_id=$2", [stale.coach,stale.club]);
     await client.query("update public.clubs set is_active=false where id=$1", [club]);
     await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null)", [platform]);
     await client.query("update training_load.mappings_manage_bridge_use set first_checked_write_at=clock_timestamp()");
@@ -101,14 +103,16 @@ test("v115 applies, rolls back and restores the audited Sources Connect catalogu
     assert.notDeepEqual(installed, beforeCatalogue);
     check((await client.query(await read("postcheck")))[0].rows[0]);
     const { rows: seed } = await client.query("select layer,id,words from training_load.sources_connect_v115_seed order by layer,id");
-    assert.deepEqual(seed.filter(row => row.layer !== "role"), [
+    assert.deepEqual(seed.filter(row => row.layer !== "role").sort((a,b) => a.id.localeCompare(b.id)), [
       { layer: "custom", id: customId, words: [word] },
       { layer: "version", id: versionId, words: [word] },
-    ]);
+      { layer: "version", id: stale.versionId, words: [word] },
+    ].sort((a,b) => a.id.localeCompare(b.id)));
     assert.equal(seed.filter(row => row.layer === "role").length, 1);
-    assert.equal((await client.query("select public.user_has_permission($1,$2,\x27club\x27,$3) as allowed", [coach,word,club])).rows[0].allowed, false);
+    const raw = await client.query("select $2=any(words) as seeded from public.permission_user_holdings($1) where scope_id=$3", [coach,word,club]);
+    assert.equal(raw.rows[0].seeded, true, "inactive clubs retain valid role seeds for reopening");
     await client.query("update public.clubs set is_active=true where id=$1", [club]);
-    assert.equal((await client.query("select public.user_has_permission($1,$2,\x27club\x27,$3) as allowed", [coach,word,club])).rows[0].allowed, true);
+    assert.equal((await client.query("select public.user_has_permission($1,$2,'club',$3) as allowed", [coach,word,club])).rows[0].allowed, true);
     assert.equal(await marker(), null);
     await assert.rejects(client.query("delete from training_load.sources_connect_local_bridge_use"), /immutable/);
     await assert.rejects(client.query("truncate training_load.sources_connect_local_bridge_use"), /immutable/);
@@ -253,6 +257,11 @@ test("v115 old and current Settings and native Sources operations share an exact
     assert.equal(closedLegacy.status, 201, await closedLegacy.clone().text());
     const closedChecked = await current.api(mapCookie, create, { method: "POST", body: closedBody });
     assert.equal(closedChecked.status, 404, closedChecked.text);
+    assert.equal(await marker(), null);
+    const closedLegacyBody = await closedLegacy.json();
+    const providerPath = create + "/" + closedLegacyBody.connection.id + "/test";
+    const provider = await current.api(mapCookie, providerPath, { method: "POST", body: {} });
+    assert.equal(provider.body.error, "not_connected", provider.text);
     assert.equal(await marker(), null);
     await setLicence(false);
     const reopened = await current.api(mapCookie, create, { method: "POST", body: closedBody });
