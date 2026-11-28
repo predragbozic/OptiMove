@@ -37,7 +37,7 @@ test("v116 is inaccessible, stays closed, rolls back exactly and reapplies", asy
       "insert into training_load.source_provider_attempts default values",
       "update training_load.source_provider_attempts set state='dispatching'",
       "insert into training_load.source_provider_attempt_teams default values",
-      "truncate training_load.source_provider_attempts",
+      "truncate training_load.source_provider_attempts, training_load.source_provider_attempt_teams",
     ]) await assert.rejects(client.query(statement), /Sources provider storage is closed/);
 
     await client.query("alter table training_load.source_provider_attempt_teams disable trigger source_provider_attempt_teams_keep_closed");
