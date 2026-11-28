@@ -1189,6 +1189,7 @@ export function setEditorWidgetType(draft, widgetType) {
 // What would block a Save before any request is made ("" = nothing).
 export function analysisEditorProblem(draft) {
   if (!draft) return "";
+  if (draft.series.some(entry => !entry.metric)) return "Choose a variable for every column or remove the empty column.";
   const galleryProblem=galleryEditorProblem(draft);if(galleryProblem)return galleryProblem;
   const title = draft.title.trim();
   if (!title) return "Give the widget a title.";
@@ -1295,8 +1296,12 @@ export function analysisEditorPlan(widget, draft) {
   const galleryChanged=gallerySettingsChanged(widget,draft);
   const shape=widget.presentation_config?.schemaVersion===1?widget.presentation_config.chartShape:null;
   const modifiesBinding=ops.some(op=>op.type!=='patchWidget'||Object.keys(op.body).some(k=>k!=='title'));
-  if(shape&&modifiesBinding)ops.unshift({type:'patchWidget',body:{presentation:{mode:'clear'}}});
-  if(galleryChanged||shape&&modifiesBinding||(draft.galleryKind&&draft.galleryKind!=='standard'&&modifiesBinding))ops.push({type:'gallery'});
+  const convertGalleryToTable = shape && widgetBody.widgetType === 'table' && !widget.presentation_config.referenceConfig;
+  if (convertGalleryToTable) widgetBody.presentation = { mode: 'clear' };
+  else {
+    if(shape&&modifiesBinding)ops.unshift({type:'patchWidget',body:{presentation:{mode:'clear'}}});
+    if(galleryChanged||shape&&modifiesBinding||(draft.galleryKind&&draft.galleryKind!=='standard'&&modifiesBinding))ops.push({type:'gallery'});
+  }
   return ops;
 }
 

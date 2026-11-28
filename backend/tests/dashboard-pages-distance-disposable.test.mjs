@@ -128,6 +128,18 @@ test('an 84-day club distance table previews and saves average and minimum over 
     const minimumSeries = minimum.result.series[0];
     assert.equal(minimumSeries.status, 'ok', JSON.stringify(minimumSeries));
     assert.deepEqual(minimumSeries.data.current.map(row => row.value).sort((a, b) => a - b), [0, 100, 200]);
+    const advanced = await api(`${path}/query`, {
+      ...period,
+      advancedPreview: {
+        ...table, widgetId, expectedWidgetRevision: widgetRevision, localFilterOverride: null,
+        series: [{
+          draftId: seriesId, previousSeriesId: seriesId,
+          settings: { ...metric, seriesOrder: 1, analyticalAggregation: 'min', sourcePolicy: 'all_with_conflicts',
+            aggregationRolePolicy: 'standalone_and_source_rollup', coveragePolicy: 'complete_and_partial', axis: 'primary' },
+        }],
+      },
+    });
+    assert.deepEqual(advanced.result.series[0], minimumSeries);
     const readAggregation = async () => (await client.query(
       'select analytical_aggregation from training_load.dashboard_widget_series where id=$1', [seriesId],
     )).rows[0].analytical_aggregation;

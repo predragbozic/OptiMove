@@ -8,6 +8,7 @@ import { queryDashboardForViewer } from '../trainingLoadDashboardQuery.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
 import { resolvePeriod } from '../dashboardSimple/compiler.js';
 import { validateContract } from '../dashboardSimple/schema.js';
+import { canUseSimplePlatformPilot } from '../dashboardSimple/platformPilot.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {loadAuthorizationContext} from '../authz.js';
 import {pickFallbackWorkspace,resolveActiveWorkspaceReadOnly} from '../workspace.js';
@@ -201,7 +202,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
     if(['widgetIds','referencePreview','metricPreview'].some(key=>Object.hasOwn(body,key)))throw pageError('invalidRequest',400);
     const previous=selected.find(w=>w.id===String(body.advancedPreview?.widgetId??'').toLowerCase());
     const widget=await buildAdvancedPreviewWidget(q,target.dashboard,previous,body.advancedPreview,validateWidgetBody);
-    const [result]=await queryDashboardForViewer(target.workspace,[widget],period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
+    const [result]=await queryDashboardForViewer(target.workspace,[widget],period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q,includeClubDistance:true},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
     const {local_filter_override,...previewWidget}=widget;
     previewWidget.series=widget.series.map(({galleryCalculation,source_connection_id,...entry})=>entry);
     return {widget:previewWidget,result:attachGalleryResult(widget,result),resolvedPeriod:period};
@@ -323,12 +324,20 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
  async function writeWidget({req,dashboardId,pageId,widgetId=null,seriesId=null,operation,body}){
   return transaction(async q=>{
    const target=await lockManagedPageTarget(q,req,dashboardId);
-   if(!validateWidgetBody(operation,body,{req:target.req,workspace:target.workspace,mode:req.app?.locals?.dashboardSimpleMode}))throw pageError('invalidRequest',400);
+   const mode = req.app?.locals?.dashboardSimpleMode;
+   const convertingGalleryToTable = operation === 'content' && body?.widgetType === 'table'
+    && body.presentation?.mode === 'clear'
+    && !(['preview','enabled'].includes(mode) && canUseSimplePlatformPilot(target.req,target.workspace));
+   if(!validateWidgetBody(operation,body,{req:target.req,workspace:target.workspace,mode,galleryToTable:convertingGalleryToTable}))throw pageError('invalidRequest',400);
    await q('select id from training_load.dashboard_pages where dashboard_id=$1 order by id for update',[dashboardId]);
    await requirePage(q,dashboardId,pageId);
    if(operation==='layout')await q('select id from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by id for update',[dashboardId,pageId]);
    if(widgetId){
-    if(!isUuid(widgetId)||!((await q('select id from training_load.dashboard_widgets where id=$1 and dashboard_id=$2 and page_id=$3 for update',[widgetId,dashboardId,pageId])).rows.length))throw pageError();
+    if(!isUuid(widgetId))throw pageError();
+    const current=(await q('select id,widget_type,presentation_config from training_load.dashboard_widgets where id=$1 and dashboard_id=$2 and page_id=$3 for update',[widgetId,dashboardId,pageId])).rows[0];
+    if(!current)throw pageError();
+    if(convertingGalleryToTable&&(!['line_chart','bar_chart'].includes(current.widget_type)
+      || !current.presentation_config?.chartShape || current.presentation_config.referenceConfig))throw pageError('invalidRequest',400);
     await q('select id from training_load.dashboard_widget_series where widget_id=$1 order by id for update',[widgetId]);
    }
    if(seriesId&&!isUuid(seriesId))throw pageError();

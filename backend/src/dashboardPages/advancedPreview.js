@@ -74,7 +74,10 @@ export async function buildAdvancedPreviewWidget(query, dashboard, widget, draft
     if (s.sourcePolicy === 'source_connection') {
       if (!isUuid(s.sourceConnectionId)) refuse();
       const {visible,conn}=await isSourceConnectionVisibleToDashboard(dashboard,s.sourceConnectionId,query);
-      if (!visible || !conn || conn.state !== 'active' && prior?.source_connection_id !== s.sourceConnectionId.toLowerCase()) refuse('notFound', 404);
+      const retainsPin = prior?.source_policy === 'source_connection'
+        && prior.source_connection_id === s.sourceConnectionId.toLowerCase()
+        && prior.metric_definition_id === s.metricDefinitionId?.toLowerCase();
+      if (!visible || !conn || conn.state !== 'active' && !retainsPin) refuse('notFound', 404);
     } else if (s.sourceConnectionId != null) refuse();
 
     series.push({

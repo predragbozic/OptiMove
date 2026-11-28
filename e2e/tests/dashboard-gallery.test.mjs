@@ -82,13 +82,14 @@ for (const width of [390, 1280]) test(`${width}px: Advanced table adds, reorders
   await openDashboard(page, fixture.dashboard.id);
   const widget = page.locator(`[data-analysis-widget-id="${fixture.widgets[0]}"]`);
   await widget.getByRole('button',{name:'Widget actions: area',exact:true}).click();
-  await action(page,'analysis-edit-widget').click();
-  await action(page,'simple-advanced').click();
+  await widget.getByRole('menuitem',{name:'Advanced settings',exact:true}).click();
   const editor = page.getByRole('dialog',{name:'Widget settings'});
   await action(page,'analysis-widget-type').selectOption('table');
   await action(page,'analysis-widget-group').selectOption('athlete');
   await action(page,'analysis-series-aggregation').selectOption('min');
   await editor.getByRole('button',{name:/Add variable/}).click();
+  assert.equal(await editor.getByRole('button',{name:'Save changes',exact:true}).isEnabled(),false);
+  assert.equal(await editor.getByRole('button',{name:'Load preview',exact:true}).isEnabled(),false);
   await editor.getByRole('searchbox',{name:'Search metrics'}).fill('Distance part B');
   await editor.getByRole('button',{name:/Distance part B/}).click();
   await action(page,'analysis-series-aggregation').selectOption('max');
@@ -107,8 +108,19 @@ for (const width of [390, 1280]) test(`${width}px: Advanced table adds, reorders
   assert.ok(await preview.getByRole('row').count() > 1);
   assert.equal(await widget.locator('optimove-dashboard-chart').count(),1);
   assert.equal(await editor.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+  const rejectedWrites = [];
+  page.on('response', response => {
+   if (response.status() >= 400 && ['PATCH','POST','PUT','DELETE'].includes(response.request().method())) {
+    rejectedWrites.push(response.json().catch(()=>null).then(body=>[response.request().method(),response.status(),body?.error]));
+   }
+  });
+  if(process.env.DASHBOARD_GALLERY_EVIDENCE) {
+   await mkdir(process.env.DASHBOARD_GALLERY_EVIDENCE,{recursive:true});
+   await editor.screenshot({path:path.join(process.env.DASHBOARD_GALLERY_EVIDENCE,`advanced-table-${width}.png`)});
+  }
   await editor.getByRole('button',{name:'Save changes',exact:true}).click();
-  await editor.waitFor({state:'hidden'});
+  await page.waitForFunction(()=>!document.querySelector('.tl-analysis-editor') || document.querySelector('.tl-editor-footer [role="alert"]'));
+  assert.equal(await editor.count(),0,JSON.stringify({errors: await editor.getByRole('alert').allTextContents(), responses:await Promise.all(rejectedWrites)}));
   await widget.getByRole('table').waitFor();
   assert.deepEqual(await widget.getByRole('columnheader').allTextContents(),visibleHeaders);
   assert.deepEqual(pageErrors,[]);

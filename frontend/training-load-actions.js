@@ -375,6 +375,7 @@ export function setTrainingLoadAnalysisSearch(kind, value) {
   const a = state.trainingLoad.analysis;
   if (kind === "picker") a.picker.search = value ?? "";
   else if (kind === "metric" && a.metricPanel) a.metricPanel.search = value ?? "";
+  else if (kind === "advanced") a.metricPicker.search = value ?? "";
 }
 
 function openAnalysisMetricPanel(widget = null) {
@@ -1672,7 +1673,11 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   if (type === "training-load-analysis-editor-preview") {
+    const editor = state.trainingLoad.analysis.editor;
     await previewAnalysisWidgetEditor(renderTrainingLoad);
+    if (state.trainingLoad.analysis.editor === editor && (editor.preview || editor.previewError)) {
+      document.querySelector(".tl-analysis-editor .tl-advanced-preview")?.focus();
+    }
     return true;
   }
   if(type==='training-load-analysis-chart-period'){
@@ -1818,6 +1823,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     }
   }
   if (type === "training-load-analysis-metric-search") {
+    if (state.trainingLoad.analysis.metricPicker.search === (action.value ?? "")) return true;
     state.trainingLoad.analysis.metricPicker.search = action.value ?? "";
     renderTrainingLoad();
     return true;

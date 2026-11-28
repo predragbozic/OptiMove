@@ -16144,6 +16144,18 @@ optimove-dashboard-chart {
 }
 
 @media (max-width: 720px) {
+  .tl-analysis-editor {
+    scroll-padding-block: 68px 78px;
+  }
+
+  .tl-analysis-editor .tl-overlay-head {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 3;
+    padding-block: 5px;
+    background: var(--surface);
+  }
+
   .tl-editor-variable-workspace {
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
@@ -16309,11 +16321,8 @@ optimove-dashboard-chart {
   gap: 8px;
 }
 
-.tl-editor-footer-row .danger {
-  margin-right: auto;
-}
-
 .tl-editor-status {
+  margin-right: auto;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
@@ -16345,11 +16354,6 @@ optimove-dashboard-chart {
   .tl-editor-status {
     flex-basis: 100%;
     order: -1;
-  }
-  .tl-editor-footer-row .danger {
-    flex-basis: 100%;
-    order: 3;
-    margin-right: 0;
   }
 }
 

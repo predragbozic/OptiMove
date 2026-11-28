@@ -866,8 +866,8 @@ function renderMetricPickerHtml(entry, disabled = "") {
   const builtIns = BUILT_IN_SERIES.filter(b => !search || `${b.label} ${b.unit || ""}`.toLowerCase().includes(search));
   return `
     <div class="tl-analysis-metric-picker">
-      <h4>Variable catalog</h4>
-      <label class="search-field"><span>Search metrics</span><input type="search" data-action="training-load-analysis-metric-search" value="${escapeAttr(picker.search)}" placeholder="Metric name or unit" ${disabled}></label>
+      <h4>${entry.metric ? "Change selected variable" : "Choose a variable"}</h4>
+      <label class="search-field"><span>Search metrics</span><input type="search" data-action="training-load-analysis-metric-search" data-tl-analysis-search="advanced" value="${escapeAttr(picker.search)}" placeholder="Metric name or unit" ${disabled}></label>
       <div class="tl-editor-catalog-results">
       ${builtIns.length ? `<div class="tl-analysis-builtins">
         <p class="eyebrow">Built-in series</p>
@@ -911,7 +911,7 @@ function renderEditorHtml() {
   const override = draft.localFilterOverride || {};
   const key = entry ? `data-series-key="${escapeAttr(entry.key)}"` : "";
   const table = draft.widgetType === "table";
-  const typeIcon = chartPickerIllustration(draft.galleryKind ?? draft.widgetType);
+  const typeIcon = chartPickerIllustration(draft.galleryKind && draft.galleryKind !== "standard" ? draft.galleryKind : draft.widgetType);
   const previewBody = analysisEditorPreviewBody(editor);
   const preview = previewBody && editor.preview?.body === previewBody ? editor.preview : null;
   const hasPagePreview = a.pagesAvailable && a.selectedPageId;
@@ -1010,7 +1010,7 @@ function renderEditorHtml() {
         </div>
         ${entry ? renderMetricPickerHtml(entry, off) : ""}
         </div>
-        ${hasPagePreview ? `<section class="tl-metric-panel-preview" aria-label="Widget preview" aria-busy="${Boolean(editor.previewLoading)}">
+        ${hasPagePreview ? `<section class="tl-metric-panel-preview tl-advanced-preview" aria-label="Widget preview" tabindex="-1" aria-busy="${Boolean(editor.previewLoading)}">
           <div class="tl-analysis-series-head">
             <h4>Preview</h4>
             ${referenceWidget ? "" : `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-editor-preview" ${analysisEditorCanPreview(editor) ? "" : "disabled"}>Load preview</button>`}
@@ -1024,10 +1024,9 @@ function renderEditorHtml() {
           ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : problem ? `<p class="builder-error" role="alert">${escapeHtml(problem)}</p>` : ""}
           ${editor.serverChanged ? `<p class="muted tl-editor-server-note">Some changes are already saved - closing keeps them.</p>` : ""}
           <div class="tl-editor-footer-row">
-            <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-widget" data-widget-id="${escapeAttr(widget.id)}" ${off}>Delete widget</button>
             <span class="tl-editor-status ${dirty ? "is-dirty" : ""}" aria-live="polite">${saving ? "Saving..." : dirty ? "Unsaved changes" : "No changes"}</span>
             <button type="button" class="plain-button compact-button" data-action="training-load-analysis-close-editor" ${off}>${editor.serverChanged ? "Close" : "Cancel"}</button>
-            <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-editor-save" ${off}>${saving ? "Saving..." : "Save changes"}</button>
+            <button type="button" class="plain-button compact-button tl-analysis-primary" data-action="training-load-analysis-editor-save" ${saving || problem ? "disabled" : ""}>${saving ? "Saving..." : "Save changes"}</button>
           </div>
         </div>
       </section>

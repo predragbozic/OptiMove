@@ -3,11 +3,11 @@ import {validFilterShape} from '../trainingLoadDashboardCatalog.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {canUseSimplePlatformPilot} from '../dashboardSimple/platformPilot.js';
 const basic={create:v.CREATE_WIDGET_KEYS,content:v.UPDATE_WIDGET_CONTENT_KEYS,addSeries:v.ADD_SERIES_KEYS,updateSeries:v.UPDATE_SERIES_KEYS,delete:['expectedWidgetRevision'],deleteSeries:['expectedWidgetRevision'],widgetLayout:['expectedWidgetRevision','x','y','width','height','mobileOrder'],layout:['expectedRevision','layout'],reorderSeries:['expectedWidgetRevision','order'],resolveSeries:['expectedWidgetRevision','metricDefinitionId']};
-export function validPageWidgetBody(operation,body,{req,workspace,mode}){
+export function validPageWidgetBody(operation,body,{req,workspace,mode,galleryToTable=false}){
  if(!body||typeof body!=='object'||Array.isArray(body)||!basic[operation])return false;
  const keys=[...basic[operation],'expectedPageRevision'];
  const presentation=['create','content'].includes(operation)&&['preview','enabled'].includes(mode)&&canUseSimplePlatformPilot(req,workspace);
- if(presentation)keys.push('presentation');
+ if(presentation||galleryToTable)keys.push('presentation');
  if(Object.keys(body).some(k=>!keys.includes(k)))return false;
  if(['create','layout'].includes(operation)&&!v.validRevision(body.expectedPageRevision))return false;
  if(!['create','layout'].includes(operation)&&!v.validRevision(body.expectedWidgetRevision))return false;
