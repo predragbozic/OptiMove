@@ -127,13 +127,30 @@ test('an existing gallery can become a table without a hidden gallery setting bl
  }finally{await context.close()}
 });
 
-for(const width of [1280,390]) test(`${width}px: add Area from View and preview before atomic save`,async()=>{
+for(const width of [1280,390,360]) test(`${width}px: add Area from View and preview before atomic save`,async()=>{
  const {context,page,pageErrors}=await openAs(browser,world,'club_admin',width);
  try{
   await openDashboard(page,byRole.get('club_admin').dashboard.id);
   await page.getByRole('button',{name:'Add widget',exact:true}).click();
   const editor=page.getByRole('dialog',{name:'Add metric'});
   assert.equal(await editor.locator('.tl-metric-panel-types button:enabled svg').count(),12);
+  if(width<720){
+   const layout=await editor.locator('.tl-metric-panel-types').evaluate(grid=>{
+    const buttons=[...grid.querySelectorAll('button')];
+    const bounds=buttons.map(button=>button.getBoundingClientRect());
+    return {
+     columns:getComputedStyle(grid).gridTemplateColumns.split(' ').length,
+     rows:new Set(bounds.map(rect=>rect.top)).size,
+     height:grid.getBoundingClientRect().height,
+     fits:grid.scrollWidth<=grid.clientWidth+1&&buttons.every(button=>button.scrollWidth<=button.clientWidth+1),
+     touchTargets:bounds.every(rect=>rect.width>=44&&rect.height>=44),
+    };
+   });
+   assert.equal(layout.columns,3);
+   assert.equal(layout.rows,4);
+   assert.ok(layout.height<=240,JSON.stringify(layout));
+   assert.ok(layout.fits&&layout.touchTargets,JSON.stringify(layout));
+  }
   await editor.getByRole('button',{name:'Area',exact:true}).click();
   const metric=editor.getByLabel('Measurement 1');
   await metric.selectOption({label:'Distance part A'});
