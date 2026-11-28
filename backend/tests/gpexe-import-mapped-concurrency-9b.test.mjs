@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // Phase 9, 9-B (contract J17 sections 3, 5, 7 and 8.2): the importer's lock
 // order against the operations that change what it writes through, with real
 // connections and real locks - no sleep is evidence (a sleep only shows "still
@@ -80,7 +81,7 @@ const originalConsoleError = console.error;
 before(async () => {
   // v66 (J18, M-B) gates a club admin's activation of a version of a field without parameters; this suite's fields have
   // none, so its database is built through v65 (see GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE).
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mapped_conc_9b", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "mapped_conc_9b", migrations: GPEXE_TEST_MIGRATIONS_BEFORE_CONFIRMATION_GATE, roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
@@ -97,6 +98,8 @@ before(async () => {
   resolver = await import("../src/sourceImportCredentialResolver.js");
   activations = await import("../src/sourceMetricActivationService.js");
   instances = await import("../src/sourceInstanceEndService.js");
+  await stageVariablesManageForTest(admin);
+  await editVariablesManageTestRole(admin, VARIABLE_MANAGE, true);
   ({ createSession } = await import("../src/auth.js"));
   ({ pool: appPool } = await import("../src/db.js"));
   assert.equal((await appPool.query("select current_database() as d")).rows[0].d, db.name, "SAFETY: the app talks to the disposable database");
@@ -1300,7 +1303,9 @@ const rk = () => crypto.randomUUID();
 async function clubAdminOf(clubId) {
   const id = await makeUser("club admin");
   await admin.query(`insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1,$2,'club_admin',true)`, [id, clubId]);
-  return { userId: id, basis: "club_admin", owner: { scope: "club", clubId: String(clubId) } };
+  await admin.query("insert into public.user_workspace_preferences (user_id, workspace_type, scope_id) values ($1,'club',$2)", [id, clubId]);
+  return { userId: id, basis: "club_admin", owner: { scope: "club", clubId: String(clubId) },
+    editorScope: { type: "club", id: String(clubId) }, sessionToken: await createSession(id) };
 }
 async function clubMapped(clubId, bindingId) {
   const { mappings, variables } = await registryWriters();
