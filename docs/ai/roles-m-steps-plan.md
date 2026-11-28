@@ -387,3 +387,89 @@ need a separate permission decision. Session-wide type and per-athlete type chan
 classification. Neither is an attendance decision. Decide their mapping together in
 a later contract. Keep model administration of the session-type catalog separate from
 assignment of a type to an activity or participant. Imports remain last.
+
+## Imports M rollout contract
+
+Sources Connect ships before Imports. Imports keeps the existing GPEXE team, owner workspace,
+candidate, activity, and athlete relationship checks. A native staff action also checks the
+applicable Imports permission and its licence ceiling. A view-only workspace stays read-only.
+Platform authority keeps its existing platform and scope checks.
+
+### Approved owning-club administrator exception
+
+The owner's decision preserves the current owning-club administrator path for Approve and Undo.
+The bridge must prove an active administrator holding in the team's own active club and retain the
+existing team, workspace, mode, switch, and operation conditions. In the owning club workspace the
+resource is the exact team of that club. When using an existing direct team route, the active
+workspace must contain that exact team under the same legacy rules. The exception carries no
+team access to another club and is never inherited from an unrelated workspace or role.
+An active direct Team coach or explicit approver grant remains a separate team-scoped path.
+`import.approve` and `import.undo` retain their team catalogue scope. The exception is a bounded
+legacy bridge for the owning administrator, with the Imports licence ceiling, and must retain a way
+for the platform to withdraw approval and undo authority independently through Roles. The staged
+enforcement design must show that an administrator can be denied Approve while keeping Undo,
+and vice versa, before exposing either word. How to represent the exception in role layers and how
+to reconcile existing approver grant and revoke with a future role model remain design and review
+items. Product approval of parity does not authorize automatic copying into broader grants.
+
+### Release 1 — Check and Link
+
+- `import.check` covers Check now, check status/history and the candidate calendar/list/detail
+  under `/api/training-load/gpexe/teams/:teamId`. Keep status and read projections compatible
+  with the other rights. POST candidate preview recomputes and persists derived columns under
+  its existing compare-and-set and masked response; apply the same Check permission.
+- `import.link` covers link create and unlink, including the existing same-team current athlete
+  and source identities. Keep source athlete and pair suggestions reads in their existing
+  audience and mask. A Link-only change may preserve the current candidate/status read scope
+  for Link UI prerequisites; record every shared read in the reviewed route matrix.
+- Identity GET keeps its stored audience and mask. Identity Load is a distinct provider write
+  with its own administrator/coach and mode gate. The mapping to an Imports word is still
+  undecided and stays out of this release. Source settings/binding, timezone, team import
+  switch, prerequisites and retention stay in their existing contracts.
+
+### Release 2 — Approve
+
+- Apply `import.approve` to candidate `/approve` and batch `/imports`; pair candidate track choice
+  mutations with the same current approval eligibility. Retain the ledger's read projection at
+  `/approvals/:approvalId`, its exact team/candidate match and its bounded recovery behavior.
+- The existing team switch and server apply switch still protect approval. In pilot mode the
+  explicit approver path retains the current active direct coach and live explicit grant conditions;
+  in team mode preserve currently eligible direct coaches and the owning-club administrator.
+  Authority must be current under the same transaction and produce the existing immutable receipt
+  for the operation. Batch keeps exact per-candidate outcomes and partial success behavior.
+- POST `/approvals/:approvalId/states` stays the v61 attendance operation tied to the original
+  approval actor and current roster rights. Existing platform grant/revoke routes remain on
+  their current administrative authority during the bridge.
+
+### Release 3 — Undo
+
+- Apply `import.undo` consistently to lookup by activity, candidate undo preview, and undo
+  command. Keep the existing v76 source ownership and immutable provenance checks.
+- An otherwise eligible importer can undo another actor's import in the same authorized team.
+  Preserve undo with the team switch off where the existing basis remains valid. Keep candidate,
+  team and activity matching, downstream dependency refusals, and the existing audit/receipt
+  replay behavior. Approval authority alone must not imply Undo after independent exposure.
+
+### Evidence and rollout
+
+For each release, freeze independent review of the route matrix, SQL and lock order with one
+rolling-compatible stage and a distinct Settings exposure after old writers drain. Use private
+PostgreSQL and fake provider fixtures. Compare exact predecessor and bridge on platform, owning
+club with and without a direct team role, direct coach, live/revoked grant, mixed account,
+view-only workspace, closed licence, and foreign/inactive/missing target combinations. Keep current
+error/status and data masking for the same legacy denial. Pin cross-team and foreign/missing
+parity, no provider call or durable write on a pre-effect denial, queued revoke/workspace/switch
+changes, exact receipt replay, old/new overlap, uncertain commit, audit, and rollback guards.
+Measure the actual seed and undo/refusal behavior in the operator rehearsal if a migration is
+needed. Assign any migration slot at release time.
+
+Run the whole backend disposable kind against the predecessor and the candidate, plus
+frontend-fast, build and affected Imports browser workflows. Focused anchors include
+`gpexe-in-app-import`, `gpexe-check-finalization`, `gpexe-check-rate-limit`,
+`gpexe-check-timing`, `gpexe-recompute-j20-a1`, `gpexe-athlete-identity`,
+`gpexe-identity-load-team-mode`, `gpexe-pair-suggestions-u3`, `gpexe-batch-approve`,
+`gpexe-import-mapped-concurrency-9b`, `gpexe-import-mapped-routes-9b`,
+`gpexe-track-choices-mt-a`, `gpexe-track-choices-mt-b`, `import-states-j20c`,
+`undo-by-importer-v76`, `gpexe-undo-guards`, `gpexe-undo-session` and
+`session-undo-roster-o1`. Run each via
+`node scripts/test-runner.mjs --project backend --kind disposable --file <name>.test.mjs`.

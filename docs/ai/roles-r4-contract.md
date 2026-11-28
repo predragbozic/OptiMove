@@ -53,6 +53,13 @@ point is marked **(recommendation)** and, when it needs the owner, collected in 
 | O7 | **Order:** (1) foundation; (2) "VIEW" through all modules; (3) "MANAGE" in this order: Calendar + Training Load (activities, RPE schedules, roster, dashboards) -> Builder / programs / exercises -> Tests + messages -> Data configuration -> IMPORTS LAST (the import licence is not needed for at least three months). |
 | O8 | **Way into a club** for an account with only an R2 assignment: option (A) of the discovery - a separate type `club_view`; the preference is stored as `club` + scope and mapped in `workspace.js` (no migration for the way in itself); fail-closed by construction; the finding about the six modules that authorize by workspace is a MANDATORY section, with a test "account without an admin row x every workspace helper". |
 
+**Imports follow-up owner decision.** Keep the owning club administrator's existing limited
+Approve and Undo access for that club's teams, including the existing team-mode basis and the
+operation-specific switch conditions. Keep the explicit team approval path separate. The
+[Imports M rollout contract](roles-m-steps-plan.md#imports-m-rollout-contract) records the
+legacy parity boundary and the independent Check/Link, Approve and Undo releases. Sources
+Connect precedes Imports.
+
 **Changes to the plan these make** (to be carried into the plan by a later small docs pull request, as R2 did):
 - 2.1, "No per-user ticks in the first version" - replaced by O4.
 - 2.1 rule 8 ("a club's copy of a system role is a snapshot ... notice") - replaced, for club versions, by O3 (section 3.3
