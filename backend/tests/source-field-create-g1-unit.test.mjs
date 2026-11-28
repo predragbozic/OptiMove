@@ -70,8 +70,9 @@ test("architecture: route C's service is the only application writer of T2a, and
   assert.ok(runAt > 0 && insertAt > runAt, "the insert is inside runWrite's body");
   const kit = fs.readFileSync(path.join(src, "sourceMetricMappingService.js"), "utf8");
   const body = kit.slice(kit.indexOf("async function runWrite("));
-  assert.ok(body.indexOf("ACTOR_CONTEXT_SQL") > 0 && body.indexOf("ACTOR_CONTEXT_SQL") < body.indexOf("await operation(client, operationId)"),
-    "runWrite sets the acting user before it runs the operation");
+  const actorAt = body.indexOf("await client.query(ACTOR_CONTEXT_SQL,");
+  const operationAt = body.search(/await operation\(client,\s*operationId(?:\s*,[^()]*)?\)/);
+  assert.ok(actorAt >= 0 && operationAt > actorAt, "runWrite sets the acting user before it runs the operation");
 });
 
 test("v74 takes every lock before its first change, in the writers' order (T4, T2a, T2b, T9, T9i, T8 NOWAIT last), within lock_timeout - the recorded SQL order (migrations.md, PR #346)", async () => {

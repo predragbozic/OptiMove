@@ -8,6 +8,7 @@
 // v40 that rehearses v41's apply / rollback / re-apply, one migrated through
 // v41 for the behaviour. Contract: docs/ai/phase12-domains-categories-contract.md
 // (J6, accepted as C101 of docs/ai/gpexe-metric-variable-mapping-discovery.md).
+import { seedVariableRenameGrants } from "./support/variable-rename-grants.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -123,6 +124,7 @@ before(async () => {
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
   await world();
+  await seedVariableRenameGrants(k);
 });
 
 function resetSeams() {

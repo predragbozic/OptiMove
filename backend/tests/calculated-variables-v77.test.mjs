@@ -3,6 +3,7 @@
 // return it). Through the real HTTP stack, on disposable optimove_tests_gpexe_* databases only (never OPTIMOVE): one migrated
 // through v76 that rehearses v77's preflight / apply / post-check / rollback / re-apply, one migrated through v77 for the
 // behaviour. Nothing computes a value in step 1; the value guard is tested on raw rows, as the writer of the next PR will write them.
+import { seedVariableRenameGrants } from "./support/variable-rename-grants.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -85,6 +86,7 @@ before(async () => {
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
   await world();
+  await seedVariableRenameGrants(k);
 });
 
 after(async () => {

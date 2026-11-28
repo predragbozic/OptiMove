@@ -1,3 +1,4 @@
+import { seedVariableRenameGrants, varyRenameGrant } from "./support/variable-rename-grants.mjs";
 // R2 - renaming, archiving and restoring a canonical variable, with a team coach
 // for club variables (backend/src/canonicalVariableAdminService.js, the routes
 // POST /api/training-load/sources/metrics/variables/:id/rename|archive|restore and
@@ -118,6 +119,7 @@ before(async () => {
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
   await world();
+  await seedVariableRenameGrants(k);
 });
 
 function resetSeams() {
@@ -1221,4 +1223,98 @@ test("17. Q10: every character group Q10 adds, and a text of blanks only, is ref
   assert.deepEqual([(await rename(W.coachA1, v.id, { labelsToken: same.variable.labelsToken, label: legacyLabel })).body.error], ["rename_unchanged"]);
   const other = await rename(W.coachA1, v.id, { labelsToken: same.variable.labelsToken, label: `Other ${ch(0x3164)}` });
   assert.deepEqual([other.status, other.body.error], [400, "invalid_body"]);
+});
+
+test("rename, archive and restore check the staged word at the owning workspace, including receipt replay", async () => {
+  const v = await created(W.caA.cookie);
+  const renameRequest = { requestKey: key(), labelsToken: v.labelsToken, label: "Checked distance" };
+  const archiveRequest = { requestKey: key(), reason: "Retired" };
+  const restoreRequest = { requestKey: key() };
+  const paths = [
+    ["rename", renameRequest],
+    ["archive", archiveRequest],
+    ["restore", restoreRequest],
+  ];
+  const write = (actor, operation, body, id = v.id) => post(`/variables/${id}/${operation}`, actor.cookie, body);
+  const snapshot = () => one(k, `select label, state,
+      (select count(*)::int from training_load.metric_variable_changes where metric_definition_id=d.id) as changes,
+      (select count(*)::int from training_load.metric_variable_requests where metric_definition_id=d.id) as receipts
+    from training_load.metric_definitions d where id=$1`, [v.id]);
+
+  await varyRenameGrant(k, "team_coach", false);
+  const before = await snapshot();
+  // A predecessor schema may still have legacy roles and even a stored role item. The runtime requires the SQL word.
+  const { definition } = await one(k, "select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as definition");
+  const unstage = definition.replace(", 'variables.rename_archive'", "");
+  assert.notEqual(unstage, definition);
+  await k.query(unstage);
+  try {
+    const denied = await write(W.caA, "rename", renameRequest);
+    assert.deepEqual([denied.status, denied.text], [404, '{"error":"notFound"}']);
+    assert.deepEqual(await snapshot(), before);
+  } finally {
+    await k.query(definition);
+  }
+  for (const [operation, body] of paths) {
+    const missing = await write(W.coachA1, operation, body, key());
+    const denied = await write(W.coachA1, operation, body);
+    assert.deepEqual([denied.status, denied.text], [404, missing.text]);
+    assert.equal(denied.headers.get("cache-control"), missing.headers.get("cache-control"));
+    const foreign = await write(W.caB, operation, body);
+    assert.deepEqual([foreign.status, foreign.text], [404, missing.text]);
+  }
+  assert.deepEqual(await snapshot(), before);
+  assert.equal(ok200(await write(W.caA, "rename", renameRequest)).variable.label, "Checked distance");
+  assert.equal(ok200(await write(W.caA, "rename", renameRequest)).replayed, true);
+  assert.equal(ok200(await write(W.caA, "archive", archiveRequest)).variable.state, "archived");
+  assert.equal(ok200(await write(W.caA, "restore", restoreRequest)).variable.state, "active");
+  const saved = await snapshot();
+  assert.equal(saved.changes, before.changes + 3);
+  assert.equal(saved.receipts, before.receipts + 3);
+
+  await varyRenameGrant(k, "club_admin", false);
+  for (const [operation, body] of paths) {
+    const denied = await write(W.caA, operation, body);
+    assert.deepEqual([denied.status, denied.text], [404, '{"error":"notFound"}']);
+  }
+  assert.deepEqual(await snapshot(), saved);
+  await varyRenameGrant(k, "club_admin", true);
+  await varyRenameGrant(k, "team_coach", true);
+  assert.equal(ok200(await archive(W.coachA1, v.id)).variable.state, "archived");
+  assert.equal(ok200(await restore(W.coachA1, v.id)).variable.state, "active");
+  await varyRenameGrant(k, "team_coach", false);
+
+  const base = "/api/training-load/metrics";
+  const definitionPath = `/definitions/${v.id}`;
+  for (const [method, path, body] of [
+    ["PATCH", definitionPath, { label: "Legacy rename" }],
+    ["POST", `${definitionPath}/archive`, {}],
+  ]) {
+    const rejected = await api(path, { base, method, body, cookie: W.caA.cookie });
+    assert.equal(rejected.status, 409, rejected.text);
+    assert.equal(rejected.body.code, "canonical_variable_read_only");
+  }
+  const remain = await snapshot();
+  const hidden = await api(`${definitionPath}/hide`, { base, method: "POST", cookie: W.caA.cookie });
+  assert.equal(hidden.status, 200, hidden.text);
+  const unhidden = await api(`${definitionPath}/hide`, { base, method: "DELETE", cookie: W.caA.cookie });
+  assert.equal(unhidden.status, 200, unhidden.text);
+  assert.deepEqual(await snapshot(), remain);
+
+  // The write is durable, but a fresh answer must also conceal it if the grant was lost after COMMIT.
+  service.setMappingCommitForTests({ fault: async (client) => {
+    await client.query("commit");
+    await varyRenameGrant(k, "club_admin", false);
+    throw new Error("Receipt connection lost after commit");
+  } });
+  try {
+    const durable = await archive(W.caA, v.id);
+    assert.deepEqual([durable.status, durable.text], [404, '{"error":"notFound"}']);
+    const after = await snapshot();
+    assert.deepEqual(after, { ...remain, state: "archived", changes: remain.changes + 1, receipts: remain.receipts + 1 });
+  } finally {
+    service.setMappingCommitForTests();
+  }
+  const system = await created(W.pa.cookie);
+  assert.equal(ok200(await rename(W.pa, system.id, { labelsToken: system.labelsToken, label: "Platform change" })).variable.label, "Platform change");
 });

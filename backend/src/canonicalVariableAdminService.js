@@ -49,8 +49,10 @@ import {
 } from "./sourceMetricMappingService.js";
 import { lockHides } from "./sourceMetricActivationSteps.js";
 import { classificationFilterSql, variableClassification } from "./canonicalClassificationService.js";
+import { createHash } from "node:crypto";
 import { resolveActiveWorkspace } from "./workspace.js";
 import { can, teamScope } from "./permissions.js";
+import { lockClubCeiling } from "./clubCeilingLock.js";
 import { unitTokenOk } from "./metricTextRules.js";
 import { isIconKey } from "./iconKeys.js";
 
@@ -1102,7 +1104,7 @@ export async function resolveVariableEditor(req, known = undefined) {
   if (!workspace) return null;
   if (workspace.type !== "team") {
     const ctx = await resolveMappingAdmin(req, workspace);
-    return ctx ? { ...ctx, view: "admin" } : null;
+    return ctx ? { ...ctx, view: "admin", editorScope: { type: workspace.type, id: workspace.scopeId }, sessionToken: req.sessionToken } : null;
   }
   const teamId = workspace.scopeId ? String(workspace.scopeId).toLowerCase() : null;
   if (!teamId || !UUID.test(teamId)) return null;
@@ -1125,7 +1127,7 @@ export async function resolveVariableEditor(req, known = undefined) {
   // Roles V-1: the module's view word at the team (the club's licence is inside can(); a platform admin passes).
   if (!can(req.authz, "variables.view", teamScope(teamId))) return null;
   const basis = row.platform_admin ? "platform_admin" : row.club_admin ? "club_admin" : "team_coach";
-  return { userId, basis, owner: { scope: "club", clubId: String(row.club_id) }, view: "coach", ...(basis === "team_coach" ? { teamId } : {}) };
+  return { userId, basis, owner: { scope: "club", clubId: String(row.club_id) }, view: "coach", editorScope: { type: "team", id: teamId }, sessionToken: req.sessionToken, ...(basis === "team_coach" ? { teamId } : {}) };
 }
 
 // Roles V-1 (docs/ai/roles-v-steps-plan.md section 2.1): the context of the two variable reads in a view workspace
@@ -1176,25 +1178,84 @@ function classifyChangeError(error) {
 // on every value that changes (`texts`: [value, max, field, nullable]) and
 // once more in the database, the UPDATE (the v38 trigger writes the change
 // row) and the request row naming that change.
+async function lockWritableDefinition(client, ctx, id) {
+  const params = [id];
+  const owner = writableSql(ctx, params);
+  const plain = (await client.query(
+    `select d.id from training_load.metric_definitions d where d.id = $1 and ${owner}`, params,
+  )).rows[0];
+  if (!plain) throw NOT_FOUND();
+  const locked = (await client.query(
+    `select id, owner_scope, owner_club_id from training_load.metric_definitions where id = $1 for update`, [id],
+  )).rows[0];
+  if (!locked || !isOwn(locked, ctx)) throw NOT_FOUND();
+}
+
+async function authorizeVariableChange(client, ctx, id) {
+  const { type, id: scopeId } = ctx.editorScope ?? {};
+  if (ctx.basis === "platform_admin") return false;
+  if ((type !== "club" && type !== "team") || !scopeId) throw NOT_FOUND();
+  const { rows: [phase] } = await client.query("select public.permission_word_honoured('variables.rename_archive') as staged");
+  if (!phase?.staged) throw NOT_FOUND();
+  await lockClubCeiling(client, [ctx.owner.clubId], "shared");
+  // Preserve the deployed domain order: the definition before legacy actor rows.
+  await lockWritableDefinition(client, ctx, id);
+  if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+  if (type === "team") {
+    const team = await client.query(
+      `select 1 from public.teams t join public.user_team_roles r on r.team_id = t.id
+        where t.id = $1 and t.club_id = $2 and coalesce(t.is_active, true)
+          and r.user_id = $3 and r.role = 'team_coach' and r.is_active for share of t, r`,
+      [scopeId, ctx.owner.clubId, ctx.userId],
+    );
+    if (team.rowCount !== 1) throw NOT_FOUND();
+  }
+  await client.query("select public.lock_permission_actor($1, $2, $3)", [ctx.userId, type, scopeId]);
+  const { rows: [rights] } = await client.query(
+    `select public.user_has_permission($1, 'variables.view', $2, $3)
+       and public.user_has_permission($1, 'variables.rename_archive', $2, $3) as allowed`,
+    [ctx.userId, type, scopeId],
+  );
+  if (!rights?.allowed || !ctx.sessionToken) throw NOT_FOUND();
+  const tokenHash = createHash("sha256").update(ctx.sessionToken).digest("base64url");
+  const session = await client.query(
+    "select 1 from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share",
+    [ctx.userId, tokenHash],
+  );
+  if (!session.rowCount) throw NOT_FOUND();
+  const preference = await client.query(
+    "select 1 from public.user_workspace_preferences where user_id=$1 and workspace_type=$2 and scope_id=$3 for share",
+    [ctx.userId, type, scopeId],
+  );
+  if (!preference.rowCount) throw NOT_FOUND();
+  return true;
+}
+
+async function recordVariableRenameArchiveUse(client) {
+  const result = await client.query(
+    "update training_load.variable_rename_archive_v112_use set first_checked_write_at=clock_timestamp()"
+    + " where singleton and first_checked_write_at is null",
+  );
+  if (!result.rowCount && !(await client.query(
+    "select 1 from training_load.variable_rename_archive_v112_use where singleton and first_checked_write_at is not null",
+  )).rowCount) throw new Error("Variables Rename and Archive first-use record is missing.");
+}
+
 async function runChange({ ctx, variableId, operation, requestKey, requestHash, reason, check, update, texts }) {
   const id = variableId.toLowerCase();
+  const authorizeTarget = ctx.basis === "platform_admin" ? undefined : (client) => authorizeVariableChange(client, ctx, id);
   return runWrite({
-    ctx, where: operation, requestKey, requestHash, action: operation,
+    ctx, where: operation, requestKey, requestHash, action: operation, authorizeTarget,
     requests: VARIABLE_REQUESTS, classify: classifyChangeError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
       return variable ? { variable } : null;
     },
-    body: async (client) => {
-      const params = [id];
-      const owner = writableSql(ctx, params);
-      const plain = (await client.query(`select d.id from training_load.metric_definitions d where d.id = $1 and ${owner}`, params)).rows[0];
-      if (!plain) throw NOT_FOUND();
-      const locked = (await client.query(
-        `select id, owner_scope, owner_club_id from training_load.metric_definitions where id = $1 for update`, [id],
-      )).rows[0];
-      if (!locked || !isOwn(locked, ctx)) throw NOT_FOUND();
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+    body: async (client, _operationId, targetAuthorized) => {
+      if (!targetAuthorized) {
+        await lockWritableDefinition(client, ctx, id);
+        if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      }
       const row = (await client.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1`, [id])).rows[0];
       if (!row) throw NOT_FOUND();
       await check(row, client);
@@ -1219,6 +1280,7 @@ async function runChange({ ctx, variableId, operation, requestKey, requestHash, 
         [requestKey, ctx.userId, operation, requestHash, ctx.owner.scope, ctx.owner.clubId, ctx.basis,
           ctx.basis === "team_coach" ? ctx.teamId : null, id, changes[0].id, reason],
       );
+      if (targetAuthorized) await recordVariableRenameArchiveUse(client);
       return { operation, metric_definition_id: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
     },
   });
