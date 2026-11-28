@@ -69,6 +69,7 @@ function roleData(client) {
 
 
 
+const stagedBuild = "cf4693b2479996f971d8b5962d9a7f182f928c4c";
 const previousBuild = "904458d0590f84d01e5c13df6109a9a4ce770d36";
 const migration = "202612151000";
 const word = "variables.manage";
@@ -169,22 +170,23 @@ test("v113 applies, rolls back and restores the audited Variables catalogue", as
 test("v113 old and current Settings and native variable operations share an exact disposable cutover", async () => {
   const fixture = await createPagesDatabase({ through: "202612141000", label: "vars_overlap_v113" });
   const { client } = fixture;
-  let current, previous;
+  let current, previous, staged;
   const priorReferences = process.env.DASHBOARD_REFERENCES_ENABLED;
   process.env.DASHBOARD_REFERENCES_ENABLED = 'true';
   try {
-    const { versionId, customId, club, team, platform, coach } = await seedNativeRoleLayers(fixture);
+    const { versionId, customId, club, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await fixture.applyThrough(migration);
     const f = fixtures(client);
     const clubAdmin = await f.user("Variables Manage club admin");
     await f.grantClub(clubAdmin, club);
     await client.query(
-      "insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'club',$3),($4,'club',$5)",
-      [platform, coach, club, clubAdmin, club],
+      "insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'club',$3),($4,'club',$3),($5,'club',$3)",
+      [platform, coach, club, clubAdmin, versionCoach],
     );
     const marker = async () => (await client.query("select first_checked_write_at from training_load.variables_manage_v113_use")).rows[0].first_checked_write_at;
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, { DASHBOARD_REFERENCES_ENABLED: 'true' }, previousBuild);
+    staged = await previousDashboardServer(fixture.url, { DASHBOARD_REFERENCES_ENABLED: 'true' }, stagedBuild);
     const cookie = await current.cookieFor(platform);
     const root = "/api/organization/roles";
     async function call(server, path, body) {
@@ -197,7 +199,7 @@ test("v113 old and current Settings and native variable operations share an exac
       return { status: response.status, body: await response.json() };
     }
     const roleId = ROLE_IDS.club_admin;
-    for (const server of [previous, current]) {
+    for (const server of [previous, staged]) {
       const { rows: [roles] } = await client.query(
         "select (select revision from public.permission_roles where id=$1) as role_revision,"
         + " (select revision from public.permission_club_role_versions where id=$2) as version_revision,"
@@ -259,6 +261,65 @@ test("v113 old and current Settings and native variable operations share an exac
     });
     assert.equal(checked.status, 201, JSON.stringify(checked.body));
     assert.deepEqual(await marker(), firstUsed);
+
+    const publicCatalog = await call(current, root + "/catalog?clubId=" + club);
+    assert.equal(publicCatalog.status, 200);
+    assert.equal(publicCatalog.body.permissions.find(entry => entry.word === word)?.checked, true);
+    assert.equal(publicCatalog.body.permissions.find(entry => entry.word === "variables.rename_archive")?.checked, true);
+    assert.equal(publicCatalog.body.permissions.find(entry => entry.word === "mappings.manage")?.checked, false);
+
+    const createInput = label => ({ ...input, label, requestKey: key() });
+    const receipts = async () => (await client.query(
+      "select count(*)::int as count from training_load.metric_variable_requests",
+    )).rows[0].count;
+    for (const layer of [
+      { id: versionId, user: versionCoach, path: root + "/" + roleId + "/clubs/" + club + "/version",
+        table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", receipt: "role", context: {} },
+      { id: customId, user: coach, path: root + "/users/" + coach + "/clubs/" + club + "/custom",
+        table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id", receipt: "custom",
+        context: { roleId, scopeType: "club", scopeId: club } },
+    ]) {
+      const actorCookie = await current.cookieFor(layer.user);
+      const permissions = async () => {
+        const me = await current.api(actorCookie, "/api/auth/me");
+        assert.equal(me.status, 200, me.text);
+        return me.body.user.permissions;
+      };
+      const original = await permissions();
+      assert.ok([word, "variables.view", "variables.rename_archive", "tests.view"].every(entry => original.includes(entry)));
+      const change = async direction => {
+        const { rows: [{ revision }] } = await client.query("select revision from public." + layer.table + " where id=$1", [layer.id]);
+        const auditCount = async () => (await client.query(
+          "select count(*)::int as count from public." + layer.auditTable + " where " + layer.auditKey + "=$1", [layer.id],
+        )).rows[0].count;
+        const before = await auditCount();
+        const patch = { requestKey: key(), expectedRevision: revision, reason: "Review full Variables Manage", [direction]: [word], ...layer.context };
+        const saved = await call(current, layer.path, patch);
+        assert.equal(saved.status, 200, JSON.stringify(saved.body));
+        assert.equal(await auditCount(), before + 1);
+        const persisted = await roleData(client);
+        const repeated = await call(staged, layer.path, patch);
+        assert.equal(repeated.status, 200, JSON.stringify(repeated.body));
+        assert.ok(saved.body[layer.receipt]);
+        assert.deepEqual(repeated.body, { [layer.receipt]: saved.body[layer.receipt], replayed: true });
+        assert.deepEqual(await roleData(client), persisted);
+      };
+      const candidate = createInput("Scoped variable " + key());
+      await change("remove");
+      assert.deepEqual(await permissions(), original.filter(entry => entry !== word));
+      const readable = await current.api(actorCookie, path + "/" + made.variable.id);
+      assert.equal(readable.status, 200, readable.text);
+      const beforeDenied = await receipts();
+      const denied = await current.api(actorCookie, path, { method: "POST", body: candidate });
+      assert.equal(denied.status, 404, denied.text);
+      assert.equal(await receipts(), beforeDenied);
+      await change("add");
+      assert.deepEqual(await permissions(), original);
+      const restored = await current.api(actorCookie, path, { method: "POST", body: candidate });
+      assert.equal(restored.status, 201, restored.text);
+      assert.equal(await receipts(), beforeDenied + 1);
+    }
+
     await assert.rejects(client.query(await read("rollback")), /refuses checked Variables Manage writer use/);
     await client.query("rollback");
     assert.deepEqual(await marker(), firstUsed);
@@ -266,7 +327,7 @@ test("v113 old and current Settings and native variable operations share an exac
     if (priorReferences === undefined) delete process.env.DASHBOARD_REFERENCES_ENABLED;
     else process.env.DASHBOARD_REFERENCES_ENABLED = priorReferences;
     try {
-      await previous?.stop();
+      await Promise.all([previous?.stop(), staged?.stop()]);
     } finally {
       try { await current?.stop(); } finally { await fixture.drop(); }
     }

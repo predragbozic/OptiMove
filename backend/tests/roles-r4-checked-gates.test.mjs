@@ -27,7 +27,8 @@ const SOURCES = files(SRC).map((f) => ({ rel: path.relative(SRC, f).split(path.s
 const CAN_CALL = /\bcan\(\s*[A-Za-z_.?]+\s*,\s*"([a-z_.]+)"/g;
 // The schedule writer rechecks the actual row under locks using the Postgres twin.
 const SQL_CHECKED = Object.freeze({
-  "canonicalVariableAdminService.js": Object.freeze(["variables.rename_archive"]),
+  "canonicalVariableAdminService.js": Object.freeze(["variables.rename_archive", "variables.manage"]),
+  "dashboardReferences/access.js": Object.freeze(["variables.manage"]),
   "testsScheduleWriteAccess.js": Object.freeze(["tests.schedule.manage"]),
   "activityRosterCommands.js": Object.freeze(["load.roster.decide"]),
   "trainingActivityWriteAccess.js": Object.freeze(["load.activities.manage"]),
@@ -45,7 +46,7 @@ test("A1. every listed gate file checks its word through can() or its named tran
       const src = SOURCES.find((s) => s.rel === gate);
       assert.ok(src, `${word}: gate file ${gate} exists`);
       const words = [...src.text.matchAll(CAN_CALL)].map((m) => m[1]);
-      const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1,\s*'([a-z_.]+)',\s*\$2,\s*\$3\)/g)].map((m) => m[1]);
+      const sqlWords = [...src.text.matchAll(/public\.user_has_permission\(\$1,\s*'([a-z_.]+)',\s*(?:\$2,\s*\$3|'club',\s*\$2)\)/g)].map((m) => m[1]);
       words.push(...sqlWords.filter((checked) => SQL_CHECKED[gate]?.includes(checked)));
       if (word === "exercises.add" || word === "exercises.remove") {
         const guard = SOURCES.find(source => source.rel === "exerciseWriteAccess.js").text;
