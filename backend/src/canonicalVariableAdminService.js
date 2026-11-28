@@ -906,6 +906,65 @@ export function setVariableWriteHoldForTests(fn) { writeHold = fn ?? null; }
 let classifyObserver = null;
 export function setVariableClassifyObserverForTests(fn) { classifyObserver = fn ?? null; }
 
+async function lockVariableManageCeiling(client, ctx) {
+  const clubId = ctx.owner?.clubId;
+  if (ctx.basis !== "club_admin" || ctx.owner.scope !== "club" || !clubId
+      || ctx.editorScope?.type !== "club" || ctx.editorScope.id !== clubId || !ctx.sessionToken) throw NOT_FOUND();
+  const { rows: [phase] } = await client.query("select public.permission_word_honoured('variables.manage') as staged");
+  if (!phase?.staged) throw NOT_FOUND();
+  await lockClubCeiling(client, [clubId], "shared");
+}
+
+async function lockVariableManageActor(client, ctx) {
+  if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+  await client.query("select public.lock_permission_actor($1, 'club', $2)", [ctx.userId, ctx.owner.clubId]);
+  const { rows: [rights] } = await client.query(
+    `select public.user_has_permission($1, 'variables.view', 'club', $2)
+       and public.user_has_permission($1, 'variables.manage', 'club', $2) as allowed`,
+    [ctx.userId, ctx.owner.clubId],
+  );
+  if (!rights?.allowed) throw NOT_FOUND();
+  await lockVariableEditorSession(client, ctx);
+}
+
+// New writes take their original domain locks first. Only replay or response
+// verification needs a separate fresh lock of the specific receipt target.
+function authorizeVariableManage(ctx, id = null) {
+  if (ctx.basis === "platform_admin") return undefined;
+  return async client => {
+    await lockVariableManageCeiling(client, ctx);
+    if (id) await lockWritableDefinition(client, ctx, id);
+    await lockVariableManageActor(client, ctx);
+    return true;
+  };
+}
+
+// Legacy validation locks the target and calculation inputs before actor locks.
+// A state or input refusal is only disclosed after the actor's fresh check.
+async function validateVariableManageEffect(client, ctx, scoped, validate) {
+  if (!scoped) {
+    await validate();
+    if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+    return;
+  }
+  let refusalAfterAuthorization;
+  try {
+    await validate();
+  } catch (error) {
+    if (!(error instanceof SourceMetricMappingError)) throw error;
+    refusalAfterAuthorization = error;
+  }
+  await lockVariableManageActor(client, ctx);
+  if (refusalAfterAuthorization) throw refusalAfterAuthorization;
+}
+
+// Older create hashes deliberately omit the owner and result IDs. When an
+// unconfirmed transaction is recovered, verify its actual durable result.
+const matchesVariableManageReceipt = (record, written) =>
+  record.owner_scope === written.owner_scope && record.owner_club_id === written.owner_club_id
+  && record.metric_definition_id === written.metric_definition_id
+  && record.metric_definition_version_id === written.metric_definition_version_id;
+
 // POST /variables - a canonical variable: the definition, its version 1 and
 // its levels, in the workspace's owner scope, in one transaction.
 export async function createVariable({ ctx, body }) {
@@ -948,17 +1007,19 @@ export async function createVariable({ ctx, body }) {
     },
   });
   return runWrite({
-    ctx, where: "variable_create", requestKey, requestHash, action: "variable_create",
+    ctx, where: "variable_create", requestKey, requestHash, action: "variable_create", authorizeTarget: authorizeVariableManage(ctx), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
     requests: VARIABLE_REQUESTS, classify: classifyVariableError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
       return variable ? { variable } : null;
     },
     body: async (client) => {
-      // v77 (J21): the inputs FOR SHARE before the rights (a new version's
-      // order: definitions, then the role, user and club rows).
-      if (calculation) await checkCalculationInputs(client, ctx, calculation, { unit: semantics.unit, levels });
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      const scoped = ctx.basis !== "platform_admin";
+      if (scoped) await lockVariableManageCeiling(client, ctx);
+      // v77 (J21): input definitions FOR SHARE before actor rights.
+      await validateVariableManageEffect(client, ctx, scoped, async () => {
+        if (calculation) await checkCalculationInputs(client, ctx, calculation, { unit: semantics.unit, levels });
+      });
       const units = [semantics.unit, ...(semantics.condition ? [semantics.condition.unit] : [])];
       if (!(await unitsAgree(client, units))) throw refusal(400, "invalid_unit", TEXT.invalid_unit);
       if (writeHold) await writeHold(client, "variable_create");
@@ -1012,7 +1073,7 @@ export async function createVariableVersion({ ctx, variableId, body }) {
     },
   });
   return runWrite({
-    ctx, where: "variable_version_create", requestKey, requestHash, action: "variable_version_create",
+    ctx, where: "variable_version_create", requestKey, requestHash, action: "variable_version_create", authorizeTarget: authorizeVariableManage(ctx, id), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
     requests: VARIABLE_REQUESTS, classify: classifyVariableError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
@@ -1021,6 +1082,8 @@ export async function createVariableVersion({ ctx, variableId, body }) {
       return version ? { variable, version } : null;
     },
     body: async (client) => {
+      const scoped = ctx.basis !== "platform_admin";
+      if (scoped) await lockVariableManageCeiling(client, ctx);
       const params = [id];
       const owner = writableSql(ctx, params);
       const plain = (await client.query(`select d.id from training_load.metric_definitions d where d.id = $1 and ${owner}`, params)).rows[0];
@@ -1029,40 +1092,41 @@ export async function createVariableVersion({ ctx, variableId, body }) {
         `select id, owner_scope, owner_club_id, state, current_version_id from training_load.metric_definitions where id = $1 for update`, [id],
       )).rows[0];
       if (!locked || !isOwn(locked, ctx)) throw NOT_FOUND();
-      if (locked.state !== "active") throw refusal(409, "variable_not_active", TEXT.variable_not_active);
-      const current = (await client.query(
-        `select ${VERSION_ROW_COLUMNS} from training_load.metric_definition_versions v where v.id = $1 and v.metric_definition_id = $2`,
-        [locked.current_version_id, id],
-      )).rows[0];
-      if (!current || current.version_id !== expectedCurrentVersionId) {
-        throw refusal(409, "current_version_changed", TEXT.current_version_changed,
-          current ? { current: { versionId: current.version_id, versionNumber: current.version_number } } : undefined);
-      }
-      // v77 (J21): a variable keeps its kind; a calculation's inputs are
-      // checked and locked before the rights; an input of a calculated
-      // variable keeps its unit.
-      const stored = storedSemantics(current);
-      if ((stored.calculation === null) !== (semantics.calculation === null)
-          || (stored.calculation && stored.calculation.kind !== semantics.calculation.kind)) {
-        throw refusal(409, "calculation_kind_fixed", TEXT.calculation_kind_fixed);
-      }
-      if (semanticsKey(stored) === semanticsKey(semantics)) throw refusal(409, "version_unchanged", TEXT.version_unchanged);
-      if (semantics.calculation) {
-        const scopes = (await client.query(
-          `select scope_level::text as level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id],
-        )).rows.map((r) => r.level);
-        const levels = ["session", "drill"].filter((level) => scopes.includes(LEVELS[level]));
-        await checkCalculationInputs(client, ctx, semantics.calculation, { unit: semantics.unit, levels });
-        // v79: a sum a ratio or a difference uses keeps its unit, as an ordinary input does.
-        if (semantics.unit !== stored.unit && (await usedByCalculation(client, id)) !== null) {
-          throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+      await validateVariableManageEffect(client, ctx, scoped, async () => {
+        if (locked.state !== "active") throw refusal(409, "variable_not_active", TEXT.variable_not_active);
+        const current = (await client.query(
+          `select ${VERSION_ROW_COLUMNS} from training_load.metric_definition_versions v where v.id = $1 and v.metric_definition_id = $2`,
+          [locked.current_version_id, id],
+        )).rows[0];
+        if (!current || current.version_id !== expectedCurrentVersionId) {
+          throw refusal(409, "current_version_changed", TEXT.current_version_changed,
+            current ? { current: { versionId: current.version_id, versionNumber: current.version_number } } : undefined);
         }
-      } else if (semantics.unit !== stored.unit || semantics.dailyAggregationMethod !== "sum") {
-        const user = await usedByCalculation(client, id);
-        if (user !== null && semantics.unit !== stored.unit) throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
-        if (user !== null) throw refusal(409, "calculation_input_day_rule_in_use", dayRuleInUseText(user));
-      }
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+        // v77 (J21): a variable keeps its kind; a calculation's inputs are
+        // checked and locked before the rights; an input of a calculated
+        // variable keeps its unit.
+        const stored = storedSemantics(current);
+        if ((stored.calculation === null) !== (semantics.calculation === null)
+            || (stored.calculation && stored.calculation.kind !== semantics.calculation.kind)) {
+          throw refusal(409, "calculation_kind_fixed", TEXT.calculation_kind_fixed);
+        }
+        if (semanticsKey(stored) === semanticsKey(semantics)) throw refusal(409, "version_unchanged", TEXT.version_unchanged);
+        if (semantics.calculation) {
+          const scopes = (await client.query(
+            `select scope_level::text as level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id],
+          )).rows.map((r) => r.level);
+          const levels = ["session", "drill"].filter((level) => scopes.includes(LEVELS[level]));
+          await checkCalculationInputs(client, ctx, semantics.calculation, { unit: semantics.unit, levels });
+          // v79: a sum a ratio or a difference uses keeps its unit, as an ordinary input does.
+          if (semantics.unit !== stored.unit && (await usedByCalculation(client, id)) !== null) {
+            throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+          }
+        } else if (semantics.unit !== stored.unit || semantics.dailyAggregationMethod !== "sum") {
+          const user = await usedByCalculation(client, id);
+          if (user !== null && semantics.unit !== stored.unit) throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+          if (user !== null) throw refusal(409, "calculation_input_day_rule_in_use", dayRuleInUseText(user));
+        }
+      });
       const units = [semantics.unit, ...(semantics.condition ? [semantics.condition.unit] : [])];
       if (!(await unitsAgree(client, units))) throw refusal(400, "invalid_unit", TEXT.invalid_unit);
       if (writeHold) await writeHold(client, "variable_version_create");
@@ -1216,7 +1280,14 @@ async function authorizeVariableChange(client, ctx, id) {
        and public.user_has_permission($1, 'variables.rename_archive', $2, $3) as allowed`,
     [ctx.userId, type, scopeId],
   );
-  if (!rights?.allowed || !ctx.sessionToken) throw NOT_FOUND();
+  if (!rights?.allowed) throw NOT_FOUND();
+  await lockVariableEditorSession(client, ctx);
+  return true;
+}
+
+async function lockVariableEditorSession(client, ctx) {
+  const { type, id: scopeId } = ctx.editorScope ?? {};
+  if (!ctx.sessionToken) throw NOT_FOUND();
   const tokenHash = createHash("sha256").update(ctx.sessionToken).digest("base64url");
   const session = await client.query(
     "select 1 from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share",
@@ -1228,7 +1299,6 @@ async function authorizeVariableChange(client, ctx, id) {
     [ctx.userId, type, scopeId],
   );
   if (!preference.rowCount) throw NOT_FOUND();
-  return true;
 }
 
 async function recordVariableRenameArchiveUse(client) {

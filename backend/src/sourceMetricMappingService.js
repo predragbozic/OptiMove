@@ -863,7 +863,7 @@ const MAPPING_REQUESTS = Object.freeze({
 });
 // The ids a committed write names when its answer could not be read (readError).
 const mappingIdsOf = (written) => ({ mappingId: written.mapping_id ?? null, ...(written.mapping_version_id ? { versionId: written.mapping_version_id } : {}) });
-async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf, authorizeTarget }) {
+async function runWrite({ ctx, where, requestKey, requestHash, action, body: operation, reread, requests = MAPPING_REQUESTS, classify = classifyDatabaseError, idsOf = mappingIdsOf, authorizeTarget, authorizeReplayOnly = false, matchesWrittenReceipt }) {
   const client = await pool.connect();
   const release = guardClient(client);
   let released = false;
@@ -881,10 +881,11 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
     await client.query(`set local lock_timeout = '${userLockWaitMs}ms'`);
     await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 34))`, [`source-metric-mapping:${ctx.userId}`]);
     await client.query(`set local lock_timeout = '${ROW_LOCK_TIMEOUT_MS}ms'`);
-    const targetAuthorized = await authorizeTarget?.(client);
+    let targetAuthorized = authorizeReplayOnly ? false : await authorizeTarget?.(client);
     // Mapping writes still read the receipt before their registry locks. Scoped variable changes authorize first.
     const earlier = (await client.query(requests.find, [ctx.userId, requestKey])).rows[0];
     if (earlier) {
+      if (authorizeReplayOnly) targetAuthorized = await authorizeTarget?.(client);
       if (earlier.operation !== action || earlier.request_hash !== requestHash) throw refusal(409, "request_key_reused", "This requestKey was already used for a different request; use a new key.");
       // A replay is a read of the current state, after the right is checked again.
       if (!targetAuthorized && !(await rightsStillHold(client, ctx))) throw NOT_FOUND();
@@ -923,7 +924,10 @@ async function runWrite({ ctx, where, requestKey, requestHash, action, body: ope
       console.error(`[source-metric-mappings] the COMMIT of ${where} was not confirmed (${commitError?.code ?? ""}); checking the request record`);
       let found = false;
       try {
-        const scopedReceipt = authorizeTarget ? { authorizeTarget, action, requestHash } : null;
+                const scopedReceipt = authorizeTarget ? {
+          authorizeTarget, action, requestHash,
+          matchesWritten: matchesWrittenReceipt ? (record) => matchesWrittenReceipt(record, written) : undefined,
+        } : null;
         found = await requestIsCommitted(ctx.userId, requestKey, scopedReceipt ? requests.find : requests.exists, scopedReceipt);
       } catch (error) {
         if (authorizeTarget && error instanceof SourceMetricMappingError
@@ -1001,7 +1005,7 @@ async function requestIsCommitted(userId, requestKey, receiptSql, scopedReceipt)
         }
         await client.query("commit");
       }
-      return answer.rowCount === 1;
+      return answer.rowCount === 1 && (scopedReceipt?.matchesWritten?.(answer.rows[0]) ?? true);
     })();
     verify.catch(() => {});
     return await withinBound(verify, left());
