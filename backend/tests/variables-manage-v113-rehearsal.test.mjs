@@ -69,7 +69,7 @@ function roleData(client) {
 
 
 
-const previousBuild = "17008c33c6d0e67cfaba3cee9a47baa6d873ebe1";
+const previousBuild = "904458d0590f84d01e5c13df6109a9a4ce770d36";
 const migration = "202612151000";
 const word = "variables.manage";
 const read = name => readFile(new URL("../../docs/runbooks/variables-manage-v113-" + name + ".sql", import.meta.url), "utf8");
