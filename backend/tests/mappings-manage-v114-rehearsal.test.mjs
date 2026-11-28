@@ -70,6 +70,7 @@ function roleData(client) {
 
 
 const previousBuild = "7a78d82a12b175476bd4e09656e28ca5f357ba72";
+const stagedBuild = "70179aa735d3449386c0f54e1cc651ee7cabc9d8";
 const migration = "202612161000";
 const word = "mappings.manage";
 const read = name => readFile(new URL("../../docs/runbooks/mappings-manage-v114-" + name + ".sql", import.meta.url), "utf8");
@@ -169,20 +170,21 @@ test("v114 applies, rolls back and restores the audited Mappings catalogue", asy
 test("v114 old and current Settings and native mapping operations share an exact disposable cutover", async () => {
   const fixture = await createPagesDatabase({ through: "202612151000", label: "map_overlap_v114" });
   const { client } = fixture;
-  let current, previous;
+  let current, previous, staged;
   try {
-    const { versionId, customId, club, team, platform, coach } = await seedNativeRoleLayers(fixture);
+    const { versionId, customId, club, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await fixture.applyThrough(migration);
     const f = fixtures(client);
     const clubAdmin = await f.user("Mappings Manage club admin");
     await f.grantClub(clubAdmin, club);
     await client.query(
-      "insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'club',$3),($4,'club',$5)",
-      [platform, coach, club, clubAdmin, club],
+      "insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'club',$3),($4,'club',$3),($5,'club',$3)",
+      [platform, coach, club, clubAdmin, versionCoach],
     );
     const marker = async () => (await client.query("select first_checked_write_at from training_load.mappings_manage_bridge_use")).rows[0].first_checked_write_at;
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, previousBuild);
+    staged = await previousDashboardServer(fixture.url, {}, stagedBuild);
     const cookie = await current.cookieFor(platform);
     const root = "/api/organization/roles";
     async function call(server, path, body) {
@@ -195,7 +197,7 @@ test("v114 old and current Settings and native mapping operations share an exact
       return { status: response.status, body: await response.json() };
     }
     const roleId = ROLE_IDS.club_admin;
-    for (const server of [previous, current]) {
+    for (const server of [previous, staged]) {
       const { rows: [roles] } = await client.query(
         "select (select revision from public.permission_roles where id=$1) as role_revision,"
         + " (select revision from public.permission_club_role_versions where id=$2) as version_revision,"
@@ -259,12 +261,83 @@ test("v114 old and current Settings and native mapping operations share an exact
     assert.equal(checked.status, 201, checked.text);
     const firstUsed = await marker();
     assert.ok(firstUsed);
+    const publicCatalog = await call(current, root + "/catalog?clubId=" + club);
+    assert.equal(publicCatalog.status, 200);
+    assert.equal(publicCatalog.body.permissions.find(entry => entry.word === word)?.checked, true);
+    assert.equal(publicCatalog.body.permissions.find(entry => entry.word === "variables.manage")?.checked, true);
+    assert.equal(publicCatalog.body.permissions.find(entry => entry.word === "sources.connect")?.checked, false);
+
+    const receipts = async () => (await client.query(
+      "select count(*)::int as count from training_load.source_metric_audit where action='mapping_create' and request_key is not null",
+    )).rows[0].count;
+    for (const layer of [
+      { id: versionId, user: versionCoach, path: root + "/" + roleId + "/clubs/" + club + "/version",
+        table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", receipt: "role", context: {} },
+      { id: customId, user: coach, path: root + "/users/" + coach + "/clubs/" + club + "/custom",
+        table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id", receipt: "custom",
+        context: { roleId, scopeType: "club", scopeId: club } },
+    ]) {
+      const actorCookie = await current.cookieFor(layer.user);
+      const permissions = async () => {
+        const me = await current.api(actorCookie, "/api/auth/me");
+        assert.equal(me.status, 200, me.text);
+        return me.body.user.permissions;
+      };
+      const originalWords = await permissions();
+      assert.ok(originalWords.includes(word) && !originalWords.includes("variables.manage"));
+      const { rows: [{ revision }] } = await client.query("select revision from public." + layer.table + " where id=$1", [layer.id]);
+      const variableGrant = await call(staged, layer.path, {
+        requestKey: key(), expectedRevision: revision, reason: "Keep existing Variable management independent",
+        add: ["variables.manage"], ...layer.context,
+      });
+      assert.equal(variableGrant.status, 200, JSON.stringify(variableGrant.body));
+      const original = await permissions();
+      assert.ok([word, "variables.view", "variables.manage", "variables.rename_archive", "tests.view"].every(entry => original.includes(entry)), layer.receipt + ": " + original.join(", "));
+      const change = async direction => {
+        const { rows: [{ revision }] } = await client.query("select revision from public." + layer.table + " where id=$1", [layer.id]);
+        const auditCount = async () => (await client.query(
+          "select count(*)::int as count from public." + layer.auditTable + " where " + layer.auditKey + "=$1", [layer.id],
+        )).rows[0].count;
+        const before = await auditCount();
+        const patch = { requestKey: key(), expectedRevision: revision, reason: "Review Mappings Manage", [direction]: [word], ...layer.context };
+        const saved = await call(current, layer.path, patch);
+        assert.equal(saved.status, 200, JSON.stringify(saved.body));
+        assert.equal(await auditCount(), before + 1);
+        const persisted = await roleData(client);
+        const repeated = await call(staged, layer.path, patch);
+        assert.equal(repeated.status, 200, JSON.stringify(repeated.body));
+        assert.ok(saved.body[layer.receipt]);
+        assert.deepEqual(repeated.body, { [layer.receipt]: saved.body[layer.receipt], replayed: true });
+        assert.deepEqual(await roleData(client), persisted);
+      };
+      const definition = await makeVariable("Scoped mapping target " + key());
+      const candidate = { requestKey: key(), sourceMetricId, metricDefinitionId: definition };
+      await change("remove");
+      assert.deepEqual(await permissions(), original.filter(entry => entry !== word));
+      const readable = await current.api(actorCookie, metrics + "/variables/" + definition);
+      assert.equal(readable.status, 200, readable.text);
+      const variable = await current.api(actorCookie, metrics + "/variables", { method: "POST", body: {
+        requestKey: key(), label: "Variable remains editable " + key(), unit: "s", levels: ["session"], dailyAggregationMethod: "sum",
+      } });
+      assert.equal(variable.status, 201, variable.text);
+      const beforeDenied = await receipts();
+      const denied = await current.api(actorCookie, path, { method: "POST", body: candidate });
+      assert.equal(denied.status, 404, denied.text);
+      assert.equal(await receipts(), beforeDenied);
+      await change("add");
+      assert.deepEqual(await permissions(), original);
+      const restored = await current.api(actorCookie, path, { method: "POST", body: candidate });
+      assert.equal(restored.status, 201, restored.text);
+      assert.equal(await receipts(), beforeDenied + 1);
+    }
+
+
     await assert.rejects(client.query(await read("rollback")), /refuses checked Mappings Manage writer use/);
     await client.query("rollback");
     assert.deepEqual(await marker(), firstUsed);
   } finally {
     try {
-      await previous?.stop();
+      await Promise.all([previous?.stop(), staged?.stop()])
     } finally {
       try { await current?.stop(); } finally { await fixture.drop(); }
     }
