@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
@@ -310,8 +312,19 @@ test("each v115 local writer stamps first use only on its own new effect", async
           [existingTeam, platform],
         );
         await fixture.applyThrough(migration);
-        server = await startServer(fixture.url);
-        const cookie = await server.cookieFor(actor);
+        const checkedBuild = execFileSync("git", ["rev-parse", "HEAD"], { cwd: new URL("../../", import.meta.url), encoding: "utf8" }).trim();
+        server = await previousDashboardServer(fixture.url, {}, checkedBuild);
+        const token = randomBytes(32).toString("base64url");
+        await client.query("insert into public.auth_sessions(user_id,token_hash,expires_at) values($1,$2,now()+interval '1 hour')",
+          [actor, createHash("sha256").update(token).digest("base64url")]);
+        const cookie = "optimove_session=" + token;
+        async function api(path, { method, body }) {
+          const response = await fetch(server.baseUrl + path, {
+            method, headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body),
+          });
+          const text = await response.text();
+          return { status: response.status, body: JSON.parse(text), text };
+        }
         const marker = async () => (await client.query("select first_checked_write_at from training_load.sources_connect_local_bridge_use")).rows[0].first_checked_write_at;
         let effect;
         if (operation === "Unbind") {
@@ -334,14 +347,14 @@ test("each v115 local writer stamps first use only on its own new effect", async
             method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(legacy.body),
           });
           assert.equal(saved.status, 200, await saved.clone().text());
-          const replay = await server.api(cookie, legacy.path, { method: "POST", body: legacy.body });
+          const replay = await api(legacy.path, { method: "POST", body: legacy.body });
           assert.equal(replay.status, 200, replay.text);
           assert.equal(replay.body.result.replayed, true);
-          const denial = await server.api(cookie, fresh.path, { method: "POST", body: { ...fresh.body, expected: { teamId: freshTeam, sourceTeamId: "999" } } });
+          const denial = await api(fresh.path, { method: "POST", body: { ...fresh.body, expected: { teamId: freshTeam, sourceTeamId: "999" } } });
           assert.equal(denial.status, 409, denial.text);
-          effect = () => server.api(cookie, fresh.path, { method: "POST", body: fresh.body });
+          effect = () => api(fresh.path, { method: "POST", body: fresh.body });
         } else {
-          const update = (team, gpexeTeamId) => server.api(cookie, "/api/training-load/gpexe/teams/" + team + "/settings", {
+          const update = (team, gpexeTeamId) => api("/api/training-load/gpexe/teams/" + team + "/settings", {
             method: "PUT", body: { gpexeTeamId },
           });
           const noOp = await update(existingTeam, "0981");
