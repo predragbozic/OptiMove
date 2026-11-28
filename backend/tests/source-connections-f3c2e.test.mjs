@@ -1459,7 +1459,7 @@ test("31. U2a: the right is checked again INSIDE the write - a role revoked, a c
   const other = await org({ approve: false });
   const ca = await clubAdmin(o.club);
   const conn = await verified(ca, o.club);
-  const attempt = () => settings.setTeamSettings(o.team, { gpexeTeamId: "981", userId: ca.id, clubAdminClubId: o.club }).then(() => null, (e) => e);
+  const attempt = () => settings.setTeamSettings(o.team, { gpexeTeamId: "981", userId: ca.id, clubAdminClubId: o.club, sessionToken: ca.cookie.slice("optimove_session=".length) }).then(() => null, (e) => e);
   approvedTeams.push(o.team);
   await q(`update public.user_club_roles set is_active = false where user_id = $1`, [ca.id]);
   let e = await attempt();
