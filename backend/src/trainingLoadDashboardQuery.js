@@ -109,15 +109,38 @@ async function fetchBuiltinSeriesCatalog(queryRunner) {
 // replaces the design proof's own per-activity loop.
 async function fetchCanonicalFactsForActivities(activityIds, queryRunner, clubDistance = null) {
   if (!activityIds.length && !clubDistance) return { factRows: [], activityDT: {} };
-  const clubActivityPredicate = clubDistance ? `or (
-       a.owner_scope = 'team' and a.lifecycle_state <> 'superseded'
-       and a.occurred_local_date between $3 and $4
-       and ($5::uuid is null or a.id = $5)
-       and exists (select 1 from public.teams t where t.id=a.owner_team_id and t.club_id=$2 and coalesce(t.is_active,true))
+  // Establish GPS eligibility before traversing the canonical results. The
+  // candidate set also verifies each returned fact against its provenance.
+  const clubDistanceCandidates = clubDistance ? `with club_distance as materialized (
+       select a.id as activity_id, ep.athlete_id, v.occasion_id, v.metric_definition_id, v.metric_definition_version_id
+       from training.activities a
+       join public.teams t on t.id=a.owner_team_id and t.club_id=$2 and coalesce(t.is_active,true)
+       join training.activity_metric_event_links l on l.activity_id=a.id and l.link_status='confirmed'
+       join training_load.metric_events ev on ev.id=l.metric_event_id
+         and ev.owner_scope='team' and ev.owner_team_id=a.owner_team_id and ev.scope_level='session'
+       join training_load.metric_event_participants ep on ep.event_id=ev.id
+       join training_load.metric_measurement_occasions o on o.event_participant_id=ep.id
+       join training_load.metric_source_identities si on si.id=o.source_identity_id and si.current_occasion_id=o.id
+       join training_load.metric_values v on v.occasion_id=o.id
+       join training_load.metric_value_source_provenance p on p.metric_value_id=v.id
+       join training_load.source_metric_mapping_activations act on act.id=p.activation_id and act.team_id=a.owner_team_id
+       join training_load.metric_source_connections c on c.id=p.metric_source_connection_id
+         and c.id=ev.source_connection_id and c.id=si.source_connection_id and c.source_system='gpexe'
+       join training_load.source_metric_definition_versions sv on sv.id=p.source_metric_version_id
+       join training_load.source_metric_definitions sd on sd.id=sv.source_metric_definition_id
+       where a.owner_scope='team' and a.lifecycle_state <> 'superseded'
+         and a.occurred_local_date between $3 and $4
+         and ($5::uuid is null or a.id=$5)
+         and ($6::uuid[] is null or ep.athlete_id=any($6))
+         and o.entry_method='api_import' and o.segment_id is null
+         and o.superseded_by_occasion_id is null and o.import_conflict_status is null
+         and v.value_numeric is not null and not v.is_derived and v.metric_definition_id=any($7::uuid[])
+         and sd.source_system='gpexe' and sd.api_family='rest_v1'
+         and sd.source_metric_key='athlete_session.total_distance'
      )` : "";
+  const clubActivityPredicate = clubDistance ? "or a.id in (select activity_id from club_distance)" : "";
   const clubDistancePredicate = clubDistance ? `or (
-       ($6::uuid[] is null or r.athlete_id = any($6))
-       and r.canonical_activity_id = a.id
+       r.canonical_activity_id = a.id
        and r.canonical_participant_id = (r.detail->>'aliasParticipantId')::uuid
        and exists (select 1 from training.activity_participants ap where ap.id=r.canonical_participant_id and ap.activity_id=a.id and ap.athlete_id=r.athlete_id)
        and r.fact_kind = 'metric_value'
@@ -125,36 +148,19 @@ async function fetchCanonicalFactsForActivities(activityIds, queryRunner, clubDi
        and r.detail->>'segmentId' is null
        and r.detail->>'isDerived' = 'false'
        and exists (
-         select 1 from training_load.metric_values v
-         join training_load.metric_measurement_occasions o on o.id=v.occasion_id
-         join training_load.metric_source_identities si on si.id=o.source_identity_id and si.current_occasion_id=o.id
-         join training_load.metric_event_participants ep on ep.id=o.event_participant_id
-         join training_load.metric_events ev on ev.id=ep.event_id
-         join training_load.metric_value_source_provenance p on p.metric_value_id=v.id
-         join training_load.source_metric_mapping_activations act on act.id=p.activation_id
-         join training_load.metric_source_connections c on c.id=p.metric_source_connection_id and c.id=ev.source_connection_id and c.id=si.source_connection_id
-         join training_load.source_metric_definition_versions sv on sv.id=p.source_metric_version_id
-         join training_load.source_metric_definitions sd on sd.id=sv.source_metric_definition_id
-         where act.team_id=a.owner_team_id
-           and ev.owner_scope='team' and ev.owner_team_id=a.owner_team_id and ev.scope_level='session'
-           and exists (select 1 from training.activity_metric_event_links l where l.activity_id=a.id and l.metric_event_id=ev.id and l.link_status='confirmed')
-           and ep.athlete_id=r.athlete_id
-           and o.entry_method='api_import' and o.superseded_by_occasion_id is null and o.import_conflict_status is null
-           and c.source_system='gpexe'
-           and v.occasion_id=(r.detail->>'occasionId')::uuid
-           and v.metric_definition_id=(r.detail->>'metricDefinitionId')::uuid
-           and v.metric_definition_version_id=(r.detail->>'metricDefinitionVersionId')::uuid
-           and v.value_numeric is not null and not v.is_derived
-           and v.metric_definition_id=any($7::uuid[])
-           and sd.source_system='gpexe' and sd.api_family='rest_v1'
-           and sd.source_metric_key='athlete_session.total_distance'
+         select 1 from club_distance d
+         where d.activity_id=a.id and d.athlete_id=r.athlete_id
+           and d.occasion_id=(r.detail->>'occasionId')::uuid
+           and d.metric_definition_id=(r.detail->>'metricDefinitionId')::uuid
+           and d.metric_definition_version_id=(r.detail->>'metricDefinitionVersionId')::uuid
        )
      )` : "";
   const r = await queryRunner(
-    `select a.id as activity_id, a.occurred_local_date::text as local_date, a.started_at,
+    `${clubDistanceCandidates}
+     select a.id as activity_id, a.occurred_local_date::text as local_date, a.started_at,
             r.canonical_activity_id, r.canonical_participant_id, r.athlete_id, r.fact_kind, r.detail
      from (
-       select a.id, a.occurred_local_date, a.started_at, a.owner_team_id from training.activities a
+       select a.id, a.occurred_local_date, a.started_at from training.activities a
        where a.id = any($1::uuid[]) ${clubActivityPredicate}
        offset 0
      ) a
