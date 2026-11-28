@@ -191,3 +191,7 @@ backend/scripts/mappings-manage-v114-rehearsal.* text eol=lf
 migrations_v2/202612171000_training_load_v115_sources_connect_local_bridge.sql text eol=lf
 docs/runbooks/sources-connect-v115-*.sql text eol=lf
 backend/scripts/sources-connect-v115-rehearsal.* text eol=lf
+
+migrations_v2/202612181000_training_load_v116_sources_provider_store.sql text eol=lf
+docs/runbooks/sources-provider-v116-*.sql text eol=lf
+backend/scripts/sources-provider-v116-rehearsal.* text eol=lf
