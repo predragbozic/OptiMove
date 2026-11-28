@@ -66,7 +66,7 @@ function roleData(client) {
 
 
 
-const previousBuild = "519ad0107d0e1328de7ddb5689e87fec3f09d383";
+const previousBuild = "bc8e3995489c711a5aafa5750dd99bc9b0a9608f";
 const migration = "202612141000";
 const word = "variables.rename_archive";
 const read = name => readFile(new URL("../../docs/runbooks/variable-rename-archive-v112-" + name + ".sql", import.meta.url), "utf8");

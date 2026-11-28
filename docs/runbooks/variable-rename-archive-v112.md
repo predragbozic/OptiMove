@@ -17,9 +17,7 @@ Standalone assignments and ended or unheld custom roles get no grant. The
 migration audits the exact items, preserves review state and takes club
 ceilings in UUID order before the permission table locks.
 
-1. Before freezing, pin the rehearsal to the exact deployed Tests Settings
-   build and confirm the registry slot. The current local checkpoint uses
-   Tests bridge build `519ad0107d0e1328de7ddb5689e87fec3f09d383`.
+1. The operator rehearsal pins the exact Tests Roles release bc8e3995489c711a5aafa5750dd99bc9b0a9608f. Confirm the target registry slot before applying v112.
 2. Rehearse on isolated loopback PostgreSQL 17 with Node 20 or later using
    `backend/scripts/variable-rename-archive-v112-rehearsal.ps1` or the
    accompanying `.sh`. The PowerShell wrapper prompts securely when a local
