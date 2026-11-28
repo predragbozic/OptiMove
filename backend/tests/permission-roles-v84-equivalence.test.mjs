@@ -134,7 +134,7 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
           const seededTestsSchedule = word === testsScheduleBridge && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
 
           const seededVariablesRenameArchive = word === variablesRenameArchive && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
-          const seededVariablesManage = word === variablesManage && ctx.platformRoles.length === 0 && clubAdminHere && type === "club";
+          const seededVariablesManage = word === variablesManage && ctx.platformRoles.length === 0 && clubAdminHere;
           const expected = seededVariablesManage || seededVariablesRenameArchive || seededTestsSchedule || seededProgramEdit || seededProgramAssignment || rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities || seededDashboards || seededBuilderRpe || seededExerciseWrite ? true : r1;
           if ((word === rosterDecide || word === estimatesManage || word === activitiesManage || word === dashboardsManage || word === builderRpe || word === programEdit || word === testsScheduleBridge || word === variablesRenameArchive || word === variablesManage || programAssignmentBridge.includes(word) || exerciseWrites.includes(word)) && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
             const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });

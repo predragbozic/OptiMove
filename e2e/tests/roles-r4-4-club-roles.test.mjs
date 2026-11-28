@@ -8,6 +8,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { launch, openAs, openSettings, request, WIDTHS } from "../lib/browser.mjs";
 
@@ -326,6 +327,14 @@ test("Variables Rename and Archive is editable independently of Variables View a
 });
 
 test("Variables Manage is editable for Club admin without changing Rename and Archive", async () => {
+  const fixture = new pg.Client({ connectionString: world.databaseUrl });
+  await fixture.connect();
+  try {
+    const platformId = world.accounts.find(account => account.role === "platform_admin").id;
+    await fixture.query("insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1, $2, 'club_admin', true)", [platformId, world.ids.clubA]);
+  } finally {
+    await fixture.end();
+  }
   const { context, page, pageErrors } = await openAs(browser, world, "platform_admin", WIDTHS.phone);
   try {
     const switched = await request(context, world, "/api/auth/workspace", { method: "PUT", body: { type: "club", scopeId: world.ids.clubA } });
