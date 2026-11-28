@@ -190,7 +190,8 @@ const REVIEWED = Object.freeze({
   // that load.view.athlete is asked for (+2); a view workspace is read through viewReadScope (the gate's), never offered.
   "trainingLoadDashboardAccess.js": 10,
   "trainingLoadDashboardCatalog.js": 4, // preserves the Legacy explicit club/team clone destination
-  "trainingLoadDashboardQuery.js": 13,
+  // #806: the optional GPEXE session-distance scope is confined to the active club's own teams.
+  "trainingLoadDashboardQuery.js": 14,
   "trainingLoadDashboardWidgets.js": 1,
   "trainingLoadMetricsAccess.js": 16,
   "trainingLoadOccurrenceService.js": 4,

@@ -12,12 +12,17 @@ function fail(code = 'invalidRequest', httpStatus = 400) {
   throw Object.assign(new Error(code), { code, httpStatus });
 }
 
+const DRAFT_GROUPINGS = new Set(['day', 'week', 'session', 'component', 'athlete', 'cohort']);
+export function isDashboardDraftGrouping(value) {
+  return DRAFT_GROUPINGS.has(value);
+}
+
 export async function buildGalleryDraft(query, target, draft, {referenceContext} = {}) {
   const allowed = ['kind', 'title', 'groupBy', 'series', 'additive', 'teamId', 'tableId', 'versionId', 'anchorKey'];
   if (!draft || typeof draft !== 'object' || Array.isArray(draft) || Object.keys(draft).some(key => !allowed.includes(key))
     || !['area', 'horizontal_bar', 'combined', 'heatmap', 'scatter', 'stacked', 'boxplot', 'radar'].includes(draft.kind)
     || typeof draft.title !== 'string' || !draft.title.trim() || draft.title.length > 200
-    || !['day', 'week', 'session', 'component', 'athlete', 'cohort'].includes(draft.groupBy)
+    || !isDashboardDraftGrouping(draft.groupBy)
     || !Array.isArray(draft.series) || !draft.series.length || draft.series.length > 8) fail();
   const radar = draft.kind === 'radar';
   if (!radar && !await galleryAvailable(query)) fail('notFound', 404);
