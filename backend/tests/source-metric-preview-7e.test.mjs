@@ -20,6 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { verifyRevisionRow, writeRevision } from "./support/source-revisions.mjs";
 import { EXTRACTORS, setExtractorFallbackForTests } from "../src/sourceMetricExtractors.js";
 import { buildGpexeImportPlan } from "../src/gpexeImportMapper.js";
@@ -70,6 +71,7 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
+  await stageMappingsManageForTest(k);
   await world();
 });
 

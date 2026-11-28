@@ -178,7 +178,7 @@ router.post("/confirmations", handle(async (req, res) => {
   if (!ctx) return;
   if (!board.mayUseBoard(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await boardSave.saveConfirmation({ ctx, body: req.body }), 200);
+  writeAnswer(res, await boardSave.saveConfirmation({ ctx: { ...ctx, sessionToken: req.sessionToken }, body: req.body }), 200);
 }));
 // Routes 6 and 7 (section 5.8): an active platform admin in the platform
 // workspace erases one confirmation's values on request, or removes one batch
@@ -273,7 +273,7 @@ router.post("/activations", handle(async (req, res) => {
   if (!ctx) return;
   if (!activations.mayManageActivations(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await activations.startActivations({ ctx, body: req.body }), 201);
+  writeAnswer(res, await activations.startActivations({ ctx: { ...ctx, sessionToken: req.sessionToken }, body: req.body }), 201);
 }));
 
 router.post("/activations/:activationId/end", handle(async (req, res) => {
@@ -281,7 +281,7 @@ router.post("/activations/:activationId/end", handle(async (req, res) => {
   if (!ctx) return;
   if (!activations.mayManageActivations(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await activations.endActivation({ ctx, activationId: req.params.activationId, body: req.body }), 200);
+  writeAnswer(res, await activations.endActivation({ ctx: { ...ctx, sessionToken: req.sessionToken }, activationId: req.params.activationId, body: req.body }), 200);
 }));
 
 // v53 (J15 sections 2.4 and 4.3): move one team from a system version to its
@@ -292,7 +292,7 @@ router.post("/activations/:activationId/switch-to-copy", handle(async (req, res)
   if (!ctx) return;
   if (!activations.maySwitchToCopy(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await activations.switchToCopy({ ctx, activationId: req.params.activationId, body: req.body }), 200);
+  writeAnswer(res, await activations.switchToCopy({ ctx: { ...ctx, sessionToken: req.sessionToken }, activationId: req.params.activationId, body: req.body }), 200);
 }));
 
 router.get("/mappings", handle(async (req, res) => {
@@ -323,21 +323,21 @@ router.post("/mappings", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await service.createMapping({ ctx, body: req.body }), 201);
+  writeAnswer(res, await service.createMapping({ ctx: { ...ctx, sessionToken: req.sessionToken }, body: req.body }), 201);
 }));
 
 router.post("/mappings/:mappingId/versions", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await service.createVersion({ ctx, mappingId: req.params.mappingId, body: req.body }), 201);
+  writeAnswer(res, await service.createVersion({ ctx: { ...ctx, sessionToken: req.sessionToken }, mappingId: req.params.mappingId, body: req.body }), 201);
 }));
 
 router.post("/mappings/:mappingId/versions/:versionId/submit", handle(async (req, res) => {
   const ctx = await adminContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await service.submitVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
+  writeAnswer(res, await service.submitVersion({ ctx: { ...ctx, sessionToken: req.sessionToken }, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
 }));
 
 // Phase 7e (J11): the aggregate preview of a mapping version over one saved
@@ -368,7 +368,7 @@ router.post("/mappings/:mappingId/versions/:versionId/activate", handle(async (r
   if (!ctx) return;
   if (!service.mayTransitionMappings(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await service.activateVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
+  writeAnswer(res, await service.activateVersion({ ctx: { ...ctx, sessionToken: req.sessionToken }, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
 }));
 
 router.post("/mappings/:mappingId/versions/:versionId/disable", handle(async (req, res) => {
@@ -376,7 +376,7 @@ router.post("/mappings/:mappingId/versions/:versionId/disable", handle(async (re
   if (!ctx) return;
   if (!service.mayTransitionMappings(ctx)) return notFound(res);
   if (!jsonObjectBody(req, res)) return;
-  writeAnswer(res, await service.disableVersion({ ctx, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
+  writeAnswer(res, await service.disableVersion({ ctx: { ...ctx, sessionToken: req.sessionToken }, mappingId: req.params.mappingId, versionId: req.params.versionId, body: req.body }), 200);
 }));
 
 // The canonical-variable admin API (M3-0, section J3): OptiMove's own

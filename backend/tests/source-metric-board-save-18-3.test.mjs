@@ -15,7 +15,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import { stageMappingsManageForTest, MAPPINGS_MANAGE } from "./support/mappings-manage-grants.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
+import { previousDashboardServer } from "./support/dashboard-pages-old-server.mjs";
 import { PLANTED, previewBundle } from "./support/preview-bundles.mjs";
 import { EXTRACTORS, setExtractorFallbackForTests } from "../src/sourceMetricExtractors.js";
 import { setDisplayRuleFallbackForTests } from "../src/sourceMetricBoard.js";
@@ -71,6 +73,7 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
+  await stageMappingsManageForTest(k);
   await world();
 });
 
@@ -730,6 +733,90 @@ test("6. the COMMIT (the five-point rule): an answer lost after the COMMIT is 20
   assert.deepEqual(shape(await post("/confirmations", W.caA, { requestKey, teamId: s.t.teamId, candidateId: s.cand.id, pair: 0, rows: s.rows })), NOT_FOUND);
 });
 
+test("pre-Board-gate binary saves a confirmation that the current binary scopes before replay", async () => {
+  const { t, cand } = await freshTeam();
+  const target = await variable(W.caA, { unit: "min" });
+  const f = await field("time");
+  const row = await newRow(W.caA, t, cand, f, target);
+  const body = { requestKey: key(), teamId: t.teamId, candidateId: cand.id, pair: 0, rows: [row] };
+  // Load the fixture extractors in the archived process. Its production
+  // sources, lockfile and request writer all come from the exact old build.
+  const fixtureSource = [
+    "import { pathToFileURL } from 'node:url';",
+    "import { resolve } from 'node:path';",
+    "const src = name => pathToFileURL(resolve('src', name)).href;",
+    "const { EXTRACTORS, setExtractorFallbackForTests } = await import(src('sourceMetricExtractors.js'));",
+    "const { setDisplayRuleFallbackForTests } = await import(src('sourceMetricBoard.js'));",
+    "setExtractorFallbackForTests(({ sourceMetricKey }) => sourceMetricKey.startsWith('board.test.time.') ? EXTRACTORS['gpexe/rest_v1/athlete_session.total_time'] : null);",
+    "setDisplayRuleFallbackForTests(({ sourceMetricKey }) => sourceMetricKey.startsWith('board.test.time.') ? 'duration_mmss' : null);",
+  ].join("\n");
+  const old = await previousDashboardServer(db.url, {
+    NODE_OPTIONS: "--import=data:text/javascript;base64," + Buffer.from(fixtureSource).toString("base64"),
+  }, "7a78d82a12b175476bd4e09656e28ca5f357ba72");
+  await k.query("update training_load.mappings_manage_bridge_use set first_checked_write_at=null");
+  const usedAt = async () => (await one("select first_checked_write_at from training_load.mappings_manage_bridge_use")).first_checked_write_at;
+  let original;
+  try {
+    const response = await fetch(old.baseUrl + PREFIX + "/confirmations", {
+      method: "POST", headers: { cookie: W.caA.cookie, "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    original = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(original));
+  } finally {
+    await old.stop();
+  }
+  assert.equal(await usedAt(), null, "the archived Board writer does not mark the bridge");
+  const replay = await nothingWritten(() => post("/confirmations", W.caA, body));
+  assert.deepEqual(ok(replay), { ...original, replayed: true });
+  assert.equal(await usedAt(), null, "the current replay does not mark the bridge");
+  const nonOwner = await nothingWritten(() => post("/confirmations", W.caB, body));
+  const missingTeam = await nothingWritten(() => post("/confirmations", W.caB, { ...body, teamId: key() }));
+  assert.deepEqual(shape(nonOwner), shape(missingTeam));
+  assert.deepEqual(shape(nonOwner), NOT_FOUND);
+});
+test("Board holder of Variables View still needs Mappings Manage", async () => {
+  const { t, cand } = await freshTeam();
+  const f = await field("time");
+  const target = await variable(W.caA, { unit: "min" });
+  const row = await newRow(W.caA, t, cand, f, target);
+  const requestKey = key();
+  const patch = remove => editVariablesManageTestRole(k, MAPPINGS_MANAGE, !remove);
+  await patch(true);
+  try {
+    assert.equal((await boardOf(W.caA, t)).status, 200);
+    const rejected = await nothingWritten(() => save(W.caA, t, cand, [row], { requestKey }));
+    assert.deepEqual(shape(rejected), NOT_FOUND);
+  } finally {
+    await patch(false);
+  }
+  assert.equal(ok(await save(W.caA, t, cand, [row], { requestKey })).replayed, false);
+});
+test("Board uncertain commit hides a durable confirmation after a workspace switch", async () => {
+  const service = await import("../src/sourceMetricMappingService.js");
+  const { t, cand } = await freshTeam();
+  const f = await field("time");
+  const target = await variable(W.caA, { unit: "min" });
+  const mixed = await clubAdmin(W.clubA, "Board mixed scope");
+  await k.query("insert into public.user_club_roles(user_id,club_id,role,is_active) values($1,$2,'club_admin',true)", [mixed.id, W.clubB]);
+  const row = await newRow(mixed, t, cand, f, target);
+  const requestKey = key();
+  const send = () => save(mixed, t, cand, [row], { requestKey });
+  service.setMappingCommitForTests({
+    fault: c => c.query("commit").then(() => { throw new Error("reply lost"); }),
+    checkFault: () => workspace(mixed.id, "club", W.clubB),
+  });
+  try {
+    assert.deepEqual(shape(await send()), NOT_FOUND);
+  } finally {
+    service.setMappingCommitForTests();
+  }
+  assert.equal((await one("select count(*)::int as n from " + T8 + " where performed_by_user_id=$1 and request_key=$2", [mixed.id, requestKey])).n, 1);
+  await nothingWritten(async () => { assert.deepEqual(shape(await send()), NOT_FOUND); });
+  await workspace(mixed.id, "club", W.clubA);
+  const replay = await nothingWritten(send);
+  assert.equal(ok(replay).replayed, true);
+  assert.equal(replay.body.confirmation.teamId, t.teamId);
+});
 test("7. the lock order (section 4.4), from the SQL the save sends: conversions, fields, revisions, mappings, versions, variables, their levels, the activations it ends, the binding, the team, the users row before the role row, the club, then the hide lock - all before the first write, and no locking clause between the first write and the COMMIT; the candidate is never locked", async () => {
   const { t, cand } = await freshTeam();
   // What is on: OptiMove's mapping (it will be replaced by a new row onto the club's variable).
@@ -786,6 +873,12 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
   const from = seen.findIndex((x) => x.includes("optimove.source_metric_actor"));
   const to = seen.findIndex((x, i) => i > from && /^commit$/i.test(x));
   assert.ok(from >= 0 && to > from, "the save's transaction was recorded");
+  const normalResponse = seen.slice(to + 1);
+  const bindingProof = normalResponse.findIndex(sql => sql.includes("source_metric_binding_club(a.source_team_binding_id) as club_id"));
+  const confirmationProof = normalResponse.findIndex(sql => sql.includes("where c.id=$1 and c.operation_id=$2"));
+  const protectedAnswer = normalResponse.findIndex(sql => sql.includes("select c.id, c.team_id, c.confirmed_at"));
+  assert.ok(bindingProof >= 0 && confirmationProof > bindingProof && protectedAnswer > confirmationProof,
+    "a normal COMMIT verifies the exact binding and confirmation before the protected response");
   const tx = seen.slice(from, to);
   const txValues = seenValues.slice(from, to);
   // The statements that carry an athlete's value (the confirmation's items, the only ones naming the value columns)
@@ -810,11 +903,13 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
     const carriers = txValues.map((params, i) => (four.every((v) => params.some((x) => x !== null && x !== "" && typeof x !== "boolean" && Number(x) === v)) ? i : -1)).filter((i) => i >= 0);
     assert.ok(carriers.length >= 1 && carriers.every((i) => valueStatements.includes(i)), "the four values of a row travel only in an items insert");
   }
-  const LOCKING = /\bfor (share|update|no key update|key share)\b|pg_advisory_xact_lock|\block table\b/i;
+  const LOCKING = /\bfor (share|update|no key update|key share)\b|pg_advisory_xact_lock|lock_club_ceiling|lock_permission_actor|\block table\b/i;
   const WRITE = /^(insert|update|delete)\b/i;
   const at = (re, after = -1) => { const i = tx.findIndex((x, n) => n > after && re.test(x)); assert.ok(i >= 0, `not sent: ${re}`); return i; };
   // The patterns are anchored on the service's exact SQL: a reworded statement fails here, never passes vacuously.
+  assert.ok(seen.slice(0, from).some(sql => sql.includes("pg_advisory_xact_lock(hashtextextended($1, 34))")));
   const order = [
+    ["shared club ceiling", /^select public\.lock_club_ceiling\(\$1::uuid\[\], \$2\)$/],
     ["conversions", /from training_load\.unit_conversions c where c\.state = 'active' .* order by c\.id for share$/],
     ["fields", /from training_load\.source_metric_definitions where id = any\(\$1::uuid\[\]\) order by id for share$/],
     ["revisions", /from training_load\.source_metric_definition_versions where id = any\(\$1::uuid\[\]\) order by id for share$/],
@@ -827,7 +922,11 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
     ["team", /from public\.teams where id = any\(\$1::uuid\[\]\) order by id for share$/],
     ["users before role", /for share of u, (g|r)$/],
     // The rights check locks the admin's own club row, then the binding's club (the same row here).
-    ["club", /from public\.clubs where id = (\$1 and coalesce\(is_active, true\)|any\(\$1::uuid\[\]\) order by id) for share$/],
+    ["actor club", /from public\.clubs where id = \$1 and coalesce\(is_active, true\) for share$/],
+    ["permission actor", /^select public\.lock_permission_actor\(\$1, 'club', \$2\)$/],
+    ["session", /from public\.auth_sessions .* for share$/],
+    ["workspace", /from public\.user_workspace_preferences .* for share$/],
+    ["binding club", /from public\.clubs where id = any\(\$1::uuid\[\]\) order by id for share$/],
     ["hide lock", /pg_advisory_xact_lock\(hashtextextended\('club-variable-hide:'/],
     ["one save per binding", /pg_advisory_xact_lock\(hashtextextended\('board-save:'/],
   ];
@@ -846,7 +945,7 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
   const places = tx.slice(0, firstWrite).filter((x) => LOCKING.test(x)).map((x) => [placeOf(x), x]);
   assert.deepEqual(places.filter(([p]) => p < 0).map(([, x]) => x), [], "a lock the order does not know");
   assert.deepEqual(places.map(([p]) => p), [...places.map(([p]) => p)].sort((a, b) => a - b), "the locks are taken in D's order");
-  assert.equal(places.filter(([p]) => p === 3).length, 2, "the existing mappings: the reused one and the pre-placed one");
+  assert.equal(places.filter(([p]) => p === order.findIndex(([name]) => name === "a mapping")).length, 2, "the existing mappings: the reused one and the pre-placed one");
   // No locking clause between the first write and the COMMIT.
   assert.deepEqual(tx.slice(firstWrite).filter((x) => LOCKING.test(x)), []);
   // The candidate, the team import lock and the v11 connection are never locked.
@@ -863,7 +962,8 @@ test("7. the lock order (section 4.4), from the SQL the save sends: conversions,
   assert.ok(lastOf("~source_metric_mapping_activations") < firstOf("+source_metric_confirmations"), "the ends before the confirmation");
   assert.ok(lastOf("+source_metric_confirmation_items") < writes.findIndex((w, i) => w === "~source_metric_mapping_versions" && i > firstOf("+source_metric_confirmations")), "the confirmation's rows before the activation of a version");
   assert.ok(writes.findIndex((w, i) => w === "~source_metric_mapping_versions" && i > firstOf("+source_metric_confirmations")) < firstOf("+source_metric_mapping_activations"), "the versions active before the starts");
-  assert.equal(writes.at(-1), "+source_metric_audit:mapping_confirmation", "the keyed request record is the last write");
+  assert.deepEqual(writes.slice(-2), ["+source_metric_audit:mapping_confirmation", "~mappings_manage_bridge_use"],
+    "the keyed confirmation is durable in the transaction before the native first-use marker");
 });
 
 // ---------------------------------------------------------------------------

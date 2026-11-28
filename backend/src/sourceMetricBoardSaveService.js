@@ -23,7 +23,7 @@ import { DISPLAY_REGISTRY_VERSION } from "./sourceMetricBoard.js";
 import { isGenericDetailsKey } from "./sourceMetricExtractors.js";
 import { unitWordCodeOf } from "./sourceUnitWords.js";
 
-const { runWrite, rightsStillHold, refusal, NOT_FOUND, plainObject, uuidField, hashOf } = adminWriteKit;
+const { runMappingWrite, rightsStillHold, refusal, NOT_FOUND, plainObject, uuidField, hashOf } = adminWriteKit;
 const { loadWorld, columnsOf, choosePair, placementOf, preplacedOf } = boardKit;
 
 export const MAX_SAVE_ROWS = 20;
@@ -324,11 +324,31 @@ export async function saveConfirmation({ ctx, body }) {
   const system = isSystemBoard(ctx);
   const requestHash = hashOf({ op: system ? "board_system_save" : "mapping_confirmation", teamId, candidateId, pair: pairIndex, rows: rows.map(identityOf) });
 
-  return runWrite({
-    ctx, where: "board_save", requestKey, requestHash, action: system ? "activation_start" : "mapping_confirmation", requests: SAVE_REQUESTS, classify: classifySaveError,
+  return runMappingWrite({
+    ctx, bindingEffect: true,
+    // The old response takes a team SHARE. Take it before the actor now,
+    // as a fresh save does, so a replay cannot reverse the write order.
+    lockReceiptTarget: async client => {
+      const team = await client.query(
+        "select id from public.teams where id=$1 and club_id=$2 and coalesce(is_active,true) for share",
+        [teamId, ctx.owner.clubId],
+      );
+      if (!team.rowCount) throw NOT_FOUND();
+    },
+    verifyReceiptTarget: async (client, record) => {
+      if (!record.confirmation_id) throw NOT_FOUND();
+      const confirmation = await client.query(
+        "select 1 from training_load.source_metric_confirmations c join public.teams t on t.id=c.team_id"
+        + " where c.id=$1 and c.operation_id=$2 and c.owner_scope='club' and c.owner_club_id=$3"
+        + " and t.club_id=$3 and coalesce(t.is_active,true)",
+        [record.confirmation_id, record.operation_id, ctx.owner.clubId],
+      );
+      if (!confirmation.rowCount) throw NOT_FOUND();
+    },
+    where: "board_save", requestKey, requestHash, action: system ? "activation_start" : "mapping_confirmation", requests: SAVE_REQUESTS, classify: classifySaveError,
     idsOf: (written) => ({ confirmationId: written.confirmation_id ?? null }),
     reread: (executor, record) => savedConfirmation(executor, ctx, record.operation_id),
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       const actor = [ctx.userId, ctx.basis];
       const audit = (action, columns, values) => client.query(
         `insert into training_load.source_metric_audit (action, ${columns.join(", ")}, performed_by_user_id, basis, operation_id)
@@ -412,7 +432,7 @@ export async function saveConfirmation({ ctx, body }) {
       const locked = await lockListedBindings(client, [{ bindingId: seen.team.binding_id }]);
       // Step 14: the rights - users first - and the club; then the hide locks
       // of every OptiMove variable the save switches on. No row lock follows.
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (!(await check(client))) throw NOT_FOUND();
       if (!(await bindingClubHolds(client, [clubId]))) throw NOT_FOUND();
       await hold(client, "before_hide_locks");
       // On the platform board every row is an OptiMove variable (S): the team's club's hide of each is locked too.

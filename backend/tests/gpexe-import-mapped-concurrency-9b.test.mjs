@@ -1,4 +1,4 @@
-import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 // Phase 9, 9-B (contract J17 sections 3, 5, 7 and 8.2): the importer's lock
 // order against the operations that change what it writes through, with real
 // connections and real locks - no sleep is evidence (a sleep only shows "still
@@ -98,8 +98,7 @@ before(async () => {
   resolver = await import("../src/sourceImportCredentialResolver.js");
   activations = await import("../src/sourceMetricActivationService.js");
   instances = await import("../src/sourceInstanceEndService.js");
-  await stageVariablesManageForTest(admin);
-  await editVariablesManageTestRole(admin, VARIABLE_MANAGE, true);
+  await stageMappingsManageForTest(admin, { variables: true });
   ({ createSession } = await import("../src/auth.js"));
   ({ pool: appPool } = await import("../src/db.js"));
   assert.equal((await appPool.query("select current_database() as d")).rows[0].d, db.name, "SAFETY: the app talks to the disposable database");

@@ -183,3 +183,7 @@ backend/scripts/variable-rename-archive-v112-rehearsal.sh text eol=lf
 migrations_v2/202612151000_training_load_v113_variables_manage_bridge.sql text eol=lf
 docs/runbooks/variables-manage-v113-*.sql text eol=lf
 backend/scripts/variables-manage-v113-rehearsal.* text eol=lf
+
+migrations_v2/202612161000_training_load_v114_mappings_manage_bridge.sql text eol=lf
+docs/runbooks/mappings-manage-v114-*.sql text eol=lf
+backend/scripts/mappings-manage-v114-rehearsal.* text eol=lf

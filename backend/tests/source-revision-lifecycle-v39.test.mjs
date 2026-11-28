@@ -1,3 +1,4 @@
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 // Phase 4 - the source-field revision lifecycle (backend/src/sourceRevisionLifecycleService.js,
 // routes L1-L5 under /api/training-load/sources/metrics/fields) with migration v39, its database
 // guards, and migration v40, Q10 part B (the database twins of the text rules). Through the real
@@ -114,6 +115,7 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
+  await stageMappingsManageForTest(k, { variables: true });
   await world();
 });
 

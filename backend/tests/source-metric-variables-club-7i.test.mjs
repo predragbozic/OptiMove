@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
+import { MAPPINGS_MANAGE, stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
 import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
@@ -122,6 +123,7 @@ before(async () => {
   apiBase = `http://localhost:${server.address().port}`;
   await stageVariablesManageForTest(k);
   await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
+  await stageMappingsManageForTest(k);
   await world();
 });
 
@@ -2345,7 +2347,7 @@ test("23. rehearsal on v52: the preflight (with planted rows for the copy-refusa
   for (const f of [ROLLBACK, PREFLIGHT, POSTCHECK, V53_FILE]) assert.ok(!(await fsp.readFile(f, "utf8")).includes("\r"), `${path.basename(f)} has LF line endings`);
 });
 
-test("native Variables Manage alone permits bounded Copy and club Hide/Show, with no effect after revocation", async () => {
+test("native Variables Manage alone permits bounded Copy and club Hide/Show, with no effect after revocation", async t => {
   const source = await systemVariable({ n: 1 });
   const copyRequest = await copyBody(source.id);
   const copyPath = "/variables/" + source.id + "/copy";
@@ -2353,8 +2355,10 @@ test("native Variables Manage alone permits bounded Copy and club Hide/Show, wit
   const showPath = "/variables/" + source.id + "/show";
   const hidden = { requestKey: key() };
   const shown = { requestKey: key() };
-  const mappingWord = await one(k, "select public.permission_word_honoured('mappings.manage') as enabled");
-  assert.equal(mappingWord.enabled, false);
+  await editVariablesManageTestRole(k, MAPPINGS_MANAGE, false);
+  t.after(() => editVariablesManageTestRole(k, MAPPINGS_MANAGE, true));
+  const { allowed } = await one(k, "select public.user_has_permission($1,'mappings.manage','club',$2) as allowed", [W.caA.id, W.clubA]);
+  assert.equal(allowed, false);
   await editVariablesManageTestRole(k, VARIABLE_MANAGE, false);
   try {
     await nothingWritten(async () => {
@@ -2392,4 +2396,5 @@ test("native Variables Manage alone permits bounded Copy and club Hide/Show, wit
     assert.equal(ok(await post(hidePath, W.caA.cookie, hidden)).replayed, true);
     assert.equal(ok(await post(showPath, W.caA.cookie, shown)).replayed, true);
   });
+
 });

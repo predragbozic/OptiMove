@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import http from "node:http";
 import pg from "pg";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN } from "./_gpexe-disposable-db.mjs";
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { activateRevisionRow, retireRevisionRow, verifyRevisionRow, writeRevision, zoneMeaningAsFutureDecision } from "./support/source-revisions.mjs";
 import { createConversion, retireConversion as retireConversionRow, retireConversionHeld, retireConversionStatements } from "./support/unit-conversions.mjs";
 import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
@@ -51,6 +52,7 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
+  await stageMappingsManageForTest(admin);
   await world();
 });
 

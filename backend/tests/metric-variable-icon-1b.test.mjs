@@ -1,3 +1,4 @@
+import { stageMappingsManageForTest } from "./support/mappings-manage-grants.mjs";
 import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // PR-1b (I1) - changing the icon of a canonical variable
 // (backend/src/canonicalVariableAdminService.js changeVariableIcon, the route
@@ -98,6 +99,7 @@ before(async () => {
   assert.equal((await k.query(`select 1 from public.schema_migrations where migration_name = $1`, [V45_NAME])).rowCount, 1, "the behaviour database carries v45");
   await stageVariablesManageForTest(k);
   await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
+  await stageMappingsManageForTest(k);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
