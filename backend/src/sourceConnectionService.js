@@ -247,7 +247,8 @@ async function localConnectionRights(client, ctx, clubId) {
     [ctx.userId, clubId],
   );
   if (!preference.rowCount) return false;
-  await client.query("select public.lock_permission_actor($1, 'club', $2)", [ctx.userId, clubId]);
+  const actor = await client.query("select public.lock_permission_actor($1, 'club', $2) as basis", [ctx.userId, clubId]);
+  if (actor.rows[0]?.basis === "platform_admin") return false;
   const right = await client.query("select public.user_has_permission($1, 'sources.connect', 'club', $2) as allowed", [ctx.userId, clubId]);
   return right.rows[0]?.allowed === true;
 }

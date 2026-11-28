@@ -816,6 +816,26 @@ test("native Sources Connect rechecks the role, workspace and session before Cre
   assert.deepEqual([conflict.status, conflict.body.error], [409, "request_key_reused"]);
   assert.equal((await create(request)).body.replayed, true);
 
+  const promoted = gate();
+  waiting = false;
+  service.setSourceCreateReplayHoldForTests(async () => { waiting = true; await promoted.p; });
+  const pendingPromoted = create(request);
+  try {
+    await waitFor(() => waiting);
+    await setSourceConnectFixture(admin, false);
+    await q("insert into public.user_global_roles(user_id,role,is_active) values($1,'platform_admin',true)", [ca.id]);
+  } finally {
+    service.setSourceCreateReplayHoldForTests(null);
+    promoted.release();
+  }
+  try {
+    assertMissing(await pendingPromoted);
+    assert.equal((await create(request)).body.replayed, true, "a fresh request may resolve the legitimate platform lane");
+  } finally {
+    await q("delete from public.user_global_roles where user_id=$1 and role='platform_admin'", [ca.id]);
+    await setSourceConnectFixture(admin, true);
+  }
+
   const { conn, binding } = await bound(ca, club, team);
   const body = unbindBody(binding);
   const before = (await auditOf(conn.id)).length;
@@ -826,6 +846,7 @@ test("native Sources Connect rechecks the role, workspace and session before Cre
   try {
     await waitFor(() => waiting);
     await setSourceConnectFixture(admin, false);
+    await q("insert into public.user_global_roles(user_id,role,is_active) values($1,'platform_admin',true)", [ca.id]);
   } finally {
     service.setSourceUnbindHoldForTests(null);
     block.release();
@@ -835,6 +856,7 @@ test("native Sources Connect rechecks the role, workspace and session before Cre
     assert.equal((await bindingRow(binding.bindingId)).state, "active");
     assert.equal((await auditOf(conn.id)).length, before);
   } finally {
+    await q("delete from public.user_global_roles where user_id=$1 and role='platform_admin'", [ca.id]);
     await setSourceConnectFixture(admin, true);
   }
   const ended = await unbindApi(conn.id, binding.bindingId, ca.cookie, body);
