@@ -67,6 +67,7 @@ function roleData(client) {
 
 
 const previousBuild = "bc8e3995489c711a5aafa5750dd99bc9b0a9608f";
+const stagedBuild = "39f40e5b488df3a33f614783112cac65571f2986";
 const migration = "202612141000";
 const word = "variables.rename_archive";
 const read = name => readFile(new URL("../../docs/runbooks/variable-rename-archive-v112-" + name + ".sql", import.meta.url), "utf8");
@@ -80,7 +81,7 @@ test("v112 applies, rolls back and restores the audited Variables catalogue", as
     "select relname,relkind,relrowsecurity from pg_class where relnamespace='training_load'::regnamespace order by relname,relkind",
   )).rows;
   try {
-    const { versionId, customId, club, team, platform, coach } = await seedNativeRoleLayers(fixture);
+    const { versionId, customId, club, team, platform, coach, versionCoach } = await seedNativeRoleLayers(fixture);
     await seedNativeRoleLayers(fixture, { includeView: false });
     await client.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null)", [platform]);
     await client.query("update tests.schedule_manage_bridge_use set first_checked_write_at=clock_timestamp()");
@@ -166,7 +167,7 @@ test("v112 applies, rolls back and restores the audited Variables catalogue", as
 test("v112 old and current Settings and native variable operations share an exact disposable cutover", async () => {
   const fixture = await createPagesDatabase({ through: "202612131000", label: "vars_overlap_v112" });
   const { client } = fixture;
-  let current, previous;
+  let current, previous, staged;
   try {
     const { versionId, customId, club, team, platform, coach } = await seedNativeRoleLayers(fixture);
     await fixture.applyThrough(migration);
@@ -174,12 +175,13 @@ test("v112 old and current Settings and native variable operations share an exac
     const clubAdmin = await f.user("Variables Rename and Archive club admin");
     await f.grantClub(clubAdmin, club);
     await client.query(
-      "insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'team',$3),($4,'club',$5)",
-      [platform, coach, team, clubAdmin, club],
+      "insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'platform',null),($2,'team',$3),($4,'club',$5),($6,'team',$3)",
+      [platform, coach, team, clubAdmin, club, versionCoach],
     );
     const marker = async () => (await client.query("select first_checked_write_at from training_load.variable_rename_archive_v112_use")).rows[0].first_checked_write_at;
     current = await startServer(fixture.url);
     previous = await previousDashboardServer(fixture.url, {}, previousBuild);
+    staged = await previousDashboardServer(fixture.url, {}, stagedBuild);
     const cookie = await current.cookieFor(platform);
     const root = "/api/organization/roles";
     async function call(server, path, body) {
@@ -192,7 +194,7 @@ test("v112 old and current Settings and native variable operations share an exac
       return { status: response.status, body: await response.json() };
     }
     const roleId = ROLE_IDS.team_coach;
-    for (const server of [previous, current]) {
+    for (const server of [previous, staged]) {
       const { rows: [roles] } = await client.query(
         "select (select revision from public.permission_roles where id=$1) as role_revision,"
         + " (select revision from public.permission_club_role_versions where id=$2) as version_revision,"
@@ -272,13 +274,80 @@ test("v112 old and current Settings and native variable operations share an exac
       "select label, icon_url, state from training_load.metric_definitions where id=$1", [id],
     )).rows;
     assert.deepEqual(final, { label: "Checked name", icon_url: "icon:" + nextIcon, state: "active" });
+
+    const exposedCatalog = await call(current, root + "/catalog?clubId=" + club);
+    assert.equal(exposedCatalog.status, 200);
+    assert.equal(exposedCatalog.body.permissions.find(entry => entry.word === word)?.checked, true);
+    assert.equal(exposedCatalog.body.permissions.find(entry => entry.word === "variables.manage")?.checked, false);
+    const snapshot = async () => (await client.query(
+      "select d.label,d.icon_url,d.state,"
+      + " (select count(*)::int from training_load.metric_variable_changes where metric_definition_id=d.id) as changes,"
+      + " (select count(*)::int from training_load.metric_variable_requests where metric_definition_id=d.id) as receipts"
+      + " from training_load.metric_definitions d where id=$1", [id],
+    )).rows[0];
+    let icon = nextIcon;
+    for (const layer of [
+      { id: versionId, cookie: await current.cookieFor(versionCoach), path: root + "/" + roleId + "/clubs/" + club + "/version",
+        table: "permission_club_role_versions", auditTable: "permission_club_role_version_changes", auditKey: "version_id", context: {} },
+      { id: customId, cookie: coachCookie, path: root + "/users/" + coach + "/clubs/" + club + "/custom",
+        table: "permission_custom_roles", auditTable: "permission_custom_role_changes", auditKey: "custom_role_id",
+        context: { roleId, scopeType: "team", scopeId: team } },
+    ]) {
+      const permissions = async () => {
+        const me = await current.api(layer.cookie, "/api/auth/me");
+        assert.equal(me.status, 200, me.text);
+        return me.body.user.permissions;
+      };
+      const originalWords = await permissions();
+      assert.ok(originalWords.includes(word) && originalWords.includes("variables.view") && originalWords.includes("tests.view"));
+      const revise = async direction => {
+        const { rows: [{ revision }] } = await client.query("select revision from public." + layer.table + " where id=$1", [layer.id]);
+        const auditCount = async () => (await client.query(
+          "select count(*)::int as count from public." + layer.auditTable + " where " + layer.auditKey + "=$1",
+          [layer.id],
+        )).rows[0].count;
+        const before = await auditCount();
+        const input = { requestKey: key(), expectedRevision: revision, reason: "Review Variables Rename and Archive", [direction]: [word], ...layer.context };
+        const saved = await call(current, layer.path, input);
+        assert.equal(saved.status, 200, JSON.stringify(saved.body));
+        assert.equal(await auditCount(), before + 1);
+        const stored = await roleData(client);
+        const repeated = await call(staged, layer.path, input);
+        assert.equal(repeated.status, 200, JSON.stringify(repeated.body));
+        assert.deepEqual(repeated.body, { ...saved.body, replayed: true });
+        assert.equal(await auditCount(), before + 1);
+        assert.deepEqual(await roleData(client), stored);
+      };
+      const next = icon === oldIcon ? nextIcon : oldIcon;
+      const iconPath = path + "/icon";
+      const draft = { requestKey: key(), expectedIconKey: icon, iconKey: next };
+      const before = await snapshot();
+      await revise("remove");
+      assert.deepEqual(await permissions(), originalWords.filter(entry => entry !== word));
+      const readScope = await request(current, layer.cookie, path);
+      assert.equal(readScope.status, 200, readScope.text);
+      const denied = await request(current, layer.cookie, iconPath, draft);
+      const missing = await request(current, layer.cookie, metrics + "/" + key() + "/icon", draft);
+      assert.deepEqual([denied.status, denied.text], [404, missing.text]);
+      assert.equal(missing.status, 404, missing.text);
+      assert.deepEqual(await snapshot(), before);
+      await revise("add");
+      assert.deepEqual(await permissions(), originalWords);
+      const accepted = await request(current, layer.cookie, iconPath, draft);
+      assert.equal(accepted.status, 200, accepted.text);
+      assert.equal(accepted.body.variable.icon, next);
+      const after = await snapshot();
+      assert.deepEqual(after, { ...before, icon_url: "icon:" + next, changes: before.changes + 1, receipts: before.receipts + 1 });
+      icon = next;
+    }
+
     assert.deepEqual(await marker(), firstUsed);
     await assert.rejects(client.query(await read("rollback")), /refuses checked Variables Rename and Archive writer use/);
     await client.query("rollback");
     assert.deepEqual(await marker(), firstUsed);
   } finally {
     try {
-      await previous?.stop();
+      await Promise.all([previous?.stop(), staged?.stop()]);
     } finally {
       try { await current?.stop(); } finally { await fixture.drop(); }
     }

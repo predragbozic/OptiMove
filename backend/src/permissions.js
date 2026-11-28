@@ -218,6 +218,7 @@ export const ENFORCED_PERMISSIONS = Object.freeze({
   "staff.assign": Object.freeze(["routes/organization.js", "permissionRolesService.js", "permissionLayersService.js"]),
   "roles.manage": Object.freeze(["permissionRolesService.js", "permissionLayersService.js"]),
   // Roles V-1 (docs/ai/roles-v-steps-plan.md sections 2.1 and 2.2): Data configuration and Tags, presets and session types.
+  "variables.rename_archive": Object.freeze(["canonicalVariableAdminService.js"]),
   "variables.view": Object.freeze(["sourceMetricAccess.js", "canonicalVariableAdminService.js", "routes/trainingActivity.js"]),
   "presets.use": Object.freeze(["routes/taxonomy.js", "sessionTypeService.js"]),
   // Roles V-2 (the plan's sections 2.3 and 9): Athletes. access.js holds its gates: athleteViewScopes, the arrays of the

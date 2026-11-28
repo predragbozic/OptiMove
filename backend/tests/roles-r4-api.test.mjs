@@ -89,7 +89,7 @@ test("1. every club-scope write takes the club's ceiling lock, shared, right aft
   // (roles V-1 checks variables.view and presets.use, roles V-2 athletes.view, roles V-3 calendar.view, roles V-4
   // tests.view and tests.results.view, so the copy keeps them).
   const CHECKED_VIEW = ["athletes.view", "calendar.view", "dashboards.view", "exercises.use", "load.view.athlete", "load.view.team", "presets.use", "programs.view", "tests.results.view", "tests.view", "variables.view"];
-  assert.deepEqual([...copy.items].sort(), ["athletes.manage", "athletes.remove", "calendar.events.manage", "dashboards.manage", "exercises.add", "exercises.remove", "load.activities.manage", "load.estimates.manage", "load.roster.decide", "load.schedule.manage", "org.view", "programs.assign", "programs.edit", "programs.publish", "programs.rpe_settings", "tests.schedule.manage", ...CHECKED_VIEW].sort());
+  assert.deepEqual([...copy.items].sort(), ["athletes.manage", "athletes.remove", "calendar.events.manage", "dashboards.manage", "exercises.add", "exercises.remove", "load.activities.manage", "load.estimates.manage", "load.roster.decide", "load.schedule.manage", "org.view", "programs.assign", "programs.edit", "programs.publish", "programs.rpe_settings", "tests.schedule.manage", "variables.rename_archive", ...CHECKED_VIEW].sort());
   const dropped = ok(c3.res).dropped;
   assert.deepEqual(dropped.filter((d) => d.reason === "not_available_yet").map((d) => d.word).sort(), VIEW.filter((v) => !CHECKED_VIEW.includes(v)));
 });
