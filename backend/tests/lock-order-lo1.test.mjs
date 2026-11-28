@@ -449,7 +449,7 @@ test("4. a coach made a platform admin during a rename, and that role revoked by
 // ---------------------------------------------------------------------------
 // 5-6. Source connections (sourceConnectionService.js rightsStillHold)
 // ---------------------------------------------------------------------------
-test("5. a club admin's Unbind against the real club-admin revocation, queued behind it: the Unbind is refused (rights_changed, nothing ended) and the revocation succeeds - no 40P01", async () => {
+test("5. a club admin's Unbind against the real club-admin revocation, queued behind it: the Unbind is refused (the identical notFound, nothing ended) and the revocation succeeds - no 40P01", async () => {
   const from = logLines.length;
   const x = await freshClub(2);
   const [adm] = x.admins;
@@ -458,7 +458,7 @@ test("5. a club admin's Unbind against the real club-admin revocation, queued be
     target: adm, revoke: () => revokeClub(adm, x.clubId), writerPattern: "for share of", write: () => unbindRoute(adm, b),
   });
   assert.equal(revoked.status, 200, revoked.text);
-  assert.deepEqual([written.status, written.body.error], [409, "rights_changed"], written.text);
+  assert.deepEqual([written.status, written.body], [404, { error: "notFound" }], written.text);
   assert.equal(await bindingState(b), "active", "nothing ended");
   assert.equal(await clubRoleActive(adm.id, x.clubId), false);
   noDeadlock(from);
