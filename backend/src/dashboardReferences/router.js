@@ -80,12 +80,12 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
     const payload=action === "create"?{name:req.body.name}:action === "draft"?req.body.draft:{};
     const hash=hashOf({contract:"dashboard-reference/v1",action,club:ctx.owner.clubId,table:req.params.id??null,body:req.body});
     const receipt=await boundedRead(async client => {
-      // Share the lock namespace and order with binding before authorizing any receipt.
-      await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
-        ["dashboard-reference:" + ctx.userId.toLowerCase() + ":" + req.body.requestId.toLowerCase()]);
       if (!await referenceWriterStillHolds(client, req, ctx)) {
         throw Object.assign(new Error("notFound"), { code: "42501" });
       }
+      // Same order as the deployed table writer: actor checks, then the request lock.
+      await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+        ["dashboard-reference:" + ctx.userId.toLowerCase() + ":" + req.body.requestId.toLowerCase()]);
       const result=await client.query("select training_load.mutate_dashboard_reference($1,$2,$3,$4,$5,$6,$7,$8) receipt",[ctx.userId,ctx.owner.clubId,req.body.requestId,hash,req.params.id??null,req.body.expectedRevision??null,action,payload]);
       return result.rows[0].receipt;
     },{locks:true});

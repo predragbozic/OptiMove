@@ -267,3 +267,39 @@ test('reference authoring requires Variables Manage on the active club for draft
   } finally {await blocker.end();}
  }
 });
+
+
+test('reference table actor is checked before taking its request lock',async()=>{
+ const actor=new pg.Client({connectionString:db.url});
+ const receipt=new pg.Client({connectionString:db.url});
+ await Promise.all([actor.connect(),receipt.connect()]);
+ let pending;
+ try {
+  await actor.query('begin');
+  await receipt.query('begin');
+  const actorPid=(await actor.query('select pg_backend_pid() pid')).rows[0].pid;
+  const receiptPid=(await receipt.query('select pg_backend_pid() pid')).rows[0].pid;
+  await actor.query('select id from public.users where id=$1 for update',[admin.id]);
+  const id=key();
+  await receipt.query("select pg_advisory_xact_lock(hashtextextended('dashboard-reference:'||$1::text||':'||$2::text,0))",[admin.id,id]);
+  pending=post(admin,R,{requestId:id,name:'Authoritative lock order'});
+  async function waitFor(blockerPid){
+   for(let attempt=0;attempt<80;attempt++){
+    const {rows:[{blocked}]}=await q.query('select exists(select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid))) blocked',[blockerPid]);
+    if(blocked)return true;
+    await new Promise(resolve=>setTimeout(resolve,20));
+   }
+   return false;
+  }
+  assert.equal(await waitFor(actorPid),true,'new table writer waits on the actor before the request, as the deployed table writer does');
+  await actor.query('commit');
+  assert.equal(await waitFor(receiptPid),true,'the table writer takes the request lock after its actor checks');
+  await receipt.query('commit');
+  const result=await pending;
+  assert.equal(result.status,201,result.text);
+ } finally {
+  await Promise.allSettled([actor.query('rollback'),receipt.query('rollback')]);
+  await Promise.all([actor.end(),receipt.end()]);
+  if(pending)await pending.catch(()=>{});
+ }
+});
