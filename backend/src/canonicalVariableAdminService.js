@@ -929,11 +929,11 @@ async function lockVariableManageActor(client, ctx) {
 
 // New writes take their original domain locks first. Only replay or response
 // verification needs a separate fresh lock of the specific receipt target.
-function authorizeVariableManage(ctx, id = null) {
+function authorizeVariableManage(ctx, lockTarget) {
   if (ctx.basis === "platform_admin") return undefined;
   return async client => {
     await lockVariableManageCeiling(client, ctx);
-    if (id) await lockWritableDefinition(client, ctx, id);
+    await lockTarget?.(client);
     await lockVariableManageActor(client, ctx);
     return true;
   };
@@ -1073,7 +1073,7 @@ export async function createVariableVersion({ ctx, variableId, body }) {
     },
   });
   return runWrite({
-    ctx, where: "variable_version_create", requestKey, requestHash, action: "variable_version_create", authorizeTarget: authorizeVariableManage(ctx, id), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
+    ctx, where: "variable_version_create", requestKey, requestHash, action: "variable_version_create", authorizeTarget: authorizeVariableManage(ctx, client => lockWritableDefinition(client, ctx, id)), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
     requests: VARIABLE_REQUESTS, classify: classifyVariableError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
@@ -1543,6 +1543,24 @@ function clubWriteOnly(ctx) {
 // system definition and its current version, its levels, then the rights;
 // the state refusals only after the right.
 const COPY_KEYS = ["requestKey", "expectedSourceVersionId", "key", "label", "shortLabel", "description", "iconKey"];
+function authorizeSystemVariablePreference(ctx, id, copy) {
+  return authorizeVariableManage(ctx, async client => {
+    const lock = copy ? "for share" : "for key share";
+    const system = await client.query(
+      "select 1 from training_load.metric_definitions where id=$1 and owner_scope='system' " + lock, [id],
+    );
+    if (!system.rowCount) throw NOT_FOUND();
+  });
+}
+
+async function lockVariableManageOrPlatformActor(client, ctx) {
+  if (ctx.basis === "platform_admin") {
+    if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+  } else {
+    await lockVariableManageActor(client, ctx);
+  }
+}
+
 export async function copyVariable({ ctx, variableId, body }) {
   clubWriteOnly(ctx);
   const id = variableIdOrNotFound(variableId);
@@ -1583,6 +1601,8 @@ export async function copyVariable({ ctx, variableId, body }) {
   };
   return runWrite({
     ctx, where: "variable_copy", requestKey, requestHash, action: "variable_copy",
+    authorizeTarget: authorizeSystemVariablePreference(ctx, id, true), authorizeReplayOnly: true,
+    matchesWrittenReceipt: (record, written) => matchesVariableManageReceipt(record, written) && record.operation_id === written.operation_id,
     requests: VARIABLE_REQUESTS, classify, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
@@ -1590,6 +1610,7 @@ export async function copyVariable({ ctx, variableId, body }) {
       return { variable, copiedMappings: await copiedMappingsOf(executor, record.operation_id) };
     },
     body: async (client, operationId) => {
+      if (ctx.basis !== "platform_admin") await lockVariableManageCeiling(client, ctx);
       // The plain read, before any lock: readable here (the system scope or
       // the club's own) - else the identical 404; the club's own variable is
       // no source (copy_source_not_system).
@@ -1600,7 +1621,7 @@ export async function copyVariable({ ctx, variableId, body }) {
       // The club's own variable is no source: a state, so answered only after
       // the right (J15 section 4), without the registry locks it does not need.
       if (plain.owner_scope !== "system") {
-        if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+        await lockVariableManageOrPlatformActor(client, ctx);
         throw refusal(409, "copy_source_not_system", TEXT.copy_source_not_system);
       }
       // The locks, in D's order.
@@ -1614,7 +1635,7 @@ export async function copyVariable({ ctx, variableId, body }) {
       await client.query(
         `select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level for share`, [id],
       );
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await lockVariableManageOrPlatformActor(client, ctx);
       // The states, answered only now (after the right), in J15 4.1's order.
       const row = (await client.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1`, [id])).rows[0];
       if (def.state !== "active") throw refusal(409, "source_not_active", TEXT.source_not_active);
@@ -1692,7 +1713,13 @@ export async function copyVariable({ ctx, variableId, body }) {
     if (error instanceof SourceMetricMappingError && ["already_copied", "key_taken"].includes(error.code) && !error.details) {
       let rightLost = false;
       const current = await boundedRead(async (client) => {
-        if (!(await rightsStillHold(client, ctx))) { rightLost = true; return null; }
+        try {
+          if (ctx.basis === "platform_admin") await lockVariableManageOrPlatformActor(client, ctx);
+          else await authorizeSystemVariablePreference(ctx, id, true)(client);
+        } catch (failure) {
+          if (failure instanceof SourceMetricMappingError && failure.status === 404) rightLost = true;
+          throw failure;
+        }
         return (await client.query(
           `select club_definition_id from training_load.metric_definition_copies where club_id = $1 and system_definition_id = $2`, [ctx.owner.clubId, id],
         )).rows[0];
@@ -1712,10 +1739,10 @@ export async function copyVariable({ ctx, variableId, body }) {
 // later. Locks: the definition FOR KEY SHARE, the rights, then the hide lock
 // (after the rights, J15 section 5), then the plain reads and the write.
 const HIDE_REQUESTS = Object.freeze({
-  find: `select 'variable_hide' as operation, hide_request_hash as request_hash, metric_definition_id, club_id::text as club_id
+  find: `select 'variable_hide' as operation, hide_request_hash as request_hash, metric_definition_id, club_id::text as club_id, id as hide_record_id
            from training_load.metric_definition_club_hides where hidden_by_user_id = $1 and hide_request_key = $2
          union all
-         select 'variable_show' as operation, show_request_hash as request_hash, metric_definition_id, club_id::text as club_id
+         select 'variable_show' as operation, show_request_hash as request_hash, metric_definition_id, club_id::text as club_id, id as hide_record_id
            from training_load.metric_definition_club_hides where shown_by_user_id = $1 and show_request_key = $2`,
   exists: `select 1 from training_load.metric_definition_club_hides
             where (hidden_by_user_id = $1 and hide_request_key = $2) or (shown_by_user_id = $1 and show_request_key = $2)`,
@@ -1764,22 +1791,26 @@ async function setHidden({ ctx, variableId, body, hide }) {
   };
   return runWrite({
     ctx, where: operation, requestKey, requestHash, action: operation,
+    authorizeTarget: authorizeSystemVariablePreference(ctx, id, false), authorizeReplayOnly: true,
+    matchesWrittenReceipt: (saved, written) => saved.metric_definition_id === written.metric_definition_id
+      && saved.club_id === written.club_id && saved.hide_record_id === written.hide_record_id,
     requests: HIDE_REQUESTS, classify, idsOf: () => ({ variableId: id }),
     reread: (executor, record) => hideStateOf(executor, ctx, record),
     body: async (client) => {
+      if (ctx.basis !== "platform_admin") await lockVariableManageCeiling(client, ctx);
       const params = [id];
       const readable = readableSql(ctx, params);
       const plain = (await client.query(`select d.id, d.owner_scope from training_load.metric_definitions d where d.id = $1 and ${readable}`, params)).rows[0];
       if (!plain) throw NOT_FOUND();
       // The club's own variable cannot be hidden: a state, answered only after the right.
       if (plain.owner_scope !== "system") {
-        if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+        await lockVariableManageOrPlatformActor(client, ctx);
         throw refusal(409, "hide_not_system", TEXT.hide_not_system);
       }
       // The definition FOR KEY SHARE (the guards read it plainly after the
       // hide lock: no row lock follows the hide lock), then the rights.
       await client.query(`select 1 from training_load.metric_definitions where id = $1 for key share`, [id]);
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await lockVariableManageOrPlatformActor(client, ctx);
       if (writeHold) await writeHold(client, `${operation}_before_hide_lock`);
       await lockHides(client, [{ clubId: ctx.owner.clubId, definitionId: id }]);
       if (writeHold) await writeHold(client, operation);
@@ -1801,13 +1832,13 @@ async function setHidden({ ctx, variableId, body, hide }) {
           [id, ctx.owner.clubId],
         )).rows[0].n;
         if (inUse > 0) throw refusal(409, "variable_in_use", TEXT.variable_in_use, { current: { activationCount: inUse } });
-        await client.query(
+        const { rows: [hidden] } = await client.query(
           `insert into training_load.metric_definition_club_hides
              (club_id, metric_definition_id, hidden_by_user_id, hidden_basis, hide_request_key, hide_request_hash)
-           values ($1, $2, $3, $4, $5, $6)`,
+           values ($1, $2, $3, $4, $5, $6) returning id`,
           [ctx.owner.clubId, id, ctx.userId, ctx.basis, requestKey, requestHash],
         );
-        return record;
+        return { ...record, hide_record_id: hidden.id };
       }
       if (!open) return { ...record, noop: true };
       await client.query(
@@ -1816,7 +1847,7 @@ async function setHidden({ ctx, variableId, body, hide }) {
           where id = $1`,
         [open.id, ctx.userId, ctx.basis, requestKey, requestHash],
       );
-      return record;
+      return { ...record, hide_record_id: open.id };
     },
   });
 }

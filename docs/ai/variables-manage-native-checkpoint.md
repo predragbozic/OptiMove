@@ -13,14 +13,14 @@ existing definition/input locks before actor row locks. Existing requests,
 uncertain commit confirmation and refreshed responses recheck scope without
 recreating effects.
 
+Native J15 Copy to own, Hide and Show again are also covered. Copy keeps
+its atomic and bounded active-system mapping inheritance as club drafts,
+without independent Mapping writes or activation. Hide and Show again
+retain their club preference and existing activation rules. Personal hide
+remains separate.
+
 Remaining for the full Variables word:
 
-- The bounded, atomic Copy to own operation under J15, including its exact
-  draft mapping effects and independent Mapping writes. Keep the approved
-  all-or-nothing behavior and document the separate cross-word policy before
-  making the word available.
-- The club's Hide and Show again policy for OptiMove variables and its
-  existing interaction with activations. Personal hide remains separate.
 - Owned classification writes for domains, categories and links.
 - P3 reference-table publishing and mutations at the resource club.
   Widget bindings continue to use their dashboard permission.

@@ -459,7 +459,7 @@ router.post("/variables/:variableId/icon", handle(async (req, res) => {
 // workspace): the platform workspace and everyone else get the identical 404
 // before the body is looked at.
 const clubAdminContext = async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return null;
   if (ctx.owner?.scope !== "club") { notFound(res); return null; }
   return ctx;

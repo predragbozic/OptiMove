@@ -5,46 +5,16 @@ import { test } from "node:test";
 import pg from "pg";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
 import { fixtures, key, ROLE_IDS, startServer } from "./support/permission-roles-world.mjs";
+import { VARIABLE_MANAGE as manage, editVariablesManageTestRole, reviseFixtureRole, stageVariablesManageForTest, takeFixtureCeilings } from "./support/variables-manage-grants.mjs";
 
 const path = "/api/training-load/sources/metrics/variables";
-const manage = "variables.manage";
-
-async function reviseFixtureRole(client, word, add, roleId = ROLE_IDS.club_admin) {
-  const migration = "fixtures/variables-manage-" + key() + ".sql";
-  const { rows: [{ revision }] } = await client.query(
-    "update public.permission_roles set revision=revision+1, updated_at=now() where id=$1 returning revision", [roleId],
-  );
-  const column = add ? "items_added" : "items_removed";
-  await client.query(
-    "insert into public.permission_role_changes(role_id,revision_after,kind,migration_name," + column + ")"
-    + " values($1,$2,'migration',$3,array[$4]::text[])", [roleId, revision, migration, word],
-  );
-  await client.query(add
-    ? "insert into public.permission_role_items (role_id,permission_word) values($1,$2)"
-    : "delete from public.permission_role_items where role_id=$1 and permission_word=$2", [roleId, word]);
-  await client.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values($1,repeat('0',64),'test')", [migration]);
-}
-
-async function takeFixtureCeilings(client) {
-  await client.query("select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive')");
-}
 
 test("native variable create and version need the staged Manage right; a queued request rechecks the grant", async () => {
   const fixture = await createPagesDatabase({ through: "202612141000", label: "variable_manage" });
   const { client } = fixture;
   const blocker = new pg.Client({ connectionString: fixture.url });
   let server;
-  const editRole = async (word, add, roleId) => {
-    await client.query("begin");
-    try {
-      await takeFixtureCeilings(client);
-      await reviseFixtureRole(client, word, add, roleId);
-      await client.query("commit");
-    } catch (error) {
-      await client.query("rollback");
-      throw error;
-    }
-  };
+  const editRole = (word, add, roleId) => editVariablesManageTestRole(client, word, add, roleId);
   try {
     await blocker.connect();
     const f = fixtures(client);
@@ -81,12 +51,7 @@ test("native variable create and version need the staged Manage right; a queued 
     const system = await post(platformCookie, path, createInput("System variable"));
     assert.equal(system.status, 201, system.text);
 
-    const { rows: [{ evaluator }] } = await client.query(
-      "select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) as evaluator",
-    );
-    const stage = evaluator.replace("'variables.view'", "'variables.view', 'variables.manage'");
-    assert.notEqual(stage, evaluator);
-    await client.query(stage);
+    await stageVariablesManageForTest(client);
     denied(await post(aCookie, path, create));
     await editRole(manage, true);
     denied(await post(coachCookie, path, createInput("Not a club administrator")));
