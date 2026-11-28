@@ -1391,6 +1391,9 @@ function internal(action, error) {
 // host's confirmed encoding; redirects refused; the answer bounded; only the
 // token field read. Statuses become stable codes; the body never leaves.
 // ---------------------------------------------------------------------------
+// Disposable tests exercise this exact protocol through an injected fake transport.
+export const sourceConnectionProtocolForTests = Object.freeze({ exchangeCredential, testReads });
+
 async function exchangeCredential({ exchangeSpec, username, password, fetchImpl = sourceFetch() }) {
   const body = exchangeSpec.encoding === "json"
     ? JSON.stringify({ username, password })
