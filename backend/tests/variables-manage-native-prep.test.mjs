@@ -98,6 +98,7 @@ test("native variable create and version need the staged Manage right; a queued 
     assert.equal(renamed.status, 200, renamed.text);
     const narrowMarked = await firstUse(true);
     assert.ok(narrowMarked instanceof Date);
+    await editRole("variables.rename_archive", false, ROLE_IDS.team_coach);
     await editRole("variables.rename_archive", false);
     const fullOnly = await callRename(definitionId, await rename("Full permission alternative"));
     assert.equal(fullOnly.status, 200, fullOnly.text);
