@@ -1,3 +1,4 @@
+import { reviseFixtureRole, takeFixtureCeilings } from "./support/variables-manage-grants.mjs";
 import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // F3c2e — the verified team binding (POST …/connections/:id/bindings) and
 // the club-admin path of the source connection routes, against a fake
@@ -1357,6 +1358,35 @@ test("29. U2a: the club admin of the team's club approves a FIRST pair in the cl
     assert.deepEqual(await historyOf(o.team), []);
   } finally {
     await setSourceConnectFixture(admin, true);
+  }
+  const barrier = new pg.Client({ connectionString: db.url });
+  await barrier.connect();
+  let queued;
+  try {
+    await barrier.query("begin");
+    await takeFixtureCeilings(barrier);
+    const pid = (await barrier.query("select pg_backend_pid() pid")).rows[0].pid;
+    queued = pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
+    let waiting = false;
+    for (let attempt = 0; attempt < 60 && !waiting; attempt++) {
+      waiting = (await admin.query(
+        "select exists(select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid))) waiting",
+        [pid],
+      )).rows[0].waiting;
+      if (!waiting) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(waiting, true, "pointer write is waiting on the permission ceiling");
+    await reviseFixtureRole(barrier, "sources.connect", false);
+    await barrier.query("commit");
+    const denied = await queued;
+    assert.deepEqual([denied.status, denied.body.error], [403, "forbidden"]);
+    assert.deepEqual(await historyOf(o.team), []);
+  } finally {
+    await barrier.query("rollback");
+    await barrier.end();
+    await queued?.catch(() => {});
+    const present = (await admin.query("select 1 from public.permission_role_items i join public.permission_roles r on r.id=i.role_id where r.basic_key='club_admin' and i.permission_word='sources.connect'")).rowCount;
+    if (!present) await setSourceConnectFixture(admin, true);
   }
   const first = await pairApi(o.team, ca.cookie, { gpexeTeamId: "981" });
   assert.equal(first.status, 200, first.text);
