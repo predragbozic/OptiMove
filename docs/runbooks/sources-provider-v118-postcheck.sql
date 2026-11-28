@@ -41,6 +41,23 @@ begin
   ) then raise exception 'Binding guard catalogue drifted'; end if;
 end
 $legacy$;
+do $attributes$
+begin
+  if not exists (
+    select from pg_proc capture join pg_proc witness on witness.oid='training_load.source_binding_sparse_generation(uuid)'::regprocedure
+    join pg_class baseline on baseline.oid='training_load.source_binding_sparse_base'::regclass
+    join pg_class delta on delta.oid='training_load.source_binding_sparse_delta'::regclass
+    where capture.oid='training_load.capture_binding_sparse_delta()'::regprocedure
+      and capture.prosecdef and capture.proconfig=array['search_path=pg_catalog']
+      and not witness.prosecdef and witness.proconfig=array['search_path=pg_catalog']
+      and capture.proowner=witness.proowner and capture.proowner=baseline.relowner and capture.proowner=delta.relowner
+      and not exists (
+        select from pg_roles r where r.rolname in ('anon','authenticated','service_role')
+          and pg_has_role(r.oid,capture.proowner,'MEMBER')
+      )
+  ) then raise exception 'Sparse binding function attributes or ownership drifted'; end if;
+end
+$attributes$;
 do $verify$
 begin
   if exists (

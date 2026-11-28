@@ -92,6 +92,10 @@ test("bound set, team and approved pointer snapshots advance independently with 
       create role anon;
       create role authenticated;
       create role service_role;
+      create role sparse_fixture_writer nologin;
+      grant usage on schema training_load, public to sparse_fixture_writer;
+      grant select, insert on training_load.source_team_bindings to sparse_fixture_writer;
+      grant select, update on training_load.source_credential_connections, training_load.source_host_catalog, public.teams to sparse_fixture_writer;
       alter default privileges in schema training_load grant all on tables to anon,authenticated,service_role;
       alter default privileges in schema training_load grant execute on functions to anon,authenticated,service_role;
     `);
@@ -137,6 +141,44 @@ test("bound set, team and approved pointer snapshots advance independently with 
             or has_function_privilege(oid,'training_load.source_binding_sparse_generation(uuid)','EXECUTE'))
       `);
       assert.equal(privateAcl.rowCount, 0);
+      const capture = "training_load.capture_binding_sparse_delta()";
+      const insertAsLegacyWriter = async () => {
+        await client.query("begin");
+        try {
+          await client.query("set local role sparse_fixture_writer");
+          await client.query(`
+            insert into ${bindings}(team_id,connection_id,source_system,source_team_id,bound_by_user_id,state,ended_at,ended_by_user_id,end_reason)
+            values($1,$2,'gpexe','701',$3,'ended',clock_timestamp(),$3,'Restricted predecessor exercise')
+          `, [legacy, legacyConnection, actor]);
+          await client.query("reset role");
+          assert.deepEqual(await snapshot(legacyConnection), { generation: "4", active: [] });
+        } finally {
+          await client.query("rollback");
+        }
+      };
+      assert.equal((await client.query(`
+        select has_table_privilege('sparse_fixture_writer','training_load.source_binding_sparse_delta','INSERT') as can_write
+      `)).rows[0].can_write, false);
+      await insertAsLegacyWriter();
+      for (const [mutation, restore] of [
+        ["security invoker", "security definer"],
+        ["reset search_path", "set search_path = pg_catalog"],
+        ["owner to sparse_fixture_writer", "owner to current_user"],
+      ]) {
+        await client.query(`alter function ${capture} ${mutation}`);
+        try {
+          await assert.rejects(checks("postcheck"), /function attributes or ownership drifted/);
+          await client.query("rollback");
+          await assert.rejects(client.query(down), /function attributes or ownership drifted/);
+          await client.query("rollback");
+          if (mutation === "security invoker") {
+            await assert.rejects(insertAsLegacyWriter(), { code: "42501" });
+          }
+        } finally {
+          await client.query(`alter function ${capture} ${restore}`);
+        }
+      }
+      await checks("postcheck");
       await client.query(down);
       assert.deepEqual(await getTriggers(), pre);
       assert.equal(dumpSchema(), beforeSchema);
