@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 import { applyActivityIdentityBridgeForCuratedFixture } from "./support/external-schedule-m2-fixture.mjs";
 // An athlete reads her own recorded results (owner's decision 2026-11-16: all of them, read-only, nobody else's),
 // through the three real routes on a disposable database: GET /api/training-activity/:id, GET /api/training-activity
@@ -28,6 +29,8 @@ before(async () => {
   await k.connect();
   assert.equal((await k.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   await applyActivityIdentityBridgeForCuratedFixture(db.url);
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   const serverModule = await import("../src/server.js");
   ({ createSession } = await import("../src/auth.js"));

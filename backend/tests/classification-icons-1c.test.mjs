@@ -10,6 +10,7 @@
 // apply / post-check / rollback / re-apply, one migrated through v46 for the
 // behaviour. Contract: docs/ai/gpexe-metric-variable-mapping-discovery.md,
 // section J6.1.
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -113,6 +114,8 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   await world();
 });
 

@@ -3,13 +3,37 @@ import { before,after,test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {createPagesDatabase} from './support/dashboard-pages-db.mjs';
+import {stageVariablesManageForTest} from './support/variables-manage-grants.mjs';
 import {fixtures,startServer,key} from './support/permission-roles-world.mjs';
 let db,q,F,srv,A,B,team,admin,coach,viewer,teamViewer,mixed,table;
 const R='/api/training-load/reference-tables';
 const post=(who,path,body)=>srv.api(who.cookie,path,{method:'POST',body});
 const person=async(label,setup=async()=>{})=>{const id=await F.user(label);await setup(id);return{id,cookie:await srv.cookieFor(id)}};
+
+async function setFixtureManageGrant(client, add) {
+ const word='variables.manage', migration='fixtures/reference-table-manage-'+key();
+ const {rows:[db]}=await client.query('select current_database() name');
+ assert.match(db.name, /^optimove_tests_/);
+ await client.query("select public.lock_club_ceiling(array(select id from public.clubs order by id),'exclusive')");
+ const {rows:[phase]}=await client.query('select public.permission_word_honoured($1) active',[word]);
+ if(!phase.active){
+  const {rows:[{ddl}]}=await client.query("select pg_get_functiondef('public.permission_word_honoured(text)'::regprocedure) ddl");
+  const staged=ddl.replace("'variables.view'", "'variables.view', 'variables.manage'");
+  assert.notEqual(staged,ddl);
+  await client.query(staged);
+ }
+ const {rows:[role]}=await client.query("update public.permission_roles set revision=revision+1,updated_at=now() where basic_key='club_admin' returning id,revision");
+ const column=add?'items_added':'items_removed';
+ await client.query(`insert into public.permission_role_changes(role_id,revision_after,kind,migration_name,${column}) values($1,$2,'migration',$3,array[$4]::text[])`,[role.id,role.revision,migration,word]);
+ await client.query(add?'insert into public.permission_role_items(role_id,permission_word) values($1,$2)':'delete from public.permission_role_items where role_id=$1 and permission_word=$2',[role.id,word]);
+ await client.query("insert into public.schema_migrations(migration_name,checksum,runner_version) values($1,repeat('0',64),'test')",[migration]);
+}
+
 before(async()=>{
  db=await createPagesDatabase({through:'202612071000',label:'references_http'});q=db.client;F=fixtures(q);
+ await q.query("begin");
+ try { await stageVariablesManageForTest(q); await setFixtureManageGrant(q,true); await q.query("commit"); }
+ catch (error) { await q.query("rollback"); throw error; }
  process.env.DASHBOARD_REFERENCES_ENABLED='true';process.env.DASHBOARD_PAGES_ENABLED='true';srv=await startServer(db.url);
  A=await F.club('Ref Alpha');B=await F.club('Ref Beta');team=await F.team(A);
  admin=await person('refAdmin',id=>F.grantClub(id,A));coach=await person('refCoach',id=>F.grantTeam(id,team));
@@ -18,7 +42,15 @@ before(async()=>{
  const r=await post(admin,'/api/organization/roles',{requestKey:key(),clubId:A,scopeTypes:['club','team'],items:['org.view'],name:'Reference viewer'});assert.equal(r.status,200,r.text);
  for(const [who,scopeType,scopeId]of [[viewer,'club',A],[teamViewer,'team',team],[mixed,'club',A]]){const assignment=await post(admin,'/api/organization/roles/assignments',{requestKey:key(),reason:'Reference access test',userId:who.id,roleId:r.body.role.id,scopeType,scopeId});assert.equal(assignment.status,200,assignment.text);}
  for(const who of [viewer,mixed])await q.query("insert into public.user_workspace_preferences(user_id,workspace_type,scope_id) values($1,'club',$2) on conflict(user_id) do update set workspace_type='club',scope_id=excluded.scope_id",[who.id,A]);
- const created=await post(admin,R,{requestId:crypto.randomUUID(),name:'Game targets'});assert.equal(created.status,201,created.text);table=created.body;
+ const firstUse=async()=> (await q.query("select first_checked_write_at::text value from training_load.variables_manage_v113_use")).rows[0].value;
+ const body={requestId:key(),name:'Game targets'};
+ assert.equal(await firstUse(),null);
+ const denied=await post(coach,R,body);assert.equal(denied.status,404,denied.text);
+ assert.equal(await firstUse(),null);
+ const created=await post(admin,R,body);assert.equal(created.status,201,created.text);table=created.body;
+ const stamped=await firstUse();assert.ok(stamped);
+ const replay=await post(admin,R,body);assert.equal(replay.status,201,replay.text);
+ assert.deepEqual(replay.body,created.body);assert.equal(await firstUse(),stamped);
 });
 after(async()=>{await srv?.stop();await db?.drop();delete process.env.DASHBOARD_REFERENCES_ENABLED;delete process.env.DASHBOARD_PAGES_ENABLED;});
 test('club admin creates and reads; a coach reads the published catalog but cannot edit',async()=>{
@@ -170,4 +202,164 @@ test('non-Home bindings follow both Pages gates and save through the sanctioned 
   await q.query('update training_load.dashboard_pages_activation set enabled=true');const current=await srv.api(admin.cookie,path);assert.equal(current.status,200,current.text);
   const saved=await srv.api(admin.cookie,path,{method:'PUT',body:{requestId:crypto.randomUUID(),expectedWidgetRevision:current.body.widget.revision,groupBy:'athlete',referenceConfig:null}});assert.equal(saved.status,200,saved.text);assert.equal((await srv.api(admin.cookie,path)).body.widget.referenceConfig,null);
  }finally{app.locals.dashboardPagesEnabled=true;await q.query('update training_load.dashboard_pages_activation set enabled=true');}
+});
+
+
+test('reference authoring requires Variables Manage on the active club for drafts, writes and replays',async()=>{
+ const definition=(await q.query("select id from training_load.metric_definitions where key='p3_http_distance'")).rows[0].id;
+ const position=(await q.query('select id from public.sport_positions order by sort_order limit 1')).rows[0].id;
+ const create={requestId:key(),name:'Manage boundary proof'};
+ const published=await post(admin,R,create);
+ assert.equal(published.status,201,published.text);
+ const target=R+'/'+published.body.id;
+ const draft={
+  columns:[{definitionId:definition,unit:'m',aggregation:'sum',dataLevel:'session',order:0}],
+  rows:[{positionId:position,order:0}],valueKinds:[{key:'target',name:'Target',order:0}],
+  cells:[{positionId:position,definitionId:definition,valueKey:'target',value:100}],
+ };
+ const edited=await srv.api(admin.cookie,target+'/draft',{method:'PATCH',body:{requestId:key(),expectedRevision:published.body.revision,draft}});
+ assert.equal(edited.status,200,edited.text);
+ const live=await post(admin,target+'/publish',{requestId:key(),expectedRevision:edited.body.revision});
+ assert.equal(live.status,200,live.text);
+ const tracked=await storedReferenceState();
+ const refused={status:404,text:'{"error":"notFound"}'};
+ const responseOf=({status,text})=>({status,text});
+
+ const blocker=new pg.Client({connectionString:db.url});
+ await blocker.connect();
+ let pending;
+ try {
+  await blocker.query('begin');
+  await setFixtureManageGrant(blocker,false);
+  const {rows:[{pid}]}=await blocker.query('select pg_backend_pid() pid');
+  pending=post(admin,R,{requestId:key(),name:'Denied after queued revocation'});
+  let waiting=false;
+  for(let attempt=0;attempt<100&&!waiting;attempt++){
+   waiting=(await q.query("select exists(select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid)) and query like 'select public.lock_club_ceiling%') waiting",[pid])).rows[0].waiting;
+   if(!waiting)await new Promise(resolve=>setTimeout(resolve,20));
+  }
+  assert.equal(waiting,true,'the native write reached the club licence lock before seeing the revoked grant');
+  await blocker.query('commit');
+  assert.deepEqual(responseOf(await pending),refused);
+  assert.deepEqual(responseOf(await post(admin,R,create)),refused,'the same completed key gives no receipt after revocation');
+  assert.deepEqual(responseOf(await post(admin,R,{requestId:key(),name:'Denied after revocation'})),refused);
+  for(const [action,method] of [['draft','PATCH'],['publish','POST'],['archive','POST']]){
+   const body={requestId:key(),expectedRevision:live.body.revision,...(action==='draft'?{draft}:{})};
+   assert.deepEqual(responseOf(await srv.api(admin.cookie,target+'/'+action,{method,body})),refused);
+  }
+  const list=await srv.api(admin.cookie,R);
+  assert.equal(list.status,200,list.text);
+  assert.equal(list.body.canCreate,false);
+  assert.ok(list.body.tables.some(row=>row.id===published.body.id));
+  assert.ok(!list.body.tables.some(row=>row.id===table.id));
+  assert.deepEqual(responseOf(await srv.api(admin.cookie,R+'/'+table.id)),refused);
+  const publishedRead=await srv.api(admin.cookie,target);
+  assert.equal(publishedRead.status,200,publishedRead.text);
+  assert.equal(publishedRead.body.version.published,true);
+  assert.equal(publishedRead.body.canEdit,false);
+  assert.deepEqual(await storedReferenceState(),tracked);
+
+  const platform=await person('referenceTablePlatform',async id=>{await F.grantPlatform(id);await F.grantClub(id,A);});
+  const pick=await srv.api(platform.cookie,'/api/auth/workspace',{method:'PUT',body:{type:'club',scopeId:A}});
+  assert.equal(pick.status,200,pick.text);
+  assert.equal((await post(platform,R,{requestId:key(),name:'Platform keeps reference authoring'})).status,201);
+ } finally {
+  await blocker.query('rollback').catch(()=>{});
+  if(pending)await pending.catch(()=>{});
+  try {
+   const has=(await blocker.query("select exists(select 1 from public.permission_role_items i join public.permission_roles r on r.id=i.role_id where r.basic_key='club_admin' and i.permission_word='variables.manage') present")).rows[0].present;
+   if(!has){
+    await blocker.query('begin');
+    await setFixtureManageGrant(blocker,true);
+    await blocker.query('commit');
+   }
+  } finally {await blocker.end();}
+ }
+});
+
+
+test('reference table actor is checked before taking its request lock',async()=>{
+ const actor=new pg.Client({connectionString:db.url});
+ const receipt=new pg.Client({connectionString:db.url});
+ await Promise.all([actor.connect(),receipt.connect()]);
+ let pending;
+ try {
+  await actor.query('begin');
+  await receipt.query('begin');
+  const actorPid=(await actor.query('select pg_backend_pid() pid')).rows[0].pid;
+  const receiptPid=(await receipt.query('select pg_backend_pid() pid')).rows[0].pid;
+  await actor.query('select id from public.users where id=$1 for update',[admin.id]);
+  const id=key();
+  await receipt.query("select pg_advisory_xact_lock(hashtextextended('dashboard-reference:'||$1::text||':'||$2::text,0))",[admin.id,id]);
+  pending=post(admin,R,{requestId:id,name:'Authoritative lock order'});
+  async function waitFor(blockerPid){
+   for(let attempt=0;attempt<80;attempt++){
+    const {rows:[{blocked}]}=await q.query('select exists(select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid))) blocked',[blockerPid]);
+    if(blocked)return true;
+    await new Promise(resolve=>setTimeout(resolve,20));
+   }
+   return false;
+  }
+  assert.equal(await waitFor(actorPid),true,'new table writer waits on the actor before the request, as the deployed table writer does');
+  await actor.query('commit');
+  assert.equal(await waitFor(receiptPid),true,'the table writer takes the request lock after its actor checks');
+  await receipt.query('commit');
+  const result=await pending;
+  assert.equal(result.status,201,result.text);
+ } finally {
+  await Promise.allSettled([actor.query('rollback'),receipt.query('rollback')]);
+  await Promise.all([actor.end(),receipt.end()]);
+  if(pending)await pending.catch(()=>{});
+ }
+});
+
+test('reference replay keeps an expired receipt stable until the sanctioned writer runs', async () => {
+  const blocker = new pg.Client({ connectionString: db.url });
+  await blocker.connect();
+  const { adminWriteKit: { hashOf } } = await import('../src/sourceMetricMappingService.js');
+  const body = { requestId: key(), name: 'Retained old reference' };
+  const old = { id: table.id, revision: table.revision };
+  const fingerprint = hashOf({ contract: 'dashboard-reference/v1', action: 'create', club: A, table: null, body });
+  const functionName = 'training_load.mutate_dashboard_reference(uuid,uuid,uuid,text,uuid,integer,text,jsonb)';
+  const original = (await q.query('select pg_get_functiondef($1::regprocedure) as ddl', [functionName])).rows[0].ddl;
+  const lock = 'reference-retention-test:' + body.requestId;
+  let pending;
+  try {
+    await q.query('begin');
+    await q.query("select set_config('optimove.reference_writer',txid_current()::text,true)");
+    await q.query(
+      "insert into training_load.dashboard_reference_requests(actor_id,request_id,table_id,club_id,request_hash,receipt,created_at)"
+      + " values($1,$2,$3,$4,$5,$6,now()-interval '15 days')",
+      [admin.id, body.requestId, table.id, A, fingerprint, old],
+    );
+    await q.query('commit');
+    const patched = original.replace('begin\n perform', "begin\n perform pg_advisory_xact_lock(hashtextextended('" + lock + "',0));\n perform");
+    assert.notEqual(patched, original);
+    await q.query(patched);
+    await blocker.query('begin');
+    const pid = (await blocker.query('select pg_backend_pid() pid')).rows[0].pid;
+    await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [lock]);
+    pending = post(admin, R, body);
+    let waiting = false;
+    for (let attempt = 0; attempt < 80 && !waiting; attempt++) {
+      waiting = (await q.query(
+        'select exists(select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid))) as blocked',
+        [pid],
+      )).rows[0].blocked;
+      if (!waiting) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(waiting, true, 'HTTP replay reached the sanctioned writer');
+    assert.equal((await q.query('select training_load.cleanup_dashboard_reference_requests() as removed')).rows[0].removed, 0);
+    await blocker.query('commit');
+    const response = await pending;
+    assert.equal(response.status, 201, response.text);
+    assert.deepEqual(response.body, old);
+    assert.equal((await q.query('select training_load.cleanup_dashboard_reference_requests() as removed')).rows[0].removed, 1);
+  } finally {
+    await blocker.query('rollback');
+    await blocker.end();
+    await q.query('rollback');
+    if (pending) await pending.catch(() => {});
+    await q.query(original);
+  }
 });

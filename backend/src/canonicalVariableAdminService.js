@@ -1,3 +1,4 @@
+import { recordVariableManageUse } from "./variableManageFirstUse.js";
 // Canonical-variable administration (M3-0): the admin API for OptiMove's own
 // canonical variables - Metrics Core definitions, independent of any source -
 // under /api/training-load/sources/metrics/variables. It reads the variables of
@@ -906,6 +907,65 @@ export function setVariableWriteHoldForTests(fn) { writeHold = fn ?? null; }
 let classifyObserver = null;
 export function setVariableClassifyObserverForTests(fn) { classifyObserver = fn ?? null; }
 
+export async function lockVariableManageCeiling(client, ctx) {
+  const clubId = ctx.owner?.clubId;
+  if (ctx.basis !== "club_admin" || ctx.owner.scope !== "club" || !clubId
+      || ctx.editorScope?.type !== "club" || ctx.editorScope.id !== clubId || !ctx.sessionToken) throw NOT_FOUND();
+  const { rows: [phase] } = await client.query("select public.permission_word_honoured('variables.manage') as staged");
+  if (!phase?.staged) throw NOT_FOUND();
+  await lockClubCeiling(client, [clubId], "shared");
+}
+
+async function lockVariableManageActor(client, ctx) {
+  if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+  await client.query("select public.lock_permission_actor($1, 'club', $2)", [ctx.userId, ctx.owner.clubId]);
+  const { rows: [rights] } = await client.query(
+    `select public.user_has_permission($1, 'variables.view', 'club', $2)
+       and public.user_has_permission($1, 'variables.manage', 'club', $2) as allowed`,
+    [ctx.userId, ctx.owner.clubId],
+  );
+  if (!rights?.allowed) throw NOT_FOUND();
+  await lockVariableEditorSession(client, ctx);
+}
+
+// New writes take their original domain locks first. Only replay or response
+// verification needs a separate fresh lock of the specific receipt target.
+export function authorizeVariableManage(ctx, lockTarget) {
+  if (ctx.basis === "platform_admin") return undefined;
+  return async client => {
+    await lockVariableManageCeiling(client, ctx);
+    await lockTarget?.(client);
+    await lockVariableManageActor(client, ctx);
+    return true;
+  };
+}
+
+// Legacy validation locks the target and calculation inputs before actor locks.
+// A state or input refusal is only disclosed after the actor's fresh check.
+async function validateVariableManageEffect(client, ctx, scoped, validate) {
+  if (!scoped) {
+    await validate();
+    if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+    return;
+  }
+  let refusalAfterAuthorization;
+  try {
+    await validate();
+  } catch (error) {
+    if (!(error instanceof SourceMetricMappingError)) throw error;
+    refusalAfterAuthorization = error;
+  }
+  await lockVariableManageActor(client, ctx);
+  if (refusalAfterAuthorization) throw refusalAfterAuthorization;
+}
+
+// Older create hashes deliberately omit the owner and result IDs. When an
+// unconfirmed transaction is recovered, verify its actual durable result.
+const matchesVariableManageReceipt = (record, written) =>
+  record.owner_scope === written.owner_scope && record.owner_club_id === written.owner_club_id
+  && record.metric_definition_id === written.metric_definition_id
+  && record.metric_definition_version_id === written.metric_definition_version_id;
+
 // POST /variables - a canonical variable: the definition, its version 1 and
 // its levels, in the workspace's owner scope, in one transaction.
 export async function createVariable({ ctx, body }) {
@@ -949,16 +1009,19 @@ export async function createVariable({ ctx, body }) {
   });
   return runWrite({
     ctx, where: "variable_create", requestKey, requestHash, action: "variable_create",
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse, authorizeTarget: authorizeVariableManage(ctx), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
     requests: VARIABLE_REQUESTS, classify: classifyVariableError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
       return variable ? { variable } : null;
     },
     body: async (client) => {
-      // v77 (J21): the inputs FOR SHARE before the rights (a new version's
-      // order: definitions, then the role, user and club rows).
-      if (calculation) await checkCalculationInputs(client, ctx, calculation, { unit: semantics.unit, levels });
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      const scoped = ctx.basis !== "platform_admin";
+      if (scoped) await lockVariableManageCeiling(client, ctx);
+      // v77 (J21): input definitions FOR SHARE before actor rights.
+      await validateVariableManageEffect(client, ctx, scoped, async () => {
+        if (calculation) await checkCalculationInputs(client, ctx, calculation, { unit: semantics.unit, levels });
+      });
       const units = [semantics.unit, ...(semantics.condition ? [semantics.condition.unit] : [])];
       if (!(await unitsAgree(client, units))) throw refusal(400, "invalid_unit", TEXT.invalid_unit);
       if (writeHold) await writeHold(client, "variable_create");
@@ -1013,6 +1076,7 @@ export async function createVariableVersion({ ctx, variableId, body }) {
   });
   return runWrite({
     ctx, where: "variable_version_create", requestKey, requestHash, action: "variable_version_create",
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse, authorizeTarget: authorizeVariableManage(ctx, client => lockWritableDefinition(client, ctx, id)), authorizeReplayOnly: true, matchesWrittenReceipt: matchesVariableManageReceipt,
     requests: VARIABLE_REQUESTS, classify: classifyVariableError, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
@@ -1021,6 +1085,8 @@ export async function createVariableVersion({ ctx, variableId, body }) {
       return version ? { variable, version } : null;
     },
     body: async (client) => {
+      const scoped = ctx.basis !== "platform_admin";
+      if (scoped) await lockVariableManageCeiling(client, ctx);
       const params = [id];
       const owner = writableSql(ctx, params);
       const plain = (await client.query(`select d.id from training_load.metric_definitions d where d.id = $1 and ${owner}`, params)).rows[0];
@@ -1029,40 +1095,41 @@ export async function createVariableVersion({ ctx, variableId, body }) {
         `select id, owner_scope, owner_club_id, state, current_version_id from training_load.metric_definitions where id = $1 for update`, [id],
       )).rows[0];
       if (!locked || !isOwn(locked, ctx)) throw NOT_FOUND();
-      if (locked.state !== "active") throw refusal(409, "variable_not_active", TEXT.variable_not_active);
-      const current = (await client.query(
-        `select ${VERSION_ROW_COLUMNS} from training_load.metric_definition_versions v where v.id = $1 and v.metric_definition_id = $2`,
-        [locked.current_version_id, id],
-      )).rows[0];
-      if (!current || current.version_id !== expectedCurrentVersionId) {
-        throw refusal(409, "current_version_changed", TEXT.current_version_changed,
-          current ? { current: { versionId: current.version_id, versionNumber: current.version_number } } : undefined);
-      }
-      // v77 (J21): a variable keeps its kind; a calculation's inputs are
-      // checked and locked before the rights; an input of a calculated
-      // variable keeps its unit.
-      const stored = storedSemantics(current);
-      if ((stored.calculation === null) !== (semantics.calculation === null)
-          || (stored.calculation && stored.calculation.kind !== semantics.calculation.kind)) {
-        throw refusal(409, "calculation_kind_fixed", TEXT.calculation_kind_fixed);
-      }
-      if (semanticsKey(stored) === semanticsKey(semantics)) throw refusal(409, "version_unchanged", TEXT.version_unchanged);
-      if (semantics.calculation) {
-        const scopes = (await client.query(
-          `select scope_level::text as level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id],
-        )).rows.map((r) => r.level);
-        const levels = ["session", "drill"].filter((level) => scopes.includes(LEVELS[level]));
-        await checkCalculationInputs(client, ctx, semantics.calculation, { unit: semantics.unit, levels });
-        // v79: a sum a ratio or a difference uses keeps its unit, as an ordinary input does.
-        if (semantics.unit !== stored.unit && (await usedByCalculation(client, id)) !== null) {
-          throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+      await validateVariableManageEffect(client, ctx, scoped, async () => {
+        if (locked.state !== "active") throw refusal(409, "variable_not_active", TEXT.variable_not_active);
+        const current = (await client.query(
+          `select ${VERSION_ROW_COLUMNS} from training_load.metric_definition_versions v where v.id = $1 and v.metric_definition_id = $2`,
+          [locked.current_version_id, id],
+        )).rows[0];
+        if (!current || current.version_id !== expectedCurrentVersionId) {
+          throw refusal(409, "current_version_changed", TEXT.current_version_changed,
+            current ? { current: { versionId: current.version_id, versionNumber: current.version_number } } : undefined);
         }
-      } else if (semantics.unit !== stored.unit || semantics.dailyAggregationMethod !== "sum") {
-        const user = await usedByCalculation(client, id);
-        if (user !== null && semantics.unit !== stored.unit) throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
-        if (user !== null) throw refusal(409, "calculation_input_day_rule_in_use", dayRuleInUseText(user));
-      }
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+        // v77 (J21): a variable keeps its kind; a calculation's inputs are
+        // checked and locked before the rights; an input of a calculated
+        // variable keeps its unit.
+        const stored = storedSemantics(current);
+        if ((stored.calculation === null) !== (semantics.calculation === null)
+            || (stored.calculation && stored.calculation.kind !== semantics.calculation.kind)) {
+          throw refusal(409, "calculation_kind_fixed", TEXT.calculation_kind_fixed);
+        }
+        if (semanticsKey(stored) === semanticsKey(semantics)) throw refusal(409, "version_unchanged", TEXT.version_unchanged);
+        if (semantics.calculation) {
+          const scopes = (await client.query(
+            `select scope_level::text as level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1`, [id],
+          )).rows.map((r) => r.level);
+          const levels = ["session", "drill"].filter((level) => scopes.includes(LEVELS[level]));
+          await checkCalculationInputs(client, ctx, semantics.calculation, { unit: semantics.unit, levels });
+          // v79: a sum a ratio or a difference uses keeps its unit, as an ordinary input does.
+          if (semantics.unit !== stored.unit && (await usedByCalculation(client, id)) !== null) {
+            throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+          }
+        } else if (semantics.unit !== stored.unit || semantics.dailyAggregationMethod !== "sum") {
+          const user = await usedByCalculation(client, id);
+          if (user !== null && semantics.unit !== stored.unit) throw refusal(409, "variable_used_by_calculation", TEXT.variable_used_by_calculation);
+          if (user !== null) throw refusal(409, "calculation_input_day_rule_in_use", dayRuleInUseText(user));
+        }
+      });
       const units = [semantics.unit, ...(semantics.condition ? [semantics.condition.unit] : [])];
       if (!(await unitsAgree(client, units))) throw refusal(400, "invalid_unit", TEXT.invalid_unit);
       if (writeHold) await writeHold(client, "variable_version_create");
@@ -1195,8 +1262,12 @@ async function authorizeVariableChange(client, ctx, id) {
   const { type, id: scopeId } = ctx.editorScope ?? {};
   if (ctx.basis === "platform_admin") return false;
   if ((type !== "club" && type !== "team") || !scopeId) throw NOT_FOUND();
-  const { rows: [phase] } = await client.query("select public.permission_word_honoured('variables.rename_archive') as staged");
-  if (!phase?.staged) throw NOT_FOUND();
+  const { rows: [phase] } = await client.query(
+    "select public.permission_word_honoured('variables.rename_archive') as narrow,"
+    + " ($1 = 'club' and public.permission_word_honoured('variables.manage')) as full",
+    [type],
+  );
+  if (!phase?.narrow && !phase?.full) throw NOT_FOUND();
   await lockClubCeiling(client, [ctx.owner.clubId], "shared");
   // Preserve the deployed domain order: the definition before legacy actor rows.
   await lockWritableDefinition(client, ctx, id);
@@ -1212,11 +1283,19 @@ async function authorizeVariableChange(client, ctx, id) {
   }
   await client.query("select public.lock_permission_actor($1, $2, $3)", [ctx.userId, type, scopeId]);
   const { rows: [rights] } = await client.query(
-    `select public.user_has_permission($1, 'variables.view', $2, $3)
-       and public.user_has_permission($1, 'variables.rename_archive', $2, $3) as allowed`,
-    [ctx.userId, type, scopeId],
+    `select public.user_has_permission($1, 'variables.view', $2, $3) as can_view,
+            ($4 and public.user_has_permission($1, 'variables.rename_archive', $2, $3)) as narrow,
+            ($5 and public.user_has_permission($1, 'variables.manage', $2, $3)) as full`,
+    [ctx.userId, type, scopeId, phase.narrow, phase.full],
   );
-  if (!rights?.allowed || !ctx.sessionToken) throw NOT_FOUND();
+  if (!rights?.can_view || (!rights.narrow && !rights.full)) throw NOT_FOUND();
+  await lockVariableEditorSession(client, ctx);
+  return rights.narrow ? "rename_archive" : "manage";
+}
+
+async function lockVariableEditorSession(client, ctx) {
+  const { type, id: scopeId } = ctx.editorScope ?? {};
+  if (!ctx.sessionToken) throw NOT_FOUND();
   const tokenHash = createHash("sha256").update(ctx.sessionToken).digest("base64url");
   const session = await client.query(
     "select 1 from public.auth_sessions where user_id=$1 and token_hash=$2 and expires_at>now() for share",
@@ -1228,7 +1307,6 @@ async function authorizeVariableChange(client, ctx, id) {
     [ctx.userId, type, scopeId],
   );
   if (!preference.rowCount) throw NOT_FOUND();
-  return true;
 }
 
 async function recordVariableRenameArchiveUse(client) {
@@ -1280,7 +1358,8 @@ async function runChange({ ctx, variableId, operation, requestKey, requestHash, 
         [requestKey, ctx.userId, operation, requestHash, ctx.owner.scope, ctx.owner.clubId, ctx.basis,
           ctx.basis === "team_coach" ? ctx.teamId : null, id, changes[0].id, reason],
       );
-      if (targetAuthorized) await recordVariableRenameArchiveUse(client);
+      if (targetAuthorized === "rename_archive") await recordVariableRenameArchiveUse(client);
+      if (targetAuthorized === "manage") await recordVariableManageUse(client);
       return { operation, metric_definition_id: id, owner_scope: ctx.owner.scope, owner_club_id: ctx.owner.clubId };
     },
   });
@@ -1473,6 +1552,24 @@ function clubWriteOnly(ctx) {
 // system definition and its current version, its levels, then the rights;
 // the state refusals only after the right.
 const COPY_KEYS = ["requestKey", "expectedSourceVersionId", "key", "label", "shortLabel", "description", "iconKey"];
+function authorizeSystemVariablePreference(ctx, id, copy) {
+  return authorizeVariableManage(ctx, async client => {
+    const lock = copy ? "for share" : "for key share";
+    const system = await client.query(
+      "select 1 from training_load.metric_definitions where id=$1 and owner_scope='system' " + lock, [id],
+    );
+    if (!system.rowCount) throw NOT_FOUND();
+  });
+}
+
+export async function lockVariableManageOrPlatformActor(client, ctx) {
+  if (ctx.basis === "platform_admin") {
+    if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+  } else {
+    await lockVariableManageActor(client, ctx);
+  }
+}
+
 export async function copyVariable({ ctx, variableId, body }) {
   clubWriteOnly(ctx);
   const id = variableIdOrNotFound(variableId);
@@ -1513,6 +1610,9 @@ export async function copyVariable({ ctx, variableId, body }) {
   };
   return runWrite({
     ctx, where: "variable_copy", requestKey, requestHash, action: "variable_copy",
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse,
+    authorizeTarget: authorizeSystemVariablePreference(ctx, id, true), authorizeReplayOnly: true,
+    matchesWrittenReceipt: (record, written) => matchesVariableManageReceipt(record, written) && record.operation_id === written.operation_id,
     requests: VARIABLE_REQUESTS, classify, idsOf: variableIdsOf,
     reread: async (executor, record) => {
       const variable = await writableVariable(executor, ctx, record);
@@ -1520,6 +1620,7 @@ export async function copyVariable({ ctx, variableId, body }) {
       return { variable, copiedMappings: await copiedMappingsOf(executor, record.operation_id) };
     },
     body: async (client, operationId) => {
+      if (ctx.basis !== "platform_admin") await lockVariableManageCeiling(client, ctx);
       // The plain read, before any lock: readable here (the system scope or
       // the club's own) - else the identical 404; the club's own variable is
       // no source (copy_source_not_system).
@@ -1530,7 +1631,7 @@ export async function copyVariable({ ctx, variableId, body }) {
       // The club's own variable is no source: a state, so answered only after
       // the right (J15 section 4), without the registry locks it does not need.
       if (plain.owner_scope !== "system") {
-        if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+        await lockVariableManageOrPlatformActor(client, ctx);
         throw refusal(409, "copy_source_not_system", TEXT.copy_source_not_system);
       }
       // The locks, in D's order.
@@ -1544,7 +1645,7 @@ export async function copyVariable({ ctx, variableId, body }) {
       await client.query(
         `select scope_level from training_load.metric_definition_scope_capabilities where metric_definition_id = $1 order by scope_level for share`, [id],
       );
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await lockVariableManageOrPlatformActor(client, ctx);
       // The states, answered only now (after the right), in J15 4.1's order.
       const row = (await client.query(`select ${VARIABLE_COLUMNS} from ${VARIABLE_FROM} where d.id = $1`, [id])).rows[0];
       if (def.state !== "active") throw refusal(409, "source_not_active", TEXT.source_not_active);
@@ -1622,7 +1723,13 @@ export async function copyVariable({ ctx, variableId, body }) {
     if (error instanceof SourceMetricMappingError && ["already_copied", "key_taken"].includes(error.code) && !error.details) {
       let rightLost = false;
       const current = await boundedRead(async (client) => {
-        if (!(await rightsStillHold(client, ctx))) { rightLost = true; return null; }
+        try {
+          if (ctx.basis === "platform_admin") await lockVariableManageOrPlatformActor(client, ctx);
+          else await authorizeSystemVariablePreference(ctx, id, true)(client);
+        } catch (failure) {
+          if (failure instanceof SourceMetricMappingError && failure.status === 404) rightLost = true;
+          throw failure;
+        }
         return (await client.query(
           `select club_definition_id from training_load.metric_definition_copies where club_id = $1 and system_definition_id = $2`, [ctx.owner.clubId, id],
         )).rows[0];
@@ -1642,10 +1749,10 @@ export async function copyVariable({ ctx, variableId, body }) {
 // later. Locks: the definition FOR KEY SHARE, the rights, then the hide lock
 // (after the rights, J15 section 5), then the plain reads and the write.
 const HIDE_REQUESTS = Object.freeze({
-  find: `select 'variable_hide' as operation, hide_request_hash as request_hash, metric_definition_id, club_id::text as club_id
+  find: `select 'variable_hide' as operation, hide_request_hash as request_hash, metric_definition_id, club_id::text as club_id, id as hide_record_id
            from training_load.metric_definition_club_hides where hidden_by_user_id = $1 and hide_request_key = $2
          union all
-         select 'variable_show' as operation, show_request_hash as request_hash, metric_definition_id, club_id::text as club_id
+         select 'variable_show' as operation, show_request_hash as request_hash, metric_definition_id, club_id::text as club_id, id as hide_record_id
            from training_load.metric_definition_club_hides where shown_by_user_id = $1 and show_request_key = $2`,
   exists: `select 1 from training_load.metric_definition_club_hides
             where (hidden_by_user_id = $1 and hide_request_key = $2) or (shown_by_user_id = $1 and show_request_key = $2)`,
@@ -1694,22 +1801,27 @@ async function setHidden({ ctx, variableId, body, hide }) {
   };
   return runWrite({
     ctx, where: operation, requestKey, requestHash, action: operation,
+    authorizeTarget: authorizeSystemVariablePreference(ctx, id, false), authorizeReplayOnly: true,
+    recordEffect: ctx.basis === "platform_admin" ? undefined : recordVariableManageUse,
+    matchesWrittenReceipt: (saved, written) => saved.metric_definition_id === written.metric_definition_id
+      && saved.club_id === written.club_id && saved.hide_record_id === written.hide_record_id,
     requests: HIDE_REQUESTS, classify, idsOf: () => ({ variableId: id }),
     reread: (executor, record) => hideStateOf(executor, ctx, record),
     body: async (client) => {
+      if (ctx.basis !== "platform_admin") await lockVariableManageCeiling(client, ctx);
       const params = [id];
       const readable = readableSql(ctx, params);
       const plain = (await client.query(`select d.id, d.owner_scope from training_load.metric_definitions d where d.id = $1 and ${readable}`, params)).rows[0];
       if (!plain) throw NOT_FOUND();
       // The club's own variable cannot be hidden: a state, answered only after the right.
       if (plain.owner_scope !== "system") {
-        if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+        await lockVariableManageOrPlatformActor(client, ctx);
         throw refusal(409, "hide_not_system", TEXT.hide_not_system);
       }
       // The definition FOR KEY SHARE (the guards read it plainly after the
       // hide lock: no row lock follows the hide lock), then the rights.
       await client.query(`select 1 from training_load.metric_definitions where id = $1 for key share`, [id]);
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await lockVariableManageOrPlatformActor(client, ctx);
       if (writeHold) await writeHold(client, `${operation}_before_hide_lock`);
       await lockHides(client, [{ clubId: ctx.owner.clubId, definitionId: id }]);
       if (writeHold) await writeHold(client, operation);
@@ -1731,13 +1843,13 @@ async function setHidden({ ctx, variableId, body, hide }) {
           [id, ctx.owner.clubId],
         )).rows[0].n;
         if (inUse > 0) throw refusal(409, "variable_in_use", TEXT.variable_in_use, { current: { activationCount: inUse } });
-        await client.query(
+        const { rows: [hidden] } = await client.query(
           `insert into training_load.metric_definition_club_hides
              (club_id, metric_definition_id, hidden_by_user_id, hidden_basis, hide_request_key, hide_request_hash)
-           values ($1, $2, $3, $4, $5, $6)`,
+           values ($1, $2, $3, $4, $5, $6) returning id`,
           [ctx.owner.clubId, id, ctx.userId, ctx.basis, requestKey, requestHash],
         );
-        return record;
+        return { ...record, hide_record_id: hidden.id };
       }
       if (!open) return { ...record, noop: true };
       await client.query(
@@ -1746,7 +1858,7 @@ async function setHidden({ ctx, variableId, body, hide }) {
           where id = $1`,
         [open.id, ctx.userId, ctx.basis, requestKey, requestHash],
       );
-      return record;
+      return { ...record, hide_record_id: open.id };
     },
   });
 }

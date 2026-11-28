@@ -21,6 +21,7 @@ import pg from "pg";
 import * as runner from "../src/migrate.js";
 import { createGpexeDisposableDb, DISPOSABLE_DB_NAME_PATTERN, GPEXE_TEST_MIGRATIONS } from "./_gpexe-disposable-db.mjs";
 import { writeRevision } from "./support/source-revisions.mjs";
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 import { allowSyntheticTestFields } from "./support/test-extractors.mjs";
 
 allowSyntheticTestFields();
@@ -119,6 +120,8 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   await world();
 });
 
@@ -2340,4 +2343,53 @@ test("23. rehearsal on v52: the preflight (with planted rows for the copy-refusa
   assert.deepEqual(await catalog(r), v53, "v53 again, the same catalog");
   // LF endings.
   for (const f of [ROLLBACK, PREFLIGHT, POSTCHECK, V53_FILE]) assert.ok(!(await fsp.readFile(f, "utf8")).includes("\r"), `${path.basename(f)} has LF line endings`);
+});
+
+test("native Variables Manage alone permits bounded Copy and club Hide/Show, with no effect after revocation", async () => {
+  const source = await systemVariable({ n: 1 });
+  const copyRequest = await copyBody(source.id);
+  const copyPath = "/variables/" + source.id + "/copy";
+  const hidePath = "/variables/" + source.id + "/hide";
+  const showPath = "/variables/" + source.id + "/show";
+  const hidden = { requestKey: key() };
+  const shown = { requestKey: key() };
+  const mappingWord = await one(k, "select public.permission_word_honoured('mappings.manage') as enabled");
+  assert.equal(mappingWord.enabled, false);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, false);
+  try {
+    await nothingWritten(async () => {
+      for (const [path, input] of [[copyPath, copyRequest], [hidePath, hidden], [showPath, shown]]) {
+        const missing = await post(path.replace(source.id, key()), W.caA.cookie, input);
+        const denied = await post(path, W.caA.cookie, input);
+        assert.deepEqual(notFoundShape(denied), notFoundShape(missing));
+        isNotFound(denied, "a native admin needs Variables Manage");
+      }
+    });
+    assert.equal((await api("/variables/" + source.id, { cookie: W.caA.cookie })).status, 200);
+  } finally {
+    await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
+  }
+  const result = ok(await post(copyPath, W.caA.cookie, copyRequest), 201);
+  assert.equal(result.copiedMappings.length, 1);
+  const drafts = await copiedDrafts(result.variable.id);
+  assert.deepEqual(drafts.map(row => row.status), ["draft"]);
+  const active = await one(k, "select count(*)::int as n from " + T5 + " where metric_definition_id=$1 and ended_at is null", [result.variable.id]);
+  assert.equal(active.n, 0);
+  assert.equal(ok(await post(hidePath, W.caA.cookie, hidden)).hidden, true);
+  assert.equal(ok(await post(showPath, W.caA.cookie, shown)).hidden, false);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, false);
+  try {
+    await nothingWritten(async () => {
+      for (const [endpoint, input] of [[copyPath, copyRequest], [hidePath, hidden], [showPath, shown]]) {
+        isNotFound(await post(endpoint, W.caA.cookie, input), "saved request also requires current Variables Manage");
+      }
+    });
+  } finally {
+    await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
+  }
+  await nothingWritten(async () => {
+    assert.equal(ok(await post(copyPath, W.caA.cookie, copyRequest)).variable.id, result.variable.id);
+    assert.equal(ok(await post(hidePath, W.caA.cookie, hidden)).replayed, true);
+    assert.equal(ok(await post(showPath, W.caA.cookie, shown)).replayed, true);
+  });
 });

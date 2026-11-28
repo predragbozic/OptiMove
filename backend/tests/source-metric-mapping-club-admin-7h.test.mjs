@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // Phase 7h - a club's admin activates, replaces and disables its club's own
 // mapping versions (A1, A2), with migration v52.
 // Contract: docs/ai/phase7h-club-admin-mappings-contract.md (J14), section 10.
@@ -103,6 +104,8 @@ before(async () => {
   await k.query(`alter table public.user_club_roles add column if not exists granted_by_user_id uuid,
                    add column if not exists revoked_at timestamptz, add column if not exists revoked_by_user_id uuid,
                    add column if not exists created_at timestamptz not null default now()`);
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];

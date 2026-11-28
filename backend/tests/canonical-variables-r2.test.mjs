@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 import { seedVariableRenameGrants, varyRenameGrant } from "./support/variable-rename-grants.mjs";
 // R2 - renaming, archiving and restoring a canonical variable, with a team coach
 // for club variables (backend/src/canonicalVariableAdminService.js, the routes
@@ -100,6 +101,8 @@ before(async () => {
   assert.equal((await r.query("select current_database() as d")).rows[0].d, rdb.name, "SAFETY");
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
   assert.ok((await k.query(`select 1 from public.schema_migrations where migration_name = $1`, [V38_NAME])).rowCount === 1, "the behaviour database carries v38");
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
@@ -1241,6 +1244,7 @@ test("rename, archive and restore check the staged word at the owning workspace,
       (select count(*)::int from training_load.metric_variable_requests where metric_definition_id=d.id) as receipts
     from training_load.metric_definitions d where id=$1`, [v.id]);
 
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, false);
   await varyRenameGrant(k, "team_coach", false);
   const before = await snapshot();
   // A predecessor schema may still have legacy roles and even a stored role item. The runtime requires the SQL word.

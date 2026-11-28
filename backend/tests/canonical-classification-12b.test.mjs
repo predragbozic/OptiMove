@@ -9,6 +9,7 @@
 // v41 for the behaviour. Contract: docs/ai/phase12-domains-categories-contract.md
 // (J6, accepted as C101 of docs/ai/gpexe-metric-variable-mapping-discovery.md).
 import { seedVariableRenameGrants } from "./support/variable-rename-grants.mjs";
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 import { after, afterEach, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -123,6 +124,8 @@ before(async () => {
   server = http.createServer(serverModule.app);
   await new Promise((resolve) => server.listen(0, resolve));
   apiBase = `http://localhost:${server.address().port}`;
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   await world();
   await seedVariableRenameGrants(k);
 });
@@ -1369,4 +1372,73 @@ test("15. v41 reads back the same after pg_dump and pg_restore (what gpexe-backu
     await target.drop();
     await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("Variables Manage authorizes owned classification effects and receipts without changing reads", async () => {
+  const domain = await domainOf(W.caA);
+  const category = await categoryOf(W.caA);
+  const existing = await linked(W.caA, { variableId: W.clubVarA.id, domainId: domain.id });
+  const rename = { requestKey: key(), namesToken: domain.namesToken, name: "Changed club classification" };
+  const icon = { requestKey: key(), expectedIconKey: null, iconKey: "run" };
+  const connect = { requestKey: key(), variableId: W.sysVar.id, categoryId: category.id };
+  const remove = { requestKey: key() };
+  const archive = { requestKey: key(), reason: "Review classification" };
+  const restore = { requestKey: key() };
+  const nodePath = "/classification/domains/" + domain.id;
+  const linkPath = "/classification/links/" + existing.id + "/remove";
+  const routes = [
+    ["/classification/domains", { requestKey: key(), name: "New club domain" }],
+    [nodePath + "/rename", rename], [nodePath + "/icon", icon],
+    [nodePath + "/archive", archive], [nodePath + "/restore", restore],
+    ["/classification/links", connect], [linkPath, remove],
+  ];
+  const denied = result => assert.deepEqual([result.status, result.text], [404, '{"error":"notFound"}']);
+  const before = await counts();
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, false);
+  try {
+    for (const [path, body] of routes) denied(await post(path, W.caA.cookie, body));
+    assert.deepEqual(await counts(), before);
+    assert.ok((await tree(W.caA)).domains.some(item => item.id === domain.id));
+  } finally {
+    await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
+  }
+
+  denied(await post(nodePath + "/rename", W.caB.cookie, rename));
+  denied(await post(nodePath + "/rename", W.coachA1.cookie, rename));
+
+  // Keep the existing domain wait ahead of the actor check. Changing to a
+  // different workspace while queued must not make the old club's edit.
+  const both = await person("classification-two-clubs", { clubAdminOf: [W.clubA, W.clubB], ws: ["club", W.clubA] });
+  await k2.query("begin");
+  try {
+    await k2.query("select id from training_load.metric_domains where id=$1 for update", [domain.id]);
+    const pending = post(nodePath + "/rename", both.cookie, rename);
+    assert.ok(await someoneWaits(), "classification mutation is waiting on the domain");
+    await workspace(both.id, "club", W.clubB);
+    await k2.query("rollback");
+    denied(await pending);
+  } finally {
+    await k2.query("rollback");
+  }
+  assert.deepEqual(await counts(), before);
+  assert.equal(ok(await post(nodePath + "/rename", W.caA.cookie, rename)).domain.name, rename.name);
+  assert.equal(ok(await post(nodePath + "/icon", W.caA.cookie, icon)).domain.icon, icon.iconKey);
+  assert.equal(ok(await post("/classification/links", W.caA.cookie, connect), 201).link.variableId, W.sysVar.id);
+  assert.equal(ok(await post(linkPath, W.caA.cookie, remove)).link.present, false);
+  assert.equal(ok(await post(nodePath + "/archive", W.caA.cookie, archive)).domain.state, "archived");
+  assert.equal(ok(await post(nodePath + "/restore", W.caA.cookie, restore)).domain.state, "active");
+
+  const saved = await counts();
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, false);
+  try {
+    denied(await post(nodePath + "/rename", W.caA.cookie, rename));
+    denied(await post(linkPath, W.caA.cookie, remove));
+    assert.deepEqual(await counts(), saved);
+  } finally {
+    await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
+  }
+  const replay = ok(await post(linkPath, W.caA.cookie, remove));
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.link.present, false);
+  assert.deepEqual(await counts(), saved);
 });

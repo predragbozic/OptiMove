@@ -128,12 +128,12 @@ const REVIEWED = Object.freeze({
   "calendarQuestionService.js": 2,
   "calendarSettingsService.js": 3,
   // V-1: resolveVariableViewer reads the club of the gate's view scope (club or team), never an offered workspace.
-  "canonicalVariableAdminService.js": 5, // existing workspace plus scoped Variables write and replay checks
+  "canonicalVariableAdminService.js": 6, // add verified club-only Variables Manage create/version checks
   "clubCeilingLock.js": 2,
   // P3 owner contract: both helpers explicitly close every workspace except club/team.
   "dashboardManageAccess.js": 4, // native owner/workspace scopes, standalone team, and scoped edit capability
   "dashboardPages/service.js": 2, // Page scope consistency and athlete Training Load licence
-  "dashboardReferences/access.js": 1,
+  "dashboardReferences/access.js": 2, // existing read scope plus the locked authoring workspace recheck
   "dashboardReferences/bindingRouter.js": 2, // grouping validation and rechecking the same active workspace before a protected write
   "dashboardReferences/query.js": 1,
   "dashboardReferences/router.js": 1, // team picker narrows to the active team

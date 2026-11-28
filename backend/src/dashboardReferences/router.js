@@ -1,9 +1,10 @@
+import { recordVariableManageUse } from "../variableManageFirstUse.js";
 import { getVariable } from "../canonicalVariableAdminService.js";
 import { Router } from "express";
 import { adminWriteKit } from "../sourceMetricMappingService.js";
-import { resolveReferenceContext, referenceCanWrite } from "./access.js";
+import { resolveReferenceContext, referenceCanWrite, referenceWriterStillHolds } from "./access.js";
 import { referenceUuid, validReferenceWrite, REFERENCE_LIMITS } from "./contract.js";
-const { boundedRead, hashOf, rightsStillHold } = adminWriteKit;
+const { boundedRead, hashOf } = adminWriteKit;
 const missing = res => res.status(404).json({ error: "notFound" });
 const invalid = res => res.status(400).json({ error: "invalidRequest", message: "Check the reference values and try again." });
 const refusalMessages = Object.freeze({
@@ -17,8 +18,11 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
     try {
       if (!enabled()) return missing(res);
       const ctx = await resolveReferenceContext(req);
-      if (!ctx || req.method !== "GET" && !referenceCanWrite(ctx)) return missing(res);
-      req.referenceContext=ctx; return next();
+      const canWrite = ctx?.view === "admin" && await boundedRead(client => referenceCanWrite(client.query.bind(client), ctx));
+      if (!ctx || req.method !== "GET" && !canWrite) return missing(res);
+      req.referenceContext = ctx;
+      req.referenceTableCanWrite = canWrite;
+      return next();
     } catch (error) { return next(error); }
   });
   const handle = fn => async (req,res,next) => {
@@ -30,15 +34,15 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
     }
   };
   router.get("/",handle(async(req,res)=>{
-    const result=await boundedRead(client=>client.query("select id,name,revision,archived,published_version_id from training_load.dashboard_reference_tables where club_id=$1 and ($2::boolean or published_version_id is not null) order by lower(name),id limit 100",[req.referenceContext.owner.clubId,referenceCanWrite(req.referenceContext)]));
-    return res.json({tables:result.rows,canCreate:referenceCanWrite(req.referenceContext)});
+    const result=await boundedRead(client=>client.query("select id,name,revision,archived,published_version_id from training_load.dashboard_reference_tables where club_id=$1 and ($2::boolean or published_version_id is not null) order by lower(name),id limit 100",[req.referenceContext.owner.clubId,req.referenceTableCanWrite]));
+    return res.json({tables:result.rows,canCreate:req.referenceTableCanWrite});
   }));
   router.get("/options",handle(async(req,res)=>{
     const club=req.referenceContext.owner.clubId;
     const result=await boundedRead(async client=>{
       const positions=(await client.query("select p.id,coalesce(o.name,p.name) name from public.sport_positions p left join public.club_position_overrides o on o.position_id=p.id and o.club_id=$1 where p.archived_at is null and (p.owner_scope='system' or p.owner_club_id=$1) and not coalesce(o.hidden,false) order by p.sort_order,coalesce(o.name,p.name),p.id",[club])).rows;
       const teams=(await client.query("select id,name from public.teams where club_id=$1 and coalesce(is_active,true) and ($2::uuid is null or id=$2) order by name,id",[club,req.referenceContext.workspace.type==='team'?req.referenceContext.workspace.scopeId:null])).rows;
-      return {clubId:club,positions,teams,canEdit:referenceCanWrite(req.referenceContext)};
+      return {clubId:club,positions,teams,canEdit:req.referenceTableCanWrite};
     });return res.json(result);
   }));
   const detail = async(req,res) => {
@@ -49,7 +53,7 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
       const version=(await client.query(req.params.versionId
         ? "select * from training_load.dashboard_reference_versions where table_id=$1 and id=$2 and published"
         : "select * from training_load.dashboard_reference_versions where table_id=$1 and ($2::boolean or published) order by version desc limit 1",
-      req.params.versionId?[table.id,req.params.versionId]:[table.id,referenceCanWrite(req.referenceContext)])).rows[0];
+      req.params.versionId?[table.id,req.params.versionId]:[table.id,req.referenceTableCanWrite])).rows[0];
       if (!version) return null;
       const [columns,rows,valueKinds,cells]=await Promise.all([
         client.query("select c.definition_id,c.unit,c.aggregation,c.data_level,c.sort_order,d.label name from training_load.dashboard_reference_columns c join training_load.metric_definitions d on d.id=c.definition_id where c.version_id=$1 order by c.sort_order",[version.id]),
@@ -57,7 +61,7 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
         client.query("select key,name,sort_order from training_load.dashboard_reference_value_kinds where version_id=$1 order by sort_order",[version.id]),
         client.query("select position_id,definition_id,value_key,value::text value from training_load.dashboard_reference_cells where version_id=$1 order by position_id,definition_id,value_key",[version.id]),
       ]);
-      return {table:{id:table.id,name:table.name,revision:table.revision,archived:table.archived},version:{id:version.id,number:version.version,published:version.published},columns:columns.rows,rows:rows.rows,valueKinds:valueKinds.rows,cells:cells.rows,canEdit:referenceCanWrite(req.referenceContext)&&!table.archived};
+      return {table:{id:table.id,name:table.name,revision:table.revision,archived:table.archived},version:{id:version.id,number:version.version,published:version.published},columns:columns.rows,rows:rows.rows,valueKinds:valueKinds.rows,cells:cells.rows,canEdit:req.referenceTableCanWrite&&!table.archived};
     });
     if(result){
       const visible=new Set();
@@ -77,8 +81,19 @@ export function createReferenceRouter({ enabled = () => process.env.DASHBOARD_RE
     const payload=action === "create"?{name:req.body.name}:action === "draft"?req.body.draft:{};
     const hash=hashOf({contract:"dashboard-reference/v1",action,club:ctx.owner.clubId,table:req.params.id??null,body:req.body});
     const receipt=await boundedRead(async client => {
-      if(!await rightsStillHold(client,ctx))throw Object.assign(new Error("notFound"),{code:"42501"});
+      if (!await referenceWriterStillHolds(client, req, ctx)) {
+        throw Object.assign(new Error("notFound"), { code: "42501" });
+      }
+      // Same order as the deployed table writer: actor checks, then the request lock.
+      await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+        ["dashboard-reference:" + ctx.userId.toLowerCase() + ":" + req.body.requestId.toLowerCase()]);
+      const native = ctx.basis !== "platform_admin";
+      const prior = native && (await client.query(
+        "select 1 from training_load.dashboard_reference_requests where actor_id=$1 and request_id=$2 for share",
+        [ctx.userId, req.body.requestId],
+      )).rowCount;
       const result=await client.query("select training_load.mutate_dashboard_reference($1,$2,$3,$4,$5,$6,$7,$8) receipt",[ctx.userId,ctx.owner.clubId,req.body.requestId,hash,req.params.id??null,req.body.expectedRevision??null,action,payload]);
+      if (native && !prior) await recordVariableManageUse(client);
       return result.rows[0].receipt;
     },{locks:true});
     return res.status(action === "create"?201:200).json(receipt);

@@ -128,6 +128,15 @@ async function editorContext(req, res) {
   return ctx;
 }
 
+async function variableManageContext(req, res) {
+  const ctx = await variables.resolveVariableEditor(req);
+  if (ctx?.view !== "admin") {
+    notFound(res);
+    return null;
+  }
+  return ctx;
+}
+
 // The drag-and-drop board (J18, docs/ai/c112-drag-mapping-contract.md, section
 // 4.2; the reads, slice 18-2). The query is read from the raw query string.
 const rawQuery = (req) => {
@@ -397,14 +406,14 @@ router.get("/variables/:variableId", handle(async (req, res) => {
 }));
 
 router.post("/variables", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await variables.createVariable({ ctx, body: req.body }), 201);
 }));
 
 router.post("/variables/:variableId/versions", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await variables.createVariableVersion({ ctx, variableId: req.params.variableId, body: req.body }), 201);
@@ -450,7 +459,7 @@ router.post("/variables/:variableId/icon", handle(async (req, res) => {
 // workspace): the platform workspace and everyone else get the identical 404
 // before the body is looked at.
 const clubAdminContext = async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return null;
   if (ctx.owner?.scope !== "club") { notFound(res); return null; }
   return ctx;
@@ -489,21 +498,21 @@ router.get("/classification", handle(async (req, res) => {
 }));
 
 router.post("/classification/links", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await classification.createLink({ ctx, body: req.body }), 201);
 }));
 
 router.post("/classification/links/:linkId/remove", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await classification.removeLink({ ctx, linkId: req.params.linkId, body: req.body }), 200);
 }));
 
 router.post("/classification/:kind", handle(async (req, res) => {
-  const ctx = await adminContext(req, res);
+  const ctx = await variableManageContext(req, res);
   if (!ctx) return;
   if (!jsonObjectBody(req, res)) return;
   writeAnswer(res, await classification.createNode({ ctx, kind: req.params.kind, body: req.body }), 201);
@@ -512,7 +521,7 @@ router.post("/classification/:kind", handle(async (req, res) => {
 // The icon (V4, J6.1) for the same callers as a rename.
 for (const [act, fn] of [["rename", "renameNode"], ["archive", "archiveNode"], ["restore", "restoreNode"], ["icon", "changeNodeIcon"]]) {
   router.post(`/classification/:kind/:nodeId/${act}`, handle(async (req, res) => {
-    const ctx = await adminContext(req, res);
+    const ctx = await variableManageContext(req, res);
     if (!ctx) return;
     if (!jsonObjectBody(req, res)) return;
     writeAnswer(res, await classification[fn]({ ctx, kind: req.params.kind, nodeId: req.params.nodeId, body: req.body }), 200);

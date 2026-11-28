@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // Calculated variables, step 1 (J21; the Rukovodilac's decisions 1-10 of 2026-11-18): migration v77 and the definition API
 // (backend/src/canonicalVariableAdminService.js: POST /variables and POST /variables/:id/versions take a calculation; the reads
 // return it). Through the real HTTP stack, on disposable optimove_tests_gpexe_* databases only (never OPTIMOVE): one migrated
@@ -87,6 +88,8 @@ before(async () => {
   apiBase = `http://localhost:${server.address().port}`;
   await world();
   await seedVariableRenameGrants(k);
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
 });
 
 after(async () => {

@@ -104,7 +104,15 @@ test("5. every service that uses the M2 kit takes the right check from it, never
   const inventory = files.get("sourceFieldInventoryRead.js").match(/const \{([\s\S]*?)\} = adminWriteKit;/)[1];
   assert.match(inventory, /\bboundedRead\b/);
   assert.doesNotMatch(inventory, /\b(runWrite|rightsStillHold)\b/);
-  for (const file of kitUsers.filter((name) => !["sourceMetricPreviewService.js", "sourceMetricBoardService.js", "sourceFieldInventoryRead.js"].includes(name))) {
+  // These native writers delegate the check to the scoped authorizer, which
+  // retains the shared legacy actor check.
+  const scopedWriters = ["canonicalClassificationService.js", "dashboardReferences/router.js"];
+  assert.match(files.get(scopedWriters[0]), /lockVariableManageOrPlatformActor\(client, ctx\)/);
+  assert.match(files.get("canonicalVariableAdminService.js"), /async function lockVariableManageActor[\s\S]*?await rightsStillHold\(client, ctx\)/);
+  assert.match(files.get(scopedWriters[1]), /referenceWriterStillHolds\(client, req, ctx\)/);
+  assert.match(files.get("dashboardReferences/access.js"), /return rightsStillHold\(client, ctx\)/);
+  const specialized = [...scopedWriters, "sourceMetricPreviewService.js", "sourceMetricBoardService.js", "sourceFieldInventoryRead.js"];
+  for (const file of kitUsers.filter((name) => !specialized.includes(name))) {
     const text = files.get(file);
     const kit = text.match(/const \{([\s\S]*?)\} = adminWriteKit;/);
     assert.ok(kit && /\brightsStillHold\b/.test(kit[1]), `${file} takes rightsStillHold from the kit`);

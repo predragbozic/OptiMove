@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // M3-0 - the canonical-variable admin API (backend/src/canonicalVariableAdminService.js,
 // routes under /api/training-load/sources/metrics/variables) and migration v36, its
 // durable request record (training_load.metric_variable_requests). Through the real
@@ -65,7 +66,7 @@ before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V36), "v36 is a test migration");
   [rdb, db] = await Promise.all([
     createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v36rb", migrations: UP_TO_V35 }),
-    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "m30" }),
+    createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "m30", roleRead: true }),
   ]);
   for (const d of [rdb, db]) assert.match(d.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   r = new pg.Client({ connectionString: rdb.url });
@@ -75,6 +76,8 @@ before(async () => {
   assert.equal((await r.query("select current_database() as d")).rows[0].d, rdb.name, "SAFETY");
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
   assert.ok((await k.query(`select 1 from public.schema_migrations where migration_name = $1`, [V36_NAME])).rowCount === 1, "the behaviour database carries v36");
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
