@@ -312,3 +312,54 @@ test('reference table actor is checked before taking its request lock',async()=>
   if(pending)await pending.catch(()=>{});
  }
 });
+
+test('reference replay keeps an expired receipt stable until the sanctioned writer runs', async () => {
+  const blocker = new pg.Client({ connectionString: db.url });
+  await blocker.connect();
+  const { adminWriteKit: { hashOf } } = await import('../src/sourceMetricMappingService.js');
+  const body = { requestId: key(), name: 'Retained old reference' };
+  const old = { id: table.id, revision: table.revision };
+  const fingerprint = hashOf({ contract: 'dashboard-reference/v1', action: 'create', club: A, table: null, body });
+  const functionName = 'training_load.mutate_dashboard_reference(uuid,uuid,uuid,text,uuid,integer,text,jsonb)';
+  const original = (await q.query('select pg_get_functiondef($1::regprocedure) as ddl', [functionName])).rows[0].ddl;
+  const lock = 'reference-retention-test:' + body.requestId;
+  let pending;
+  try {
+    await q.query('begin');
+    await q.query("select set_config('optimove.reference_writer',txid_current()::text,true)");
+    await q.query(
+      "insert into training_load.dashboard_reference_requests(actor_id,request_id,table_id,club_id,request_hash,receipt,created_at)"
+      + " values($1,$2,$3,$4,$5,$6,now()-interval '15 days')",
+      [admin.id, body.requestId, table.id, A, fingerprint, old],
+    );
+    await q.query('commit');
+    const patched = original.replace('begin\n perform', "begin\n perform pg_advisory_xact_lock(hashtextextended('" + lock + "',0));\n perform");
+    assert.notEqual(patched, original);
+    await q.query(patched);
+    await blocker.query('begin');
+    const pid = (await blocker.query('select pg_backend_pid() pid')).rows[0].pid;
+    await blocker.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [lock]);
+    pending = post(admin, R, body);
+    let waiting = false;
+    for (let attempt = 0; attempt < 80 && !waiting; attempt++) {
+      waiting = (await q.query(
+        'select exists(select 1 from pg_stat_activity where datname=current_database() and $1=any(pg_blocking_pids(pid))) as blocked',
+        [pid],
+      )).rows[0].blocked;
+      if (!waiting) await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(waiting, true, 'HTTP replay reached the sanctioned writer');
+    assert.equal((await q.query('select training_load.cleanup_dashboard_reference_requests() as removed')).rows[0].removed, 0);
+    await blocker.query('commit');
+    const response = await pending;
+    assert.equal(response.status, 201, response.text);
+    assert.deepEqual(response.body, old);
+    assert.equal((await q.query('select training_load.cleanup_dashboard_reference_requests() as removed')).rows[0].removed, 1);
+  } finally {
+    await blocker.query('rollback');
+    await blocker.end();
+    await q.query('rollback');
+    if (pending) await pending.catch(() => {});
+    await q.query(original);
+  }
+});
