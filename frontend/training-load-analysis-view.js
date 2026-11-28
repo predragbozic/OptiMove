@@ -942,7 +942,7 @@ function renderEditorHtml() {
         <div class="tl-analysis-editor-grid">
           <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-tl-editor-field="title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(draft.title)}" maxlength="200" ${off}></label>
           <label><span class="tl-editor-type-label">${typeIcon} Display type</span><select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}" ${off}>${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, draft.widgetType)).join("")}</select></label>
-          <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
+          <label>${table ? "Table rows" : "Show per"}<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
           <div class="tl-analysis-control">
             <span>Activity override</span>
             ${override.activityId
@@ -985,11 +985,11 @@ function renderEditorHtml() {
           </div>
           ${entry?.metric ? `
             <div class="tl-analysis-editor-grid">
-              <label>Label<input type="text" data-action="training-load-analysis-series-label" data-tl-editor-field="label" ${key} value="${escapeAttr(entry.fields.displayLabel || "")}" maxlength="200" placeholder="${escapeAttr(editorMetricLabel(entry.metric))}" ${off}></label>
+              <label>${table ? "Column name" : "Label"}<input type="text" data-action="training-load-analysis-series-label" data-tl-editor-field="label" ${key} value="${escapeAttr(entry.fields.displayLabel || "")}" maxlength="200" placeholder="${escapeAttr(editorMetricLabel(entry.metric))}" ${off}></label>
               ${table ? "" : `<label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
               <label>Color<input type="color" data-action="training-load-analysis-series-color" ${key} value="${escapeAttr(entry.fields.color || "#0f766e")}" ${off}></label>`}
-              ${saving ? `<label>Scope<select disabled>${optionHtml(entry.fields.dataScopeLevel, SCOPE_LABELS[entry.fields.dataScopeLevel] || entry.fields.dataScopeLevel, entry.fields.dataScopeLevel)}</select></label>` : renderScopeSelectHtml({ action: "training-load-analysis-series-scope", attrs: key, value: entry.fields.dataScopeLevel, metric: entry.metric, label: "Scope" })}
-              <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${((state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === entry.metric?.id)?.allowedAggregations ?? AGGREGATIONS.filter(v => v !== "ratio")).map((v) => optionHtml(v, AGGREGATION_LABELS[v], entry.fields.analyticalAggregation)).join("")}</select></label>
+              ${saving ? `<label>Data level<select disabled>${optionHtml(entry.fields.dataScopeLevel, SCOPE_LABELS[entry.fields.dataScopeLevel] || entry.fields.dataScopeLevel, entry.fields.dataScopeLevel)}</select></label>` : renderScopeSelectHtml({ action: "training-load-analysis-series-scope", attrs: key, value: entry.fields.dataScopeLevel, metric: entry.metric, label: "Data level" })}
+              <label>Calculate<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${((state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === entry.metric?.id)?.allowedAggregations ?? AGGREGATIONS.filter(v => v !== "ratio")).map((v) => optionHtml(v, AGGREGATION_LABELS[v], entry.fields.analyticalAggregation)).join("")}</select></label>
               ${analysisWidgetSupportsComparison(draft.widgetType) ? `<label>Comparison<select data-action="training-load-analysis-series-comparison" ${key} ${off}>${COMPARISONS.map((v) => optionHtml(v, COMPARISON_LABELS[v], entry.fields.comparisonPeriod || "")).join("")}</select></label>` : ""}
             </div>
             <details class="tl-editor-data-options" data-editor-data-options>

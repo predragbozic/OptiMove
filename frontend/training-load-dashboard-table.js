@@ -63,9 +63,9 @@ export function renderDashboardPivotTable(model, athletes, describeSeries) {
   const format = tableNumberFormat(model);
   return `<div class="tl-analysis-table-wrap" role="region" aria-label="Metric values" tabindex="0">
     ${columns.some(column => column.mixed) ? '<p role="status">Values use different or unknown units. Choose one unit to compare them.</p>' : ''}
-    <table class="tl-analysis-table"><caption>Current period values</caption>
-      <thead><tr>${showAthlete ? '<th scope="col">Athlete</th>' : ''}${showDate ? '<th scope="col">Date</th>' : ''}${columns.map(({ label, icon, unit }) => `<th scope="col">${icon}${escapeHtml(label)}${unit && !uuid.test(unit) ? ` (${escapeHtml(unit)})` : ''}</th>`).join("")}</tr></thead>
-      <tbody>${sorted.map(({ name, date, cells }) => `<tr>${showAthlete ? `<td>${escapeHtml(name || "—")}</td>` : ''}${showDate ? `<td>${escapeHtml(formatDate(date))}</td>` : ''}${columns.map((column, index) => `<td>${escapeHtml(metricCellText(cells[index], column.mixed, format))}</td>`).join("")}</tr>`).join("")}</tbody>
+    <table class="tl-analysis-table tl-analysis-pivot-table"><caption>Current period values</caption>
+      <thead><tr>${showAthlete ? '<th scope="col" class="tl-editor-athlete-cell">Athlete</th>' : ''}${showDate ? '<th scope="col">Date</th>' : ''}${columns.map(({ label, icon, unit }) => `<th scope="col" class="tl-dashboard-value-cell">${icon}${escapeHtml(label)}${unit && !uuid.test(unit) ? ` (${escapeHtml(unit)})` : ''}</th>`).join("")}</tr></thead>
+      <tbody>${sorted.map(({ name, date, cells }) => `<tr>${showAthlete ? `<td class="tl-editor-athlete-cell">${escapeHtml(name || "—")}</td>` : ''}${showDate ? `<td>${escapeHtml(formatDate(date))}</td>` : ''}${columns.map((column, index) => `<td class="tl-dashboard-value-cell">${escapeHtml(metricCellText(cells[index], column.mixed, format))}</td>`).join("")}</tr>`).join("")}</tbody>
     </table>
   </div>`;
 }

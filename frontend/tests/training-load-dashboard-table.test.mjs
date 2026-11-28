@@ -23,8 +23,8 @@ test("day pivot puts metrics in series order with their icons and units and join
     series("load", [row("b", "2026-11-08", "AU", 19), row("a", "2026-11-07", "AU", 0)]),
     series("distance", [row("A", "2026-11-07", "m", 42.567), row("a", "2026-11-08", "m", 55)]),
   ]), athletes, describe);
-  assert.match(html, /<th scope="col">Athlete<\/th><th scope="col">Date<\/th><th scope="col"><span aria-hidden="true">L<\/span>Load \(AU\)<\/th><th scope="col"><span aria-hidden="true">D<\/span>Total distance \(m\)<\/th>/);
-  assert.match(html, /<tr><td>A &amp; Z<\/td><td>07\.11\.2026<\/td><td>0<\/td><td>42\.57<\/td><\/tr><tr><td>A &amp; Z<\/td><td>08\.11\.2026<\/td><td>—<\/td><td>55<\/td><\/tr><tr><td>B<\/td><td>08\.11\.2026<\/td><td>19<\/td><td>—<\/td><\/tr>/);
+  assert.match(html, /<th scope="col"[^>]*>Athlete<\/th><th scope="col">Date<\/th><th scope="col"[^>]*><span aria-hidden="true">L<\/span>Load \(AU\)<\/th><th scope="col"[^>]*><span aria-hidden="true">D<\/span>Total distance \(m\)<\/th>/);
+  assert.match(html, /<tr><td[^>]*>A &amp; Z<\/td><td[^>]*>07\.11\.2026<\/td><td[^>]*>0<\/td><td[^>]*>42\.57<\/td><\/tr><tr><td[^>]*>A &amp; Z<\/td><td[^>]*>08\.11\.2026<\/td><td[^>]*>—<\/td><td[^>]*>55<\/td><\/tr><tr><td[^>]*>B<\/td><td[^>]*>08\.11\.2026<\/td><td[^>]*>19<\/td><td[^>]*>—<\/td><\/tr>/);
 });
 
 test("athlete pivot keeps explicit conflicts, omits IDs and reports a series with mixed units", () => {
@@ -72,10 +72,10 @@ test("saved dashboard table uses the pivot and returns to the raw renderer for a
     { seriesId: "load", status: "ok", data: { current: [{ athleteId: "a", bucketKey: "a", unit: "AU", value: 3 }] } },
   ] }] };
   const html = renderTrainingLoadAnalysisHtml();
-  assert.match(html, /<th scope="col">Athlete<\/th>.*sRPE \(AU\).*Total distance \(m\)/);
-  assert.match(html, /<td>A &amp; Z<\/td><td>3<\/td><td>9<\/td>/);
+  assert.match(html, /<th scope="col"[^>]*>Athlete<\/th>.*sRPE \(AU\).*Total distance \(m\)/);
+  assert.match(html, /<td[^>]*>A &amp; Z<\/td><td[^>]*>3<\/td><td[^>]*>9<\/td>/);
   widget.series[1].analytical_aggregation = "none";
   const raw = renderTrainingLoadAnalysisHtml();
   assert.match(raw, /<th scope="col">Series<\/th><th scope="col">Bucket<\/th>/);
-  assert.doesNotMatch(raw, /<td>A &amp; Z<\/td><td>3<\/td><td>9<\/td>/);
+  assert.doesNotMatch(raw, /<td[^>]*>A &amp; Z<\/td><td[^>]*>3<\/td><td[^>]*>9<\/td>/);
 });

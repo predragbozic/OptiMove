@@ -1,7 +1,7 @@
 import {before,after,test} from 'node:test';import assert from 'node:assert/strict';import {randomBytes} from 'node:crypto';import {mkdir,writeFile} from 'node:fs/promises';import path from 'node:path';import pg from 'pg';
 import {launch,openAs,openTrainingLoad} from '../lib/browser.mjs';import {startWorld} from '../lib/world.mjs';
 import {seedGalleryMeasurements,seedGalleryDashboard} from '../../backend/tests/support/dashboard-gallery-seed.mjs';
-let world,browser,gallery;const byRole=new Map();
+let world,browser,gallery;const byRole=new Map(),advancedByRole=new Map();
 const action=(page,name)=>page.locator(`[data-action="training-load-${name}"]`);
 async function openDashboard(page,id){await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();const tab=page.getByRole('tab',{name:'Dashboards'});if(await tab.isVisible())await tab.click();await page.locator('.tl-dash-picker-trigger').click();await page.locator('[data-dashboard-id="'+id+'"]').first().click();await page.locator('optimove-dashboard-chart svg').first().waitFor();}
 // Follow the same visible controls as a coach: Dashboard actions -> PDF.
@@ -21,10 +21,12 @@ before(async()=>{
   const definitions=await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,athleteIds:world.ids.athleteIds});
   await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,teamId:world.ids.teamA,athleteIds:world.ids.athleteIds,dates:['2026-11-02','2026-11-03'],existingDefinitions:definitions});
   gallery=await seedGalleryDashboard(q,{actorId:actor.id,definitions});
+  advancedByRole.set('platform_admin',await seedGalleryDashboard(q,{actorId:actor.id,definitions,title:'Advanced desktop'}));
   await q.query("update training_load.dashboard_pages set period_config=jsonb_set(period_config,'{dateFrom}','\"2026-11-04\"') where id=$1",[gallery.home.id]);
   await q.query("insert into training_load.dashboard_pages(dashboard_id,name,position) values($1,'Other page',1)",[gallery.dashboard.id]);
   for(const [role,type,scope]of [['club_admin','club',world.ids.clubA],['team_coach','team',world.ids.teamA]]){
    const owner=world.accounts.find(a=>a.role===role);byRole.set(role,await seedGalleryDashboard(q,{actorId:actor.id,ownerId:owner.id,workspaceType:type,scopeId:scope,definitions,title:'Gallery '+role}));
+   if(role==='club_admin')advancedByRole.set(role,await seedGalleryDashboard(q,{actorId:actor.id,ownerId:owner.id,workspaceType:type,scopeId:scope,definitions,title:'Advanced mobile'}));
   }
  }finally{await q.end()}
  browser=await launch();
@@ -76,7 +78,7 @@ for(const width of [360,375,390])test(width+'px: visual gallery editor saves a m
 });
 for (const width of [390, 1280]) test(`${width}px: Advanced table adds, reorders and previews measured variables`, async () => {
  const role = width === 390 ? 'club_admin' : 'platform_admin';
- const fixture = width === 390 ? byRole.get(role) : gallery;
+ const fixture = advancedByRole.get(role);
  const {context, page, pageErrors} = await openAs(browser, world, role, width);
  try {
   await openDashboard(page, fixture.dashboard.id);

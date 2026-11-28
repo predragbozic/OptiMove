@@ -15986,6 +15986,22 @@ button.tests-assignment-card {
   font-variant-numeric: tabular-nums;
 }
 
+.tl-analysis-pivot-table .tl-dashboard-value-cell {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.tl-analysis-pivot-table .tl-editor-athlete-cell {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.tl-analysis-pivot-table th.tl-editor-athlete-cell {
+  background: var(--surface-alt, #f4f4f4);
+}
+
 .tl-analysis-kpi-context {
   color: var(--muted);
   font-size: 13px;
