@@ -11,6 +11,7 @@ const pictures={
  scatter:'<circle cx="19" cy="34" r="3"/><circle cx="33" cy="25" r="3"/><circle cx="48" cy="29" r="3"/><circle cx="60" cy="13" r="3"/><circle cx="80" cy="10" r="3"/>',
  stacked:'<path d="M14 42V26H30V42M42 42V20H58V42M70 42V30H86V42" fill="currentColor" fill-opacity=".6"/><path d="M14 26V14H30V26M42 20V5H58V20M70 30V12H86V30" fill="currentColor" fill-opacity=".2"/>',
  boxplot:'<path d="M12 24H84M12 17V31M84 17V31M30 10H65V38H30ZM47 10V38"/>',
+ radar:'<path d="M48 4L77 18L66 41H30L19 18ZM48 4V26M77 18L48 26L66 41M30 41L48 26L19 18"/><path d="M48 11L67 21L57 34L34 36L29 22Z" fill="currentColor" fill-opacity=".2"/>',
 };
 export function chartPickerIllustration(kind){
  return `<svg viewBox="0 0 96 48" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2">${pictures[kind]??pictures.standard}</svg>`;

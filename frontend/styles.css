@@ -16705,6 +16705,29 @@ optimove-dashboard-chart {
   font-size: 12px;
 }
 
+.tl-metric-panel-gallery-settings {
+  display: grid;
+  gap: 12px;
+  min-inline-size: 0;
+  margin: 12px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.tl-metric-panel-gallery-settings select {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .tl-metric-panel-types {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tl-metric-panel-types .tl-analysis-type-button {
+    white-space: normal;
+  }
+}
+
 .tl-analysis-type-button.is-selected {
   border-color: var(--tl-accent);
   background: var(--tl-accent-soft);

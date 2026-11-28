@@ -19,7 +19,7 @@ export const PAGE_ROUTE_MATRIX=Object.freeze([
  ['post','/:dashboardId/pages/:pageId/widgets/:widgetId/series/:seriesId/resolve'],
  ['get','/:dashboardId/pages/requests/:requestId'],['get','/:dashboardId/pages'],['get','/:dashboardId/pages/:pageId'],
  ['post','/:dashboardId/pages'],['post','/:dashboardId/pages/reorder'],['post','/:dashboardId/pages/:pageId/copy'],
- ['post','/:dashboardId/pages/:pageId/query'],['post','/:dashboardId/pages/:pageId/widgets/:widgetId/copy'],['patch','/:dashboardId/pages/:pageId'],['delete','/:dashboardId/pages/:pageId']
+ ['post','/:dashboardId/pages/:pageId/query'],['post','/:dashboardId/pages/:pageId/gallery'],['post','/:dashboardId/pages/:pageId/widgets/:widgetId/copy'],['patch','/:dashboardId/pages/:pageId'],['delete','/:dashboardId/pages/:pageId']
 ]);
 function validInput(op,input){
  if(!input||typeof input!=='object'||Array.isArray(input))return false;
@@ -44,6 +44,7 @@ export function createPagesRouter({pool}){
   if(!isUuid(req.params.dashboardId)||req.params.pageId&&!isUuid(req.params.pageId))return res.status(400).json({error:'invalidRequest'});
   const args={req,dashboardId:req.params.dashboardId,pageId:req.params.pageId??null};
   if(operation.startsWith('widget:'))return res.json(await service.writeWidget({...args,widgetId:req.params.widgetId??null,seriesId:req.params.seriesId??null,operation:operation.slice(7),body:req.body}));
+  if(operation==='gallery')return res.json(await service.createGallery({...args,body:req.body}));
   if(operation==='status')return res.json(await service.status({...args,requestId:req.params.requestId}));
   if(operation==='read')return res.json(await (args.pageId?service.detail(args):service.read(args)));
   if(operation==='copy'){
@@ -53,7 +54,7 @@ export function createPagesRouter({pool}){
   }
   if(operation==='query'){
    const b=req.body;
-   if(!b||Object.keys(b).some(k=>!['dateFrom','dateTo','timeZone','athleteIds','activityId','componentId','shellFilter','widgetIds','referencePreview'].includes(k))||b.widgetIds&&!(Array.isArray(b.widgetIds)&&b.widgetIds.length<=200&&b.widgetIds.every(isUuid)))return res.status(400).json({error:'invalidRequest'});
+   if(!b||Object.keys(b).some(k=>!['dateFrom','dateTo','timeZone','athleteIds','activityId','componentId','shellFilter','widgetIds','referencePreview','metricPreview','galleryDraft'].includes(k))||b.widgetIds&&!(Array.isArray(b.widgetIds)&&b.widgetIds.length<=200&&b.widgetIds.every(isUuid)))return res.status(400).json({error:'invalidRequest'});
    return res.json(await service.queryPage({...args,body:b}));
   }
   const body=req.body;
@@ -62,6 +63,7 @@ export function createPagesRouter({pool}){
   if(operation==='edit'&&!['rename','defaults'].includes(op)||!validInput(op,body.input))return res.status(400).json({error:'invalidRequest'});
   res.json(await service.mutate({...args,operation:op,body}));
  }catch(e){
+  if(operation==='gallery'&&e.code==='42501')return res.status(404).json({error:'notFound'});
   if(operation==='copyPage'&&e.code==='S2C02')return res.status(409).json({error:'pageCopyConfigurationUnavailable'});
   const codes={P0002:[404,'notFound'],'40001':[409,'staleRevision'],'40002':[409,'dashboardArchived'],S2C01:[409,'idempotencyConflict'],S2C06:[409,'requestExpired'],'23505':[409,'conflict'],'23514':[409,'pageUnavailable'],'22023':[400,'invalidRequest'],P0001:[400,'invalidRequest'],'22P02':[400,'invalidRequest'],'23503':[404,'notFound']};
   if(e.code==='23514'&&['pageNotEmpty','homePageRequired','pageLimit'].includes(e.message))return res.status(409).json({error:e.message});
@@ -71,6 +73,7 @@ export function createPagesRouter({pool}){
  router.get('/:dashboardId/pages/requests/:requestId',handle('status'));
  router.get('/:dashboardId/pages',handle('read'));router.get('/:dashboardId/pages/:pageId',handle('read'));
  router.post('/:dashboardId/pages/:pageId/query',handle('query'));
+ router.post('/:dashboardId/pages/:pageId/gallery',handle('gallery'));
  router.post('/:dashboardId/pages/:pageId/widgets/:widgetId/copy',handle('copy'));
  router.post('/:dashboardId/pages/:pageId/copy',handle('copyPage'));
  router.post('/:dashboardId/pages',handle('create'));router.post('/:dashboardId/pages/reorder',handle('reorder'));

@@ -107,15 +107,60 @@ async function fetchBuiltinSeriesCatalog(queryRunner) {
 // LATERAL-joined with every canonical fact training.canonical_activity_
 // results() would produce per activity. This is the single fetch that
 // replaces the design proof's own per-activity loop.
-async function fetchCanonicalFactsForActivities(activityIds, queryRunner) {
-  if (!activityIds.length) return { factRows: [], activityDT: {} };
+async function fetchCanonicalFactsForActivities(activityIds, queryRunner, clubDistance = null) {
+  if (!activityIds.length && !clubDistance) return { factRows: [], activityDT: {} };
+  const clubActivityPredicate = clubDistance ? `or (
+       a.owner_scope = 'team' and a.lifecycle_state <> 'superseded'
+       and a.occurred_local_date between $3 and $4
+       and ($5::uuid is null or a.id = $5)
+       and exists (select 1 from public.teams t where t.id=a.owner_team_id and t.club_id=$2 and coalesce(t.is_active,true))
+     )` : "";
+  const clubDistancePredicate = clubDistance ? `or (
+       ($6::uuid[] is null or r.athlete_id = any($6))
+       and r.canonical_activity_id = a.id
+       and r.canonical_participant_id = (r.detail->>'aliasParticipantId')::uuid
+       and exists (select 1 from training.activity_participants ap where ap.id=r.canonical_participant_id and ap.activity_id=a.id and ap.athlete_id=r.athlete_id)
+       and r.fact_kind = 'metric_value'
+       and r.detail->>'entryMethod' = 'api_import'
+       and r.detail->>'segmentId' is null
+       and r.detail->>'isDerived' = 'false'
+       and exists (
+         select 1 from training_load.metric_values v
+         join training_load.metric_measurement_occasions o on o.id=v.occasion_id
+         join training_load.metric_source_identities si on si.id=o.source_identity_id and si.current_occasion_id=o.id
+         join training_load.metric_event_participants ep on ep.id=o.event_participant_id
+         join training_load.metric_events ev on ev.id=ep.event_id
+         join training_load.metric_value_source_provenance p on p.metric_value_id=v.id
+         join training_load.source_metric_mapping_activations act on act.id=p.activation_id
+         join training_load.metric_source_connections c on c.id=p.metric_source_connection_id and c.id=ev.source_connection_id and c.id=si.source_connection_id
+         join training_load.source_metric_definition_versions sv on sv.id=p.source_metric_version_id
+         join training_load.source_metric_definitions sd on sd.id=sv.source_metric_definition_id
+         where act.team_id=a.owner_team_id
+           and ev.owner_scope='team' and ev.owner_team_id=a.owner_team_id and ev.scope_level='session'
+           and exists (select 1 from training.activity_metric_event_links l where l.activity_id=a.id and l.metric_event_id=ev.id and l.link_status='confirmed')
+           and ep.athlete_id=r.athlete_id
+           and o.entry_method='api_import' and o.superseded_by_occasion_id is null and o.import_conflict_status is null
+           and c.source_system='gpexe'
+           and v.occasion_id=(r.detail->>'occasionId')::uuid
+           and v.metric_definition_id=(r.detail->>'metricDefinitionId')::uuid
+           and v.metric_definition_version_id=(r.detail->>'metricDefinitionVersionId')::uuid
+           and v.value_numeric is not null and not v.is_derived
+           and v.metric_definition_id=any($7::uuid[])
+           and sd.source_system='gpexe' and sd.api_family='rest_v1'
+           and sd.source_metric_key='athlete_session.total_distance'
+       )
+     )` : "";
   const r = await queryRunner(
     `select a.id as activity_id, a.occurred_local_date::text as local_date, a.started_at,
             r.canonical_activity_id, r.canonical_participant_id, r.athlete_id, r.fact_kind, r.detail
-     from training.activities a
+     from (
+       select a.id, a.occurred_local_date, a.started_at, a.owner_team_id from training.activities a
+       where a.id = any($1::uuid[]) ${clubActivityPredicate}
+       offset 0
+     ) a
      cross join lateral training.canonical_activity_results(a.id) r
-     where a.id = any($1::uuid[])`,
-    [activityIds],
+     where a.id = any($1::uuid[]) ${clubDistancePredicate}`,
+    clubDistance ? [activityIds, ...clubDistance] : [activityIds],
   );
   const activityDT = {};
   for (const row of r.rows) {
@@ -255,7 +300,7 @@ async function fetchDayLevelFactsForMetrics(metricIds, { dataWorkspaceType, data
 // what makes the batch endpoint genuinely set-based: N widgets against
 // the SAME range never cost more DB round trips than 1 widget would.
 // ------------------------------------------------------------
-async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId, definitionIds = [] }, dayScopeMetricIds, builtinCatalog, queryRunner) {
+async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom, dateTo, activityId, componentId, definitionIds = [], clubDistanceMetricIds }, dayScopeMetricIds, builtinCatalog, queryRunner) {
   const workspaceArgs = { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo, athleteIds };
   let authorizedActivityIds = await fetchAuthorizedActivityIds(workspaceArgs, queryRunner);
 
@@ -274,7 +319,11 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     authorizedActivityIds = authorizedActivityIds.includes(activityId) ? [activityId] : [];
   }
 
-  const { factRows, activityDT } = await fetchCanonicalFactsForActivities(authorizedActivityIds, queryRunner);
+  // Team GPS distance is available to the parent club. Keep the other team
+  // activity facts and participant data outside the club dashboard query.
+  const clubDistance = dataWorkspaceType === "club" && clubDistanceMetricIds.length && !componentId
+    ? [dataWorkspaceScopeId, dateFrom, dateTo, activityId ?? null, athleteIds?.length ? athleteIds : null, clubDistanceMetricIds] : null;
+  const { factRows, activityDT } = await fetchCanonicalFactsForActivities(authorizedActivityIds, queryRunner, clubDistance);
 
   // Build the segment -> canonical component map from the SAME fact rows
   // already fetched (no second round trip) — component_metric_segment_
@@ -294,10 +343,13 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
   // the design proof's own queryMetricSeries() — grain/component identity
   // derived once here, shared by every series that needs this metric.
   const metricFactsByDefinition = new Map();
+  const clubDistanceFactsByDefinition = new Map();
+  const strictActivityIds = new Set(authorizedActivityIds);
   for (const row of metricValueRows) {
     const d = row.detail;
     const defId = d.metricDefinitionId;
-    if (!metricFactsByDefinition.has(defId)) metricFactsByDefinition.set(defId, []);
+    const index = strictActivityIds.has(row.activity_id) ? metricFactsByDefinition : clubDistanceFactsByDefinition;
+    if (!index.has(defId)) index.set(defId, []);
     const occ = occContext[d.occasionId] || {};
     const dt = activityDT[row.activity_id] || {};
     const ver = versionInfo[d.metricDefinitionVersionId] || {};
@@ -305,7 +357,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
     const canonicalComponentId = grain === "component" ? (segmentToComponentId.get(d.segmentId) ?? null) : null;
     if (grain === "component" && canonicalComponentId == null) continue; // no CONFIRMED canonical link — cannot be safely bucketed
     if (resolvedComponentId && grain === "component" && canonicalComponentId !== resolvedComponentId) continue; // componentId filter — component-grain only, session-level stays visible
-    metricFactsByDefinition.get(defId).push({
+    index.get(defId).push({
       athleteId: row.athlete_id, canonicalActivityId: row.canonical_activity_id, canonicalParticipantId: row.canonical_participant_id,
       activityId: row.activity_id, componentKey: d.segmentId ?? null, canonicalComponentId,
       grain, grainKey: grain === "component" ? canonicalComponentId : row.activity_id,
@@ -360,7 +412,7 @@ async function buildRangeContext({ dataWorkspaceType, dataWorkspaceScopeId, data
       for (const [definitionId, list] of facts) facts.set(definitionId, list.filter((f) => MEASURED_ENTRY_METHODS.has(f.entryMethod) && f.calculated !== true));
     }
   }
-  return { currentDefinitions: new Map(Object.values(versionInfo).filter(v => v.is_current).map(v => [v.metric_definition_id, v])), authorizedActivityIds, metricFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition, builtinCatalog };
+  return { currentDefinitions: new Map(Object.values(versionInfo).filter(v => v.is_current).map(v => [v.metric_definition_id, v])), authorizedActivityIds, metricFactsByDefinition, clubDistanceFactsByDefinition, rpeFacts, participantRows, dayLevelFactsByDefinition, builtinCatalog };
 }
 
 // ------------------------------------------------------------
@@ -621,12 +673,14 @@ function reduceRows(rows, { groupBy, analyticalAggregation }) {
 // access happens here, only in buildRangeContext above.
 // ------------------------------------------------------------
 
-function queryMetricSeriesFromContext(ctx, { metricDefinitionId, dataScopeLevel, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId, athleteIds }) {
+function queryMetricSeriesFromContext(ctx, { metricDefinitionId, dataScopeLevel, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId, athleteIds, includeClubDistance }) {
   if (dataScopeLevel === "day") {
     const facts = ctx.dayLevelFactsByDefinition.get(metricDefinitionId) || [];
     return resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId });
   }
-  const facts = ctx.metricFactsByDefinition.get(metricDefinitionId) || [];
+  const direct = ctx.metricFactsByDefinition.get(metricDefinitionId) || [];
+  const facts = includeClubDistance && dataScopeLevel === "session"
+    ? direct.concat(ctx.clubDistanceFactsByDefinition.get(metricDefinitionId) ?? []) : direct;
   return resolveFactsToRows(facts, { dataScopeLevel, athleteIds, aggregationRolePolicy, coveragePolicy, sourcePolicy, sourceConnectionId });
 }
 
@@ -695,7 +749,7 @@ export function mergeFilters(...layers) {
 // the number of widgets), while two widgets with genuinely different
 // local_filter_override values never leak each other's rows.
 // ------------------------------------------------------------
-export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs, { queryRunner = query, referenceMeasurementsOnly = false } = {}) {
+export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, dateFrom, dateTo }, specs, { queryRunner = query, referenceMeasurementsOnly = false, includeClubDistance = false } = {}) {
   const rangeCache = new Map();
   const ratioCache = new Map();
 
@@ -727,7 +781,13 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
     if (!rangeCache.has(cacheKey)) {
       const dayScopeMetricIds = [...(dayScopeMetricIdsByFilterKey.get(fk) || [])];
       rangeCache.set(cacheKey, buildRangeContext(
-        { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom: rDateFrom, dateTo: rDateTo, activityId, componentId, definitionIds: [...new Set(specs.filter(s => s.metricDefinitionId).map(s => s.metricDefinitionId))] },
+        { dataWorkspaceType, dataWorkspaceScopeId, dataWorkspaceUserId, athleteWorkspaceAthleteId, athleteIds, dateFrom: rDateFrom, dateTo: rDateTo, activityId, componentId,
+          definitionIds: [...new Set(specs.filter(s => s.metricDefinitionId).map(s => s.metricDefinitionId))],
+          clubDistanceMetricIds: includeClubDistance && !referenceMeasurementsOnly
+            ? [...new Set(specs.filter(s => filterKeyFor(s.athleteIds,s.activityId,s.componentId)===fk
+                && s.allowClubDistance !== false && s.metricDefinitionId && s.dataScopeLevel === "session"
+                && ["all_with_conflicts", "api_import", "source_connection"].includes(s.sourcePolicy ?? "all_with_conflicts"))
+              .map(s => s.metricDefinitionId))] : [] },
         dayScopeMetricIds,
         builtinCatalog,
         queryRunner,
@@ -757,6 +817,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
             metricDefinitionId: spec.metricDefinitionId, dataScopeLevel: spec.dataScopeLevel,
             aggregationRolePolicy: spec.aggregationRolePolicy, coveragePolicy: spec.coveragePolicy,
             sourcePolicy: spec.sourcePolicy, sourceConnectionId: spec.sourceConnectionId, athleteIds: effectiveAthleteIds,
+            includeClubDistance:includeClubDistance&&!referenceMeasurementsOnly&&spec.allowClubDistance!==false,
           });
       const definition = ctx.currentDefinitions.get(spec.metricDefinitionId);
       const calculation = definition?.calculation;
@@ -857,7 +918,7 @@ export async function runDashboardBatchQuery({ dataWorkspaceType, dataWorkspaceS
 // dashboard" cost a small, range-and-filter-bounded number of queries
 // regardless of how many widgets/series it holds.
 // ------------------------------------------------------------
-export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dateFrom, dateTo }, { defaultFilter, requestFilter, shellFilter = null, shellCohort, queryRunner = query } = {}) {
+export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dateFrom, dateTo }, { defaultFilter, requestFilter, shellFilter = null, shellCohort, queryRunner = query, includeClubDistance = false } = {}) {
   const cohort = shellCohort === undefined ? await resolveShellCohort(dataWorkspaceArgs, shellFilter, queryRunner) : shellCohort;
   const specs = [];
   const placeholders = [];
@@ -892,10 +953,11 @@ export async function queryDashboard(dataWorkspaceArgs, widgetsWithSeries, { dat
         coveragePolicy: series.coverage_policy, sourcePolicy: series.source_policy, sourceConnectionId: series.source_connection_id,
         groupBy: widget.group_by, analyticalAggregation: series.analytical_aggregation, comparisonPeriod: series.comparison_period,
         athleteIds, activityId, componentId, shellConstrained: cohort !== null,
+        allowClubDistance:!widget.presentation_config?.referenceConfig,
       });
     }
   }
-  const results = await runDashboardBatchQuery({ ...dataWorkspaceArgs, dateFrom, dateTo }, specs, { queryRunner });
+  const results = await runDashboardBatchQuery({ ...dataWorkspaceArgs, dateFrom, dateTo }, specs, { queryRunner, includeClubDistance });
   const byWidget = new Map();
   for (const item of [...results, ...placeholders]) {
     if (!byWidget.has(item.widgetId)) byWidget.set(item.widgetId, []);

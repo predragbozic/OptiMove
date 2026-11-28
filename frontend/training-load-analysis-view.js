@@ -1,3 +1,5 @@
+import {metricPanelCanPreview,metricPanelPreviewBody} from './training-load-analysis-data.js';
+import {referenceChartModel,referenceReason} from './dashboard-reference-model.js';
 import {chartPickerIllustration,renderGalleryPicker} from './training-load-gallery-picker.js';
 import {dashboardDisclosureOpen} from './training-load-dashboard-disclosures.js';
 import {GALLERY_CHOICES} from './training-load-gallery-editor.js';
@@ -525,13 +527,13 @@ function renderChartHtml(model) {
   `;
 }
 
-function renderWidgetBodyHtml(widget, results) {
+function renderWidgetBodyHtml(widget, results, previewPeriod = null) {
   if(widget.presentation_config?.schemaVersion===1&&widget.presentation_config.referenceConfig) return `<div data-reference-island="chart" data-widget-id="${escapeAttr(widget.id)}"></div>`;
   const analysis = state.trainingLoad.analysis;
   const querySkipped = analysis.queryResult === null && (analysis.dashboard?.is_template || analysis.dashboard?.status === "archived");
   const catalog = state.trainingLoad.analysis.metricPicker.definitions ?? [];
   const displayWidget = { ...widget, series: widget.series.map(series => { const definition = catalog.find(d => d.id === series.metric_definition_id); return { ...series, ...(definition ? { calculation: definition.calculation } : {}) }; }) };
-  const model = buildDashboardWidgetDisplayModel(displayWidget, results, { loading: analysis.queryLoading, querySkipped, error: analysis.queryError, period: analysis.period });
+  const model = buildDashboardWidgetDisplayModel(displayWidget, results, { loading: !previewPeriod && analysis.queryLoading, querySkipped: !previewPeriod && querySkipped, error: previewPeriod ? null : analysis.queryError, period: previewPeriod ?? analysis.period });
   model.interactionGeneration=analysisChartInteractionGeneration();
   if (model.status === "unsupported") return `<p class="builder-error" role="alert">Unsupported display configuration version.</p>`;
   if (model.config.status !== "ready") return `<p class="builder-error" role="alert">Invalid display configuration.</p>`;
@@ -601,6 +603,7 @@ function renderGridHtml() {
       ${canEdit() && !a.editMode ? `
         <div class="tl-analysis-layout-actions">
           <button type="button" class="plain-button compact-button tl-analysis-primary tl-analysis-add-widget-button" data-action="training-load-analysis-add-widget" ${pageBusy() ? "disabled" : ""}><svg class="tl-analysis-button-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>Add widget</span></button>
+          ${a.simplePreview&&a.pagesAvailable?`<button type="button" class="plain-button compact-button" data-action="training-load-analysis-add-gallery-widget" ${pageBusy()?"disabled":""}>Add from gallery</button>`:""}
         </div>
       ` : ""}
     </section>
@@ -702,21 +705,58 @@ function renderPanelMetricListHtml(panel) {
 }
 
 function renderPanelPreviewHtml(panel) {
-  const type = WIDGET_TYPES.find((t) => t.key === panel.widgetType) || WIDGET_TYPES[0];
-  const summary = panel.metric
-    ? [`${AGGREGATION_LABELS[panel.aggregation] || panel.aggregation} ${panel.metric.label}`, panel.metric.unit ? panel.metric.unit : "", (GROUP_BY_LABELS[panel.groupBy] || panel.groupBy).toLowerCase()].filter(Boolean).join(" · ")
-    : "Choose a metric to see the configuration";
-  let body;
-  if (panel.widgetType === "kpi") body = `<div class="tl-analysis-kpi"><span class="tl-analysis-kpi-value tl-preview-placeholder">--</span><span class="tl-analysis-kpi-label">${escapeHtml(summary)}</span></div>`;
-  else if (panel.widgetType === "table") body = `<div class="tl-preview-rows" aria-hidden="true"><span></span><span></span><span></span></div><p class="tl-analysis-kpi-label">${escapeHtml(summary)}</p>`;
-  else body = `<div class="tl-preview-bars ${panel.widgetType === "line_chart" ? "is-line" : ""}" aria-hidden="true"><span style="--h:40%"></span><span style="--h:70%"></span><span style="--h:55%"></span><span style="--h:85%"></span><span style="--h:60%"></span></div><p class="tl-analysis-kpi-label">${escapeHtml(summary)}</p>`;
-  return `
-    <article class="panel tl-analysis-widget tl-metric-panel-preview" aria-label="Widget preview">
-      <header class="tl-analysis-widget-head"><div><p class="eyebrow">${escapeHtml(type.label)}</p><h3>${escapeHtml(panel.title.trim() || "Untitled metric")}</h3></div></header>
-      ${body}
-      <p class="muted tl-metric-panel-preview-note">Preview shows the configuration. Values appear on the dashboard after saving.</p>
-    </article>
-  `;
+  const available = state.trainingLoad.analysis.pagesAvailable && state.trainingLoad.analysis.selectedPageId;
+  const preview = (panel.galleryDraft || panel.metric) && panel.preview?.body === metricPanelPreviewBody(panel) ? panel.preview : null;
+  const reference = preview?.result?.references;
+  const radar = reference && referenceChartModel(reference,preview.widget);
+  const content = reference ? radar
+    ? `<optimove-dashboard-chart data-chart="${escapeAttr(JSON.stringify(radar))}"><div class="tl-analysis-echarts"></div></optimove-dashboard-chart>`
+    : `<p role="status">${escapeHtml(referenceReason(reference.axes?.find(axis=>axis.status!=="ready")?.reason??reference.reason))}</p>`
+    : preview ? renderWidgetBodyHtml(preview.widget, preview.result, preview.resolvedPeriod) : "";
+  return `<div class="tl-metric-panel-preview" aria-label="Widget preview" aria-busy="${Boolean(panel.previewLoading)}">
+    <button type="button" class="plain-button compact-button" data-action="training-load-analysis-panel-preview" ${available && metricPanelCanPreview(panel) && !panel.previewLoading ? "" : "disabled"}>Load preview</button>
+    ${panel.previewLoading ? '<p role="status">Loading preview…</p>' : ""}
+    ${panel.previewError ? `<p role="alert">${escapeHtml(panel.previewError)}</p>` : ""}
+    ${content || (!available ? '<p class="muted">Live preview is available on dashboard pages.</p>' : "")}
+  </div>`;
+}
+
+function renderNewGallerySettings(panel, definitions) {
+  const {kind,series,teamId,tableId,anchorKey,additive}=panel.galleryDraft;
+  const preset=kind==="radar"&&tableId!==undefined;
+  const distribution=["heatmap","boxplot"].includes(kind);
+  const metrics=definitions.filter(def=>["numeric","number"].includes(def.valueType)&&!def.hiddenInClub
+    && (kind!=="stacked"&&(kind!=="radar"||preset)||!def.calculation)
+    && (!preset||!panel.galleryPreset||panel.galleryPreset.columns.some(col=>col.definition_id===def.id)));
+  const builtin=kind==="radar"?[]:BUILT_IN_SERIES.filter(def=>def.key!=="last_session_date");
+  const field=(name,index)=>`data-action="training-load-analysis-panel-gallery-field" data-field="${name}" data-index="${index}"`;
+  const teamOptions=state.trainingLoad.references?.options?.teams??[];
+  const tables=(state.trainingLoad.references?.tables??[]).filter(table=>table.published_version_id&&!table.archived);
+  const flexible=["area","horizontal_bar","combined","stacked","radar"].includes(kind);
+  const minimum=kind==="radar"?3:["stacked","combined"].includes(kind)?2:1;
+  return `<fieldset class="tl-metric-panel-gallery-settings" ${panel.saving?"disabled":""}><legend>Measurements</legend>
+    ${kind==="radar"?`<label>Reference source<select ${field("referenceMode",0)}>${optionHtml("preset","Published reference table",preset?"preset":"team")}${optionHtml("team","Team average",preset?"preset":"team")}</select></label>
+      ${preset?`<label>Reference table<select ${field("tableId",0)}><option value="">Choose a published table</option>${tables.map(table=>optionHtml(table.id,table.name,tableId)).join("")}</select></label>
+        ${!tables.length?'<p role="status">Publish a reference table before using it in Radar.</p>':""}
+        ${panel.galleryPreset?`<label>100% reference<select ${field("anchorKey",0)}>${panel.galleryPreset.valueKinds.map(kind=>optionHtml(kind.key,kind.name,anchorKey)).join("")}</select></label>`:""}`
+      :`<label>Reference team<select ${field("teamId",0)}><option value="">Choose a team</option>${teamOptions.map(team=>optionHtml(team.id,team.name,teamId)).join("")}</select></label>
+        ${!teamOptions.length?'<p role="status">Radar requires an active team and access to dashboard references.</p>':""}`}`:""}
+    ${series.map((row,index)=>{
+      const definition=metrics.find(def=>def.id===row.metricDefinitionId);
+      const fixed=BUILT_IN_FIXED_SCOPE[row.builtInSeriesKey];
+      const scopes=fixed?[fixed]:definition?.scopeCapabilities?.length?definition.scopeCapabilities:SCOPE_LEVELS;
+      return `<div class="tl-analysis-editor-grid">
+        <label>${kind==="scatter"?["X axis","Y axis"][index]:`Measurement ${index+1}`}<select ${field("metricDefinitionId",index)}><option value="">Choose a metric</option>${builtin.map(def=>optionHtml(def.key,def.label,row.builtInSeriesKey)).join("")}${metrics.map(def=>optionHtml(def.id,def.label,row.metricDefinitionId)).join("")}</select></label>
+        <label>Data level<select ${field("dataScopeLevel",index)}>${scopes.map(scope=>optionHtml(scope,SCOPE_LABELS[scope]??scope,row.dataScopeLevel)).join("")}</select></label>
+        ${distribution?"<p>Uses each measurement.</p>":`<label>Calculate<select ${field("analyticalAggregation",index)}>${(definition?.allowedAggregations??AGGREGATIONS).filter(value=>value!=="none"&&(value!=="ratio"||definition?.calculation?.kind==="ratio")).map(value=>optionHtml(value,AGGREGATION_LABELS[value],row.analyticalAggregation)).join("")}</select></label>`}
+        ${kind==="combined"?`<label>Mark<select ${field("mark",index)}>${["bar","line"].map(mark=>optionHtml(mark,mark,row.mark)).join("")}</select></label>
+          <label>Axis<select ${field("axis",index)}>${["primary","secondary"].map(axis=>optionHtml(axis,AXIS_LABELS[axis],row.axis)).join("")}</select></label>`:""}
+        ${flexible&&series.length>minimum?`<button type="button" class="plain-button compact-button" ${field("remove",index)}>Remove measurement ${index+1}</button>`:""}
+      </div>`;
+    }).join("")}
+    ${kind==="stacked"?`<label><input type="checkbox" ${field("additive",0)} ${additive?"checked":""}> Measurements are separate parts of the same total</label>`:""}
+    ${flexible&&series.length<8?`<button type="button" class="plain-button compact-button" ${field("append",0)}>Add measurement</button>`:""}
+  </fieldset>`;
 }
 
 function renderMetricPanelHtml() {
@@ -742,8 +782,18 @@ function renderMetricPanelHtml() {
           </section>
           <section class="tl-metric-panel-step">
             <h4><span class="tl-metric-panel-step-no">2</span>View</h4>
-            <div class="tl-analysis-widget-type-grid tl-metric-panel-types">
-              ${WIDGET_TYPES.map((type) => `<button type="button" class="plain-button tl-analysis-type-button ${panel.widgetType === type.key ? "is-selected" : ""}" aria-pressed="${panel.widgetType === type.key ? "true" : "false"}" data-action="training-load-analysis-panel-type" data-widget-type="${type.key}">${chartPickerIllustration(type.key)}<strong>${escapeHtml(type.label)}</strong><small>${escapeHtml(type.hint)}</small></button>`).join("")}
+            <div class="tl-analysis-widget-type-grid tl-metric-panel-types" aria-label="Widget display">
+              ${WIDGET_TYPES.map((type) => {
+                const active=!panel.galleryDraft&&panel.widgetType===type.key;
+                return `<button type="button" class="plain-button tl-analysis-type-button ${active?"is-selected":""}" aria-pressed="${active}" data-action="training-load-analysis-panel-type" data-widget-type="${type.key}">${chartPickerIllustration(type.key)}<strong>${escapeHtml(type.label)}</strong><small>${escapeHtml(type.hint)}</small></button>`;
+              }).join("")}
+              ${[...GALLERY_CHOICES.filter(([key]) => key !== "standard"), ["radar", "Radar"]].map(([key, label]) => {
+                const supported = !editing ? a.pagesAvailable : (key === "radar"
+                  ? state.trainingLoad.analysis.referencesAvailable && ["line_chart", "bar_chart"].includes(panel.widgetType)
+                  : state.trainingLoad.analysis.chartShapes);
+                const active=panel.galleryDraft?.kind===key;
+                return `<button type="button" class="plain-button tl-analysis-type-button ${active?"is-selected":""}" aria-pressed="${active}" data-action="training-load-analysis-panel-chart" data-chart-kind="${escapeAttr(key)}" ${supported ? "" : "disabled"}>${chartPickerIllustration(key)}<strong>${escapeHtml(label)}</strong></button>`;
+              }).join("")}
             </div>
             ${editing ? `<div class="tl-metric-panel-advanced"><span class="muted">More chart types, axes, sources and series</span> <button type="button" class="plain-button compact-button" data-action="training-load-analysis-open-advanced" data-widget-id="${escapeAttr(panel.widgetId)}">Advanced settings</button></div>` : ""}
           </section>
@@ -751,10 +801,11 @@ function renderMetricPanelHtml() {
             <h4><span class="tl-metric-panel-step-no">3</span>Settings</h4>
             <div class="tl-analysis-editor-grid">
               <label>Title<input type="text" data-action="training-load-analysis-panel-title" value="${escapeAttr(panel.title)}" maxlength="200" placeholder="${escapeAttr(panel.metric?.label || "Widget title")}"></label>
-              <label>Show<select data-action="training-load-analysis-panel-field" data-field="groupBy">${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g], panel.groupBy)).join("")}</select></label>
-              <label>Calculate<select data-action="training-load-analysis-panel-field" data-field="aggregation">${((state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === panel.metric?.id)?.allowedAggregations ?? AGGREGATIONS.filter(v => v !== "ratio")).map((v) => optionHtml(v, AGGREGATION_LABELS[v], panel.aggregation)).join("")}</select></label>
-              ${renderScopeSelectHtml({ action: "training-load-analysis-panel-field", attrs: 'data-field="scope"', value: panel.scope, metric: panel.metric, label: "Data level" })}
+              ${panel.galleryDraft?.kind==="radar"?"":`<label>Show<select data-action="training-load-analysis-panel-field" data-field="groupBy">${GROUP_BY.filter(g=>!["heatmap","boxplot"].includes(panel.galleryDraft?.kind)||["day","week"].includes(g)).map((g) => optionHtml(g, GROUP_BY_LABELS[g], panel.groupBy)).join("")}</select></label>`}
+              ${panel.galleryDraft?"":`<label>Calculate<select data-action="training-load-analysis-panel-field" data-field="aggregation">${((state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === panel.metric?.id)?.allowedAggregations ?? AGGREGATIONS.filter(v => v !== "ratio")).map((v) => optionHtml(v, AGGREGATION_LABELS[v], panel.aggregation)).join("")}</select></label>
+              ${renderScopeSelectHtml({ action: "training-load-analysis-panel-field", attrs: 'data-field="scope"', value: panel.scope, metric: panel.metric, label: "Data level" })}`}
             </div>
+            ${panel.galleryDraft?renderNewGallerySettings(panel,a.metricPicker.definitions??[]):""}
 
           </section>
           <section class="tl-metric-panel-step">

@@ -1,4 +1,4 @@
-import {renderGalleryPicker} from './training-load-gallery-picker.js';
+import {chartPickerIllustration,renderGalleryPicker} from './training-load-gallery-picker.js';
 import {renderDashboardChartPlots} from './training-load-analysis-echarts-options.js';
 import { calculationErrors, renderCalculationFormula, renderRatioCoverage } from './training-load-calculation-view.js';
 import { renderDashboardMetricTable } from "./training-load-dashboard-table.js";
@@ -117,11 +117,11 @@ function displayChoices(model, locked) {
   const custom = model.draft?.metricRef?.kind === "metric";
   const scopes = metric.scope_capabilities?.length ? metric.scope_capabilities.map((scope) => typeof scope === "string" ? scope : scope.scope_level) : ["day", "session", "component"];
   return `<label class="tl-simple-field">Title<input type="text" ${action("title")} maxlength="200" value="${escapeAttr(model.draft?.title ?? "")}"${disabled(locked)}></label>
-    <fieldset${disabled(locked)}><legend>Display</legend>${views.map(([value, label]) => {
+    <fieldset${disabled(locked)}><legend>Display</legend><div class="tl-gallery-picks">${views.map(([value, label]) => {
       if (model.widgetId && value !== view.type) return "";
       const supported = types.some((type) => (typeof type === "string" ? type : type.key) === value && type.is_active !== false);
-      return `<label class="tl-simple-choice"><input type="radio" name="training-load-simple-view" ${action("view")} value="${value}"${(view.type ?? "table") === value ? " checked" : ""}${disabled(!supported)}>${label}${!supported ? " (unavailable)" : ""}</label>`;
-    }).join("")}</fieldset>
+      return `<label class="tl-gallery-pick ${view.type === value ? "is-selected" : ""}"><input type="radio" name="training-load-simple-view" ${action("view")} value="${value}"${(view.type ?? "table") === value ? " checked" : ""}${disabled(!supported)}>${chartPickerIllustration(value)}<span>${label}${!supported ? " (unavailable)" : ""}</span></label>`;
+    }).join("")}</div></fieldset>
     ${model.widgetId ? message("To use a different display type, add a new widget.") : ""}
     ${selectField("group", "Group results by", [["day", "Day"], ["week", "Week"], ["athlete", "Athlete"], ["session", "Session"], ["component", "Component"], ["cohort", "Whole group"]], view.groupBy ?? "day", locked)}
     ${renderCalculationFormula(metric)}

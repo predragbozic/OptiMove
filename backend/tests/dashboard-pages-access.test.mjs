@@ -46,7 +46,7 @@ test('Page router enumeration pins every mounted verb/path and closed configurat
  assert.equal(pagesEnabled({}),false);assert.equal(pagesEnabled({DASHBOARD_PAGES_ENABLED:'false'}),false);assert.equal(pagesEnabled({DASHBOARD_PAGES_ENABLED:'true'}),true);assert.throws(()=>pagesEnabled({DASHBOARD_PAGES_ENABLED:'yes'}));
  const router=createPagesRouter({pool:{query(){throw Error('No database call allowed in route inventory')}}});
  const actual=router.stack.filter(layer=>layer.route).flatMap(layer=>Object.keys(layer.route.methods).map(method=>[method,layer.route.path]));
- const sort=rows=>rows.map(row=>row.join(' ')).sort();assert.deepEqual(sort(actual),sort(PAGE_ROUTE_MATRIX));assert.equal(actual.length,20);
+ const sort=rows=>rows.map(row=>row.join(' ')).sort();assert.deepEqual(sort(actual),sort(PAGE_ROUTE_MATRIX));assert.equal(actual.length,21);
 });
 
 test('feature off mounts no Page route, including every write and runtime query',async()=>{

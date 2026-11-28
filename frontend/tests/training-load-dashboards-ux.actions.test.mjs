@@ -382,7 +382,10 @@ test("Add metric opens the staged panel; picking a built-in applies its defaults
   assert.match(html, /aria-labelledby="tl-metric-panel-title"/);
   assert.match(html, /data-action="training-load-analysis-panel-save"[^>]*disabled/);
   assert.match(html, /Nothing is saved until you press Save\./);
-  assert.match(html, /Values appear on the dashboard after saving\./, "the preview is explicitly a configuration preview");
+  assert.match(html, /data-action="training-load-analysis-panel-preview"[^>]*disabled/);
+  for (const label of ["Area", "Horizontal bar", "Bar + line", "Heatmap", "Scatter", "Stacked bar", "Box plot", "Radar"]) {
+    assert.ok(html.includes(`</svg><strong>${label}</strong>`), `View shows ${label} with an icon`);
+  }
   assert.doesNotMatch(html, /tl-analysis-editor"/, "the advanced editor is not what opens");
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-builtin", builtInKey: "srpe" }), { renderTrainingLoad });
@@ -392,7 +395,6 @@ test("Add metric opens the staged panel; picking a built-in applies its defaults
   assert.equal(metricPanelCanSave(a.metricPanel), true);
   html = renderTrainingLoadAnalysisHtml();
   assert.match(html, /data-built-in-key="srpe"[^>]*aria-pressed="true"|aria-pressed="true"[^>]*data-built-in-key="srpe"/);
-  assert.match(html, /Total sRPE · AU · per day/, "the preview summarises the staged configuration");
 
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-type", widgetType: "bar_chart" }), { renderTrainingLoad });
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-field", field: "groupBy" }, "week"), { renderTrainingLoad });
@@ -411,6 +413,37 @@ test("Add metric opens the staged panel; picking a built-in applies its defaults
   assert.equal(a.metricPanel, null);
   assert.equal(writes().length, 0, "Cancel: no widget, no series, nothing was ever sent");
   assert.equal(a.widgets.length, 1, "the dashboard is exactly as it was");
+});
+
+test("Load preview renders measured values for the current draft without saving", async () => {
+  resetState();
+  loadedDashboard();
+  const a = state.trainingLoad.analysis;
+  a.pagesAvailable = true;
+  a.selectedPageId = otherId;
+  a.page = { id: otherId, name: "Home", revision: 1 };
+  a.pages = [a.page];
+  a.pageCanManage = true;
+  const shown = widget({ id: newWidgetId, title: "sRPE", series: [series({ built_in_series_key: "srpe" })] });
+  installFetchMock(responder({ extra: ({ body }) => body?.metricPreview && ({
+    status: 200,
+    body: {
+      widget: shown,
+      resolvedPeriod: { dateFrom: body.dateFrom, dateTo: body.dateTo },
+      result: { widgetId: shown.id, series: [{ seriesId, status: "ok", data: { current: [{ value: 431, unit: "AU", bucketKey: body.dateFrom }], comparison: null } }] },
+    },
+  }) }));
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-add-widget" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-pick-builtin", builtInKey: "srpe" }), { renderTrainingLoad });
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-preview" }), { renderTrainingLoad });
+  const request = fetchCalls.find(({ body }) => body?.metricPreview);
+  assert.match(request.url, new RegExp(`/pages/${otherId}/query$`));
+  assert.equal(request.body.metricPreview.builtInSeriesKey, "srpe");
+  assert.equal(request.body.metricPreview.analyticalAggregation, "sum");
+  assert.match(renderTrainingLoadAnalysisHtml(), /431/);
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-panel-field", field: "groupBy" }, "week"), { renderTrainingLoad });
+  assert.doesNotMatch(renderTrainingLoadAnalysisHtml(), /431/);
+  assert.deepEqual(writes(), []);
 });
 
 test("Save for a NEW metric: POST widget (title/type/per + 12-col placement below existing widgets) -> POST series at revision 1 with the staged aggregation/scope -> one batch query; the panel closes with a notice", async () => {

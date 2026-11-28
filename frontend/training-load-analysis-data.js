@@ -540,15 +540,8 @@ export async function saveAnalysisLayout(onPainted) {
 // Dashboards UX H1: the guided "Add metric" panel.
 //
 // Everything the coach picks in the panel (metric, view, title, per/
-// aggregation/scope) is STAGED here and nothing reaches the server until
-// Save. POST /:id/query only ever evaluates SAVED widgets (optionally
-// narrowed by widgetIds - see routes/trainingLoadDashboard.js), so a live
-// data preview of an unsaved widget would need a new API and is
-// deliberately NOT offered: the panel shows a static configuration preview
-// and the real values appear on the dashboard right after Save, when the
-// ordinary detail reload + batch query runs. Cancel just drops this object -
-// no draft widget is ever created (creating-then-deleting on Cancel would
-// churn dashboard revisions for nothing).
+// aggregation/scope) is staged until Save. Page preview submits the staged
+// settings to the read-only query path. Cancel drops the local draft.
 // ------------------------------------------------------------
 
 // Sensible starting aggregation/scope per built-in series; catalog metrics
@@ -615,12 +608,64 @@ export function setMetricPanelMetric(panel, metric) {
     panel.scope = BUILT_IN_DEFAULTS[metric.key].scope;
   }
   const definition = (state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === metric?.id);
+  if (definition?.scopeCapabilities?.length && !definition.scopeCapabilities.includes(panel.scope)) {
+    panel.scope = definition.scopeCapabilities.includes("session") ? "session" : definition.scopeCapabilities[0];
+  }
   if (definition?.calculation?.kind === 'ratio') panel.aggregation = 'ratio';
   if (!panel.titleTouched) panel.title = metric?.label || "";
 }
 
 export function metricPanelCanSave(panel = state.trainingLoad.analysis.metricPanel) {
+  if (panel?.galleryDraft) return Boolean(!panel.saving && !panel.previewLoading && panel.preview?.body === metricPanelPreviewBody(panel));
   return Boolean(panel && panel.metric && panel.title.trim() && !panel.saving);
+}
+
+export function metricPanelCanPreview(panel) {
+  if (!panel?.galleryDraft) return metricPanelCanSave(panel);
+  const {kind,series,teamId,tableId,versionId,anchorKey,additive}=panel.galleryDraft;
+  const metrics=series.map(row=>row.metricDefinitionId??row.builtInSeriesKey);
+  return Boolean(panel.title.trim() && !panel.saving && metrics.every(Boolean)
+    && new Set(metrics).size===series.length
+    && (kind!=="radar"||teamId||tableId&&versionId&&anchorKey) && (kind!=="stacked"||additive));
+}
+
+export function metricPanelPreviewBody(panel) {
+  const { period } = state.trainingLoad.analysis;
+  const chartDay = analysisChartDay();
+  return JSON.stringify({
+    dateFrom: chartDay ?? period.dateFrom, dateTo: chartDay ?? period.dateTo,
+    ...analysisRuntimeFilterPayload(),
+    ...(panel.galleryDraft ? {galleryDraft:{...panel.galleryDraft,title:panel.title.trim(),groupBy:panel.groupBy}} : {
+    metricPreview: {
+      ...(panel.widgetId ? { widgetId: panel.widgetId } : {}),
+      ...seriesBodyForMetric(panel.metric),
+      title: panel.title.trim(), widgetType: panel.widgetType, groupBy: panel.groupBy,
+      dataScopeLevel: panel.scope, analyticalAggregation: panel.aggregation,
+    }}),
+  });
+}
+
+export async function previewAnalysisMetricPanel(onPainted) {
+  const a = state.trainingLoad.analysis;
+  const panel = a.metricPanel;
+  if (!a.pagesAvailable || !a.selectedPageId || !metricPanelCanPreview(panel) || panel.previewLoading) return;
+  ensureAnalysisPeriod();
+  const body = metricPanelPreviewBody(panel);
+  panel.previewLoading = true;
+  panel.preview = null;
+  panel.previewError = "";
+  onPainted?.();
+  try {
+    const response = await api(`${analysisPageWriteBase()}/query`, { method: "POST", body });
+    if (a.metricPanel === panel && metricPanelPreviewBody(panel) === body) panel.preview = { ...response, body };
+  } catch (error) {
+    if (a.metricPanel === panel && metricPanelPreviewBody(panel) === body) {
+      panel.previewError = error.status === 400 ? "Review the metric, calculation and data level, then try again." : "Preview data could not be loaded. Try again.";
+    }
+  } finally {
+    panel.previewLoading = false;
+    if (a.metricPanel === panel) onPainted?.();
+  }
 }
 
 function sameMetric(left, right) {
@@ -701,6 +746,32 @@ export async function saveAnalysisMetricPanel(onPainted) {
   const a = state.trainingLoad.analysis;
   const panel = a.metricPanel;
   if (!panel || !a.dashboard || !metricPanelCanSave(panel)) return false;
+  if (panel.galleryDraft) {
+    if(panel.galleryRequest?.previewBody!==panel.preview.body){
+      panel.galleryRequest={previewBody:panel.preview.body,body:{
+        requestId:crypto.randomUUID(),requestIssuedAt:panel.preview.requestIssuedAt,
+        expectedPageRevision:a.page.revision,expectedDashboardRevision:a.dashboard.revision,
+        draft:JSON.parse(panel.preview.body).galleryDraft,
+      }};
+    }
+    panel.saving=true;
+    panel.error="";
+    onPainted?.();
+    try {
+      await api(`${analysisPageWriteBase()}/gallery`,{method:"POST",body:JSON.stringify(panel.galleryRequest.body)});
+    } catch (error) {
+      panel.error=error.status===409?"The dashboard changed. Reopen the page and preview again.":"This chart could not be saved. Check its settings and try again.";
+      return false;
+    } finally {
+      panel.saving=false;
+      onPainted?.();
+    }
+    a.metricPanel=null;
+    await loadDashboardDetail(a.dashboard.id,onPainted,{force:true});
+    await queryAnalysisDashboard(onPainted,{force:true});
+    a.notice="Widget saved.";
+    return true;
+  }
   const base = analysisPageWriteBase();
   const post = (url, body) => api(url, { method: "POST", body: JSON.stringify(body) });
   const patch = (url, body) => api(url, { method: "PATCH", body: JSON.stringify(body) });

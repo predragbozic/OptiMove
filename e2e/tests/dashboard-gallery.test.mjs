@@ -94,17 +94,27 @@ for(const role of ['club_admin','team_coach'])test(role+': saved gallery is read
  }finally{await context.close()}
 });
 
-test('1280px: the regular Edit metric panel shows illustrated choices in a two-column layout',async()=>{
- const {context,page,pageErrors}=await openAs(browser,world,'club_admin',1280);
+for (const width of [1280,390]) test(`${width}px: Edit metric shows every illustrated display and loads preview`,async()=>{
+ const {context,page,pageErrors}=await openAs(browser,world,'club_admin',width);
  try{
   await openDashboard(page,byRole.get('club_admin').dashboard.id);
   await page.getByRole('button',{name:'Widget actions: horizontal_bar',exact:true}).click();
   await action(page,'analysis-edit-widget').click();
   const editor=page.getByRole('dialog',{name:'Edit metric'});
   await editor.waitFor();
-  assert.equal(await editor.locator('.tl-metric-panel-types button svg').count(),4);
+  assert.equal(await editor.locator('.tl-metric-panel-types button svg').count(),12);
+  assert.equal(await editor.getByRole('button',{name:/^Radar/}).isVisible(),true);
   assert.equal(await editor.getByRole('button',{name:'Advanced settings',exact:true}).isVisible(),true);
-  assert.equal(await editor.locator('.tl-metric-panel-body').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),2);
+  assert.equal(await editor.locator('.tl-metric-panel-body').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width===1280?2:1);
+  const [preview]=await Promise.all([
+   page.waitForResponse(response=>response.url().endsWith('/query')&&response.request().postDataJSON()?.metricPreview),
+   editor.getByRole('button',{name:'Load preview',exact:true}).click(),
+  ]);
+  assert.equal(preview.status(),200,await preview.text());
+  assert.ok((await preview.json()).result.series[0].data.current.some(row=>typeof row.value==='number'));
+  await editor.locator('[aria-label="Widget preview"][aria-busy="false"]').waitFor();
+  assert.equal(await editor.locator('[aria-label="Widget preview"] [role="alert"]').count(),0);
+  assert.equal(await editor.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
   assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
@@ -114,6 +124,36 @@ test('an existing gallery can become a table without a hidden gallery setting bl
   await openDashboard(page,gallery.dashboard.id);await page.getByRole('button',{name:'Widget actions: combined',exact:true}).click();await action(page,'analysis-edit-widget').click();await action(page,'simple-advanced').click();
   const dialog=page.getByRole('dialog',{name:'Widget settings'});await dialog.waitFor();await action(page,'analysis-widget-type').selectOption('table');await dialog.getByRole('button',{name:'Save changes',exact:true}).click();await dialog.waitFor({state:'hidden'});
   await page.locator('[data-analysis-widget-id="'+gallery.widgets[2]+'"] table').waitFor();assert.deepEqual(pageErrors,[]);
+ }finally{await context.close()}
+});
+
+for(const width of [1280,390]) test(`${width}px: add Area from View and preview before atomic save`,async()=>{
+ const {context,page,pageErrors}=await openAs(browser,world,'club_admin',width);
+ try{
+  await openDashboard(page,byRole.get('club_admin').dashboard.id);
+  await page.getByRole('button',{name:'Add widget',exact:true}).click();
+  const editor=page.getByRole('dialog',{name:'Add metric'});
+  assert.equal(await editor.locator('.tl-metric-panel-types button:enabled svg').count(),12);
+  await editor.getByRole('button',{name:'Area',exact:true}).click();
+  const metric=editor.getByLabel('Measurement 1');
+  await metric.selectOption({label:'Distance part A'});
+  await editor.getByLabel('Title').fill(`Area preview ${width}`);
+  await editor.getByLabel('Title').press('Tab');
+  const [preview]=await Promise.all([
+   page.waitForResponse(r=>r.url().endsWith('/query')&&r.request().postDataJSON()?.galleryDraft),
+   editor.getByRole('button',{name:'Load preview',exact:true}).click(),
+  ]);
+  assert.equal(preview.status(),200,await preview.text());
+  assert.ok((await preview.json()).result.series[0].data.current.some(row=>typeof row.value==='number'));
+  await editor.locator('[aria-label="Widget preview"] optimove-dashboard-chart svg').waitFor();
+  assert.equal(await page.locator('.tl-analysis-grid').getByRole('heading',{name:`Area preview ${width}`}).count(),0);
+  const [saved]=await Promise.all([
+   page.waitForResponse(r=>r.url().endsWith('/gallery')&&r.request().method()==='POST'),
+   editor.getByRole('button',{name:'Save metric',exact:true}).click(),
+  ]);
+  assert.equal(saved.status(),200,await saved.text());
+  await page.locator('.tl-analysis-grid').getByRole('heading',{name:`Area preview ${width}`}).waitFor();
+  assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
 

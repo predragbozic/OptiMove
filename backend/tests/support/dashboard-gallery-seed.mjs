@@ -1,9 +1,9 @@
 // Synthetic, measured values only. Shared by backend HTTP and browser tests;
 // this helper never imports browser tooling and accepts only the test-owned client.
 import crypto from 'node:crypto';
-export async function seedGalleryMeasurements(q,{actorId,clubId,athleteIds,teamId=null,dates=['2026-11-05','2026-11-06'],existingDefinitions=null,entryMethod='manual'}){
+export async function seedGalleryMeasurements(q,{actorId,clubId,athleteIds,teamId=null,dates=['2026-11-05','2026-11-06'],existingDefinitions=null,entryMethod='manual',labels=['Distance part A','Distance part B']}){
  const definitions=existingDefinitions??[];
- for(const name of (existingDefinitions?[]:['Distance part A','Distance part B'])){
+ for(const name of (existingDefinitions?[]:labels)){
   const id=(await q.query("insert into training_load.metric_definitions(key,label,owner_scope,state,created_by_user_id) values($1,$2,'system','active',$3) returning id",['gallery_'+crypto.randomUUID(),name,actorId])).rows[0].id;
   const versionId=(await q.query("insert into training_load.metric_definition_versions(metric_definition_id,version_number,unit,value_type,daily_aggregation_method,created_by_user_id) values($1,1,'m','numeric','sum',$2) returning id",[id,actorId])).rows[0].id;
   await q.query('update training_load.metric_definitions set current_version_id=$2 where id=$1',[id,versionId]);await q.query("insert into training_load.metric_definition_scope_capabilities(metric_definition_id,scope_level) values($1,'session')",[id]);definitions.push({id,versionId,name});

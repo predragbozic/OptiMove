@@ -1,5 +1,5 @@
 import { canManageExternalSchedules } from "./permission-nav.js";
-import { loadReferenceSection, referencesMayBeLeft, referenceAction } from "./dashboard-references.js";
+import { loadReferenceSection, referenceState, referencesMayBeLeft, referenceAction } from "./dashboard-references.js";
 import {formatDate as formatDashboardReportDate} from './utils.js';
 import {printDashboardPage} from './training-load-dashboard-print.js';
 import {handleDashboardPageAction} from './training-load-pages-data.js';
@@ -8,6 +8,8 @@ import { closeImportsOverlays } from "./gpexe-period-data.js";
 import { applyRpeChangeAnswer, rpeChangeFormFields, rpeChangeIsUnchanged, rpeChangeRequestBody } from "./rpe-answer-change.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
+import { previewAnalysisMetricPanel } from './training-load-analysis-data.js';
+import {api} from './api.js';
 import {
   clearGpexeIdentities, closeGpexeCandidate, importsUnloadShouldWarn, loadGpexeImports, reloadGpexeCandidates } from "./gpexe-import-data.js";
 import { estimateTargetsOf, reviewHasWorkInFlight } from "./gpexe-estimate-link.js";
@@ -1356,10 +1358,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     return true;
   }
   // -------------------- Dashboards UX H1: guided "Add metric" panel --------------------
-  if (type === "training-load-analysis-add-widget") {
+  if (type === "training-load-analysis-add-widget" || type === "training-load-analysis-add-gallery-widget") {
     if (!state.trainingLoad.analysis.dashboard) return true;
     if (analysisWidgetActionsBlocked()) return true;
-    if (state.trainingLoad.analysis.simplePreview && await openSimpleEditor(null, renderTrainingLoad)) return true;
+    if (type.endsWith("add-widget") && state.trainingLoad.analysis.simplePreview && await openSimpleEditor(null, renderTrainingLoad)) return true;
     openAnalysisMetricPanel(null);
     // The catalog load flips metricPicker.loading synchronously, so this
     // first render already shows "Loading metrics..." under the built-ins;
@@ -1399,6 +1401,132 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     const panel = state.trainingLoad.analysis.metricPanel;
     if (!panel || panel.saving) return true;
     panel.widgetType = action.dataset.widgetType || panel.widgetType;
+    panel.galleryDraft=null;
+    renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-panel-chart") {
+    const a = state.trainingLoad.analysis;
+    const panel = a.metricPanel;
+    const widget = a.widgets.find(row => row.id === panel?.widgetId);
+    if (!panel || panel.saving || analysisWidgetActionsBlocked()) return true;
+    const kind = action.dataset.chartKind;
+    if (!panel.widgetId && a.pagesAvailable) {
+      if (!["area","horizontal_bar","combined","heatmap","scatter","stacked","boxplot","radar"].includes(kind)) return true;
+      const distribution=["heatmap","boxplot"].includes(kind);
+      const count=kind==="radar"?3:["combined","scatter","stacked"].includes(kind)?2:1;
+      const first=(a.metricPicker.definitions??[]).find(def=>def.id===panel.metric?.id&&["numeric","number"].includes(def.valueType));
+      panel.galleryDraft={kind,series:Array.from({length:count},(_,index)=>({
+        metricDefinitionId:index===0?first?.id??"":"",
+        dataScopeLevel:index===0&&first?panel.scope:"session",
+        analyticalAggregation:distribution?"none":"sum",
+        ...(kind==="combined"?{mark:index===0?"bar":"line",axis:index===0?"primary":"secondary"}:{}),
+      })),...(kind==="radar"?{tableId:"",versionId:"",anchorKey:""}:{}),...(kind==="stacked"?{additive:false}:{})};
+      panel.groupBy=kind==="radar"?"athlete":"day";
+      renderTrainingLoad();
+      if(kind==="radar"&&!referenceState().initialized) void loadReferenceSection(renderTrainingLoad);
+      return true;
+    }
+    if (!widget) return true;
+    if (kind === "radar") {
+      if (!a.referencesAvailable || !["line_chart", "bar_chart"].includes(widget.widget_type)) return true;
+      await referenceAction('openBinding', widget.id);
+      if (!a.referenceEditorOpen) return true;
+      a.metricPanel = null;
+      await referenceAction('bindingField', { key: 'mode', value: 'radar' });
+    } else {
+      if (!a.chartShapes || !["area", "horizontal_bar", "combined", "heatmap", "scatter", "stacked", "boxplot"].includes(kind)) return true;
+      openAnalysisWidgetEditor(widget);
+      const draft = a.editor.draft;
+      setEditorWidgetType(draft, kind === "area" ? "line_chart" : "bar_chart");
+      draft.galleryKind = kind;
+      draft.galleryKeys = draft.series.map(row => row.key);
+      a.metricPanel = null;
+      void loadAnalysisMetricDefinitions().then(renderTrainingLoad);
+    }
+    renderTrainingLoad();
+    return true;
+  }
+  if(type==="training-load-analysis-panel-gallery-field"){
+    const a=state.trainingLoad.analysis,panel=a.metricPanel,draft=panel?.galleryDraft;
+    if(!draft||panel.saving)return true;
+    const {field,index}=action.dataset;
+    const entry=draft.series[Number(index)];
+    if(field==="referenceMode"&&draft.kind==="radar"){
+      panel.galleryPreset=null;
+      if(action.value==="team"){
+        delete draft.tableId;
+        delete draft.versionId;
+        delete draft.anchorKey;
+        draft.teamId="";
+        draft.series.forEach(row=>{
+          if(a.metricPicker.definitions.find(def=>def.id===row.metricDefinitionId)?.calculation){
+            delete row.metricDefinitionId;
+            row.analyticalAggregation="sum";
+          }
+        });
+        panel.groupBy="cohort";
+      }else{
+        delete draft.teamId;
+        Object.assign(draft,{tableId:"",versionId:"",anchorKey:""});
+        panel.groupBy="athlete";
+      }
+    }
+    else if(field==="tableId"&&draft.kind==="radar"&&Object.hasOwn(draft,"tableId")){
+      const table=referenceState().tables.find(row=>row.id===action.value&&!row.archived&&row.published_version_id);
+      panel.galleryPreset=null;
+      panel.previewError="";
+      Object.assign(draft,{tableId:table?.id??"",versionId:"",anchorKey:""});
+      if(table){
+        try{
+          const detail=await api(`/api/training-load/reference-tables/${encodeURIComponent(table.id)}/versions/${encodeURIComponent(table.published_version_id)}`);
+          if(a.metricPanel!==panel||panel.galleryDraft!==draft||draft.tableId!==table.id)return true;
+          panel.galleryPreset=detail;
+          draft.versionId=table.published_version_id;
+          draft.anchorKey=detail.valueKinds.find(row=>row.key==="target")?.key??detail.valueKinds[0]?.key??"";
+          if(!panel.titleTouched)panel.title=table.name;
+          draft.series.forEach((seriesRow,i)=>{
+            const column=detail.columns[i];
+            seriesRow.metricDefinitionId=column?.definition_id??"";
+            if(column)Object.assign(seriesRow,{dataScopeLevel:column.data_level,analyticalAggregation:column.aggregation});
+          });
+        }catch{
+          if(a.metricPanel===panel&&panel.galleryDraft===draft&&draft.tableId===table.id)panel.previewError="The published reference could not be loaded.";
+        }
+      }
+    }
+    else if(field==="anchorKey")draft.anchorKey=action.value;
+    else if(field==="teamId")draft.teamId=action.value;
+    else if(field==="append"&&["area","horizontal_bar","combined","stacked","radar"].includes(draft.kind)&&draft.series.length<8){
+      draft.series.push({dataScopeLevel:"session",analyticalAggregation:"sum",...(draft.kind==="combined"?{mark:"bar",axis:"primary"}:{})});
+    }
+    else if(field==="remove"&&entry&&["area","horizontal_bar","combined","stacked","radar"].includes(draft.kind)){
+      const minimum=draft.kind==="radar"?3:["stacked","combined"].includes(draft.kind)?2:1;
+      if(draft.series.length>minimum)draft.series.splice(Number(index),1);
+    }
+    else if(field==="additive")draft.additive=action.checked;
+    else if(entry&&["metricDefinitionId","dataScopeLevel","analyticalAggregation","mark","axis"].includes(field)){
+      if(field==="metricDefinitionId"){
+        const builtin=BUILT_IN_SERIES.find(def=>def.key===action.value);
+        const definition=builtin??a.metricPicker.definitions.find(def=>def.id===action.value);
+        delete entry.metricDefinitionId;
+        delete entry.builtInSeriesKey;
+        if(builtin){
+          entry.builtInSeriesKey=builtin.key;
+          entry.dataScopeLevel=BUILT_IN_FIXED_SCOPE[builtin.key]??entry.dataScopeLevel;
+        }else if(definition){
+          entry.metricDefinitionId=definition.id;
+          if(definition.scopeCapabilities?.length&&!definition.scopeCapabilities.includes(entry.dataScopeLevel))entry.dataScopeLevel=definition.scopeCapabilities[0];
+        }
+        if(index==="0"&&!panel.titleTouched&&definition)panel.title=definition.label;
+        const column=panel.galleryPreset?.columns?.find(item=>item.definition_id===action.value);
+        if(column)Object.assign(entry,{dataScopeLevel:column.data_level,analyticalAggregation:column.aggregation});
+        const allowed=definition?.allowedAggregations??[];
+        if(!["heatmap","boxplot"].includes(draft.kind)&&allowed.length&&!allowed.includes(entry.analyticalAggregation)){
+          entry.analyticalAggregation=allowed.find(value=>value!=="none")??"sum";
+        }
+      }else entry[field]=action.value;
+    }
     renderTrainingLoad();
     return true;
   }
@@ -1419,6 +1547,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (field === "scope" && panel.metric?.kind === "builtin" && BUILT_IN_FIXED_SCOPE[panel.metric.key]) return true;
     panel[field] = action.value || panel[field];
     renderTrainingLoad();
+    return true;
+  }
+  if (type === "training-load-analysis-panel-preview") {
+    await previewAnalysisMetricPanel(renderTrainingLoad);
     return true;
   }
   if (type === "training-load-analysis-panel-save") {
