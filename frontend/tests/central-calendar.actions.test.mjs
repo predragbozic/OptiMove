@@ -336,12 +336,11 @@ test("4b. the time grid (wide, grid mode) places a timed card at its minute and 
   const untimed = [...doc.querySelectorAll(".cc-timegrid-untimed :is(.cc-card, .cc-daychip)")].map((card) => card.dataset.key);
   assert.deepEqual(untimed, ["planned:batch-1", "external:sch-2:d3", "test:tsch-2:d4", "external:sch-3:d5", "activity:act-manual"], "every card without a start time, day by day");
   assert.equal(doc.querySelector('.cc-mode-switch [data-mode="grid"]').getAttribute("aria-pressed"), "true");
-  // Not on a medium screen: no switch, the list is drawn.
+  // Tablet keeps the chosen time grid and all seven days.
   layout = "medium";
   render();
-  assert.equal(dom().querySelector(".cc-mode-switch"), null);
-  assert.ok(dom().querySelector(".cc-week"));
-  assert.equal(dom().querySelector(".cc-timegrid"), null);
+  assert.equal(dom().querySelector('.cc-mode-switch [data-mode="grid"]').getAttribute("aria-pressed"), "true");
+  assert.equal(dom().querySelectorAll(".cc-timegrid-head").length, 7);
 });
 
 // --- 5. The card ---------------------------------------------------------------

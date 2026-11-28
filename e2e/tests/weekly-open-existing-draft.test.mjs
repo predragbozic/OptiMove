@@ -83,6 +83,7 @@ for (const [label, width, name] of CASES) {
     try {
       await navTo(page, "#calendarToggle");
       await page.waitForSelector(".central-calendar .athlete-switcher", { timeout: 20_000 });
+      if (width >= 761) await page.getByRole("button", { name: "Show athletes", exact: true }).click();
       if (width < 761 && (await page.locator(".athlete-switcher-fold").getAttribute("aria-expanded")) !== "true") await page.locator(".athlete-switcher-fold").click();
       await page.locator(`.athlete-switcher .builder-batch-pill[aria-label="${name}"]`).click();
       await page.waitForSelector(".cc-athlete-line");

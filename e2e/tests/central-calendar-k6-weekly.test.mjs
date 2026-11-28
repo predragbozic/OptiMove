@@ -61,6 +61,7 @@ async function withPlans(page) {
 async function openCalendar(page, width) {
   await navTo(page, "#calendarToggle");
   await page.waitForSelector(".central-calendar .athlete-switcher", { timeout: 20_000 });
+  if (width >= 761) await page.getByRole("button", { name: "Show athletes", exact: true }).click();
   if (width < 761 && (await page.locator(".athlete-switcher-fold").getAttribute("aria-expanded")) !== "true") await page.locator(".athlete-switcher-fold").click();
 }
 const overflow = (page, width) => page.evaluate((w) => Math.max(window.innerWidth - w, document.documentElement.scrollWidth - w), width);

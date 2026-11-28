@@ -265,7 +265,7 @@ test("D5. the Day time grid only on wide with the switch on Time grid; six colum
   cal.weekMode = "list";
   assert.equal(draw(cal).querySelector(".cc-timegrid"), null, "the switch on List: the list");
   cal.weekMode = "grid";
-  assert.equal(draw(cal, "medium").querySelector(".cc-timegrid"), null, "medium: the list");
+  assert.ok(draw(cal, "medium").querySelector(".cc-timegrid-day"), "tablet: the time grid");
   assert.ok(draw(cal, "phone").querySelector(".cc-timegrid-day"), "phone: the time grid");
 });
 
@@ -293,12 +293,13 @@ test("phone week shows icons for a pair and counts larger overlaps in full-width
   assert.match(group.parentElement.getAttribute("style"), /--cc-tg-width:1(?:;|$)/);
 });
 
-test("U. unchanged larger layouts retain the K7 markup", () => {
+test("U. larger layouts retain K7 content outside the athlete filter and tablet view switch", () => {
   const before = JSON.parse(readFileSync(new URL("./support/central-calendar-k7-unchanged.json", import.meta.url), "utf8"));
   assert.equal(Object.keys(before).length, K7_UNCHANGED_CASES.length);
   for (const c of K7_UNCHANGED_CASES) {
-    if (c.layout === "phone") continue;
+    if (c.layout === "phone" || (c.layout === "medium" && c.view !== "month")) continue;
     const html = view.renderCentralCalendarHtml(k7State(c), { today: K7_TODAY, layout: c.layout });
-    assert.equal(html, before[`${c.layout}/${c.view}/${c.mode}`], `${c.layout}/${c.view}/${c.mode}`);
+    const withoutSwitcher = (markup) => markup.replace(/<section class="athlete-switcher[^]*?<\/section>/, "");
+    assert.equal(withoutSwitcher(html), withoutSwitcher(before[`${c.layout}/${c.view}/${c.mode}`]), `${c.layout}/${c.view}/${c.mode}`);
   }
 });
