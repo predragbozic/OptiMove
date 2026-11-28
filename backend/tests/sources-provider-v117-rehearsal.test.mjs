@@ -68,7 +68,8 @@ test("audited v117 host and connection generation installation is private, NOWAI
 
     await client.query(`grant select on ${hosts} to ${inheritedRole}`);
     assert.equal((await pre()).new_fields_can_remain_private, false, "inherited API table privilege is visible");
-    await assert.rejects(db.applyThrough(prefix), /source relations already grant API or PUBLIC access/);
+    await assert.rejects(db.applyThrough(prefix), error => error.cause?.code === "P0001"
+      && /source relations already grant API or PUBLIC access/.test(error.cause.message));
     await noColumns();
     await client.query(`revoke select on ${hosts} from ${inheritedRole}`);
     await client.query(`grant select on ${connections} to public`);
@@ -82,7 +83,8 @@ test("audited v117 host and connection generation installation is private, NOWAI
       await holder.query("begin");
       try {
         await holder.query(`select 1 from ${table} for share`);
-        await assert.rejects(db.applyThrough(prefix), /could not obtain lock on relation/);
+        await assert.rejects(db.applyThrough(prefix), error => error.cause?.code === "55P03"
+          && /could not obtain lock on relation/.test(error.cause.message));
         await noColumns();
       } finally {
         await holder.query("rollback");
