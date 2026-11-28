@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // J18, slice 18-1 - migration v65 (M-A): the stored two-athlete confirmation of
 // a drag-and-drop mapping.
 // Contract: docs/ai/c112-drag-mapping-contract.md (J18), sections 5.1-5.4, 5.6,
@@ -96,6 +97,8 @@ before(async () => {
   await k.connect();
   assert.equal((await r.query("select current_database() as d")).rows[0].d, rdb.name, "SAFETY");
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
