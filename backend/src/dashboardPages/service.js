@@ -18,6 +18,7 @@ import {canonicalKey} from '../dashboardSimple/compiler.js';
 import {isUuid} from '../dashboardSimple/schema.js';
 import {pageDatabaseEnabled} from './config.js';
 import {buildGalleryDraft,bindGallerySeries} from './galleryDraft.js';
+import {buildAdvancedPreviewWidget} from './advancedPreview.js';
 import {adminWriteKit} from '../sourceMetricMappingService.js';
 import {dashboardManageOffered,dashboardWorkspaceWriteScope,dashboardOwnerWriteScope,lockDashboardManageCeilings,dashboardManageRightsStillHold,lockDashboardActor,markDashboardManageWrite} from '../dashboardManageAccess.js';
 
@@ -181,7 +182,7 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    let shellFilter;try{shellFilter=normalizeShellFilter(body.shellFilter)}catch{throw pageError('invalidRequest',400)}
    if(body.galleryDraft!==undefined){
     if(!canManageDashboardRow(target.req,target.dashboard)||!dashboardManageOffered(target.req,target.workspace,target.dashboard))throw pageError();
-    if(['widgetIds','referencePreview','metricPreview'].some(key=>Object.hasOwn(body,key)))throw pageError('invalidRequest',400);
+    if(['widgetIds','referencePreview','metricPreview','advancedPreview'].some(key=>Object.hasOwn(body,key)))throw pageError('invalidRequest',400);
     const widget=await buildGalleryDraft(q,target,body.galleryDraft);
     const namedAthletes=dashboardNamedAthletesAllowed(target.req,target.workspace);
     const options={defaultFilter:page.default_filter,requestFilter:filter,shellFilter};
@@ -194,6 +195,16 @@ export function createPageService({pool,now=()=>Date.now(),validateWidgetBody=()
    const widgets=(await q('select * from training_load.dashboard_widgets where dashboard_id=$1 and page_id=$2 order by widget_order,id',[dashboardId,page.id])).rows;
    const series=widgets.length?(await q('select * from training_load.dashboard_widget_series where widget_id=any($1::uuid[]) order by widget_id,series_order,id',[widgets.map(w=>w.id)])).rows:[];
    let selected=dashboardWidgetsForViewer(target.req,widgets).filter(w=>!body.widgetIds||body.widgetIds.includes(w.id)).map(w=>({...w,series:series.filter(s=>s.widget_id===w.id)}));
+   if(body.advancedPreview!==undefined){
+    if(!canManageDashboardRow(target.req,target.dashboard)||!dashboardManageOffered(target.req,target.workspace,target.dashboard))throw pageError();
+    if(['widgetIds','referencePreview','metricPreview'].some(key=>Object.hasOwn(body,key)))throw pageError('invalidRequest',400);
+    const previous=selected.find(w=>w.id===String(body.advancedPreview?.widgetId??'').toLowerCase());
+    const widget=await buildAdvancedPreviewWidget(q,target.dashboard,previous,body.advancedPreview,validateWidgetBody);
+    const [result]=await queryDashboardForViewer(target.workspace,[widget],period,{defaultFilter:page.default_filter,requestFilter:filter,shellFilter,queryRunner:q},{namedAthletes:dashboardNamedAthletesAllowed(target.req,target.workspace)});
+    const {local_filter_override,...previewWidget}=widget;
+    previewWidget.series=widget.series.map(({galleryCalculation,source_connection_id,...entry})=>entry);
+    return {widget:previewWidget,result:attachGalleryResult(widget,result),resolvedPeriod:period};
+   }
    if(body.metricPreview!==undefined){
     if(!canManageDashboardRow(target.req,target.dashboard)||!dashboardManageOffered(target.req,target.workspace,target.dashboard))throw pageError();
     if(body.widgetIds!==undefined||body.referencePreview!==undefined)throw pageError('invalidRequest',400);

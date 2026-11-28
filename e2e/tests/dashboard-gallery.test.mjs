@@ -74,6 +74,47 @@ for(const width of [360,375,390])test(width+'px: visual gallery editor saves a m
   const selected=page.locator(`[data-analysis-widget-id="${gallery.widgets[2]}"] optimove-dashboard-chart`);await selected.locator('svg').waitFor();assert.equal(await selected.evaluate(el=>JSON.parse(el.getAttribute('data-chart')).option.series[0].type),width===360?'scatter':'bar');assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
+for (const width of [390, 1280]) test(`${width}px: Advanced table adds, reorders and previews measured variables`, async () => {
+ const role = width === 390 ? 'club_admin' : 'platform_admin';
+ const fixture = width === 390 ? byRole.get(role) : gallery;
+ const {context, page, pageErrors} = await openAs(browser, world, role, width);
+ try {
+  await openDashboard(page, fixture.dashboard.id);
+  const widget = page.locator(`[data-analysis-widget-id="${fixture.widgets[0]}"]`);
+  await widget.getByRole('button',{name:'Widget actions: area',exact:true}).click();
+  await action(page,'analysis-edit-widget').click();
+  await action(page,'simple-advanced').click();
+  const editor = page.getByRole('dialog',{name:'Widget settings'});
+  await action(page,'analysis-widget-type').selectOption('table');
+  await action(page,'analysis-widget-group').selectOption('athlete');
+  await action(page,'analysis-series-aggregation').selectOption('min');
+  await editor.getByRole('button',{name:/Add variable/}).click();
+  await editor.getByRole('searchbox',{name:'Search metrics'}).fill('Distance part B');
+  await editor.getByRole('button',{name:/Distance part B/}).click();
+  await action(page,'analysis-series-aggregation').selectOption('max');
+  await editor.getByRole('button',{name:'Move up: Distance part B',exact:true}).click();
+  const [response] = await Promise.all([
+   page.waitForResponse(r=>r.url().endsWith('/query') && r.request().postDataJSON()?.advancedPreview),
+   editor.getByRole('button',{name:'Load preview',exact:true}).click(),
+  ]);
+  assert.equal(response.status(),200,await response.text());
+  const preview = editor.getByRole('region',{name:'Widget preview',exact:true});
+  const headers = preview.getByRole('columnheader');
+  await headers.last().waitFor();
+  const visibleHeaders = await headers.allTextContents();
+  assert.match(visibleHeaders[1],/Distance part B/);
+  assert.match(visibleHeaders[2],/Distance part A/);
+  assert.ok(await preview.getByRole('row').count() > 1);
+  assert.equal(await widget.locator('optimove-dashboard-chart').count(),1);
+  assert.equal(await editor.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+  await editor.getByRole('button',{name:'Save changes',exact:true}).click();
+  await editor.waitFor({state:'hidden'});
+  await widget.getByRole('table').waitFor();
+  assert.deepEqual(await widget.getByRole('columnheader').allTextContents(),visibleHeaders);
+  assert.deepEqual(pageErrors,[]);
+ } finally { await context.close(); }
+});
+
 for(const width of [390,1280])test(width+'px: PDF copies seven graphs in visible order and only expanded tables, with no controls or identifiers',async()=>{
  const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',width);try{
   await context.addInitScript(()=>{window.print=()=>{}});await openDashboard(page,gallery.dashboard.id);await page.waitForFunction(()=>document.querySelectorAll('.tl-analysis-grid optimove-dashboard-chart svg').length===7);

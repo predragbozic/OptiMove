@@ -1,4 +1,4 @@
-import {metricPanelCanPreview,metricPanelPreviewBody} from './training-load-analysis-data.js';
+import {analysisEditorCanPreview,analysisEditorPreviewBody,metricPanelCanPreview,metricPanelPreviewBody} from './training-load-analysis-data.js';
 import {referenceChartModel,referenceReason} from './dashboard-reference-model.js';
 import {chartPickerIllustration,renderGalleryPicker} from './training-load-gallery-picker.js';
 import {dashboardDisclosureOpen} from './training-load-dashboard-disclosures.js';
@@ -9,7 +9,7 @@ import { analysisChartDay, analysisChartInteractionGeneration, BUILT_IN_FIXED_SC
 import { renderSimpleEditorHtml } from './training-load-simple-view.js';
 import { state } from "./state.js";
 import { viewModuleOpen } from "./view-modules.js";
-import { formatDashboardValue as formatValue, renderDashboardMetricTable } from "./training-load-dashboard-table.js";
+import { formatDashboardValue as formatValue, renderDashboardMetricTable, renderDashboardPivotTable } from "./training-load-dashboard-table.js";
 import { buildDashboardWidgetDisplayModel } from "./training-load-analysis-display-model.js";
 import { dashboardGroupLabels } from "./training-load-analysis-group-labels.js";
 import { renderDashboardChartPlots } from "./training-load-analysis-echarts-options.js";
@@ -25,12 +25,12 @@ const WIDGET_TYPES = [
   { key: "bar_chart", label: "Bar", hint: "Compare buckets" },
 ];
 const GROUP_BY = ["day", "week", "session", "component", "athlete", "cohort"];
-const AGGREGATIONS = ["sum", "avg", "max", "last", "none", "ratio"];
+const AGGREGATIONS = ["sum", "avg", "min", "max", "last", "none", "ratio"];
 const SCOPE_LEVELS = ["day", "session", "component"];
 // Dashboards UX H1: coach-facing labels for the guided panel's basic
 // settings (H4: the advanced editor uses them too).
 const GROUP_BY_LABELS = { day: "Per day", week: "Per week", session: "Per session", component: "Per component", athlete: "Per athlete", cohort: "Whole group" };
-const AGGREGATION_LABELS = { ratio: "Ratio", sum: "Total", avg: "Average", max: "Maximum", last: "Latest value", none: "Raw values" };
+const AGGREGATION_LABELS = { ratio: "Ratio", sum: "Total", avg: "Average", min: "Minimum", max: "Maximum", last: "Latest value", none: "Raw values" };
 const SCOPE_LABELS = { day: "Day", session: "Session", component: "Component" };
 const SOURCE_POLICIES = ["all_with_conflicts", "source_connection", "manual", "api_import", "csv_import", "derived", "estimate", "not_applicable"];
 const COVERAGE_POLICIES = ["complete_only", "complete_and_partial", "any"];
@@ -550,7 +550,16 @@ function renderWidgetBodyHtml(widget, results, previewPeriod = null) {
     if (model.series.length === 1 && model.series[0].status === "ready" && ["day", "athlete"].includes(model.groupBy)) {
       return renderDashboardMetricTable(model, state.trainingLoad.orgPickerData?.athletes ?? [], seriesLabel(model.series[0].definition)) + calculatedNoteHtml(widget) + ratioNotes;
     }
-    return renderTableHtml(model) + calculatedNoteHtml(widget) + ratioNotes;
+    const pivot = renderDashboardPivotTable(model, state.trainingLoad.orgPickerData?.athletes ?? [], series => {
+      const label = seriesLabel(series);
+      const metric = definitions.find(def => def.id === series.metric_definition_id);
+      const builtin = BUILT_IN_SERIES.find(def => def.key === series.built_in_series_key);
+      const letter = builtin?.icon ?? (metric?.shortLabel || metric?.label || label || "?").slice(0, 1);
+      const fallback = `<span class="tl-metric-icon-fallback" aria-hidden="true">${escapeHtml(uuidPattern.test(label) ? "?" : letter)}</span> `;
+      const icon = renderMetricIconHtml(metric?.iconUrl, { className: "tl-metric-icon", fallback });
+      return { label, icon, unit: metric?.unit ?? builtin?.unit };
+    });
+    return (pivot ?? renderTableHtml(model)) + calculatedNoteHtml(widget) + ratioNotes;
   }
   return renderChartHtml(model) + calculatedNoteHtml(widget) + ratioNotes;
 }
@@ -842,7 +851,7 @@ function editorMetricLabel(metric, displayLabel = "") {
   return metric?.hints?.[0]?.key || "Choose a metric";
 }
 
-function renderMetricPickerHtml(entry) {
+function renderMetricPickerHtml(entry, disabled = "") {
   const picker = state.trainingLoad.analysis.metricPicker;
   const search = picker.search.trim().toLowerCase();
   const definitions = pickable(picker.definitions, { chosen: [entry.metric?.kind === "metric" ? entry.metric.id : null] }).filter((d) => !search || `${d.label} ${d.key} ${d.unit || ""} ${d.domainLabel || ""}`.toLowerCase().includes(search));
@@ -854,25 +863,29 @@ function renderMetricPickerHtml(entry) {
   }
   const isBuiltIn = (key) => entry.metric?.kind === "builtin" && entry.metric.key === key;
   const isMetric = (id) => entry.metric?.kind === "metric" && entry.metric.id === id;
+  const builtIns = BUILT_IN_SERIES.filter(b => !search || `${b.label} ${b.unit || ""}`.toLowerCase().includes(search));
   return `
     <div class="tl-analysis-metric-picker">
-      <p class="eyebrow">Metric</p>
-      <label class="search-field"><span>Search metrics</span><input type="search" data-action="training-load-analysis-metric-search" value="${escapeAttr(picker.search)}" placeholder="Metric name or unit"></label>
-      <div class="tl-analysis-builtins">
+      <h4>Variable catalog</h4>
+      <label class="search-field"><span>Search metrics</span><input type="search" data-action="training-load-analysis-metric-search" value="${escapeAttr(picker.search)}" placeholder="Metric name or unit" ${disabled}></label>
+      <div class="tl-editor-catalog-results">
+      ${builtIns.length ? `<div class="tl-analysis-builtins">
         <p class="eyebrow">Built-in series</p>
-        ${BUILT_IN_SERIES.map((b) => `<button type="button" class="plain-button compact-button ${isBuiltIn(b.key) ? "is-active" : ""}" aria-pressed="${isBuiltIn(b.key) ? "true" : "false"}" data-action="training-load-analysis-series-bind-builtin" data-series-key="${escapeAttr(entry.key)}" data-built-in-key="${escapeAttr(b.key)}"><span class="tl-metric-icon-fallback">${escapeHtml(b.icon)}</span>${escapeHtml(b.label)}${b.unit ? ` · ${escapeHtml(b.unit)}` : ""}</button>`).join("")}
-      </div>
+        ${builtIns.map((b) => `<button type="button" class="plain-button compact-button ${isBuiltIn(b.key) ? "is-active" : ""}" aria-pressed="${isBuiltIn(b.key) ? "true" : "false"}" data-action="training-load-analysis-series-bind-builtin" data-series-key="${escapeAttr(entry.key)}" data-built-in-key="${escapeAttr(b.key)}" ${disabled}><span class="tl-metric-icon-fallback">${escapeHtml(b.icon)}</span>${escapeHtml(b.label)}${b.unit ? ` · ${escapeHtml(b.unit)}` : ""}</button>`).join("")}
+      </div>` : ""}
       ${picker.loading ? `<p class="muted tl-analysis-loading" aria-live="polite">Loading metrics...</p>` : ""}
       ${picker.error ? `<p class="builder-error" role="alert">${escapeHtml(picker.error)}</p>` : ""}
       ${[...groups.entries()].map(([group, rows]) => `
         <div class="tl-analysis-metric-group">
           <p class="eyebrow">${escapeHtml(group)}</p>
-          ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option ${isMetric(d.id) ? "is-active" : ""}" aria-pressed="${isMetric(d.id) ? "true" : "false"}" data-action="training-load-analysis-series-bind-metric" data-series-key="${escapeAttr(entry.key)}" data-metric-id="${escapeAttr(d.id)}">
+          ${rows.map((d) => `<button type="button" class="tl-analysis-metric-option ${isMetric(d.id) ? "is-active" : ""}" aria-pressed="${isMetric(d.id) ? "true" : "false"}" data-action="training-load-analysis-series-bind-metric" data-series-key="${escapeAttr(entry.key)}" data-metric-id="${escapeAttr(d.id)}" ${disabled}>
             ${renderMetricIconHtml(d.iconUrl, { fallback: `<span class="tl-metric-icon-fallback">${escapeHtml((d.shortLabel || d.label || "?").slice(0, 1))}</span>` })}
             <span><strong>${escapeHtml(pickerName(d, picker.definitions))}</strong><small>${escapeHtml([d.unit, d.valueType, d.domainLabel, d.categoryLabel, (d.scopeCapabilities || []).join("/")].filter(Boolean).join(" · "))}</small></span>
           </button>`).join("")}
         </div>
       `).join("")}
+      ${!builtIns.length && !groups.size && !picker.loading && !picker.error ? '<p class="muted" role="status">No variables match your search.</p>' : ""}
+      </div>
     </div>
   `;
 }
@@ -896,8 +909,16 @@ function renderEditorHtml() {
   const saving = Boolean(editor.saving);
   const off = saving ? "disabled" : "";
   const override = draft.localFilterOverride || {};
-  const entryIndex = entry ? entries.indexOf(entry) : -1;
   const key = entry ? `data-series-key="${escapeAttr(entry.key)}"` : "";
+  const table = draft.widgetType === "table";
+  const typeIcon = chartPickerIllustration(draft.galleryKind ?? draft.widgetType);
+  const previewBody = analysisEditorPreviewBody(editor);
+  const preview = previewBody && editor.preview?.body === previewBody ? editor.preview : null;
+  const hasPagePreview = a.pagesAvailable && a.selectedPageId;
+  const referenceWidget = Boolean(widget.presentation_config?.referenceConfig);
+  const definitionFor = item => item.metric?.kind === "builtin"
+    ? BUILT_IN_SERIES.find(metric => metric.key === item.metric.key)
+    : a.metricPicker.definitions?.find(metric => metric.id === item.metric?.id);
   const isBuiltIn = entry?.metric?.kind === "builtin";
   // H4: the query engine reads built-in series without these three filters.
   const policyOff = saving || isBuiltIn ? "disabled" : "";
@@ -905,11 +926,10 @@ function renderEditorHtml() {
     ? ["not_applicable"]
     : SOURCE_POLICIES.filter((v) => v !== "not_applicable" && (v !== "source_connection" || entry?.fields.sourcePolicy === "source_connection"));
   const status = (item) => {
-    if (!item.id || !rowsById.has(item.id)) return "New - not saved yet";
+    if (!item.metric) return "Choose a variable";
     const row = rowsById.get(item.id);
-    if (row.resolution_status === "unresolved") return "Choose a metric";
-    if (row.resolution_status === "ambiguous") return "Ambiguous metric";
-    return `${AXIS_LABELS[item.fields.axis || "primary"]} axis`;
+    if (row?.resolution_status === "ambiguous" && item.metric.kind === "hints") return "Ambiguous variable";
+    return [definitionFor(item)?.unit, AGGREGATION_LABELS[item.fields.analyticalAggregation]].filter(Boolean).join(" · ");
   };
   return `
     <div class="builder-athlete-overlay">
@@ -921,7 +941,7 @@ function renderEditorHtml() {
         </div>
         <div class="tl-analysis-editor-grid">
           <label>Title<input type="text" data-action="training-load-analysis-widget-title" data-tl-editor-field="title" data-widget-id="${escapeAttr(widget.id)}" value="${escapeAttr(draft.title)}" maxlength="200" ${off}></label>
-          <label>Type<select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}" ${off}>${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, draft.widgetType)).join("")}</select></label>
+          <label><span class="tl-editor-type-label">${typeIcon} Display type</span><select data-action="training-load-analysis-widget-type" data-widget-id="${escapeAttr(widget.id)}" ${off}>${WIDGET_TYPES.map((t) => optionHtml(t.key, t.label, draft.widgetType)).join("")}</select></label>
           <label>Show per<select data-action="training-load-analysis-widget-group" data-widget-id="${escapeAttr(widget.id)}" ${off}>${GROUP_BY.map((g) => optionHtml(g, GROUP_BY_LABELS[g] || g, draft.groupBy)).join("")}</select></label>
           <div class="tl-analysis-control">
             <span>Activity override</span>
@@ -942,27 +962,39 @@ function renderEditorHtml() {
           ${draft.galleryKind==='stacked'?`<label><input type="checkbox" data-action="training-load-analysis-gallery-additive" ${draft.galleryAdditive?'checked':''} ${off}>These measurements are separate additive components of one total.</label>`:''}
           ${['heatmap','boxplot'].includes(draft.galleryKind)?'<p>Use Each measurement to keep separate athlete values. Conflicting or repeated athlete/date values are left out.</p>':''}
         </fieldset>`:''}
+        <div class="tl-editor-variable-workspace">
         <div class="tl-analysis-series-editor">
           <div class="tl-analysis-series-head">
-            <strong>Series <span class="muted">${entries.length} of ${cap}</span></strong>
-            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-add-series" data-widget-id="${escapeAttr(widget.id)}" ${saving || entries.length >= cap ? "disabled" : ""}>Add series</button>
+            <h4>${table ? "Table columns" : "Variables"} <small class="muted">${entries.length} / ${cap}</small></h4>
+            <button type="button" class="plain-button compact-button" data-action="training-load-analysis-add-series" data-choose-metric="true" data-widget-id="${escapeAttr(widget.id)}" ${saving || entries.length >= cap ? "disabled" : ""}>+ Add variable</button>
           </div>
           <div class="tl-analysis-series-list">
-            ${entries.map((item) => `
-              <button type="button" class="tl-analysis-series-row ${entry?.key === item.key ? "is-active" : ""}" aria-pressed="${entry?.key === item.key ? "true" : "false"}" data-action="training-load-analysis-select-series" data-series-key="${escapeAttr(item.key)}">
-                <span>${escapeHtml(editorMetricLabel(item.metric, item.fields.displayLabel || ""))}</span>
-                <small>${escapeHtml(status(item))}</small>
-              </button>
-            `).join("") || `<p class="muted">No series yet.</p>`}
+            ${entries.map((item, index) => {
+              const label = editorMetricLabel(item.metric, item.fields.displayLabel || "");
+              const metric = definitionFor(item);
+              const itemKey = `data-series-key="${escapeAttr(item.key)}"`;
+              return `<div class="tl-editor-variable-row">
+                <button type="button" class="tl-analysis-series-row ${entry?.key === item.key ? "is-active" : ""}" aria-pressed="${entry?.key === item.key}" data-action="training-load-analysis-select-series" ${itemKey} ${off}>
+                  ${renderMetricIconHtml(metric?.iconUrl, { fallback: `<span class="tl-metric-icon-fallback" aria-hidden="true">${escapeHtml(metric?.icon || label[0] || "?")}</span>` })}
+                  <span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(status(item))}</small></span>
+                </button>
+                <button type="button" class="plain-button icon-button" data-action="training-load-analysis-series-up" ${itemKey} aria-label="Move up: ${escapeAttr(label)}" ${saving || index === 0 ? "disabled" : ""}>&uarr;</button>
+                <button type="button" class="plain-button icon-button" data-action="training-load-analysis-series-down" ${itemKey} aria-label="Move down: ${escapeAttr(label)}" ${saving || index === entries.length - 1 ? "disabled" : ""}>&darr;</button>
+              </div>`;
+            }).join("") || `<p class="muted">Add a variable to show data.</p>`}
           </div>
-          ${entry ? `
+          ${entry?.metric ? `
             <div class="tl-analysis-editor-grid">
               <label>Label<input type="text" data-action="training-load-analysis-series-label" data-tl-editor-field="label" ${key} value="${escapeAttr(entry.fields.displayLabel || "")}" maxlength="200" placeholder="${escapeAttr(editorMetricLabel(entry.metric))}" ${off}></label>
-              <label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
-              <label>Color<input type="color" data-action="training-load-analysis-series-color" ${key} value="${escapeAttr(entry.fields.color || "#0f766e")}" ${off}></label>
+              ${table ? "" : `<label>Axis<select data-action="training-load-analysis-series-axis" ${key} ${off}>${["primary", "secondary"].map((v) => optionHtml(v, AXIS_LABELS[v], entry.fields.axis || "primary")).join("")}</select></label>
+              <label>Color<input type="color" data-action="training-load-analysis-series-color" ${key} value="${escapeAttr(entry.fields.color || "#0f766e")}" ${off}></label>`}
               ${saving ? `<label>Scope<select disabled>${optionHtml(entry.fields.dataScopeLevel, SCOPE_LABELS[entry.fields.dataScopeLevel] || entry.fields.dataScopeLevel, entry.fields.dataScopeLevel)}</select></label>` : renderScopeSelectHtml({ action: "training-load-analysis-series-scope", attrs: key, value: entry.fields.dataScopeLevel, metric: entry.metric, label: "Scope" })}
               <label>Aggregation<select data-action="training-load-analysis-series-aggregation" ${key} ${off}>${((state.trainingLoad.analysis.metricPicker.definitions ?? []).find(d => d.id === entry.metric?.id)?.allowedAggregations ?? AGGREGATIONS.filter(v => v !== "ratio")).map((v) => optionHtml(v, AGGREGATION_LABELS[v], entry.fields.analyticalAggregation)).join("")}</select></label>
               ${analysisWidgetSupportsComparison(draft.widgetType) ? `<label>Comparison<select data-action="training-load-analysis-series-comparison" ${key} ${off}>${COMPARISONS.map((v) => optionHtml(v, COMPARISON_LABELS[v], entry.fields.comparisonPeriod || "")).join("")}</select></label>` : ""}
+            </div>
+            <details class="tl-editor-data-options" data-editor-data-options>
+              <summary>Source and coverage</summary>
+              <div class="tl-analysis-editor-grid">
               <label class="tl-editor-wide">Source<select data-action="training-load-analysis-series-source" ${key} ${policyOff}>${sourceChoices.map((v) => optionHtml(v, SOURCE_LABELS[v], entry.fields.sourcePolicy)).join("")}</select></label>
               <label class="tl-editor-wide">Values included<select data-action="training-load-analysis-series-role" ${key} ${policyOff}>${ROLE_POLICIES.map((v) => optionHtml(v, ROLE_POLICY_LABELS[v], entry.fields.aggregationRolePolicy)).join("")}</select></label>
               <label class="tl-editor-wide">Total coverage<select data-action="training-load-analysis-series-coverage" ${key} ${policyOff}>${COVERAGE_POLICIES.map((v) => optionHtml(v, COVERAGE_LABELS[v], entry.fields.coveragePolicy)).join("")}</select></label>
@@ -970,14 +1002,24 @@ function renderEditorHtml() {
                 ? "Source, values included and total coverage don't apply to built-in metrics."
                 : "Direct value: recorded as it is, not a total. Source total: a total reported by the device or system itself. Calculated total: a total computed afterwards from other values. Partial total: some parts are missing, for example after a device dropout. Direct values are kept by every total coverage choice. If two values remain for the same athlete and session, component or day, the widget shows a conflict instead of adding them up. An estimate, a value a coach estimated for an athlete with no recording, is left out of every source except Estimates only."}</p>
             </div>
-            <div class="tl-analysis-series-actions">
-              <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-up" ${key} ${saving || entryIndex <= 0 ? "disabled" : ""}>Move up</button>
-              <button type="button" class="plain-button compact-button" data-action="training-load-analysis-series-down" ${key} ${saving || entryIndex >= entries.length - 1 ? "disabled" : ""}>Move down</button>
-              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${off}>Remove series</button>
-            </div>
-            ${renderMetricPickerHtml(entry)}
+            </details>
           ` : ""}
+          ${entry ? `<div class="tl-analysis-series-actions">
+              <button type="button" class="plain-button compact-button danger" data-action="training-load-analysis-delete-series" ${key} ${off}>Remove variable</button>
+            </div>` : ""}
         </div>
+        ${entry ? renderMetricPickerHtml(entry, off) : ""}
+        </div>
+        ${hasPagePreview ? `<section class="tl-metric-panel-preview" aria-label="Widget preview" aria-busy="${Boolean(editor.previewLoading)}">
+          <div class="tl-analysis-series-head">
+            <h4>Preview</h4>
+            ${referenceWidget ? "" : `<button type="button" class="plain-button compact-button" data-action="training-load-analysis-editor-preview" ${analysisEditorCanPreview(editor) ? "" : "disabled"}>Load preview</button>`}
+          </div>
+          ${referenceWidget ? '<p class="muted">Preview reference comparisons in References and Radar.</p>' : ""}
+          ${editor.previewLoading ? '<p role="status">Loading preview…</p>' : ""}
+          ${editor.previewError ? `<p role="alert">${escapeHtml(editor.previewError)}</p>` : ""}
+          ${preview ? renderWidgetBodyHtml(preview.widget, preview.result, preview.resolvedPeriod) : ""}
+        </section>` : ""}
         <div class="tl-analysis-modal-actions tl-editor-footer">
           ${editor.error ? `<p class="builder-error" role="alert">${escapeHtml(editor.error)}</p>` : problem ? `<p class="builder-error" role="alert">${escapeHtml(problem)}</p>` : ""}
           ${editor.serverChanged ? `<p class="muted tl-editor-server-note">Some changes are already saved - closing keeps them.</p>` : ""}

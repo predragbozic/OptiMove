@@ -1192,6 +1192,7 @@ test("Analysis metric picker filters catalog metadata and supports built-in bind
   assert.match(html, /Testing/);
   assert.match(html, /Jumping/);
   assert.doesNotMatch(html, /Sprint speed/);
+  await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-metric-search" }, "srpe"), { renderTrainingLoad });
   const key = state.trainingLoad.analysis.editor.draft.series[0].key;
   await handleTrainingLoadAction(fakeAction({ action: "training-load-analysis-series-bind-builtin", seriesKey: key, builtInKey: "srpe" }), { renderTrainingLoad });
   // Dashboards UX H3: binding is staged - shown as chosen, sent only on Save.

@@ -54,7 +54,7 @@ export function createPagesRouter({pool}){
   }
   if(operation==='query'){
    const b=req.body;
-   if(!b||Object.keys(b).some(k=>!['dateFrom','dateTo','timeZone','athleteIds','activityId','componentId','shellFilter','widgetIds','referencePreview','metricPreview','galleryDraft'].includes(k))||b.widgetIds&&!(Array.isArray(b.widgetIds)&&b.widgetIds.length<=200&&b.widgetIds.every(isUuid)))return res.status(400).json({error:'invalidRequest'});
+   if(!b||Object.keys(b).some(k=>!['dateFrom','dateTo','timeZone','athleteIds','activityId','componentId','shellFilter','widgetIds','referencePreview','metricPreview','galleryDraft','advancedPreview'].includes(k))||b.widgetIds&&!(Array.isArray(b.widgetIds)&&b.widgetIds.length<=200&&b.widgetIds.every(isUuid)))return res.status(400).json({error:'invalidRequest'});
    return res.json(await service.queryPage({...args,body:b}));
   }
   const body=req.body;

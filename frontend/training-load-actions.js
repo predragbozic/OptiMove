@@ -8,7 +8,7 @@ import { closeImportsOverlays } from "./gpexe-period-data.js";
 import { applyRpeChangeAnswer, rpeChangeFormFields, rpeChangeIsUnchanged, rpeChangeRequestBody } from "./rpe-answer-change.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
-import { previewAnalysisMetricPanel } from './training-load-analysis-data.js';
+import { previewAnalysisMetricPanel, previewAnalysisWidgetEditor } from './training-load-analysis-data.js';
 import {api} from './api.js';
 import {
   clearGpexeIdentities, closeGpexeCandidate, importsUnloadShouldWarn, loadGpexeImports, reloadGpexeCandidates } from "./gpexe-import-data.js";
@@ -1671,6 +1671,10 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  if (type === "training-load-analysis-editor-preview") {
+    await previewAnalysisWidgetEditor(renderTrainingLoad);
+    return true;
+  }
   if(type==='training-load-analysis-chart-period'){
     const a=state.trainingLoad.analysis;if(a.queryLoading||!a.widgets.some(w=>w.id===action.dataset.widgetId)||JSON.stringify(a.period)!==action.dataset.boundPeriod||Number(action.dataset.boundGeneration)!==analysisChartInteractionGeneration())return true;
     const from=action.dataset.dateFrom,to=action.dataset.dateTo;
@@ -1741,8 +1745,13 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-analysis-add-series") {
     const editor = state.trainingLoad.analysis.editor;
     if (!editor?.draft || editor.saving) return true;
-    editor.seriesKey = addEditorSeries(editor.draft);
+    const chooseMetric = action.dataset.chooseMetric === "true";
+    editor.seriesKey = addEditorSeries(editor.draft, { chooseMetric });
+    if (chooseMetric) state.trainingLoad.analysis.metricPicker.search = "";
     renderTrainingLoad();
+    if (chooseMetric) {
+      document.querySelector(".tl-analysis-editor [data-action='training-load-analysis-metric-search']")?.focus();
+    }
     return true;
   }
   if (type === "training-load-analysis-select-series") {
@@ -1770,6 +1779,9 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (!editor?.draft || editor.saving) return true;
     moveEditorSeries(editor.draft, action.dataset.seriesKey, type.endsWith("up") ? -1 : 1);
     renderTrainingLoad();
+    const row = [...document.querySelectorAll(".tl-editor-variable-row")].find(element =>
+      element.querySelector(".tl-analysis-series-row")?.dataset.seriesKey === action.dataset.seriesKey);
+    (row?.querySelector(`[data-action="${type}"]:not(:disabled)`) ?? row?.querySelector(".tl-analysis-series-row"))?.focus({ preventScroll: true });
     return true;
   }
   if (type === "training-load-analysis-delete-series") {
