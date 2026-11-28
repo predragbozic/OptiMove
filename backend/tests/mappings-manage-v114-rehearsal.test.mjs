@@ -283,6 +283,14 @@ test("v114 old and current Settings and native mapping operations share an exact
         assert.equal(me.status, 200, me.text);
         return me.body.user.permissions;
       };
+      const originalWords = await permissions();
+      assert.ok(originalWords.includes(word) && !originalWords.includes("variables.manage"));
+      const { rows: [{ revision }] } = await client.query("select revision from public." + layer.table + " where id=$1", [layer.id]);
+      const variableGrant = await call(staged, layer.path, {
+        requestKey: key(), expectedRevision: revision, reason: "Keep existing Variable management independent",
+        add: ["variables.manage"], ...layer.context,
+      });
+      assert.equal(variableGrant.status, 200, JSON.stringify(variableGrant.body));
       const original = await permissions();
       assert.ok([word, "variables.view", "variables.manage", "variables.rename_archive", "tests.view"].every(entry => original.includes(entry)), layer.receipt + ": " + original.join(", "));
       const change = async direction => {
