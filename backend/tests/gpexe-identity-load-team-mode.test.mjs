@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // D3 (after the pilot): the team's own coach may start the identity load, but only while the team's import switch is on in
 // mode `team` (v56). The service holds that right in every phase of the load (the claim, a replay, and FOR SHARE in the
 // finalize), so a switch-off or a move to `pilot` during a load ends it as rights_changed with nothing stored. Everyone else
@@ -41,9 +42,10 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "idteam" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "idteam", roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await setSourceConnectFixture(admin, true);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   // The real public.athletes has birth_date (athleteProfile.js); the legacy test scaffold does not.

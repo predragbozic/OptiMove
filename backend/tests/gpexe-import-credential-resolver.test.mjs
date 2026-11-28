@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // F3c2g — the importer's credential resolver and the strict transition rule
 // (a team with an active source binding reads only through it, never through
 // GPEXE_API_TOKEN; a team without one keeps the legacy path), on a disposable
@@ -46,9 +47,10 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2g" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "f3c2g", roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await setSourceConnectFixture(admin, true);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   process.env.DATABASE_URL = db.url;

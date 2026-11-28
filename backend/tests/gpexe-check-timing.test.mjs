@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // P0 — the GPEXE check timing line (owner order 2026-10-13): one aggregated,
 // closed-grammar line per check, on a disposable optimove_tests_gpexe_*
 // database (never OPTIMOVE) through the real server, against a fake server3
@@ -47,9 +48,10 @@ let statements = 0;
 const originalQuery = pg.Client.prototype.query;
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "timing" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "timing", roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await setSourceConnectFixture(admin, true);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   process.env.DATABASE_URL = db.url;

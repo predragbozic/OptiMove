@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // U3 (J19): suggested athlete pairs - the matching rule and the read
 // GET /teams/:teamId/athlete-pair-suggestions, on a disposable
 // optimove_tests_gpexe_* database against a fake source (never OPTIMOVE, no
@@ -42,9 +43,10 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "identity" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "identity", roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await setSourceConnectFixture(admin, true);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   // The real public.athletes has birth_date (athleteProfile.js); the legacy test scaffold does not.

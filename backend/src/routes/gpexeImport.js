@@ -199,7 +199,7 @@ router.put("/teams/:teamId/settings", handle(async (req, res) => {
   // `reason` is only required when an existing connection is changed; the
   // service decides that under its own lock.
   const reason = typeof req.body?.reason === "string" ? req.body.reason : null;
-  res.json({ settings: await service.setTeamSettings(access.teamId, { gpexeTeamId: req.body?.gpexeTeamId, reason, userId: req.user.id, clubAdminClubId: clubAdmin ? access.clubId : null }) });
+  res.json({ settings: await service.setTeamSettings(access.teamId, { gpexeTeamId: req.body?.gpexeTeamId, reason, userId: req.user.id, clubAdminClubId: clubAdmin ? access.clubId : null, sessionToken: clubAdmin ? req.sessionToken : null }) });
 }));
 
 // U2 (v56): who may turn a team's import on or off. An active platform admin, or the active admin of the

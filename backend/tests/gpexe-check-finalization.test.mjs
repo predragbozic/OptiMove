@@ -1,3 +1,4 @@
+import { setSourceConnectFixture } from "./support/source-connect-grants.mjs";
 // v33 — a check's results become actionable only when the check itself is
 // atomically succeeded (owner order 2026-10-11: condition 6 and the server3
 // drill-parameter guard), on a disposable optimove_tests_gpexe_* database
@@ -54,9 +55,10 @@ const originalConsole = {};
 
 before(async () => {
   assert.ok(GPEXE_TEST_MIGRATIONS.includes(V33), "v33 is part of the test migrations");
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v33" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "v33", roleRead: true });
   admin = new pg.Client({ connectionString: db.url });
   await admin.connect();
+  await setSourceConnectFixture(admin, true);
   assert.equal((await admin.query("select current_database() as db")).rows[0].db, db.name, "SAFETY: unexpected database");
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   process.env.DATABASE_URL = db.url;
