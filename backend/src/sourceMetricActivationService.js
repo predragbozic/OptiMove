@@ -36,7 +36,7 @@ import { boundedText } from "./metricTextRules.js";
 export { mayManageActivations };
 
 const {
-  runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, plainObject, uuidField, hashOf, encodeCursor, decodeCursor,
+  runMappingWrite, requireOwnActivationBindings, boundedRead, rightsStillHold, refusal, NOT_FOUND, plainObject, uuidField, hashOf, encodeCursor, decodeCursor,
   invalidCursor, LOWER_UUID, UUID,
 } = adminWriteKit;
 
@@ -85,14 +85,14 @@ export async function startActivations({ ctx, body }) {
   const bindings = bindingList(body.bindings);
   const reason = reasonOf(body.reason);
   const requestHash = hashOf({ op: "activation_start", mappingId, versionId, bindings, reason });
-  return runWrite({
-    ctx, where: "activation_start", requestKey, requestHash, action: "activation_start",
+  return runMappingWrite({
+    ctx, bindingEffect: true, where: "activation_start", requestKey, requestHash, action: "activation_start",
     idsOf: (written) => ({ mappingId: written.mapping_id ?? null, versionId: written.mapping_version_id ?? null }),
     reread: async (executor, record) => {
       const activations = await operationStarts(executor, ctx, record.operation_id);
       return activations && activations.length > 0 ? { activations } : null;
     },
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       // Step 2: the scope on a plain read, before any lock - the version of the
       // named mapping, its owner, each binding's club and team.
       const ruleInstalled = await conditionMatchInstalled(client);
@@ -107,7 +107,7 @@ export async function startActivations({ ctx, body }) {
         [versionId, mappingId],
       )).rows[0];
       if (!v) throw NOT_FOUND();
-      const clubIds = await assertListedBindingsInScope(client, ctx, v.owner_key, bindings);
+      let clubIds = await assertListedBindingsInScope(client, ctx, v.owner_key, bindings);
       // Step 4: the locks - T2a and T2b (LOW-1), T3, T4, the bindings, their teams.
       const field = (await client.query(`select state from training_load.source_metric_definitions where id = $1 for share`, [v.source_metric_definition_id])).rows[0];
       await client.query(`select 1 from training_load.source_metric_definition_versions where id = $1 for share`, [v.source_metric_version_id]);
@@ -117,10 +117,11 @@ export async function startActivations({ ctx, body }) {
       )).rows[0];
       if (!version) throw NOT_FOUND();
       const locked = await lockListedBindings(client, bindings);
+      if (ctx.basis !== "platform_admin") clubIds = await assertListedBindingsInScope(client, ctx, v.owner_key, bindings);
       // Step 5: the rights - the actor (with the promotion probe), then the
       // bindings' clubs FOR SHARE (R6), then the scope again (its facts are
       // immutable; the teams were qualified under their lock).
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (!(await check(client))) throw NOT_FOUND();
       if (!(await bindingClubHolds(client, clubIds))) throw NOT_FOUND();
       for (const clubId of clubIds) if (!activationInScope(ctx, { mappingOwnerKey: v.owner_key, bindingClubId: clubId })) throw NOT_FOUND();
       // v53 (J15 section 5): the hide locks of a system version, one per
@@ -182,14 +183,14 @@ export async function endActivation({ ctx, activationId, body }) {
   if (body.expectedState !== "open") throw refusal(400, "invalid_body", "expectedState is open: the state of the activation this request ends.");
   const reason = reasonOf(body.reason);
   const requestHash = hashOf({ op: "activation_end", activationId: id, expectedState: "open", reason });
-  return runWrite({
-    ctx, where: "activation_end", requestKey, requestHash, action: "activation_end",
+  return runMappingWrite({
+    ctx, bindingEffect: true, where: "activation_end", requestKey, requestHash, action: "activation_end",
     idsOf: () => ({ activationId: id }),
     reread: async (executor, record) => {
       const activation = await endedActivation(executor, ctx, record.operation_id);
       return activation ? { activation } : null;
     },
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       // Step 2: the scope on a plain read - the activation, its mapping's owner
       // and its binding's club (the connection's owner, which never changes).
       const plain = (await client.query(`${ACTIVATION_SELECT} where a.id = $1`, [id])).rows[0];
@@ -202,8 +203,9 @@ export async function endActivation({ ctx, activationId, body }) {
       const row = (await client.query(
         `select id, ended_at from training_load.source_metric_mapping_activations where id = $1 for no key update`, [id],
       )).rows[0];
+      await requireOwnActivationBindings(client, ctx, { activationIds: [id] });
       // Step 5: the rights, the binding's club, the scope again.
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (!(await check(client))) throw NOT_FOUND();
       if (!(await bindingClubHolds(client, [plain.club_id]))) throw NOT_FOUND();
       if (!activationInScope(ctx, { mappingOwnerKey: plain.owner_key, bindingClubId: plain.club_id })) throw NOT_FOUND();
       // Step 6: the state.
@@ -260,15 +262,15 @@ export async function switchToCopy({ ctx, activationId, body }) {
   // J15 section 4: the hash carries the workspace's club, so the same key and
   // body in another club is request_key_reused.
   const requestHash = hashOf({ op: "activation_switch_to_copy", clubId: ctx.owner.clubId, activationId: id, expectedState: "open", toVersionId, reason });
-  return runWrite({
-    ctx, where: "activation_switch", requestKey, requestHash, action: "activation_start",
+  return runMappingWrite({
+    ctx, bindingEffect: true, where: "activation_switch", requestKey, requestHash, action: "activation_start",
     idsOf: () => ({ activationId: id }),
     reread: async (executor, record) => {
       const ended = await endedActivation(executor, ctx, record.operation_id);
       const started = await operationStarts(executor, ctx, record.operation_id);
       return ended && started && started.length === 1 ? { ended, activation: started[0] } : null;
     },
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       // The answers in J15 section 4.3's order, on plain reads first: the
       // activation in S2's scope, then the target only among the workspace
       // club's own mapping versions (owner_key from the club workspace itself,
@@ -318,7 +320,8 @@ export async function switchToCopy({ ctx, activationId, body }) {
       )).rows[0];
       const listed = [{ bindingId: old.source_team_binding_id, requirement: old.requirement }];
       const locked = await lockListedBindings(client, listed);
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await requireOwnActivationBindings(client, ctx, { activationIds: [id] });
+      if (!(await check(client))) throw NOT_FOUND();
       if (!(await bindingClubHolds(client, [old.club_id]))) throw NOT_FOUND();
       if (!activationInScope(ctx, { mappingOwnerKey: old.owner_key, bindingClubId: old.club_id })
           || !activationInScope(ctx, { mappingOwnerKey: to.owner_key, bindingClubId: old.club_id })) throw NOT_FOUND();

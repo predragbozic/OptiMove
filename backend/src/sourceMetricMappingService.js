@@ -1048,8 +1048,28 @@ async function checkMappingManage(client, ctx) {
   return true;
 }
 
+async function requireOwnActivationBindings(client, ctx, { operationId, activationIds }) {
+  if (ctx.basis === "platform_admin") return 0;
+  const ids = activationIds ?? (await client.query(
+    "select activation_id as id from training_load.source_metric_audit where operation_id=$1 and action in ('activation_start','activation_end')",
+    [operationId],
+  )).rows.map(row => row.id);
+  if (!ids.length) return 0;
+  const distinct = [...new Set(ids)];
+  // Ownership is immutable once a binding exists. Do not acquire binding or
+  // mapping locks after the actor lock when answering a durable receipt.
+  const { rows } = await client.query(
+    "select training_load.source_metric_binding_club(a.source_team_binding_id) as club_id, m.owner_key"
+    + " from training_load.source_metric_mapping_activations a join training_load.source_metric_mappings m on m.id=a.mapping_id"
+    + " where a.id=any($1::uuid[])", [distinct],
+  );
+  if (rows.length !== distinct.length
+      || rows.some(row => row.club_id !== ctx.owner.clubId || !["system", ctx.owner.clubId].includes(row.owner_key))) throw NOT_FOUND();
+  return rows.length;
+}
+
 function runMappingWrite(options) {
-  const { ctx, body } = options;
+  const { ctx, body, bindingEffect = false } = options;
   if (ctx.basis === "platform_admin") return runWrite(options);
   const check = client => checkMappingManage(client, ctx);
   return runWrite({
@@ -1060,15 +1080,18 @@ function runMappingWrite(options) {
       return check(client);
     },
     authorizeReceipt: async (client, row) => {
-      if (!row.mapping_id) throw NOT_FOUND();
+      const bound = row.operation_id ? await requireOwnActivationBindings(client, ctx, { operationId: row.operation_id }) : 0;
+      if (bindingEffect && bound > 0) return;
+      if (bindingEffect || !row.mapping_id) throw NOT_FOUND();
       const target = await client.query(
         "select 1 from training_load.source_metric_mappings where id=$1 and owner_key=$2",
         [row.mapping_id, ctx.owner.clubId],
       );
       if (!target.rowCount) throw NOT_FOUND();
     },
-    matchesWrittenReceipt: (record, written) => record.mapping_id === written.mapping_id
-      && (record.mapping_version_id ?? null) === (written.mapping_version_id ?? null),
+    matchesWrittenReceipt: (record, written) => written.operation_id
+      ? record.operation_id === written.operation_id
+      : record.mapping_id === written.mapping_id && (record.mapping_version_id ?? null) === (written.mapping_version_id ?? null),
     body: async (client, operationId) => {
       await lockClubCeiling(client, [ctx.owner.clubId], "shared");
       try {
@@ -1620,14 +1643,14 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
     route: "mapping_activate", mappingId: mId, versionId: vId, toStatus: "active", expectedActiveVersionId, reason,
     ...(listed.length > 0 ? { activations: listed, activationReason } : {}),
   });
-  return runWrite({
+  return runMappingWrite({
     ctx, where: replacing ? "mapping_version_replace" : "mapping_version_activate", requestKey, requestHash, action,
     reread: (executor, record) => activationAnswer(executor, ctx, record),
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       const v = await transitionTarget(client, ctx, mId, vId);
       // Phase 7d: the listed bindings' scope on a plain read, before the first
       // lock (J10 section 4.3), in the workspace of the mapping's owner.
-      const clubIds = listed.length > 0 ? await assertListedBindingsInScope(client, ctx, v.owner_key, listed) : [];
+      let clubIds = listed.length > 0 ? await assertListedBindingsInScope(client, ctx, v.owner_key, listed) : [];
       // Step 2: the conversion rows, in one statement (v34's own function).
       await client.query(`select training_load.source_metric_lock_conversions($1, $2, $3, $4)`,
         [v.source_unit, v.target_unit, v.source_bound_unit, v.canonical_bound_unit]);
@@ -1652,6 +1675,7 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       // NO KEY UPDATE in ascending id (the version being activated, still
       // needs_review, has none: a start needs an active version).
       const ending = replacing && active === expectedActiveVersionId ? await lockOpenActivations(client, [active]) : [];
+      await requireOwnActivationBindings(client, ctx, { activationIds: ending.map(row => row.id) });
       // D's order (J15 section 5 and R13, the lock-order pull request): the
       // listed bindings and their teams FOR SHARE before the rights, and the
       // clubs right after them, as S1 and the switch take them - so A1 holds
@@ -1659,7 +1683,8 @@ export async function activateVersion({ ctx, mappingId, versionId, body }) {
       // an Unbind and a club-admin revocation), and every lock is taken
       // before the first end. An unknown or archived one is the identical 404.
       const bindingLocks = listed.length > 0 ? await lockListedBindings(client, listed) : null;
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      if (listed.length && ctx.basis !== "platform_admin") clubIds = await assertListedBindingsInScope(client, ctx, v.owner_key, listed);
+      if (!(await check(client))) throw NOT_FOUND();
       if (listed.length > 0 && !(await bindingClubHolds(client, clubIds))) throw NOT_FOUND();
       // v53 (J15 sections 5 and 7.5, R13): a system version's listed starts
       // take the hide locks of their clubs, ascending, after the last row lock
@@ -1781,13 +1806,13 @@ export async function disableVersion({ ctx, mappingId, versionId, body }) {
   const expectedStatus = body.expectedStatus;
   const reason = transitionReason(body.reason);
   const requestHash = hashOf({ route: "mapping_disable", mappingId: mId, versionId: vId, toStatus: "disabled", expectedStatus, reason });
-  return runWrite({
+  return runMappingWrite({
     ctx, where: "mapping_version_disable", requestKey, requestHash, action: "mapping_status",
     reread: async (executor, record) => {
       const version = await writableVersion(executor, ctx, record.mapping_id, record.mapping_version_id);
       return version ? { version, activationsEnded: await operationEndCount(executor, record.operation_id) } : null;
     },
-    body: async (client, operationId) => {
+    body: async (client, operationId, check = db => rightsStillHold(db, ctx)) => {
       const v = await transitionTarget(client, ctx, mId, vId);
       await lockRevision(client, v);
       await client.query(`select 1 from training_load.source_metric_mappings where id = $1 for no key update`, [mId]);
@@ -1796,7 +1821,8 @@ export async function disableVersion({ ctx, mappingId, versionId, body }) {
       // end with mapping_version_disabled, on every club's binding (a system
       // version can always be stopped), never a refusal.
       const ending = await lockOpenActivations(client, [vId]);
-      if (!(await rightsStillHold(client, ctx))) throw NOT_FOUND();
+      await requireOwnActivationBindings(client, ctx, { activationIds: ending.map(row => row.id) });
+      if (!(await check(client))) throw NOT_FOUND();
       const status = locked.get(vId);
       if (status !== expectedStatus) throw refusal(409, "version_status_changed", MESSAGES.version_status_changed, { current: { status } });
       await databaseTextAgrees(client, reason);
@@ -2028,7 +2054,7 @@ export async function copiedMappingsOf(executor, operationId) {
 }
 
 export const adminWriteKit = Object.freeze({
-  runWrite, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
+  runWrite, runMappingWrite, requireOwnActivationBindings, boundedRead, rightsStillHold, refusal, NOT_FOUND, MESSAGES, plainObject, uuidField, boundedText, boundedOut,
   dec, decCmp, hashOf, encodeCursor, decodeCursor, cursorQuery, invalidCursor, ownerKeyOf, CURSOR_AT, LOWER_UUID, UUID,
   CANONICAL_VERSION_COLUMNS, canonicalParametersOf, notReadyCodeOf, REVISION_COLUMNS, revisionOut, PARAMS_AS_TEXT,
 });

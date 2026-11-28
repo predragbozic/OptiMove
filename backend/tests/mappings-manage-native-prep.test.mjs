@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createPagesDatabase } from "./support/dashboard-pages-db.mjs";
@@ -129,6 +130,125 @@ test("native create, version and submit require Mappings Manage in the owning wo
     const switched = await pending;
     assert.deepEqual([switched.status, switched.body], [404, { error: "notFound" }]);
     assert.deepEqual(await digest(), checked);
+
+    await client.query("update public.user_workspace_preferences set workspace_type='club',scope_id=$1 where user_id=any($2::uuid[])", [clubA, [native, platform]]);
+    const binding = async (club, sourceTeam) => {
+      const team = await f.team(club);
+      const { rows: [connection] } = await client.query("insert into training_load.source_credential_connections"
+        + " (source_system,owner_scope,owner_club_id,host_key,account_label,credential_kind,created_by_user_id,state,"
+        + " credential_ciphertext,credential_nonce,credential_auth_tag,credential_key_version,last_verified_at)"
+        + " values ('gpexe','club',$1,'server3','Fixture','exchanged_token',$2,'verified',$3,$4,$5,1,now()) returning id",
+      [club, platform, randomBytes(24), randomBytes(12), randomBytes(16)]);
+      await client.query("insert into training_load.gpexe_team_settings (owner_team_id,gpexe_team_id,configured_by_user_id) values ($1,$2,$3)", [team, sourceTeam, platform]);
+      const { rows: [saved] } = await client.query("insert into training_load.source_team_bindings"
+        + " (team_id,connection_id,source_system,source_team_id,bound_by_user_id,legacy_gpexe_settings_team_id)"
+        + " values ($1,$2,'gpexe',$3,$4,$1) returning id", [team, connection.id, sourceTeam, platform]);
+      return saved.id;
+    };
+    const ownBinding = await binding(clubA, "960101"), foreignBinding = await binding(clubB, "960102");
+    const versionResource = versionPath + "/" + version.body.version.id;
+    const activationRequest = { requestKey: key(), expectedActiveVersionId: null };
+    const nativeAttempt = await post(cookie, versionResource + "/activate", activationRequest);
+    assert.deepEqual([nativeAttempt.status, nativeAttempt.body.error], [409, "confirmation_required"]);
+    const platformActivated = await post(operator, versionResource + "/activate", activationRequest);
+    assert.equal(platformActivated.status, 200, platformActivated.text);
+    const start = (bindingId, requestKey = key()) => ({
+      requestKey, mappingId: created.body.mapping.id, versionId: version.body.version.id,
+      bindings: [{ bindingId, requirement: "required" }], reason: "Fixture start.",
+    });
+    const beforeActivations = await digest();
+    await deny("/activations", start(foreignBinding));
+    await deny("/activations", start(key()));
+    assert.deepEqual(await digest(), beforeActivations);
+    const startInput = start(ownBinding);
+    const started = await post(cookie, "/activations", startInput);
+    assert.equal(started.status, 201, started.text);
+    const activation = started.body.activations[0];
+    assert.equal(activation.bindingId, ownBinding);
+    await move(native);
+    const endBody = { requestKey: key(), expectedState: "open", reason: "Fixture end." };
+    const endPath = "/activations/" + activation.id + "/end";
+    await deny("/activations", startInput);
+    await deny(endPath, endBody);
+    await deny("/activations/" + key() + "/end", endBody);
+    const switchInput = { ...endBody, requestKey: key(), toVersionId: version.body.version.id };
+    await deny("/activations/" + activation.id + "/switch-to-copy", switchInput);
+    await deny("/activations/" + key() + "/switch-to-copy", switchInput);
+    await client.query("update public.user_workspace_preferences set scope_id=$1 where user_id=$2", [clubA, native]);
+    const beforeRevocation = await digest();
+    await client.query("begin");
+    try {
+      await client.query("select id from training_load.source_metric_mapping_activations where id=$1 for update", [activation.id]);
+      pending = post(cookie, endPath, endBody);
+      const deadline = Date.now() + 1500;
+      let queued = false;
+      while (!queued && Date.now() < deadline) {
+        const { rows: [row] } = await client.query("select exists(select 1 from pg_locks where not granted and $1=any(pg_blocking_pids(pid))) as waiting", [pid]);
+        queued = row.waiting;
+        if (!queued) await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(queued, true, "end queued at the activation before checking live club authority");
+      await client.query("update public.user_club_roles set is_active=false where user_id=$1 and club_id=$2", [native, clubA]);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback");
+      await pending;
+      throw error;
+    }
+    const revoked = await pending;
+    assert.deepEqual([revoked.status, revoked.body], [404, { error: "notFound" }]);
+    assert.deepEqual(await digest(), beforeRevocation);
+    await client.query("update public.user_club_roles set is_active=true where user_id=$1 and club_id=$2", [native, clubA]);
+    const ended = await post(cookie, endPath, endBody);
+    assert.equal(ended.status, 200, ended.text);
+    assert.equal(ended.body.activation.id, activation.id);
+    assert.ok(ended.body.activation.endedAt);
+    assert.equal((await post(cookie, endPath, endBody)).body.replayed, true);
+    const disabled = await post(cookie, versionResource + "/disable", { requestKey: key(), expectedStatus: "active", reason: "Fixture disable." });
+    assert.equal(disabled.status, 200, disabled.text);
+    assert.equal(disabled.body.version.status, "disabled");
+
+    await client.query("update public.user_workspace_preferences set workspace_type='platform',scope_id=null where user_id=$1", [platform]);
+    const systemVariable = await variable("System switch metric");
+    const systemMapping = await post(operator, "/mappings", { ...input, requestKey: key(), metricDefinitionId: systemVariable });
+    assert.equal(systemMapping.status, 201, systemMapping.text);
+    const systemMappingId = systemMapping.body.mapping.id;
+    const systemVersions = "/mappings/" + systemMappingId + "/versions";
+    const systemDraft = await post(operator, systemVersions, { ...versionInput, requestKey: key() });
+    assert.equal(systemDraft.status, 201, systemDraft.text);
+    const systemVersionId = systemDraft.body.version.id;
+    const systemVersionPath = systemVersions + "/" + systemVersionId;
+    const reviewed = await post(operator, systemVersionPath + "/submit", { requestKey: key() });
+    assert.equal(reviewed.status, 200, reviewed.text);
+    const activated = await post(operator, systemVersionPath + "/activate", { ...activationRequest, requestKey: key() });
+    assert.equal(activated.status, 200, activated.text);
+    const systemStart = bindingId => ({ ...start(bindingId), mappingId: systemMappingId, versionId: systemVersionId });
+    await deny("/activations", systemStart(foreignBinding));
+    await deny("/activations", systemStart(key()));
+    const systemStarted = await post(cookie, "/activations", systemStart(ownBinding));
+    assert.equal(systemStarted.status, 201, systemStarted.text);
+    assert.equal(systemStarted.body.activations[0].bindingId, ownBinding);
+    await client.query("update public.user_workspace_preferences set workspace_type='club',scope_id=$1 where user_id=$2", [clubA, platform]);
+    const { rows: [{ current_version_id }] } = await client.query("select current_version_id from training_load.metric_definitions where id=$1", [systemVariable]);
+    const copied = await post(operator, "/variables/" + systemVariable + "/copy", { requestKey: key(), expectedSourceVersionId: current_version_id });
+    assert.equal(copied.status, 201, copied.text);
+    const { rows: [draft] } = await client.query("select l.club_version_id,v.mapping_id from training_load.source_metric_mapping_version_copies l"
+      + " join training_load.source_metric_mapping_versions v on v.id=l.club_version_id where v.metric_definition_id=$1", [copied.body.variable.id]);
+    const copiedPath = "/mappings/" + draft.mapping_id + "/versions/" + draft.club_version_id;
+    const copySubmitted = await post(operator, copiedPath + "/submit", { requestKey: key() });
+    assert.equal(copySubmitted.status, 200, copySubmitted.text);
+    const copyActivated = await post(operator, copiedPath + "/activate", { ...activationRequest, requestKey: key() });
+    assert.equal(copyActivated.status, 200, copyActivated.text);
+    const ownSwitchPath = "/activations/" + systemStarted.body.activations[0].id + "/switch-to-copy";
+    const ownSwitchBody = { ...endBody, requestKey: key(), toVersionId: draft.club_version_id };
+    const switchedToCopy = await post(cookie, ownSwitchPath, ownSwitchBody);
+    assert.equal(switchedToCopy.status, 200, switchedToCopy.text);
+    assert.equal(switchedToCopy.body.activation.bindingId, ownBinding);
+    assert.equal(switchedToCopy.body.activation.versionId, draft.club_version_id);
+    assert.equal(switchedToCopy.body.ended.id, systemStarted.body.activations[0].id);
+    assert.equal((await post(cookie, ownSwitchPath, ownSwitchBody)).body.replayed, true);
+    await move(native);
+    await deny(ownSwitchPath, ownSwitchBody);
   } finally {
     try { await server?.stop(); } finally { await db.drop(); }
   }
