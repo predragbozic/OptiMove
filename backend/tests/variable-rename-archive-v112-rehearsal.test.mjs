@@ -278,7 +278,7 @@ test("v112 old and current Settings and native variable operations share an exac
     const exposedCatalog = await call(current, root + "/catalog?clubId=" + club);
     assert.equal(exposedCatalog.status, 200);
     assert.equal(exposedCatalog.body.permissions.find(entry => entry.word === word)?.checked, true);
-    assert.equal(exposedCatalog.body.permissions.find(entry => entry.word === "variables.manage")?.checked, false);
+    assert.equal(exposedCatalog.body.permissions.find(entry => entry.word === "variables.manage")?.checked, true);
     const snapshot = async () => (await client.query(
       "select d.label,d.icon_url,d.state,"
       + " (select count(*)::int from training_load.metric_variable_changes where metric_definition_id=d.id) as changes,"

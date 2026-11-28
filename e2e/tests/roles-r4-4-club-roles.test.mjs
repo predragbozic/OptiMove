@@ -8,6 +8,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import pg from "pg";
 import { startWorld } from "../lib/world.mjs";
 import { launch, openAs, openSettings, request, WIDTHS } from "../lib/browser.mjs";
 
@@ -318,6 +319,57 @@ test("Variables Rename and Archive is editable independently of Variables View a
     assert.deepEqual(await items(), initial.filter(word => word !== "variables.rename_archive"));
     await rename.check();
     await apply("Restore variable change permission");
+    assert.deepEqual(await items(), initial);
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test("Variables Manage is editable for Club admin without changing Rename and Archive", async () => {
+  const fixture = new pg.Client({ connectionString: world.databaseUrl });
+  await fixture.connect();
+  try {
+    const platformId = world.accounts.find(account => account.role === "platform_admin").id;
+    await fixture.query("insert into public.user_club_roles (user_id, club_id, role, is_active) values ($1, $2, 'club_admin', true)", [platformId, world.ids.clubA]);
+  } finally {
+    await fixture.end();
+  }
+  const { context, page, pageErrors } = await openAs(browser, world, "platform_admin", WIDTHS.phone);
+  try {
+    const switched = await request(context, world, "/api/auth/workspace", { method: "PUT", body: { type: "club", scopeId: world.ids.clubA } });
+    assert.equal(switched.status, 200, switched.text);
+    await page.reload();
+    await openRoles(page);
+    const response = await request(context, world, R + "/clubs/" + world.ids.clubA + "/roles");
+    assert.equal(response.status, 200, response.text);
+    const clubRoleId = JSON.parse(response.text).systemRoles.find(role => role.basicKey === "club_admin").roleId;
+    await page.locator('[data-club-role="' + clubRoleId + '"]').getByRole("button", { name: "Open" }).click();
+    const editor = page.locator('[data-club-roles-editor="' + clubRoleId + '"]');
+    const manage = editor.locator('[data-role-word="variables.manage"]');
+    const view = editor.locator('[data-role-word="variables.view"]');
+    await manage.waitFor();
+    assert.ok(await manage.isEnabled());
+    assert.ok(await manage.isChecked());
+    assert.ok(await view.isChecked());
+    const save = page.locator("[data-club-roles-save]");
+    const apply = async reason => {
+      await save.locator("textarea").fill(reason);
+      await save.getByRole("button", { name: /Save for Example Club/ }).click();
+      await page.getByText("Saved for this club: Club admin.").waitFor();
+    };
+    const items = async () => {
+      const answer = await request(context, world, R + "/clubs/" + world.ids.clubA + "/roles");
+      assert.equal(answer.status, 200, answer.text);
+      return JSON.parse(answer.text).systemRoles.find(role => role.roleId === clubRoleId).effectiveItems;
+    };
+    const initial = await items();
+    assert.ok(["tests.view", "variables.view", "variables.rename_archive", "variables.manage"].every(word => initial.includes(word)));
+    await manage.uncheck();
+    await apply("Revoke full Variables Manage");
+    assert.deepEqual(await items(), initial.filter(word => word !== "variables.manage"));
+    await manage.check();
+    await apply("Restore full Variables Manage");
     assert.deepEqual(await items(), initial);
     assert.deepEqual(pageErrors, []);
   } finally {
