@@ -4,6 +4,7 @@ import {startDashboardShellFixture} from './support/dashboard-shell-fixture.mjs'
 let world,q,actor,dashboard,home,definitions;const saved=[];
 const period={dateFrom:'2026-11-01',dateTo:'2026-11-07',timeZone:'UTC'};
 async function api(path,body,method='POST',account=actor){const r=await fetch(world.baseUrl+path,{method,headers:{Cookie:`optimove_session=${account.sessionToken}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const text=await r.text();return{status:r.status,text,body:JSON.parse(text)}}
+
 before(async()=>{
  world=await startDashboardShellFixture({envOverrides:{DASHBOARD_PAGES_ENABLED:'true',DASHBOARD_REFERENCES_ENABLED:'true',DASHBOARD_SIMPLE_MODE:'enabled',DASHBOARD_SIMPLE_BUDGET_VERIFIED:'true',DASHBOARD_SIMPLE_SESSION_AFFINITY_VERIFIED:'true',DASHBOARD_SIMPLE_PREVIEW_MAX_ACTIVE:'1',DASHBOARD_SIMPLE_KEY_ID:'gallery-http-test',DASHBOARD_SIMPLE_KEY_BASE64:crypto.randomBytes(32).toString('base64')}});
  q=new pg.Client({connectionString:world.databaseUrl});await q.connect();actor=world.accounts[0];
@@ -212,4 +213,37 @@ test('new Radar shows actual club values against a published reference before sa
  const result=await api(url+'/query',{...period,widgetIds:[saved.body.widgetId]},'POST',club);
  assert.equal(result.status,200,result.text);
  assert.deepEqual(result.body.widgets[0].references.axes.map(axis=>axis.points),preview.body.result.references.axes.map(axis=>axis.points));
+});
+
+test('Advanced table preview reads staged measurements and leaves the saved widget intact',async()=>{
+ await q.query('update training_load.dashboard_pages_activation set enabled=true');
+ const club=world.accounts.find(a=>a.role==='club_admin');
+ const measures=await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,athleteIds:world.ids.athleteIds,
+  labels:['Preview distance A','Preview distance B','Preview distance C']});
+ const made=await api('/api/training-load/dashboards',{name:'Advanced preview table'},'POST',club);
+ assert.equal(made.status,201,made.text);
+ const dash=made.body.dashboard;
+ const page=(await q.query('select * from training_load.dashboard_pages where dashboard_id=$1',[dash.id])).rows[0];
+ const url=`/api/training-load/dashboards/${dash.id}/pages/${page.id}`;
+ const create=await api(url+'/widgets',{expectedPageRevision:page.revision,widgetType:'table',title:'Stored title',
+  widgetOrder:1,x:0,y:0,width:6,height:5,mobileOrder:1,groupBy:'athlete'},'POST',club);
+ assert.equal(create.status,200,create.text);
+ const widgetId=create.body.widgetId;
+ const stamped=(await q.query('select revision from training_load.dashboard_widgets where id=$1',[widgetId])).rows[0];
+ const draft={widgetId,expectedWidgetRevision:stamped.revision,title:'Preview title',widgetType:'table',groupBy:'athlete',localFilterOverride:null,
+  series:[measures[1],measures[0]].map((def,index)=>({draftId:crypto.randomUUID(),settings:{
+   metricDefinitionId:def.id,seriesOrder:index+1,dataScopeLevel:'session',analyticalAggregation:'sum',
+   sourcePolicy:'all_with_conflicts',coveragePolicy:'complete_and_partial',aggregationRolePolicy:'standalone_and_source_rollup',axis:'primary',
+  }}))};
+ const response=await api(url+'/query',{...period,advancedPreview:draft},'POST',club);
+ assert.equal(response.status,200,response.text);
+ assert.equal(response.body.widget.title,'Preview title');
+ assert.deepEqual(response.body.widget.series.map(item=>item.metric_definition_id),[measures[1].id,measures[0].id]);
+ assert.ok(response.body.result.series.every(item=>item.data.current.some(row=>typeof row.value==='number')));
+ const persistent=(await q.query('select w.title,w.revision,(select count(*)::int from training_load.dashboard_widget_series s where s.widget_id=w.id) count from training_load.dashboard_widgets w where w.id=$1',[widgetId])).rows[0];
+ assert.deepEqual(persistent,{title:'Stored title',revision:stamped.revision,count:0});
+ const stale=await api(url+'/query',{...period,advancedPreview:{...draft,expectedWidgetRevision:stamped.revision+1}},'POST',club);
+ assert.equal(stale.status,409,stale.text);
+ const denied=await api(url+'/query',{...period,advancedPreview:draft},'POST',world.accounts.find(a=>a.role==='athlete'));
+ assert.equal(denied.status,404,denied.text);
 });

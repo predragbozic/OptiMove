@@ -1113,14 +1113,14 @@ export function editorSeriesEntry(draft, key) {
   return draft?.series.find((entry) => entry.key === key) || null;
 }
 
-export function addEditorSeries(draft) {
+export function addEditorSeries(draft, { chooseMetric = false } = {}) {
   const key = `new-${draft.nextKey}`;
   draft.nextKey += 1;
   const entry = {
     key, id: "", metric: null, sourceConnectionId: null, pendingAdd: null,
     fields: { displayLabel: null, axis: "primary", color: null, dataScopeLevel: "session", analyticalAggregation: "avg", sourcePolicy: null, aggregationRolePolicy: "standalone_and_source_rollup", coveragePolicy: "complete_and_partial", comparisonPeriod: null },
   };
-  setEditorSeriesMetric(entry, { kind: "builtin", key: "rpe" });
+  if (!chooseMetric) setEditorSeriesMetric(entry, { kind: "builtin", key: "rpe" });
   draft.series.push(entry);
   return key;
 }
@@ -1189,6 +1189,7 @@ export function setEditorWidgetType(draft, widgetType) {
 // What would block a Save before any request is made ("" = nothing).
 export function analysisEditorProblem(draft) {
   if (!draft) return "";
+  if (draft.series.some(entry => !entry.metric)) return "Choose a variable for every column or remove the empty column.";
   const galleryProblem=galleryEditorProblem(draft);if(galleryProblem)return galleryProblem;
   const title = draft.title.trim();
   if (!title) return "Give the widget a title.";
@@ -1295,8 +1296,12 @@ export function analysisEditorPlan(widget, draft) {
   const galleryChanged=gallerySettingsChanged(widget,draft);
   const shape=widget.presentation_config?.schemaVersion===1?widget.presentation_config.chartShape:null;
   const modifiesBinding=ops.some(op=>op.type!=='patchWidget'||Object.keys(op.body).some(k=>k!=='title'));
-  if(shape&&modifiesBinding)ops.unshift({type:'patchWidget',body:{presentation:{mode:'clear'}}});
-  if(galleryChanged||shape&&modifiesBinding||(draft.galleryKind&&draft.galleryKind!=='standard'&&modifiesBinding))ops.push({type:'gallery'});
+  const convertGalleryToTable = shape && widgetBody.widgetType === 'table' && !widget.presentation_config.referenceConfig;
+  if (convertGalleryToTable) widgetBody.presentation = { mode: 'clear' };
+  else {
+    if(shape&&modifiesBinding)ops.unshift({type:'patchWidget',body:{presentation:{mode:'clear'}}});
+    if(galleryChanged||shape&&modifiesBinding||(draft.galleryKind&&draft.galleryKind!=='standard'&&modifiesBinding))ops.push({type:'gallery'});
+  }
   return ops;
 }
 
@@ -1318,6 +1323,66 @@ function editorSeriesPostBody(entry, seriesOrder) {
   }
   if (body.sourcePolicy === "source_connection" && entry.sourceConnectionId) body.sourceConnectionId = entry.sourceConnectionId;
   return body;
+}
+
+export function analysisEditorCanPreview(editor = state.trainingLoad.analysis.editor) {
+  const a = state.trainingLoad.analysis;
+  const widget = a.widgets.find(row => row.id === editor?.widgetId);
+  return Boolean(a.pagesAvailable && a.selectedPageId && widget && editor?.open && editor.draft
+    && !widget.presentation_config?.referenceConfig
+    && !editor.saving && !editor.previewLoading
+    && !analysisEditorProblem(editor.draft) && editor.draft.series.every(entry => ["builtin","metric"].includes(entry.metric?.kind)));
+}
+
+export function analysisEditorPreviewBody(editor = state.trainingLoad.analysis.editor) {
+  const a = state.trainingLoad.analysis;
+  const widget = a.widgets.find(row => row.id === editor?.widgetId);
+  if (!editor?.draft || !widget || editor.draft.series.some(entry => !entry.metric)) return null;
+  const draft = editor.draft;
+  const series = draft.series.map((entry, index) => ({
+    draftId: entry.id || `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    ...(entry.id ? { previousSeriesId: entry.id } : {}),
+    settings: editorSeriesPostBody(entry, index + 1),
+  }));
+  let chartShape;
+  if (draft.galleryKind && draft.galleryKind !== "standard") {
+    const draftWithIds = { ...draft, series: draft.series.map((entry, index) => ({ ...entry, id: series[index].draftId })) };
+    chartShape = galleryEditorPresentation(widget, draftWithIds).chartShape;
+  }
+  const chartDay = analysisChartDay();
+  return JSON.stringify({
+    dateFrom: chartDay ?? a.period.dateFrom, dateTo: chartDay ?? a.period.dateTo,
+    ...analysisRuntimeFilterPayload(),
+    advancedPreview: {
+      widgetId: widget.id, expectedWidgetRevision: widget.revision,
+      title: draft.title.trim(), widgetType: draft.widgetType, groupBy: draft.groupBy,
+      localFilterOverride: draft.localFilterOverride, series, ...(chartShape ? { chartShape } : {}),
+    },
+  });
+}
+
+export async function previewAnalysisWidgetEditor(onPainted) {
+  const a = state.trainingLoad.analysis;
+  const editor = a.editor;
+  if (!analysisEditorCanPreview(editor)) return;
+  ensureAnalysisPeriod();
+  const body = analysisEditorPreviewBody(editor);
+  const path = `${analysisPageWriteBase()}/query`;
+  editor.previewLoading = true;
+  editor.preview = null;
+  editor.previewError = "";
+  onPainted?.();
+  try {
+    const result = await api(path, { method: "POST", body });
+    if (a.editor === editor && body === analysisEditorPreviewBody(editor)) editor.preview = { ...result, body };
+  } catch (error) {
+    if (a.editor === editor && body === analysisEditorPreviewBody(editor)) editor.previewError = error.status === 409
+      ? "This widget changed. Reopen its settings to preview again."
+      : "Could not preview these settings. Check the selected metrics and try again.";
+  } finally {
+    editor.previewLoading = false;
+    if (a.editor === editor) onPainted?.();
+  }
 }
 
 // After a failed/partial save and the reload: line the draft up with what

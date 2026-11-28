@@ -5,7 +5,7 @@ import { validateEditorDraft, validateContract } from './schema.js';
 import { bindingVisible } from './capabilities.js';
 const charts = new Set(['line_chart', 'bar_chart']);
 const composed = new Set(['day', 'week', 'athlete']);
-const aggs = ['sum', 'avg', 'max', 'last', 'none', 'ratio'];
+const aggs = ['sum', 'avg', 'min', 'max', 'last', 'none', 'ratio'];
 const sourcePolicies = ['all_with_conflicts', 'source_connection', 'manual', 'api_import', 'csv_import', 'derived', 'not_applicable'];
 const own = (o, k) => Object.hasOwn(o ?? {}, k);
 const clone = v => structuredClone(v);

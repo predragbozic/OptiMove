@@ -3115,9 +3115,18 @@ function renderTrainingLoad() {
   // IMP1: a search repaints Imports every 2 s; the tab row keeps where the person scrolled it, and the active tab is
   // brought into view only when it is not.
   const importsRowLeft = state.trainingLoad.section === "imports" ? els.content.querySelector(".imports-tabs")?.scrollLeft || 0 : 0;
+  const editorBefore = els.content.querySelector(".tl-analysis-editor");
+  const editorScrollTop = editorBefore?.scrollTop ?? 0;
+  const editorOptionsOpen = editorBefore?.querySelector("[data-editor-data-options]")?.open;
   disposeReferenceIslands();
   disposeDashboardControls();
   els.content.innerHTML = renderTrainingLoadCoachHtml();
+  const editorAfter = els.content.querySelector(".tl-analysis-editor");
+  if (editorBefore && editorAfter) {
+    const editorOptions = editorAfter.querySelector("[data-editor-data-options]");
+    if (editorOptions) editorOptions.open = Boolean(editorOptionsOpen);
+    editorAfter.scrollTop = editorScrollTop;
+  }
   void mountDashboardControls(els.content, renderTrainingLoad);
   void mountReferenceIslands(els.content, renderTrainingLoad);
   void mountTrainingLoadViewSchedules(els.content);
@@ -3410,7 +3419,7 @@ async function handleContentClick(event) {
   if (!action) return;
 
   const type = action.dataset.action;
-  if (action.matches("select") && action.closest(".tl-metric-panel")) return;
+  if (action.matches("select") && action.closest(".tl-metric-panel, .tl-analysis-editor")) return;
   if (type?.startsWith("my-training-")) {
     await handleMyTrainingAction(action, { render: renderMyTraining, pushHistory: pushAppHistory });
     return;

@@ -8,7 +8,7 @@ import { closeImportsOverlays } from "./gpexe-period-data.js";
 import { applyRpeChangeAnswer, rpeChangeFormFields, rpeChangeIsUnchanged, rpeChangeRequestBody } from "./rpe-answer-change.js";
 import { handleGpexeImportAction } from "./gpexe-import-actions.js";
 import { simpleEditor, openSimpleEditor, leaveSimpleEditor, handleSimpleEditorAction } from './training-load-simple-actions.js';
-import { previewAnalysisMetricPanel } from './training-load-analysis-data.js';
+import { previewAnalysisMetricPanel, previewAnalysisWidgetEditor } from './training-load-analysis-data.js';
 import {api} from './api.js';
 import {
   clearGpexeIdentities, closeGpexeCandidate, importsUnloadShouldWarn, loadGpexeImports, reloadGpexeCandidates } from "./gpexe-import-data.js";
@@ -375,6 +375,7 @@ export function setTrainingLoadAnalysisSearch(kind, value) {
   const a = state.trainingLoad.analysis;
   if (kind === "picker") a.picker.search = value ?? "";
   else if (kind === "metric" && a.metricPanel) a.metricPanel.search = value ?? "";
+  else if (kind === "advanced") a.metricPicker.search = value ?? "";
 }
 
 function openAnalysisMetricPanel(widget = null) {
@@ -1671,6 +1672,14 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     renderTrainingLoad();
     return true;
   }
+  if (type === "training-load-analysis-editor-preview") {
+    const editor = state.trainingLoad.analysis.editor;
+    await previewAnalysisWidgetEditor(renderTrainingLoad);
+    if (state.trainingLoad.analysis.editor === editor && (editor.preview || editor.previewError)) {
+      document.querySelector(".tl-analysis-editor .tl-advanced-preview")?.focus();
+    }
+    return true;
+  }
   if(type==='training-load-analysis-chart-period'){
     const a=state.trainingLoad.analysis;if(a.queryLoading||!a.widgets.some(w=>w.id===action.dataset.widgetId)||JSON.stringify(a.period)!==action.dataset.boundPeriod||Number(action.dataset.boundGeneration)!==analysisChartInteractionGeneration())return true;
     const from=action.dataset.dateFrom,to=action.dataset.dateTo;
@@ -1741,8 +1750,13 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
   if (type === "training-load-analysis-add-series") {
     const editor = state.trainingLoad.analysis.editor;
     if (!editor?.draft || editor.saving) return true;
-    editor.seriesKey = addEditorSeries(editor.draft);
+    const chooseMetric = action.dataset.chooseMetric === "true";
+    editor.seriesKey = addEditorSeries(editor.draft, { chooseMetric });
+    if (chooseMetric) state.trainingLoad.analysis.metricPicker.search = "";
     renderTrainingLoad();
+    if (chooseMetric) {
+      document.querySelector(".tl-analysis-editor [data-action='training-load-analysis-metric-search']")?.focus();
+    }
     return true;
   }
   if (type === "training-load-analysis-select-series") {
@@ -1770,13 +1784,20 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     if (!editor?.draft || editor.saving) return true;
     moveEditorSeries(editor.draft, action.dataset.seriesKey, type.endsWith("up") ? -1 : 1);
     renderTrainingLoad();
+    const row = [...document.querySelectorAll(".tl-editor-variable-row")].find(element =>
+      element.querySelector(".tl-analysis-series-row")?.dataset.seriesKey === action.dataset.seriesKey);
+    (row?.querySelector(`[data-action="${type}"]:not(:disabled)`) ?? row?.querySelector(".tl-analysis-series-row"))?.focus({ preventScroll: true });
     return true;
   }
   if (type === "training-load-analysis-delete-series") {
     const editor = state.trainingLoad.analysis.editor;
     if (!editor?.draft || editor.saving) return true;
-    editor.seriesKey = removeEditorSeries(editor.draft, action.dataset.seriesKey);
+    const key = action.dataset.seriesKey;
+    const nextKey = removeEditorSeries(editor.draft, key);
+    if (!editorSeriesEntry(editor.draft, editor.seriesKey)) editor.seriesKey = nextKey;
     renderTrainingLoad();
+    const dialog = globalThis.document?.querySelector(".tl-analysis-editor");
+    (dialog?.querySelector(".tl-analysis-series-row.is-active") ?? dialog?.querySelector("[data-choose-metric]"))?.focus({ preventScroll: true });
     return true;
   }
   if (type?.startsWith("training-load-analysis-series-")) {
@@ -1806,6 +1827,7 @@ export async function handleTrainingLoadAction(action, { renderTrainingLoad, ope
     }
   }
   if (type === "training-load-analysis-metric-search") {
+    if (state.trainingLoad.analysis.metricPicker.search === (action.value ?? "")) return true;
     state.trainingLoad.analysis.metricPicker.search = action.value ?? "";
     renderTrainingLoad();
     return true;

@@ -10,6 +10,7 @@
 import { query, pool } from "./db.js";
 import { canManageCatalogRow, catalogVisibilitySql, resolveCatalogOwnerScope } from "./trainingLoadMetricsAccess.js";
 import { calculatedDefinitionSql } from "./calculatedValues.js";
+import { allowedDashboardAggregations as allowedAggregations } from "./dashboardRatios.js";
 
 const DEFAULT_ICON_URL = "/assets/icons/metric-default.svg";
 
@@ -179,15 +180,7 @@ function definitionVisibilitySql(req, alias, params, teamClubId) {
       and exists (select 1 from public.clubs tc where tc.id = ${alias}.owner_club_id and coalesce(tc.is_active, true))))`;
 }
 
-// How a dashboard series may combine a variable's values (the database's rule, v16 and v79's
-// dashboard_widget_series_validate_aggregation_type_compat): text and yes/no only as the last value or none; a ratio as a
-// ratio, its highest or its latest value - never totalled or averaged; any other number (a sum and a difference included,
-// they are amounts) as sum, avg, max, last or none.
-export function allowedAggregations(valueType, calculationKind) {
-  if (valueType === "text" || valueType === "boolean") return ["last", "none"];
-  if (calculationKind === "ratio") return ["ratio", "max", "last", "none"];
-  return ["sum", "avg", "max", "last", "none"];
-}
+export { allowedAggregations };
 
 // v79 (the dashboard stream's questions, the Rukovodilac's ruling 1): a definition row says how it is calculated -
 // `calculation` { kind, scale (a ratio only), inputs: [{ definitionId, name, shortName, unit }] in the formula's order }

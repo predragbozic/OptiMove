@@ -9,6 +9,7 @@ import { createSimpleCapabilityReader } from './capabilities.js';
 import { canManageDashboardRow, dataWorkspaceMatches } from '../trainingLoadDashboardAccess.js';
 import { authorizePreviewTarget, loadPreviewContext, loadPreviewExisting } from './previewContext.js';
 import { previewError, withPreviewTransaction } from './previewTransaction.js';
+import { allowedDashboardAggregations } from '../dashboardRatios.js';
 
 const responseLimit = 2 * 1024 * 1024;
 const issueResult = (status, code, path) => ({ status, issues: [{ code, path, severity: 'error' }] });
@@ -41,7 +42,7 @@ export function createSimplePreviewService({ pool, queryDashboard, admission, to
         const reader = createSimpleCapabilityReader({ query: queryRunner, canManageDashboardRow, dataWorkspaceMatches });
         if (options.metricDefinitionId) {
           const { metric } = await reader.load({ req: target.req, dataWorkspace: target.workspace, dashboardId, metricRef: { kind: 'metric', metricDefinitionId: options.metricDefinitionId } });
-          return { metrics: [{ ...metric, allowed_aggregations: metric.allowedAggregations ?? (metric.value_type === 'numeric' ? ['sum', 'avg', 'max', 'last', 'none'] : ['last', 'none']) }], nextCursor: null };
+          return { metrics: [{ ...metric, allowed_aggregations: metric.allowedAggregations ?? allowedDashboardAggregations(metric.value_type, metric.calculation?.kind) }], nextCursor: null };
         }
         return reader.listMetrics({ req: target.req, dataWorkspace: target.workspace, dashboardId, ...options });
       }

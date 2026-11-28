@@ -10,7 +10,7 @@ import { bootstrapLegacySnapshot } from './support/legacy-bootstrap.mjs';
 import { activateOn, bindTeam, ensureMappedSystem, platformAdmin } from './support/mapped-world.mjs';
 import { makeBundle, standardAthletes } from './_gpexe-fixtures.mjs';
 
-test('an 84-day club distance table and its draft only query relevant GPEXE sessions', async () => {
+test('an 84-day club distance table previews and saves average and minimum over relevant GPEXE sessions', async () => {
   const db = await createDisposableDatabase({ prefix: 'dashboard', label: 'distance_preview' });
   const originalUrl = process.env.DATABASE_URL;
   const originalPagesEnabled = process.env.DASHBOARD_PAGES_ENABLED;
@@ -57,6 +57,9 @@ test('an 84-day club distance table and its draft only query relevant GPEXE sess
     const athleteIdByGpexeId = Object.fromEntries(athleteIds.map((id, i) => [101 + i, id]));
     for (let index = 0; index < 27; index++) {
       const date = new Date(Date.UTC(2026, 6, 3 + index * 2)).toISOString().slice(0, 10);
+      for (const [player, initialDistance] of [[athletes[0], 100], [athletes[1], 200]]) {
+        for (const part of player.parts) part.distance = initialDistance + index;
+      }
       const bundle = makeBundle({ gpexeTeamId: 9743, sessionId: 6200 + index, start: date + 'T18:08:12', athletes });
       bundle.teamSession.end_timestamp = date + 'T19:19:35';
       await importGpexeBundle(client, bundle, { ownerTeamId: teamId, performedByUserId: actor, athleteIdByGpexeId, batchFilename: 'dashboard distance' });
@@ -85,9 +88,9 @@ test('an 84-day club distance table and its draft only query relevant GPEXE sess
     const cookie = `optimove_session=${await createSession(actor)}`;
     server = http.createServer(app);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    async function api(path, body, status = 200) {
+    async function api(path, body, status = 200, method = body ? 'POST' : 'GET') {
       const response = await fetch(`http://127.0.0.1:${server.address().port}${path}`, {
-        method: body ? 'POST' : 'GET',
+        method,
         headers: { Cookie: cookie, 'Content-Type': 'application/json' },
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
@@ -105,7 +108,8 @@ test('an 84-day club distance table and its draft only query relevant GPEXE sess
       ...table, widgetOrder: 0, x: 0, y: 0, width: 6, height: 4, mobileOrder: 0,
       expectedDashboardRevision: dashboard.revision, expectedPageRevision: page.revision,
     });
-    await api(`${path}/widgets/${widgetId}/series`, { ...metric, expectedWidgetRevision: 1, seriesOrder: 0 });
+    const seriesPath = `${path}/widgets/${widgetId}/series`;
+    const { seriesId, widgetRevision } = await api(seriesPath, { ...metric, expectedWidgetRevision: 1, seriesOrder: 0 });
     for (const filter of [{}, { activityId }, { athleteIds: [athleteIds[0]] }]) {
       const periodAndFilter = { dateFrom: '2026-07-01', dateTo: '2026-09-22', ...filter };
       const preview = await api(`${path}/query`, { ...periodAndFilter, metricPreview: { ...table, ...metric, widgetId } });
@@ -114,8 +118,40 @@ test('an 84-day club distance table and its draft only query relevant GPEXE sess
       assert.equal(series.status, 'ok', JSON.stringify(series));
       assert.deepEqual(preview.result.series[0], series);
       const values = series.data.current.map(row => row.value).sort((a, b) => a - b);
-      assert.deepEqual(values, filter.athleteIds ? [100] : [0, 100, 200]);
+      assert.deepEqual(values, filter.athleteIds ? [113] : filter.activityId ? [0, 100, 200] : [0, 113, 213]);
     }
+
+    const period = { dateFrom: '2026-07-01', dateTo: '2026-09-22' };
+    const minimum = await api(`${path}/query`, {
+      ...period, metricPreview: { ...table, ...metric, widgetId, analyticalAggregation: 'min' },
+    });
+    const minimumSeries = minimum.result.series[0];
+    assert.equal(minimumSeries.status, 'ok', JSON.stringify(minimumSeries));
+    assert.deepEqual(minimumSeries.data.current.map(row => row.value).sort((a, b) => a - b), [0, 100, 200]);
+    const advanced = await api(`${path}/query`, {
+      ...period,
+      advancedPreview: {
+        ...table, widgetId, expectedWidgetRevision: widgetRevision, localFilterOverride: null,
+        series: [{
+          draftId: seriesId, previousSeriesId: seriesId,
+          settings: { ...metric, seriesOrder: 1, analyticalAggregation: 'min', sourcePolicy: 'all_with_conflicts',
+            aggregationRolePolicy: 'standalone_and_source_rollup', coveragePolicy: 'complete_and_partial', axis: 'primary' },
+        }],
+      },
+    });
+    assert.deepEqual(advanced.result.series[0], minimumSeries);
+    const readAggregation = async () => (await client.query(
+      'select analytical_aggregation from training_load.dashboard_widget_series where id=$1', [seriesId],
+    )).rows[0].analytical_aggregation;
+    assert.equal(await readAggregation(), 'avg');
+    await api(`${seriesPath}/${seriesId}`, { expectedWidgetRevision: widgetRevision, analyticalAggregation: 'min' }, 200, 'PATCH');
+    assert.equal(await readAggregation(), 'min');
+    const savedMinimum = await api(`${path}/query`, period);
+    assert.deepEqual(savedMinimum.widgets[0].series[0], minimumSeries);
+
+    await api(`${path}/query`, {
+      ...period, metricPreview: { ...table, builtInSeriesKey: 'last_session_date', dataScopeLevel: 'day', analyticalAggregation: 'min' },
+    }, 400);
   } finally {
     if (server?.listening) {
       server.closeAllConnections();

@@ -1,6 +1,7 @@
 import { validReferenceConfig } from "../dashboardReferences/contract.js";
 import {validGalleryShape} from '../dashboardGallery/contract.js';
 import { normalizeShellFilter } from '../dashboardShellFilter.js';
+import { DASHBOARD_ANALYTICAL_AGGREGATIONS } from '../dashboardRatios.js';
 // S1.1 26162ae: isolated JSON contracts. No routes, database or evaluator.
 const obj = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const en = (...values) => ({ enum: values });
@@ -22,7 +23,7 @@ export const periodConfigSchema = union(
   tagged('mode', 'relative', { schemaVersion: { const: 1 }, preset: en('today', 'last_7_days', 'last_28_days', 'this_week'), timeZone: { type: 'string', format: 'time-zone' } }),
 );
 export const periodIntentSchema = union(tagged('mode', 'inherit'), tagged('mode', 'replacePageRuntime', { periodConfig: periodConfigSchema, savePageDefaults: bool }, ['mode', 'periodConfig']));
-export const viewSchema = obj({ type: en('kpi', 'line_chart', 'bar_chart', 'table'), groupBy: en('day', 'week', 'session', 'component', 'athlete', 'cohort'), dataScopeLevel: en('day', 'session', 'component'), analyticalAggregation: en('sum', 'avg', 'max', 'last', 'none', 'ratio'), chartKind: en('standard','area','horizontal_bar','heatmap','boxplot') }, ['type','groupBy','dataScopeLevel','analyticalAggregation']);
+export const viewSchema = obj({ type: en('kpi', 'line_chart', 'bar_chart', 'table'), groupBy: en('day', 'week', 'session', 'component', 'athlete', 'cohort'), dataScopeLevel: en('day', 'session', 'component'), analyticalAggregation: en(...DASHBOARD_ANALYTICAL_AGGREGATIONS), chartKind: en('standard','area','horizontal_bar','heatmap','boxplot') }, ['type','groupBy','dataScopeLevel','analyticalAggregation']);
 export const displayV2Schema = obj({ schemaVersion: { const: 2 }, numberFormat: obj({ maximumFractionDigits: { type: 'integer', minimum: 0, maximum: 6 } }, []), legend: obj({ visible: bool }, []), valueLabels: obj({ visible: bool }, []) }, ['schemaVersion']);
 export const yAxisSchema = union(tagged('mode', 'auto'), tagged('mode', 'fixed', { min: num, max: num }));
 export const chartInteractionsSchema = obj({ tooltip: obj({ mode: en('exact', 'formatted') }), legend: obj({ toggle: bool }), zoom: obj({ mode: en('disabled', 'local'), applyPeriodAction: bool }), pointSelection: obj({ mode: en('disabled', 'details') }), yAxis: yAxisSchema }, []);

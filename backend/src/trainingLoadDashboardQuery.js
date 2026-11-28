@@ -521,6 +521,7 @@ function reduceTyped(items, method, valueType) {
   const nums = items.map((i) => Number(i.value));
   if (effectiveMethod === "sum") return nums.reduce((a, b) => a + b, 0);
   if (effectiveMethod === "avg") return nums.reduce((a, b) => a + b, 0) / nums.length;
+  if (effectiveMethod === "min") return nums.reduce((lowest, value) => Math.min(lowest, value), Infinity);
   if (effectiveMethod === "max") return Math.max(...nums);
   throw new Error(`reduceTyped: unknown aggregation method ${effectiveMethod}`);
 }

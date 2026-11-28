@@ -1,7 +1,7 @@
 import {before,after,test} from 'node:test';import assert from 'node:assert/strict';import {randomBytes} from 'node:crypto';import {mkdir,writeFile} from 'node:fs/promises';import path from 'node:path';import pg from 'pg';
 import {launch,openAs,openTrainingLoad} from '../lib/browser.mjs';import {startWorld} from '../lib/world.mjs';
 import {seedGalleryMeasurements,seedGalleryDashboard} from '../../backend/tests/support/dashboard-gallery-seed.mjs';
-let world,browser,gallery;const byRole=new Map();
+let world,browser,gallery;const byRole=new Map(),advancedByRole=new Map();
 const action=(page,name)=>page.locator(`[data-action="training-load-${name}"]`);
 async function openDashboard(page,id){await openTrainingLoad(page);await page.getByRole('tab',{name:'Data & Analysis'}).click();const tab=page.getByRole('tab',{name:'Dashboards'});if(await tab.isVisible())await tab.click();await page.locator('.tl-dash-picker-trigger').click();await page.locator('[data-dashboard-id="'+id+'"]').first().click();await page.locator('optimove-dashboard-chart svg').first().waitFor();}
 // Follow the same visible controls as a coach: Dashboard actions -> PDF.
@@ -21,10 +21,12 @@ before(async()=>{
   const definitions=await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,athleteIds:world.ids.athleteIds});
   await seedGalleryMeasurements(q,{actorId:actor.id,clubId:world.ids.clubA,teamId:world.ids.teamA,athleteIds:world.ids.athleteIds,dates:['2026-11-02','2026-11-03'],existingDefinitions:definitions});
   gallery=await seedGalleryDashboard(q,{actorId:actor.id,definitions});
+  advancedByRole.set('platform_admin',await seedGalleryDashboard(q,{actorId:actor.id,definitions,title:'Advanced desktop'}));
   await q.query("update training_load.dashboard_pages set period_config=jsonb_set(period_config,'{dateFrom}','\"2026-11-04\"') where id=$1",[gallery.home.id]);
   await q.query("insert into training_load.dashboard_pages(dashboard_id,name,position) values($1,'Other page',1)",[gallery.dashboard.id]);
   for(const [role,type,scope]of [['club_admin','club',world.ids.clubA],['team_coach','team',world.ids.teamA]]){
    const owner=world.accounts.find(a=>a.role===role);byRole.set(role,await seedGalleryDashboard(q,{actorId:actor.id,ownerId:owner.id,workspaceType:type,scopeId:scope,definitions,title:'Gallery '+role}));
+   if(role==='club_admin')advancedByRole.set(role,await seedGalleryDashboard(q,{actorId:actor.id,ownerId:owner.id,workspaceType:type,scopeId:scope,definitions,title:'Advanced mobile'}));
   }
  }finally{await q.end()}
  browser=await launch();
@@ -74,6 +76,62 @@ for(const width of [360,375,390])test(width+'px: visual gallery editor saves a m
   const selected=page.locator(`[data-analysis-widget-id="${gallery.widgets[2]}"] optimove-dashboard-chart`);await selected.locator('svg').waitFor();assert.equal(await selected.evaluate(el=>JSON.parse(el.getAttribute('data-chart')).option.series[0].type),width===360?'scatter':'bar');assert.deepEqual(pageErrors,[]);
  }finally{await context.close()}
 });
+for (const width of [390, 1280]) test(`${width}px: Advanced table adds, reorders and previews measured variables`, async () => {
+ const role = width === 390 ? 'club_admin' : 'platform_admin';
+ const fixture = advancedByRole.get(role);
+ const {context, page, pageErrors} = await openAs(browser, world, role, width);
+ try {
+  await openDashboard(page, fixture.dashboard.id);
+  const widget = page.locator(`[data-analysis-widget-id="${fixture.widgets[0]}"]`);
+  await widget.getByRole('button',{name:'Widget actions: area',exact:true}).click();
+  await widget.getByRole('menuitem',{name:'Advanced settings',exact:true}).click();
+  const editor = page.getByRole('dialog',{name:'Widget settings'});
+  await action(page,'analysis-widget-type').selectOption('table');
+  await action(page,'analysis-widget-group').selectOption('athlete');
+  await action(page,'analysis-series-aggregation').selectOption('min');
+  await editor.getByRole('button',{name:/Add variable/}).click();
+  assert.equal(await editor.getByRole('button',{name:'Save changes',exact:true}).isEnabled(),false);
+  assert.equal(await editor.getByRole('button',{name:'Load preview',exact:true}).isEnabled(),false);
+  await editor.getByRole('button',{name:'Remove variable: Choose a metric',exact:true}).click();
+  assert.equal(await editor.locator('.tl-editor-variable-row').count(),1);
+  await editor.getByRole('button',{name:/Add variable/}).click();
+  await editor.getByRole('searchbox',{name:'Search metrics'}).fill('Distance part B');
+  await editor.getByRole('button',{name:/Distance part B/}).click();
+  await action(page,'analysis-series-aggregation').selectOption('max');
+  await editor.getByRole('button',{name:'Move up: Distance part B',exact:true}).click();
+  const [response] = await Promise.all([
+   page.waitForResponse(r=>r.url().endsWith('/query') && r.request().postDataJSON()?.advancedPreview),
+   editor.getByRole('button',{name:'Load preview',exact:true}).click(),
+  ]);
+  assert.equal(response.status(),200,await response.text());
+  const preview = editor.getByRole('region',{name:'Widget preview',exact:true});
+  const headers = preview.getByRole('columnheader');
+  await headers.last().waitFor();
+  const visibleHeaders = await headers.allTextContents();
+  assert.match(visibleHeaders[1],/Distance part B/);
+  assert.match(visibleHeaders[2],/Distance part A/);
+  assert.ok(await preview.getByRole('row').count() > 1);
+  assert.equal(await widget.locator('optimove-dashboard-chart').count(),1);
+  assert.equal(await editor.evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+  const rejectedWrites = [];
+  page.on('response', response => {
+   if (response.status() >= 400 && ['PATCH','POST','PUT','DELETE'].includes(response.request().method())) {
+    rejectedWrites.push(response.json().catch(()=>null).then(body=>[response.request().method(),response.status(),body?.error]));
+   }
+  });
+  if(process.env.DASHBOARD_GALLERY_EVIDENCE) {
+   await mkdir(process.env.DASHBOARD_GALLERY_EVIDENCE,{recursive:true});
+   await editor.screenshot({path:path.join(process.env.DASHBOARD_GALLERY_EVIDENCE,`advanced-table-${width}.png`)});
+  }
+  await editor.getByRole('button',{name:'Save changes',exact:true}).click();
+  await page.waitForFunction(()=>!document.querySelector('.tl-analysis-editor') || document.querySelector('.tl-editor-footer [role="alert"]'));
+  assert.equal(await editor.count(),0,JSON.stringify({errors: await editor.getByRole('alert').allTextContents(), responses:await Promise.all(rejectedWrites)}));
+  await widget.getByRole('table').waitFor();
+  assert.deepEqual(await widget.getByRole('columnheader').allTextContents(),visibleHeaders);
+  assert.deepEqual(pageErrors,[]);
+ } finally { await context.close(); }
+});
+
 for(const width of [390,1280])test(width+'px: PDF copies seven graphs in visible order and only expanded tables, with no controls or identifiers',async()=>{
  const {context,page,pageErrors}=await openAs(browser,world,'platform_admin',width);try{
   await context.addInitScript(()=>{window.print=()=>{}});await openDashboard(page,gallery.dashboard.id);await page.waitForFunction(()=>document.querySelectorAll('.tl-analysis-grid optimove-dashboard-chart svg').length===7);
