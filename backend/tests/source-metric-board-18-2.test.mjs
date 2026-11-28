@@ -1,3 +1,4 @@
+import { VARIABLE_MANAGE, editVariablesManageTestRole, stageVariablesManageForTest } from "./support/variables-manage-grants.mjs";
 // J18, slice 18-2 - the reads of the drag-and-drop board: the board of a team
 // (route 1), one placement (route 2) and the stored confirmations (routes 4
 // and 5). Contract: docs/ai/c112-drag-mapping-contract.md, sections 3.3-3.6,
@@ -51,11 +52,13 @@ const logLines = [];
 const originalConsole = {};
 
 before(async () => {
-  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "board182" });
+  db = await createGpexeDisposableDb({ baseDatabaseUrl: ORIGINAL_DATABASE_URL, label: "board182", roleRead: true });
   assert.match(db.name, DISPOSABLE_DB_NAME_PATTERN, "SAFETY: a disposable database only");
   k = new pg.Client({ connectionString: db.url });
   await k.connect();
   assert.equal((await k.query("select current_database() as d")).rows[0].d, db.name, "SAFETY");
+  await stageVariablesManageForTest(k);
+  await editVariablesManageTestRole(k, VARIABLE_MANAGE, true);
   process.env.DATABASE_URL = db.url;
   for (const level of ["log", "info", "warn", "error", "debug"]) {
     originalConsole[level] = console[level];
