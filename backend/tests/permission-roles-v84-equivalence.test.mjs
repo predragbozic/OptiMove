@@ -79,6 +79,8 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
   const testsScheduleBridge = "tests.schedule.manage";
   assert.ok(perms.HONOURED_PERMISSIONS.includes(testsScheduleBridge));
   assert.ok(perms.STORABLE_PERMISSIONS.includes(testsScheduleBridge));
+  const mappingsManage = "mappings.manage";
+  assert.ok(!perms.HONOURED_PERMISSIONS.includes(mappingsManage), "the staged Mapping word is hidden in Settings");
   const variablesManage = "variables.manage";
   assert.ok(perms.HONOURED_PERMISSIONS.includes(variablesManage));
   assert.ok(perms.STORABLE_PERMISSIONS.includes(variablesManage));
@@ -135,12 +137,16 @@ test("31. old-vs-new: for every account of R1's matrix, every one of the 52 word
 
           const seededVariablesRenameArchive = word === variablesRenameArchive && ctx.platformRoles.length === 0 && oracle.canR1(ctx, "org.view", scope);
           const seededVariablesManage = word === variablesManage && ctx.platformRoles.length === 0 && clubAdminHere;
-          const expected = seededVariablesManage || seededVariablesRenameArchive || seededTestsSchedule || seededProgramEdit || seededProgramAssignment || rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities || seededDashboards || seededBuilderRpe || seededExerciseWrite ? true : r1;
+          const seededMappingsManage = word === mappingsManage && ctx.platformRoles.length === 0 && clubAdminHere;
+          if (word === mappingsManage && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
+            assert.equal(perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id }).permissions.includes(word), false);
+          }
+          const expected = seededMappingsManage || seededVariablesManage || seededVariablesRenameArchive || seededTestsSchedule || seededProgramEdit || seededProgramAssignment || rolesManage || seededView || seededCalendar || seededSchedule || seededRoster || seededEstimates || seededActivities || seededDashboards || seededBuilderRpe || seededExerciseWrite ? true : r1;
           if ((word === rosterDecide || word === estimatesManage || word === activitiesManage || word === dashboardsManage || word === builderRpe || word === programEdit || word === testsScheduleBridge || word === variablesRenameArchive || word === variablesManage || programAssignmentBridge.includes(word) || exerciseWrites.includes(word)) && ctx.platformRoles.length === 0 && (type === "club" || type === "team")) {
             const projection = perms.permissionsForWorkspace(ctx, { type, scopeId: scope.id });
             assert.equal(projection.permissions.includes(word), expected, `${name}: exposed ${word} on ${scopeName}`);
           }
-          if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster && !seededEstimates && !seededActivities && !seededDashboards && !seededBuilderRpe && !seededExerciseWrite && !seededProgramEdit && !seededProgramAssignment && !seededTestsSchedule && !seededVariablesRenameArchive && !seededVariablesManage) differences++;
+          if (expected !== r1 && !seededView && !seededCalendar && !seededSchedule && !seededRoster && !seededEstimates && !seededActivities && !seededDashboards && !seededBuilderRpe && !seededExerciseWrite && !seededProgramEdit && !seededProgramAssignment && !seededTestsSchedule && !seededVariablesRenameArchive && !seededVariablesManage && !seededMappingsManage) differences++;
           assert.equal(now, expected, `${name}: can(${word}) on ${scopeName}`);
           assert.equal(sql, expected, `${name}: twin(${word}) on ${scopeName}`);
           cells++;
