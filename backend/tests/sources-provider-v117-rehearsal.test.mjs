@@ -77,6 +77,16 @@ test("audited v117 host and connection generation installation is private, NOWAI
     await client.query(`revoke select on ${connections} from public`);
     all(await pre());
 
+    await client.query(`alter table ${hosts} disable trigger source_host_catalog_immutable`);
+    try {
+      assert.equal((await pre()).source_guards_exact, false);
+      await assert.rejects(db.applyThrough(prefix), error => error.cause?.code === "P0001"
+        && /source guards differ/.test(error.cause.message));
+      await noColumns();
+    } finally {
+      await client.query(`alter table ${hosts} enable trigger source_host_catalog_immutable`);
+    }
+
     holder = new client.constructor({ connectionString: db.url });
     await holder.connect();
     for (const table of [hosts, connections]) {
@@ -140,6 +150,28 @@ test("audited v117 host and connection generation installation is private, NOWAI
       await client.query("drop role " + inheritedRole);
     }
     for (const role of created) await client.query("drop role " + role);
+    await db.drop();
+  }
+});
+
+test("a committed legacy connection change alone closes the v117 rollback window", async () => {
+  const db = await createPagesDatabase({ through: prefix, label: "sources_v117_conn" });
+  const { client } = db;
+  try {
+    const f = fixtures(client);
+    const club = await f.club("Legacy connection rollback club");
+    const owner = await f.user("Legacy connection rollback owner");
+    const { rows: [row] } = await client.query(`insert into ${connections}(source_system,owner_scope,owner_club_id,host_key,account_label,credential_kind,created_by_user_id)
+      values('gpexe','club',$1,'server3','Legacy local account','exchanged_token',$2) returning id`, [club,owner]);
+    await client.query(`update ${connections} set state='verified', last_verified_at=clock_timestamp(),
+      credential_ciphertext=decode('ff','hex'), credential_nonce=decode(repeat('01',12),'hex'),
+      credential_auth_tag=decode(repeat('02',16),'hex'), credential_key_version=1 where id=$1`, [row.id]);
+    assert.equal((await client.query(`select provider_generation from ${connections} where id=$1`, [row.id])).rows[0].provider_generation, "1");
+    assert.equal((await client.query(`select count(*)::int as total from ${hosts} where provider_generation<>0`)).rows[0].total, 0);
+    await assert.rejects(client.query(await read("rollback")), /generation already captured/);
+    await client.query("rollback");
+    all((await client.query(await read("postcheck")))[0].rows[0]);
+  } finally {
     await db.drop();
   }
 });
